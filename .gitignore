@@ -19,6 +19,8 @@ web/.vite/
 .env.*
 !.env.example
 secrets/
+!prototype/secrets/
+!prototype/secrets/.gitkeep
 /data/
 /backups/
 *.db

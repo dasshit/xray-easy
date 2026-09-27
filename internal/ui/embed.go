@@ -7,8 +7,9 @@ import (
 	"strings"
 )
 
-// Files contains the production UI. The placeholder index is replaced by the
-// Vite build in the control-plane image build.
+// Files contains the production UI. Docker builds replace this directory with
+// the freshly compiled Vite bundle; keeping the bundle in the repository also
+// makes a native `go build` serve the same shell.
 //
 //go:embed dist/*
 var Files embed.FS

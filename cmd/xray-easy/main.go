@@ -2,7 +2,9 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,31 +13,51 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/skip2/go-qrcode"
 	"xray-easy/internal/auth"
+	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
+	"xray-easy/internal/supervisor"
 	"xray-easy/internal/ui"
+	"xray-easy/internal/xray"
 )
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
+var deviceNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
+var fingerprints = map[string]bool{"chrome": true, "firefox": true, "safari": true, "edge": true, "ios": true, "android": true, "random": true}
 
 type server struct {
-	store     *store.Store
-	masterKey []byte
+	store            *store.Store
+	masterKey        []byte
+	configDir        string
+	publicPort       int
+	defaultAPIListen string
+	supervisor       supervisor.Client
+	applyMu          sync.Mutex
 }
 
 type initializeRequest struct {
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	PublicHost string `json:"public_host"`
-	PublicPort int    `json:"public_port"`
+	Username      string `json:"username"`
+	Password      string `json:"password"`
+	PublicHost    string `json:"public_host"`
+	PublicPort    int    `json:"public_port"`
+	RealityTarget string `json:"reality_target"`
+	RealitySNI    string `json:"reality_sni"`
 }
 
 type loginRequest struct {
 	Username string `json:"username"`
 	Password string `json:"password"`
+}
+
+type clientRequest struct {
+	Name        string `json:"name"`
+	Fingerprint string `json:"fingerprint"`
 }
 
 func main() {
@@ -53,7 +75,25 @@ func main() {
 		fatal(err)
 	}
 	defer db.Close()
-	s := &server{store: db, masterKey: masterKey}
+	configDir := envOr("XRAY_EASY_CONFIG_DIR", "/etc/xray")
+	if err := os.MkdirAll(filepath.Join(configDir, "candidates"), 0o700); err != nil {
+		fatal(err)
+	}
+	publicPort, err := configuredPublicPort()
+	if err != nil {
+		fatal(err)
+	}
+	s := &server{
+		store:            db,
+		masterKey:        masterKey,
+		configDir:        configDir,
+		publicPort:       publicPort,
+		defaultAPIListen: envOr("XRAY_API_LISTEN", "127.0.0.1:10085"),
+		supervisor: supervisor.Client{
+			BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
+			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
+		},
+	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/healthz", s.healthz)
 	mux.HandleFunc("/api/readyz", s.readyz)
@@ -62,6 +102,9 @@ func main() {
 	mux.HandleFunc("/api/auth/login", s.login)
 	mux.HandleFunc("/api/auth/logout", s.logout)
 	mux.HandleFunc("/api/me", s.me)
+	mux.HandleFunc("/api/settings", s.settings)
+	mux.HandleFunc("/api/clients", s.clients)
+	mux.HandleFunc("/api/clients/", s.clientRoute)
 	mux.Handle("/", ui.Handler())
 	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: requestLimit(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
 	fmt.Fprintf(os.Stderr, "xray-easy control plane listening on %s\n", serverHTTP.Addr)
@@ -82,6 +125,15 @@ func loadMasterKey() ([]byte, error) {
 	return key, nil
 }
 
+func configuredPublicPort() (int, error) {
+	value := envOr("XRAY_PUBLIC_PORT", "443")
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, errors.New("XRAY_PUBLIC_PORT must be an integer between 1 and 65535")
+	}
+	return port, nil
+}
+
 func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Ping(r.Context()); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "database unavailable"})
@@ -100,7 +152,7 @@ func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read setup status"})
 		return
 	}
-	writeJSON(w, http.StatusOK, status)
+	writeJSON(w, http.StatusOK, map[string]any{"initialized": status.Initialized, "public_port": s.publicPort})
 }
 
 func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
@@ -122,16 +174,38 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "password must contain at least 12 characters"})
 		return
 	}
-	if req.PublicPort == 0 {
-		req.PublicPort = 443
+	if req.PublicPort != 0 && req.PublicPort != s.publicPort {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "public_port is controlled by XRAY_PUBLIC_PORT"})
+		return
 	}
-	if req.PublicPort < 1 || req.PublicPort > 65535 || strings.TrimSpace(req.PublicHost) == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "public_host and a valid public_port are required"})
+	req.PublicPort = s.publicPort
+	if strings.TrimSpace(req.PublicHost) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "public_host is required"})
+		return
+	}
+	req.RealityTarget = strings.TrimSpace(req.RealityTarget)
+	req.RealitySNI = strings.TrimSpace(req.RealitySNI)
+	if err := xray.ValidateTarget(req.RealityTarget, req.RealitySNI); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.supervisor.ProbeTarget(r.Context(), req.RealityTarget, req.RealitySNI); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "REALITY target probe failed", "detail": err.Error()})
 		return
 	}
 	hash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	privateKey, publicKey, err := xray.NewRealityKeyPair()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not generate REALITY key pair"})
+		return
+	}
+	encryptedPrivateKey, err := secret.Seal(s.masterKey, privateKey, "reality_private_key")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encrypt REALITY private key"})
 		return
 	}
 	admin, err := s.store.Initialize(r.Context(), req.Username, hash, strings.TrimSpace(req.PublicHost), req.PublicPort)
@@ -142,6 +216,19 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, status, map[string]any{"error": err.Error()})
 		return
+	}
+	settings, err := s.store.GetSettings(r.Context())
+	if err == nil {
+		settings.XrayAPIListen = s.defaultAPIListen
+		settings.RealityTarget = req.RealityTarget
+		settings.RealitySNI = req.RealitySNI
+		settings.RealityPrivateKeyEnc = encryptedPrivateKey
+		settings.RealityPublicKey = publicKey
+		settings.ClientFingerprint = "chrome"
+		if err := s.store.UpdateSettings(r.Context(), settings); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not save Xray API settings"})
+			return
+		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": admin.ID, "username": admin.Username})
 }
@@ -166,7 +253,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create session"})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int((3 * time.Hour) / time.Second)})
+	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int((3 * time.Hour) / time.Second)})
 	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username, "expires_in": int((3 * time.Hour) / time.Second)})
 }
 
@@ -185,6 +272,288 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username})
+}
+
+func (s *server) settings(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.authenticated(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	settings, err := s.store.GetSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": err.Error()})
+		return
+	}
+	settings.PublicPort = s.publicPort
+	if r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, publicSettings(settings))
+		return
+	}
+	if r.Method == http.MethodPatch {
+		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "settings rotation is not implemented in this slice"})
+		return
+	}
+	writeJSON(w, http.StatusMethodNotAllowed, nil)
+}
+
+func (s *server) clients(w http.ResponseWriter, r *http.Request) {
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	if r.Method == http.MethodGet {
+		clients, err := s.store.ListClients(r.Context())
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list clients"})
+			return
+		}
+		writeJSON(w, http.StatusOK, clients)
+		return
+	}
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	var req clientRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if !deviceNamePattern.MatchString(name) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name must contain ASCII letters, digits or '-' and be 1-64 characters"})
+		return
+	}
+	fingerprint := strings.TrimSpace(req.Fingerprint)
+	settings, err := s.store.GetSettings(r.Context())
+	if err != nil || settings.RealityPrivateKeyEnc == "" {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "REALITY setup is incomplete"})
+		return
+	}
+	settings.PublicPort = s.publicPort
+	if fingerprint != "" && !fingerprints[fingerprint] {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported client fingerprint"})
+		return
+	}
+	privateKey, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt REALITY private key"})
+		return
+	}
+	client, err := s.createClient(r.Context(), settings, privateKey, name, fingerprint, admin.ID)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusCreated, client)
+}
+
+func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	parts := strings.Split(strings.Trim(strings.TrimPrefix(r.URL.Path, "/api/clients/"), "/"), "/")
+	if len(parts) == 0 || parts[0] == "" {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+		return
+	}
+	id := parts[0]
+	client, err := s.store.GetClient(r.Context(), id)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+		return
+	}
+	if len(parts) == 1 && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, client)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "profile" && r.Method == http.MethodGet {
+		s.profile(w, r, client)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "enable" && r.Method == http.MethodPost {
+		s.changeClientState(w, r, client, true, false, admin.ID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "disable" && r.Method == http.MethodPost {
+		s.changeClientState(w, r, client, false, false, admin.ID)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "revoke" && r.Method == http.MethodPost {
+		s.changeClientState(w, r, client, false, true, admin.ID)
+		return
+	}
+	writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
+}
+
+func (s *server) createClient(ctx context.Context, settings store.Settings, privateKey, name, fingerprint, actorID string) (store.Client, error) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	clients, err := s.store.ListClients(ctx)
+	if err != nil {
+		return store.Client{}, fmt.Errorf("list clients: %w", err)
+	}
+	clientID, err := randomID()
+	if err != nil {
+		return store.Client{}, err
+	}
+	uuid, err := xray.NewUUID()
+	if err != nil {
+		return store.Client{}, err
+	}
+	shortID, err := xray.NewShortID()
+	if err != nil {
+		return store.Client{}, err
+	}
+	if fingerprint == "" {
+		fingerprint = settings.ClientFingerprint
+	}
+	client := store.Client{ID: clientID, Name: name, ClientFingerprint: fingerprint, Enabled: true}
+	clientEmail := "device-" + clientID + "@xray-easy"
+	if err := s.store.CreateClient(ctx, client, uuid, clientEmail, shortID); err != nil {
+		return store.Client{}, fmt.Errorf("create client: %w", err)
+	}
+	client.UUID, client.Email, client.ShortID = uuid, clientEmail, shortID
+	clients = append(clients, client)
+	if err := s.applyClientsLocked(ctx, settings, privateKey, clients, actorID, "client.create", clientID); err != nil {
+		_ = s.store.DeleteClient(ctx, clientID)
+		return store.Client{}, err
+	}
+	return s.store.GetClient(ctx, clientID)
+}
+
+func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client store.Client, enabled, revoked bool, actorID string) {
+	if client.Revoked && !revoked {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "revoked client cannot be enabled"})
+		return
+	}
+	settings, err := s.store.GetSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "settings are incomplete"})
+		return
+	}
+	settings.PublicPort = s.publicPort
+	privateKey, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt REALITY private key"})
+		return
+	}
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	clients, err := s.store.ListClients(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list clients"})
+		return
+	}
+	for i := range clients {
+		if clients[i].ID == client.ID {
+			clients[i].Enabled, clients[i].Revoked = enabled, revoked
+		}
+	}
+	if err := s.applyClientsLocked(r.Context(), settings, privateKey, clients, actorID, "client.state", client.ID); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := s.store.SetClientState(r.Context(), client.ID, enabled, revoked); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not persist client state"})
+		return
+	}
+	updated, _ := s.store.GetClient(r.Context(), client.ID)
+	writeJSON(w, http.StatusOK, updated)
+}
+
+func (s *server) applyClients(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	return s.applyClientsLocked(ctx, settings, privateKey, clients, actorID, action, entityID)
+}
+
+func (s *server) applyClientsLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string) error {
+	xrayClients := make([]xray.Client, 0, len(clients))
+	for _, client := range clients {
+		xrayClients = append(xrayClients, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
+	}
+	rendered, err := xray.RenderServerConfig(xray.Settings{PublicHost: settings.PublicHost, PublicPort: settings.PublicPort, XrayAPIListen: settings.XrayAPIListen, RealityTarget: settings.RealityTarget, RealitySNI: settings.RealitySNI, RealityPrivateKey: privateKey, RealityPublicKey: settings.RealityPublicKey, ClientFingerprint: settings.ClientFingerprint, InternalInboundPort: settings.InternalInboundPort}, xrayClients)
+	if err != nil {
+		return fmt.Errorf("render Xray config: %w", err)
+	}
+	operationID, err := randomID()
+	if err != nil {
+		return err
+	}
+	revision := time.Now().UnixNano()
+	operation := store.ApplyOperation{ID: operationID, Revision: revision, State: "pending", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
+	if err := s.store.CreateApplyOperation(ctx, operation); err != nil {
+		return err
+	}
+	path := filepath.Join(s.configDir, "candidates", operationID+".json")
+	if err := writeAtomic(path, rendered); err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return err
+	}
+	if err := s.supervisor.Validate(ctx, path, operationID); err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return err
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "validated", "")
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
+	if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return err
+	}
+	active := filepath.Join(s.configDir, "active.json")
+	if err := os.Rename(path, active); err != nil {
+		// The candidate is running, but it was not promoted to the durable
+		// active path. Ask the supervisor to restore the previous active file.
+		_ = s.supervisor.Apply(ctx, active, operationID+"-rollback")
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return err
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "committed", "")
+	_ = s.store.AddAudit(ctx, actorID, action, "client", entityID, "configuration applied")
+	return nil
+}
+
+func (s *server) profile(w http.ResponseWriter, r *http.Request, client store.Client) {
+	settings, err := s.store.GetSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "settings are incomplete"})
+		return
+	}
+	settings.PublicPort = s.publicPort
+	privateKey, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt REALITY private key"})
+		return
+	}
+	_ = privateKey
+	profile, err := xray.BuildProfile(xray.Settings{PublicHost: settings.PublicHost, PublicPort: settings.PublicPort, XrayAPIListen: settings.XrayAPIListen, RealityTarget: settings.RealityTarget, RealitySNI: settings.RealitySNI, RealityPrivateKey: "server-secret-not-exported", RealityPublicKey: settings.RealityPublicKey, ClientFingerprint: settings.ClientFingerprint, InternalInboundPort: settings.InternalInboundPort}, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Pragma", "no-cache")
+	format := r.URL.Query().Get("format")
+	switch format {
+	case "json":
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Disposition", `attachment; filename="`+client.Name+`.json"`)
+		_, _ = w.Write(profile.JSON)
+	case "qr":
+		png, err := qrcode.Encode(profile.URI, qrcode.Medium, 512)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encode QR"})
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(png)
+	default:
+		writeJSON(w, http.StatusOK, map[string]any{"client_id": client.ID, "uri": profile.URI, "name": profile.Name, "json": json.RawMessage(profile.JSON)})
+	}
 }
 
 func (s *server) authenticated(r *http.Request) (store.Admin, error) {
@@ -241,4 +610,41 @@ func envOr(name, fallback string) string {
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
+}
+
+func publicSettings(settings store.Settings) map[string]any {
+	return map[string]any{"public_host": settings.PublicHost, "public_port": settings.PublicPort, "reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow}
+}
+
+func randomID() (string, error) {
+	b := make([]byte, 16)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
+func writeAtomic(path string, data []byte) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".candidate-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName)
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }

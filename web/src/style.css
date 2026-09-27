@@ -6,10 +6,21 @@ header { display: flex; justify-content: space-between; align-items: center; mar
 .card { background: white; border: 1px solid #e1e6ef; border-radius: 14px; padding: 26px; box-shadow: 0 8px 24px #1720330d; }
 h1 { margin: 0 0 24px; font-size: 1.45rem; }
 label { display: grid; gap: 7px; margin: 14px 0; font-size: .9rem; color: #556176; }
-input { width: 100%; border: 1px solid #cbd3df; border-radius: 8px; padding: 11px 12px; font: inherit; color: #172033; }
+input, select { width: 100%; border: 1px solid #cbd3df; border-radius: 8px; padding: 11px 12px; font: inherit; color: #172033; background: white; }
+input[readonly] { background: #f4f6fa; }
 button { border: 0; border-radius: 8px; padding: 11px 16px; background: #315efb; color: white; font: inherit; cursor: pointer; }
 button:disabled { opacity: .55; cursor: wait; }
 .secondary, .language { background: transparent; color: #315efb; padding: 6px 0; }
+.danger { background: transparent; color: #b42318; padding: 6px 0; }
 .language { font-size: .9rem; }
 .card-title { display: flex; justify-content: space-between; align-items: start; gap: 18px; }
 .error { margin: 0; color: #b42318; }
+.device-create { display: flex; gap: 8px; margin: 22px 0; }
+.device-create input { flex: 1; }
+.devices { list-style: none; padding: 0; margin: 0; border-top: 1px solid #e1e6ef; }
+.devices li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 12px 0; border-bottom: 1px solid #e1e6ef; }
+.devices small { color: #556176; margin-right: 14px; }
+.devices button { margin-left: 10px; }
+.profile { margin-top: 22px; }
+.profile img { display: block; width: 220px; height: 220px; margin: 10px 0 14px; image-rendering: pixelated; }
+textarea { width: 100%; min-height: 92px; resize: vertical; border: 1px solid #cbd3df; border-radius: 8px; padding: 10px; font: 12px ui-monospace, monospace; }

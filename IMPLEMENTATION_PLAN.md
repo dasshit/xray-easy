@@ -2,6 +2,21 @@
 
 Дата исследования: 2026-09-27.
 
+## Текущий статус реализации
+
+В репозитории уже собран первый вертикальный срез: отдельные контейнеры
+control plane и `xray-supervisor`, SQLite-модель установки и устройств,
+AES-GCM envelope для REALITY private key, setup с TLS probe, typed renderer
+VLESS + REALITY + TCP/Vision, атомарные candidate-файлы с `xray run -test`,
+применение с rollback к `active.json`, а также Vue dashboard с QR, VLESS URI,
+JSON export и enable/disable/revoke. Compose публикует UI только на loopback
+VDS и передаёт `XRAY_PUBLIC_PORT` как единственную настройку внешнего порта.
+
+Следующими обязательными срезами остаются TOTP/recovery, reconciliation и
+StatsService polling, backups/restore, полноценный settings rotation с
+подтверждением, redacted diagnostics/SSE и release E2E-проверка импорта в
+V2Rage на macOS/iOS.
+
 ## 1. Результат исследования и границы продукта
 
 ### 1.1. Что повторяем из опыта wg-easy

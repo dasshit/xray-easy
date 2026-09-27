@@ -77,6 +77,7 @@ type supervisor struct {
 	cfg *config
 	log *logBuffer
 
+	applyMu      sync.Mutex
 	mu           sync.Mutex
 	child        *exec.Cmd
 	childDone    chan error
@@ -174,7 +175,9 @@ func (s *supervisor) startChild(path string) error {
 func (s *supervisor) capture(r io.Reader) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		s.log.add(scanner.Text())
+		line := redact(scanner.Text())
+		s.log.add(line)
+		fmt.Fprintln(os.Stderr, line)
 	}
 }
 
@@ -198,18 +201,57 @@ func (s *supervisor) stopChild() {
 }
 
 func (s *supervisor) apply(path string) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+
 	if err := s.validate(path); err != nil {
 		return err
 	}
+	// The control plane only promotes a candidate to active.json after this
+	// call succeeds. Keep that stable path as the rollback target while the
+	// candidate is being started.
+	previous := filepath.Join(s.cfg.configDir, "active.json")
 	s.stopChild()
 	if err := s.startChild(path); err != nil {
-		s.mu.Lock()
-		s.state = "degraded"
-		s.lastError = err.Error()
-		s.mu.Unlock()
+		s.rollback(previous, err)
+		return err
+	}
+	time.Sleep(500 * time.Millisecond)
+	s.mu.Lock()
+	state := s.state
+	lastError := s.lastError
+	lastExit := s.lastExit
+	s.mu.Unlock()
+	if state != "running" {
+		if lastError == "" {
+			lastError = lastExit
+		}
+		if lastError == "" {
+			lastError = "Xray exited during startup"
+		}
+		err := errors.New(lastError)
+		s.rollback(previous, err)
 		return err
 	}
 	return nil
+}
+
+func (s *supervisor) rollback(previous string, cause error) {
+	if _, err := os.Stat(previous); err != nil {
+		s.mu.Lock()
+		s.state = "degraded"
+		s.lastError = cause.Error()
+		s.mu.Unlock()
+		return
+	}
+	if err := s.startChild(previous); err != nil {
+		s.mu.Lock()
+		s.state = "degraded"
+		s.lastError = fmt.Sprintf("%v; rollback failed: %v", cause, err)
+		s.mu.Unlock()
+		return
+	}
+	s.logf("candidate rejected; restored active.json")
 }
 
 func (s *supervisor) validate(path string) error {
@@ -418,34 +460,19 @@ func probeTarget(target, sni string) error {
 	if err != nil || portNumber < 1 || portNumber > 65535 {
 		return errors.New("target port must be between 1 and 65535")
 	}
-	if err := rejectPrivateTarget(host); err != nil {
-		return err
-	}
 	if sni == "" {
 		sni = host
 	}
-	dialer := net.Dialer{Timeout: 5 * time.Second}
-	conn, err := tls.DialWithDialer(&dialer, "tcp", net.JoinHostPort(host, port), &tls.Config{ServerName: sni, MinVersion: tls.VersionTLS12})
-	if err != nil {
-		return fmt.Errorf("TLS probe failed: %w", err)
-	}
-	_ = conn.Close()
-	return nil
-}
-
-func rejectPrivateTarget(host string) error {
-	ip := net.ParseIP(host)
-	if ip != nil {
-		if forbiddenProbeIP(ip) {
-			return errors.New("target resolves to a private or local address")
+	addresses := []net.IP{}
+	if ip := net.ParseIP(host); ip != nil {
+		addresses = append(addresses, ip)
+	} else {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		addresses, err = net.DefaultResolver.LookupIP(ctx, "ip", host)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("resolve target: %w", err)
 		}
-		return nil
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	addresses, err := net.DefaultResolver.LookupIP(ctx, "ip", host)
-	if err != nil {
-		return fmt.Errorf("resolve target: %w", err)
 	}
 	if len(addresses) == 0 {
 		return errors.New("target has no addresses")
@@ -455,7 +482,20 @@ func rejectPrivateTarget(host string) error {
 			return errors.New("target resolves to a private or local address")
 		}
 	}
-	return nil
+	// Dial the address returned by the same DNS lookup that passed the SSRF
+	// checks. Using the hostname here would allow a DNS rebinding between the
+	// check and the TLS connection.
+	dialer := net.Dialer{Timeout: 5 * time.Second}
+	var lastErr error
+	for _, address := range addresses {
+		conn, dialErr := tls.DialWithDialer(&dialer, "tcp", net.JoinHostPort(address.String(), port), &tls.Config{ServerName: sni, MinVersion: tls.VersionTLS12})
+		if dialErr == nil {
+			_ = conn.Close()
+			return nil
+		}
+		lastErr = dialErr
+	}
+	return fmt.Errorf("TLS probe failed: %w", lastErr)
 }
 
 func forbiddenProbeIP(ip net.IP) bool {
