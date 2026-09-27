@@ -34,11 +34,14 @@ The current slice implements the usable device and administration flow:
   host, REALITY target/SNI or private key shows a diff, creates an automatic
   backup, validates the candidate through the supervisor and revokes old
   device profiles after exact `REVOKE`/`ROTATE` confirmation;
+- the authenticated dashboard shows the supervisor state, restart count and a
+  bounded tail of redacted Xray warnings/errors; `/api/events` streams stats
+  and status updates over SSE;
 - the Vue dashboard is embedded into the control-plane image;
 - `compose.stage0.yaml` keeps the supervisor and Xray API off the host network.
 
-Settings rotation and the complete diagnostics/API surface from the plan are
-still subsequent slices.
+The next slice is the release E2E checklist for importing the generated VLESS
+profile into V2Rage on macOS/iOS.
 
 ## Run the stage 0 container
 

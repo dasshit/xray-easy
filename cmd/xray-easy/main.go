@@ -23,6 +23,7 @@ import (
 	"github.com/skip2/go-qrcode"
 	"xray-easy/internal/auth"
 	"xray-easy/internal/backup"
+	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/maintenance"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/stats"
@@ -52,6 +53,9 @@ type server struct {
 	applyMu          sync.Mutex
 	settingsMu       sync.Mutex
 	pendingSettings  map[string]pendingSettingsChange
+	eventsMu         sync.Mutex
+	eventSubs        map[chan struct{}]struct{}
+	diagnosticBuffer *diagnostics.Buffer
 	totpMu           sync.Mutex
 	pendingTOTP      map[string]pendingTOTP
 }
@@ -178,9 +182,11 @@ func main() {
 			BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
 			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
 		},
-		handler:         handlerClient,
-		pendingSettings: make(map[string]pendingSettingsChange),
-		pendingTOTP:     make(map[string]pendingTOTP),
+		handler:          handlerClient,
+		pendingSettings:  make(map[string]pendingSettingsChange),
+		eventSubs:        make(map[chan struct{}]struct{}),
+		diagnosticBuffer: diagnostics.NewBuffer(200),
+		pendingTOTP:      make(map[string]pendingTOTP),
 	}
 	s.stats = stats.NewManager(db, statsClient)
 	s.stats.Start(ctx)
@@ -200,6 +206,8 @@ func main() {
 	mux.HandleFunc("/api/auth/totp/enable", s.totpEnable)
 	mux.HandleFunc("/api/auth/totp/disable", s.totpDisable)
 	mux.HandleFunc("/api/me", s.me)
+	mux.HandleFunc("/api/status", s.status)
+	mux.HandleFunc("/api/logs", s.logs)
 	mux.HandleFunc("/api/settings", s.settings)
 	mux.HandleFunc("/api/settings/validate", s.settingsValidate)
 	mux.HandleFunc("/api/settings/apply", s.settingsApply)
@@ -709,6 +717,121 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username, "totp_enabled": admin.TOTPEnabled, "recovery_codes_remaining": count})
 }
 
+func (s *server) status(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.authenticated(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	status, err := s.supervisor.Status(r.Context())
+	response := map[string]any{
+		"state":            status.State,
+		"pid":              status.PID,
+		"restart_count":    status.RestartCount,
+		"started_at":       status.StartedAt,
+		"last_error":       diagnostics.Redact(status.LastError),
+		"last_exit":        diagnostics.Redact(status.LastExit),
+		"stats_last_error": "",
+	}
+	if s.stats != nil {
+		response["stats_last_error"] = diagnostics.Redact(s.stats.LastError())
+	}
+	if err != nil {
+		response["state"] = "unavailable"
+		response["supervisor_error"] = diagnostics.Redact(err.Error())
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (s *server) logs(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.authenticated(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	component := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("component")))
+	if component == "" {
+		component = "xray"
+	}
+	if component != "xray" && component != "app" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "component must be xray or app"})
+		return
+	}
+	limit := 100
+	if value := strings.TrimSpace(r.URL.Query().Get("limit")); value != "" {
+		parsed, err := strconv.Atoi(value)
+		if err != nil || parsed < 1 || parsed > 200 {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "limit must be between 1 and 200"})
+			return
+		}
+		limit = parsed
+	}
+	entries := make([]diagnostics.Entry, 0, limit)
+	if component == "app" {
+		entries = append(entries, s.diagnosticBuffer.Snapshot(limit)...)
+	} else {
+		lines, err := s.supervisor.Logs(r.Context())
+		if err != nil {
+			s.recordDiagnostic("warn", "could not read supervisor logs: "+err.Error())
+			writeJSON(w, http.StatusBadGateway, map[string]any{"code": "diagnostics_unavailable", "error": "could not read Xray diagnostics"})
+			return
+		}
+		for _, line := range lines {
+			level := diagnosticLevel(line)
+			if level == "info" {
+				continue
+			}
+			entries = append(entries, diagnostics.Entry{At: time.Now().UTC(), Component: "xray", Level: level, Message: diagnostics.Redact(line)})
+		}
+		if len(entries) > limit {
+			entries = entries[len(entries)-limit:]
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"component": component, "entries": entries, "next_cursor": ""})
+}
+
+func diagnosticLevel(line string) string {
+	lower := strings.ToLower(line)
+	if strings.Contains(lower, "error") || strings.Contains(lower, "fail") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic") || strings.Contains(lower, "exited") {
+		return "error"
+	}
+	if strings.Contains(lower, "warn") || strings.Contains(lower, "degraded") {
+		return "warn"
+	}
+	return "info"
+}
+
+func (s *server) recordDiagnostic(level, message string) {
+	if s.diagnosticBuffer != nil {
+		s.diagnosticBuffer.Add("app", level, message)
+	}
+	s.notifyEvents()
+}
+
+func (s *server) subscribeEvents() (<-chan struct{}, func()) {
+	channel := make(chan struct{}, 1)
+	s.eventsMu.Lock()
+	s.eventSubs[channel] = struct{}{}
+	s.eventsMu.Unlock()
+	return channel, func() {
+		s.eventsMu.Lock()
+		if _, ok := s.eventSubs[channel]; ok {
+			delete(s.eventSubs, channel)
+			close(channel)
+		}
+		s.eventsMu.Unlock()
+	}
+}
+
+func (s *server) notifyEvents() {
+	s.eventsMu.Lock()
+	defer s.eventsMu.Unlock()
+	for subscriber := range s.eventSubs {
+		select {
+		case subscriber <- struct{}{}:
+		default:
+		}
+	}
+}
+
 func (s *server) totpStatus(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -857,10 +980,6 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
 		return
 	}
-	if s.stats == nil {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "statistics are unavailable"})
-		return
-	}
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "streaming is unavailable"})
@@ -869,14 +988,24 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-store")
 	w.Header().Set("Connection", "keep-alive")
-	notifications, unsubscribe := s.stats.Subscribe()
-	defer unsubscribe()
+	var statsNotifications <-chan struct{}
+	unsubscribeStats := func() {}
+	if s.stats != nil {
+		statsNotifications, unsubscribeStats = s.stats.Subscribe()
+	}
+	defer unsubscribeStats()
+	eventNotifications, unsubscribeEvents := s.subscribeEvents()
+	defer unsubscribeEvents()
 
-	send := func() error {
+	sendStats := func() error {
 		if _, err := s.authenticated(r); err != nil {
 			return err
 		}
-		payload, err := json.Marshal(map[string]any{"type": "stats", "at": time.Now().UTC(), "clients": s.stats.Snapshot()})
+		clients := map[string]stats.ClientStats{}
+		if s.stats != nil {
+			clients = s.stats.Snapshot()
+		}
+		payload, err := json.Marshal(map[string]any{"type": "stats", "at": time.Now().UTC(), "clients": clients})
 		if err != nil {
 			return err
 		}
@@ -886,7 +1015,33 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 		return nil
 	}
-	if err := send(); err != nil {
+	sendStatus := func() error {
+		if _, err := s.authenticated(r); err != nil {
+			return err
+		}
+		status, err := s.supervisor.Status(r.Context())
+		payload := map[string]any{"type": "status", "at": time.Now().UTC(), "state": status.State, "restart_count": status.RestartCount, "last_error": diagnostics.Redact(status.LastError), "stats_last_error": ""}
+		if s.stats != nil {
+			payload["stats_last_error"] = diagnostics.Redact(s.stats.LastError())
+		}
+		if err != nil {
+			payload["state"] = "unavailable"
+			payload["supervisor_error"] = diagnostics.Redact(err.Error())
+		}
+		data, marshalErr := json.Marshal(payload)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		if _, writeErr := fmt.Fprintf(w, "event: status\ndata: %s\n\n", data); writeErr != nil {
+			return writeErr
+		}
+		flusher.Flush()
+		return nil
+	}
+	if err := sendStats(); err != nil {
+		return
+	}
+	if err := sendStatus(); err != nil {
 		return
 	}
 	heartbeat := time.NewTicker(20 * time.Second)
@@ -895,12 +1050,16 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-notifications:
-			if err := send(); err != nil {
+		case <-statsNotifications:
+			if err := sendStats(); err != nil {
+				return
+			}
+		case <-eventNotifications:
+			if err := sendStatus(); err != nil {
 				return
 			}
 		case <-heartbeat.C:
-			if _, err := s.authenticated(r); err != nil {
+			if err := sendStatus(); err != nil {
 				return
 			}
 			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
@@ -1141,6 +1300,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	}
 	if pending.ExpectedConfirmation != "" {
 		if err := s.supervisor.ProbeTarget(r.Context(), pending.Settings.RealityTarget, pending.Settings.RealitySNI); err != nil {
+			s.recordDiagnostic("warn", "settings target re-probe failed: "+err.Error())
 			s.finishSettingsChange(req.ChangeID, false)
 			writeJSON(w, http.StatusBadGateway, map[string]any{"code": "validation_error", "error": "REALITY target probe failed", "detail": err.Error()})
 			return
@@ -1160,6 +1320,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
 	backupInfo, err := manager.Create("settings-rotation")
 	if err != nil {
+		s.recordDiagnostic("error", "automatic settings backup failed: "+err.Error())
 		s.finishSettingsChange(req.ChangeID, false)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "backup_failed", "error": "could not create automatic backup", "detail": err.Error()})
 		return
@@ -1180,6 +1341,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	}
 	path, operationID, err := s.prepareCandidateLocked(r.Context(), pending.Settings, privateKey, newClients)
 	if err != nil {
+		s.recordDiagnostic("error", "settings candidate validation failed: "+err.Error())
 		s.finishSettingsChange(req.ChangeID, false)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": err.Error()})
 		return
@@ -1191,6 +1353,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.supervisor.Apply(r.Context(), path, operationID); err != nil {
+		s.recordDiagnostic("error", "settings candidate apply failed: "+err.Error())
 		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
 		_ = os.Remove(path)
 		s.finishSettingsChange(req.ChangeID, false)
@@ -1285,6 +1448,7 @@ func (s *server) backups(w http.ResponseWriter, r *http.Request) {
 		defer lock.Close()
 		item, err := manager.Create("manual")
 		if err != nil {
+			s.recordDiagnostic("error", "manual backup failed: "+err.Error())
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create backup", "detail": err.Error()})
 			return
 		}
@@ -1493,6 +1657,7 @@ func (s *server) startReconciler(ctx context.Context) {
 	go func() {
 		reconcileCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		if err := s.reconcileRunning(reconcileCtx); err != nil {
+			s.recordDiagnostic("warn", "initial Xray reconciliation skipped: "+err.Error())
 			fmt.Fprintf(os.Stderr, "xray handler reconciliation skipped: %v\n", err)
 		}
 		cancel()
@@ -1505,6 +1670,7 @@ func (s *server) startReconciler(ctx context.Context) {
 			case <-ticker.C:
 				reconcileCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 				if err := s.reconcileRunning(reconcileCtx); err != nil {
+					s.recordDiagnostic("warn", "Xray reconciliation skipped: "+err.Error())
 					fmt.Fprintf(os.Stderr, "xray handler reconciliation skipped: %v\n", err)
 				}
 				cancel()

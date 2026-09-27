@@ -9,6 +9,8 @@ type TOTPSetup = { setup_token: string; secret: string; otpauth_uri: string; rec
 type Settings = { public_host: string; public_port: number; reality_target: string; reality_sni: string; client_fingerprint: string; protocol: string; network: string; security: string; flow: string }
 type SettingsDiff = { field: string; from: string; to: string }
 type SettingsChange = { change_id: string; expires_in: number; expected_confirmation: string; requires_confirmation: boolean; diff: SettingsDiff[]; consequences: string[]; revoked_clients: number; settings: Settings; confirmation: string }
+type NodeStatus = { state: string; restart_count: number; last_error?: string; last_exit?: string; stats_last_error?: string; supervisor_error?: string }
+type DiagnosticEntry = { at: string; component: string; level: string; message: string }
 
 class APIError extends Error {
   code?: string
@@ -33,16 +35,18 @@ const lastBackup = ref('')
 const settings = ref<Settings | null>(null)
 const settingsForm = ref({ publicHost: '', realityTarget: '', realitySNI: '', clientFingerprint: 'chrome', rotatePrivateKey: false })
 const pendingSettings = ref<SettingsChange | null>(null)
+const nodeStatus = ref<NodeStatus | null>(null)
+const diagnostics = ref<DiagnosticEntry[]>([])
 const loginNeedsTOTP = ref(false)
 const loginUsesRecovery = ref(false)
 let events: EventSource | null = null
 
 const text = {
   en: {
-    title: 'Xray-easy', setup: 'Initial setup', login: 'Administrator login', username: 'Username', password: 'Password', host: 'Public host or IPv4', port: 'Public port (from Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Create administrator', signIn: 'Sign in', ready: 'Devices', newDevice: 'Device name', fingerprint: 'Fingerprint', createDevice: 'Create device', profile: 'Profile', qr: 'QR code', download: 'Download JSON', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', revoke: 'Revoke', logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', security: 'Account security', backup: 'Create backup', backupCreated: 'Backup created', settings: 'Node settings', saveSettings: 'Review changes', applySettings: 'Apply settings', cancelSettings: 'Cancel', rotateKey: 'Generate a new REALITY key', confirmation: 'Confirmation', settingsWarning: 'Existing device profiles may stop working and will be revoked.', expected: 'Type exactly', settingsDiff: 'Changes', consequences: 'Consequences', revokedClients: 'Profiles to revoke', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
+    title: 'Xray-easy', setup: 'Initial setup', login: 'Administrator login', username: 'Username', password: 'Password', host: 'Public host or IPv4', port: 'Public port (from Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Create administrator', signIn: 'Sign in', ready: 'Devices', newDevice: 'Device name', fingerprint: 'Fingerprint', createDevice: 'Create device', profile: 'Profile', qr: 'QR code', download: 'Download JSON', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', revoke: 'Revoke', logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', security: 'Account security', backup: 'Create backup', backupCreated: 'Backup created', settings: 'Node settings', saveSettings: 'Review changes', applySettings: 'Apply settings', cancelSettings: 'Cancel', rotateKey: 'Generate a new REALITY key', confirmation: 'Confirmation', settingsWarning: 'Existing device profiles may stop working and will be revoked.', expected: 'Type exactly', settingsDiff: 'Changes', consequences: 'Consequences', revokedClients: 'Profiles to revoke', diagnostics: 'Diagnostics', xrayState: 'Xray state', restarts: 'Restarts', refreshDiagnostics: 'Refresh diagnostics', noDiagnostics: 'No warnings or errors', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
   },
   ru: {
-    title: 'Xray-easy', setup: 'Первичная настройка', login: 'Вход администратора', username: 'Имя пользователя', password: 'Пароль', host: 'Публичный адрес или IPv4', port: 'Публичный порт (из Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Создать администратора', signIn: 'Войти', ready: 'Устройства', newDevice: 'Имя устройства', fingerprint: 'Fingerprint', createDevice: 'Создать устройство', profile: 'Профиль', qr: 'QR-код', download: 'Скачать JSON', enabled: 'включено', disabled: 'выключено', revoked: 'отозвано', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', revoke: 'Отозвать', logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', security: 'Безопасность аккаунта', backup: 'Создать backup', backupCreated: 'Backup создан', settings: 'Настройки узла', saveSettings: 'Проверить изменения', applySettings: 'Применить настройки', cancelSettings: 'Отмена', rotateKey: 'Сгенерировать новый REALITY-ключ', confirmation: 'Подтверждение', settingsWarning: 'Старые профили могут перестать работать и будут отозваны.', expected: 'Введите точно', settingsDiff: 'Изменения', consequences: 'Последствия', revokedClients: 'Профилей будет отозвано', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
+    title: 'Xray-easy', setup: 'Первичная настройка', login: 'Вход администратора', username: 'Имя пользователя', password: 'Пароль', host: 'Публичный адрес или IPv4', port: 'Публичный порт (из Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Создать администратора', signIn: 'Войти', ready: 'Устройства', newDevice: 'Имя устройства', fingerprint: 'Fingerprint', createDevice: 'Создать устройство', profile: 'Профиль', qr: 'QR-код', download: 'Скачать JSON', enabled: 'включено', disabled: 'выключено', revoked: 'отозвано', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', revoke: 'Отозвать', logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', security: 'Безопасность аккаунта', backup: 'Создать backup', backupCreated: 'Backup создан', settings: 'Настройки узла', saveSettings: 'Проверить изменения', applySettings: 'Применить настройки', cancelSettings: 'Отмена', rotateKey: 'Сгенерировать новый REALITY-ключ', confirmation: 'Подтверждение', settingsWarning: 'Старые профили могут перестать работать и будут отозваны.', expected: 'Введите точно', settingsDiff: 'Изменения', consequences: 'Последствия', revokedClients: 'Профилей будет отозвано', diagnostics: 'Диагностика', xrayState: 'Состояние Xray', restarts: 'Перезапуски', refreshDiagnostics: 'Обновить диагностику', noDiagnostics: 'Предупреждений и ошибок нет', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
   },
 }
 
@@ -69,9 +73,17 @@ async function load() {
   } catch (cause) { showError(cause) }
 }
 
-async function loadAuthenticated() { await Promise.all([loadClients(), loadTOTPStatus(), loadSettings()]) }
+async function loadAuthenticated() { await Promise.all([loadClients(), loadTOTPStatus(), loadSettings(), loadStatus(), loadDiagnostics()]) }
 async function loadClients() { clients.value = await request<Client[]>('/api/clients') }
 async function loadTOTPStatus() { totpStatus.value = await request<TOTPStatus>('/api/auth/totp/status') }
+async function loadStatus() { try { nodeStatus.value = await request<NodeStatus>('/api/status') } catch { nodeStatus.value = { state: 'unavailable', restart_count: 0 } } }
+async function loadDiagnostics() {
+  const results = await Promise.allSettled([
+    request<{ entries: DiagnosticEntry[] }>('/api/logs?component=xray&limit=100'),
+    request<{ entries: DiagnosticEntry[] }>('/api/logs?component=app&limit=100'),
+  ])
+  diagnostics.value = results.flatMap(result => result.status === 'fulfilled' ? result.value.entries : []).sort((left, right) => left.at.localeCompare(right.at)).slice(-100)
+}
 async function loadSettings() {
   settings.value = await request<Settings>('/api/settings')
   settingsForm.value = { publicHost: settings.value.public_host, realityTarget: settings.value.reality_target, realitySNI: settings.value.reality_sni, clientFingerprint: settings.value.client_fingerprint, rotatePrivateKey: false }
@@ -81,6 +93,7 @@ function connectEvents() {
   if (events || !admin.value) return
   events = new EventSource('/api/events')
   events.addEventListener('stats', () => { if (admin.value) void loadClients() })
+  events.addEventListener('status', () => { if (admin.value) { void loadStatus(); void loadDiagnostics() } })
   events.onerror = () => { events?.close(); events = null; if (admin.value) window.setTimeout(connectEvents, 3000) }
 }
 
@@ -232,6 +245,14 @@ function formatLastSeen(value?: string) { if (!value) return ''; return new Date
           <button :disabled="busy || (pendingSettings.requires_confirmation && pendingSettings.confirmation !== pendingSettings.expected_confirmation)" @click="applySettings">{{ t().applySettings }}</button>
           <button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancelSettings }}</button>
         </div>
+      </section>
+      <section class="diagnostics-panel">
+        <div class="card-title"><h2>{{ t().diagnostics }}</h2><button class="secondary" :disabled="busy" @click="loadStatus(); loadDiagnostics()">{{ t().refreshDiagnostics }}</button></div>
+        <p>{{ t().xrayState }}: <strong>{{ nodeStatus?.state || 'unknown' }}</strong> · {{ t().restarts }}: {{ nodeStatus?.restart_count || 0 }}</p>
+        <p v-if="nodeStatus?.last_error" class="error">{{ nodeStatus.last_error }}</p>
+        <p v-if="nodeStatus?.stats_last_error" class="error">{{ nodeStatus.stats_last_error }}</p>
+        <ul v-if="diagnostics.length" class="diagnostics-list"><li v-for="entry in diagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`"><small>{{ formatLastSeen(entry.at) }} · {{ entry.component }} · {{ entry.level }}</small><span>{{ entry.message }}</span></li></ul>
+        <p v-else class="hint">{{ t().noDiagnostics }}</p>
       </section>
       <section class="security">
         <h2>{{ t().security }}</h2>

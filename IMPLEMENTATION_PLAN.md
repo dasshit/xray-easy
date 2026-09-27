@@ -13,10 +13,13 @@ JSON export и enable/disable/revoke. Compose публикует UI только
 VDS и передаёт `XRAY_PUBLIC_PORT` как единственную настройку внешнего порта.
 Добавлены StatsService polling, reconciliation через HandlerService,
 аутентифицированный SSE, TOTP с зашифрованным секретом, одноразовые recovery-
-коды, двухшаговый вход и logout-all.
+коды, двухшаговый вход и logout-all. Diagnostics/API surface также реализованы:
+supervisor держит bounded tail, control plane отдаёт только redacted warnings и
+errors через authenticated `/api/status` и `/api/logs`, а `/api/events` передаёт
+stats/status updates.
 
-Следующими обязательными срезами остаются redacted diagnostics/SSE и release
-E2E-проверка импорта в V2Rage на macOS/iOS.
+Следующим обязательным срезом остаётся release E2E-проверка импорта в V2Rage
+на macOS/iOS.
 
 Backup/restore уже реализованы: control plane и CLI используют общий
 межпроцессный maintenance lock; SQLite snapshot создаётся через `VACUUM INTO`,
@@ -361,6 +364,8 @@ POST   /api/auth/totp/setup
 POST   /api/auth/totp/enable
 POST   /api/auth/totp/disable
 GET    /api/me
+
+GET    /api/status
 
 GET    /api/settings
 PATCH  /api/settings
@@ -875,13 +880,14 @@ Smoke-проверка выполнена на чистом Compose volume: setu
 серверного и клиентского JSON, QR, state transitions и восстановление
 `active.json` после перезапуска.
 
-Реализованные срезы TOTP, backup/restore и settings rotation добавили CLI-команды `admin
+Реализованные срезы TOTP, backup/restore, settings rotation и diagnostics добавили CLI-команды `admin
 logout-all`,
 `admin reset-totp` и `admin recovery-codes`, запускаемые через
 `docker compose exec`, а также `backup create`, `backup list` и
 `restore <name> RESTORE`; settings rotation выполняется через Web UI с
-preview/diff и подтверждением `ROTATE` или `REVOKE`. Следующий срез:
-redacted diagnostics и release E2E. До публикации образа CI должен заменить tag на immutable
+preview/diff и подтверждением `ROTATE` или `REVOKE`; diagnostics доступны через
+redacted `/api/status`, `/api/logs` и SSE `/api/events`. Следующий срез — release
+E2E. До публикации образа CI должен заменить tag на immutable
 digest и добавить проверку upstream checksum для pinned Xray release.
 
 ## Источники

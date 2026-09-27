@@ -33,6 +33,16 @@ type probeRequest struct {
 	SNI    string `json:"sni"`
 }
 
+type Status struct {
+	Protocol     string    `json:"protocol"`
+	State        string    `json:"state"`
+	PID          int       `json:"pid"`
+	LastError    string    `json:"last_error"`
+	LastExit     string    `json:"last_exit"`
+	RestartCount int       `json:"restart_count"`
+	StartedAt    time.Time `json:"started_at"`
+}
+
 func (c Client) Validate(ctx context.Context, path, operationID string) error {
 	_, err := c.call(ctx, http.MethodPost, "/validate", operationRequest{Path: path, OperationID: operationID})
 	return err
@@ -51,6 +61,32 @@ func (c Client) ProbeTarget(ctx context.Context, target, sni string) error {
 func (c Client) Health(ctx context.Context) error {
 	_, err := c.call(ctx, http.MethodGet, "/health", nil)
 	return err
+}
+
+func (c Client) Status(ctx context.Context) (Status, error) {
+	body, err := c.call(ctx, http.MethodGet, "/status", nil)
+	if err != nil {
+		return Status{}, err
+	}
+	var status Status
+	if err := json.Unmarshal(body, &status); err != nil {
+		return Status{}, fmt.Errorf("decode supervisor status: %w", err)
+	}
+	return status, nil
+}
+
+func (c Client) Logs(ctx context.Context) ([]string, error) {
+	body, err := c.call(ctx, http.MethodGet, "/logs", nil)
+	if err != nil {
+		return nil, err
+	}
+	var response struct {
+		Lines []string `json:"lines"`
+	}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("decode supervisor logs: %w", err)
+	}
+	return response.Lines, nil
 }
 
 func (c Client) call(ctx context.Context, method, path string, payload any) ([]byte, error) {

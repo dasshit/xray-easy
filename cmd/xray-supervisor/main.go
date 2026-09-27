@@ -30,6 +30,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"xray-easy/internal/diagnostics"
 )
 
 const protocolVersion = "v1"
@@ -524,34 +526,7 @@ func formatExit(err error) string {
 }
 
 func redact(value string) string {
-	for _, key := range []string{"privateKey", "private_key", "password", "token", "secret", "master_key"} {
-		for _, separator := range []string{"=", ":"} {
-			value = redactAfter(value, key+separator)
-		}
-	}
-	return value
-}
-
-func redactAfter(value, marker string) string {
-	needle := strings.ToLower(marker)
-	searchFrom := 0
-	for {
-		if searchFrom >= len(value) {
-			return value
-		}
-		idxRelative := strings.Index(strings.ToLower(value[searchFrom:]), needle)
-		if idxRelative < 0 {
-			return value
-		}
-		idx := searchFrom + idxRelative
-		start := idx + len(marker)
-		end := start
-		for end < len(value) && !strings.ContainsRune(" \t,;}\n", rune(value[end])) {
-			end++
-		}
-		value = value[:start] + "[REDACTED]" + value[end:]
-		searchFrom = start + len("[REDACTED]")
-	}
+	return diagnostics.Redact(value)
 }
 
 func runHealthcheck(url, tokenFile string) error {
