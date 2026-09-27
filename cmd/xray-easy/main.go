@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -48,6 +50,8 @@ type server struct {
 	stats            *stats.Manager
 	handler          *xrayapi.HandlerClient
 	applyMu          sync.Mutex
+	settingsMu       sync.Mutex
+	pendingSettings  map[string]pendingSettingsChange
 	totpMu           sync.Mutex
 	pendingTOTP      map[string]pendingTOTP
 }
@@ -88,6 +92,39 @@ type pendingTOTP struct {
 type clientRequest struct {
 	Name        string `json:"name"`
 	Fingerprint string `json:"fingerprint"`
+}
+
+type settingsPatchRequest struct {
+	PublicHost        *string `json:"public_host"`
+	RealityTarget     *string `json:"reality_target"`
+	RealitySNI        *string `json:"reality_sni"`
+	ClientFingerprint *string `json:"client_fingerprint"`
+	RotatePrivateKey  bool    `json:"rotate_private_key"`
+}
+
+type settingsApplyRequest struct {
+	ChangeID     string `json:"change_id"`
+	Confirmation string `json:"confirmation"`
+}
+
+type settingsDiff struct {
+	Field string `json:"field"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+}
+
+type pendingSettingsChange struct {
+	ID                   string
+	AdminID              string
+	BaseFingerprint      string
+	ClientsFingerprint   string
+	Settings             store.Settings
+	ExpectedConfirmation string
+	Diff                 []settingsDiff
+	Consequences         []string
+	RevokedClients       int
+	ExpiresAt            time.Time
+	Applying             bool
 }
 
 type clientResponse struct {
@@ -141,8 +178,9 @@ func main() {
 			BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
 			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
 		},
-		handler:     handlerClient,
-		pendingTOTP: make(map[string]pendingTOTP),
+		handler:         handlerClient,
+		pendingSettings: make(map[string]pendingSettingsChange),
+		pendingTOTP:     make(map[string]pendingTOTP),
 	}
 	s.stats = stats.NewManager(db, statsClient)
 	s.stats.Start(ctx)
@@ -163,6 +201,8 @@ func main() {
 	mux.HandleFunc("/api/auth/totp/disable", s.totpDisable)
 	mux.HandleFunc("/api/me", s.me)
 	mux.HandleFunc("/api/settings", s.settings)
+	mux.HandleFunc("/api/settings/validate", s.settingsValidate)
+	mux.HandleFunc("/api/settings/apply", s.settingsApply)
 	mux.HandleFunc("/api/backups", s.backups)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/clients", s.clients)
@@ -466,8 +506,13 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.PublicPort = s.publicPort
+	req.PublicHost = strings.TrimSpace(req.PublicHost)
 	if strings.TrimSpace(req.PublicHost) == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "public_host is required"})
+		return
+	}
+	if err := xray.ValidatePublicHost(req.PublicHost); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	req.RealityTarget = strings.TrimSpace(req.RealityTarget)
@@ -882,10 +927,334 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodPatch {
-		writeJSON(w, http.StatusNotImplemented, map[string]any{"error": "settings rotation is not implemented in this slice"})
+		s.prepareSettingsChange(w, r)
 		return
 	}
 	writeJSON(w, http.StatusMethodNotAllowed, nil)
+}
+
+func (s *server) settingsValidate(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	s.prepareSettingsChange(w, r)
+}
+
+func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	var req settingsPatchRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
+	}
+	current, err := s.store.GetSettings(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "settings_incomplete", "error": err.Error()})
+		return
+	}
+	current.PublicPort = s.publicPort
+	candidate := current
+	if req.PublicHost != nil {
+		candidate.PublicHost = strings.TrimSpace(*req.PublicHost)
+	}
+	if req.RealityTarget != nil {
+		candidate.RealityTarget = strings.TrimSpace(*req.RealityTarget)
+	}
+	if req.RealitySNI != nil {
+		candidate.RealitySNI = strings.TrimSpace(*req.RealitySNI)
+	}
+	if req.ClientFingerprint != nil {
+		candidate.ClientFingerprint = strings.TrimSpace(*req.ClientFingerprint)
+	}
+	if err := xray.ValidatePublicHost(candidate.PublicHost); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
+	}
+	if candidate.ClientFingerprint == "" || !fingerprints[candidate.ClientFingerprint] {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "unsupported client fingerprint"})
+		return
+	}
+	if err := xray.ValidateTarget(candidate.RealityTarget, candidate.RealitySNI); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
+	}
+	hostChanged := candidate.PublicHost != current.PublicHost
+	targetChanged := candidate.RealityTarget != current.RealityTarget
+	sniChanged := candidate.RealitySNI != current.RealitySNI
+	privateKeyChanged := req.RotatePrivateKey
+	dangerous := hostChanged || targetChanged || sniChanged || privateKeyChanged
+	if !dangerous && candidate.ClientFingerprint == current.ClientFingerprint {
+		writeJSON(w, http.StatusOK, map[string]any{"changed": false, "settings": publicSettings(current)})
+		return
+	}
+
+	if dangerous && (targetChanged || sniChanged) {
+		if err := s.supervisor.ProbeTarget(r.Context(), candidate.RealityTarget, candidate.RealitySNI); err != nil {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"code": "validation_error", "error": "REALITY target probe failed", "detail": err.Error()})
+			return
+		}
+	}
+	clients, err := s.store.ListClients(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list clients"})
+		return
+	}
+	changeID, err := randomID()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create settings change"})
+		return
+	}
+	if privateKeyChanged {
+		newPrivateKey, publicKey, keyErr := xray.NewRealityKeyPair()
+		if keyErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not generate REALITY key pair"})
+			return
+		}
+		candidate.RealityPublicKey = publicKey
+		candidate.RealityPrivateKeyEnc, err = secret.Seal(s.masterKey, newPrivateKey, "reality_private_key")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encrypt REALITY private key"})
+			return
+		}
+	}
+	diff := make([]settingsDiff, 0, 5)
+	if hostChanged {
+		diff = append(diff, settingsDiff{Field: "public_host", From: current.PublicHost, To: candidate.PublicHost})
+	}
+	if targetChanged {
+		diff = append(diff, settingsDiff{Field: "reality_target", From: current.RealityTarget, To: candidate.RealityTarget})
+	}
+	if sniChanged {
+		diff = append(diff, settingsDiff{Field: "reality_sni", From: current.RealitySNI, To: candidate.RealitySNI})
+	}
+	if privateKeyChanged {
+		diff = append(diff, settingsDiff{Field: "reality_private_key", From: "current key", To: "new key generated"})
+		diff = append(diff, settingsDiff{Field: "reality_public_key", From: current.RealityPublicKey, To: candidate.RealityPublicKey})
+	}
+	if candidate.ClientFingerprint != current.ClientFingerprint {
+		diff = append(diff, settingsDiff{Field: "client_fingerprint", From: current.ClientFingerprint, To: candidate.ClientFingerprint})
+	}
+	expectedConfirmation := ""
+	consequences := []string{}
+	if dangerous {
+		expectedConfirmation = "REVOKE"
+		if privateKeyChanged && !hostChanged && !targetChanged && !sniChanged {
+			expectedConfirmation = "ROTATE"
+		}
+		consequences = append(consequences,
+			"all existing device profiles will be revoked and cannot be re-enabled",
+			"new profiles must be created after the change",
+			"Xray will be validated and reloaded after an automatic backup",
+		)
+	} else {
+		consequences = append(consequences, "existing profiles remain valid; new profiles use the updated default fingerprint")
+	}
+	pending := pendingSettingsChange{ID: changeID, AdminID: admin.ID, BaseFingerprint: settingsFingerprint(current), ClientsFingerprint: clientsFingerprint(clients), Settings: candidate, ExpectedConfirmation: expectedConfirmation, Diff: diff, Consequences: consequences, RevokedClients: len(clients), ExpiresAt: time.Now().UTC().Add(10 * time.Minute)}
+	s.settingsMu.Lock()
+	for id, item := range s.pendingSettings {
+		if item.AdminID == admin.ID {
+			delete(s.pendingSettings, id)
+		}
+	}
+	s.pendingSettings[changeID] = pending
+	s.settingsMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"changed":               true,
+		"change_id":             changeID,
+		"expires_in":            600,
+		"expected_confirmation": expectedConfirmation,
+		"requires_confirmation": expectedConfirmation != "",
+		"diff":                  diff,
+		"consequences":          consequences,
+		"revoked_clients":       len(clients),
+		"settings":              publicSettings(candidate),
+	})
+}
+
+func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	var req settingsApplyRequest
+	if err := decodeJSON(r, &req); err != nil || strings.TrimSpace(req.ChangeID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "change_id is required"})
+		return
+	}
+	s.settingsMu.Lock()
+	pending, ok := s.pendingSettings[req.ChangeID]
+	if !ok || pending.AdminID != admin.ID || time.Now().UTC().After(pending.ExpiresAt) || pending.Applying {
+		s.settingsMu.Unlock()
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "confirmation_expired", "error": "settings change is expired or already applying"})
+		return
+	}
+	if pending.ExpectedConfirmation != "" && strings.TrimSpace(req.Confirmation) != pending.ExpectedConfirmation {
+		s.settingsMu.Unlock()
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "confirmation_required", "error": "type the requested confirmation word", "expected_confirmation": pending.ExpectedConfirmation})
+		return
+	}
+	pending.Applying = true
+	s.pendingSettings[req.ChangeID] = pending
+	s.settingsMu.Unlock()
+
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	lock, err := maintenance.Acquire(r.Context(), s.maintenancePath)
+	if err != nil {
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"code": "apply_pending", "error": "maintenance lock is unavailable"})
+		return
+	}
+	defer lock.Close()
+	current, err := s.store.GetSettings(r.Context())
+	if err != nil {
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "settings_incomplete", "error": err.Error()})
+		return
+	}
+	current.PublicPort = s.publicPort
+	if settingsFingerprint(current) != pending.BaseFingerprint {
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "conflict", "error": "settings changed; prepare the rotation again"})
+		return
+	}
+	if pending.ExpectedConfirmation == "" {
+		if err := s.store.UpdateSettings(r.Context(), pending.Settings); err != nil {
+			s.finishSettingsChange(req.ChangeID, false)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "persist settings: " + err.Error()})
+			return
+		}
+		_ = s.store.AddAudit(r.Context(), admin.ID, "settings.update", "settings", "node", fmt.Sprintf("client fingerprint default changed from %s to %s", current.ClientFingerprint, pending.Settings.ClientFingerprint))
+		s.finishSettingsChange(req.ChangeID, true)
+		writeJSON(w, http.StatusOK, map[string]any{"applied": true, "settings": publicSettings(pending.Settings), "revoked_clients": 0})
+		return
+	}
+	if pending.ExpectedConfirmation != "" {
+		if err := s.supervisor.ProbeTarget(r.Context(), pending.Settings.RealityTarget, pending.Settings.RealitySNI); err != nil {
+			s.finishSettingsChange(req.ChangeID, false)
+			writeJSON(w, http.StatusBadGateway, map[string]any{"code": "validation_error", "error": "REALITY target probe failed", "detail": err.Error()})
+			return
+		}
+	}
+	oldClients, err := s.store.ListClients(r.Context())
+	if err != nil {
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list clients"})
+		return
+	}
+	if clientsFingerprint(oldClients) != pending.ClientsFingerprint {
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "conflict", "error": "device list or states changed; review the rotation again"})
+		return
+	}
+	manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
+	backupInfo, err := manager.Create("settings-rotation")
+	if err != nil {
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "backup_failed", "error": "could not create automatic backup", "detail": err.Error()})
+		return
+	}
+	privateKey, err := secret.Open(s.masterKey, pending.Settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt candidate REALITY private key"})
+		return
+	}
+	newClients := append([]store.Client(nil), oldClients...)
+	states := make(map[string]store.ClientState, len(oldClients))
+	if pending.ExpectedConfirmation != "" {
+		for i := range newClients {
+			newClients[i].Enabled, newClients[i].Revoked = false, true
+			states[newClients[i].ID] = store.ClientState{Enabled: false, Revoked: true}
+		}
+	}
+	path, operationID, err := s.prepareCandidateLocked(r.Context(), pending.Settings, privateKey, newClients)
+	if err != nil {
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": err.Error()})
+		return
+	}
+	if err := s.store.UpdateApplyOperation(r.Context(), operationID, "applying", ""); err != nil {
+		_ = os.Remove(path)
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": err.Error()})
+		return
+	}
+	if err := s.supervisor.Apply(r.Context(), path, operationID); err != nil {
+		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
+		_ = os.Remove(path)
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": err.Error()})
+		return
+	}
+	if err := s.store.UpdateSettingsAndClientStates(r.Context(), pending.Settings, states); err != nil {
+		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
+		_ = s.supervisor.Apply(r.Context(), filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+		_ = os.Remove(path)
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "persist settings rotation: " + err.Error()})
+		return
+	}
+	if err := os.Rename(path, filepath.Join(s.configDir, "active.json")); err != nil {
+		_ = s.store.UpdateSettingsAndClientStates(r.Context(), current, clientStates(oldClients))
+		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
+		_ = s.supervisor.Apply(r.Context(), filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+		s.finishSettingsChange(req.ChangeID, false)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "promote Xray config: " + err.Error()})
+		return
+	}
+	_ = s.store.UpdateApplyOperation(r.Context(), operationID, "committed", "")
+	_ = s.store.AddAudit(r.Context(), admin.ID, "settings.rotation", "settings", "node", fmt.Sprintf("settings rotated; %d profiles revoked; backup=%s", len(states), backupInfo.Name))
+	s.finishSettingsChange(req.ChangeID, true)
+	writeJSON(w, http.StatusOK, map[string]any{"applied": true, "settings": publicSettings(pending.Settings), "revoked_clients": len(states), "backup": backupInfo.Name})
+}
+
+func (s *server) finishSettingsChange(id string, success bool) {
+	s.settingsMu.Lock()
+	defer s.settingsMu.Unlock()
+	if success {
+		delete(s.pendingSettings, id)
+		return
+	}
+	if pending, ok := s.pendingSettings[id]; ok {
+		pending.Applying = false
+		s.pendingSettings[id] = pending
+	}
+}
+
+func clientStates(clients []store.Client) map[string]store.ClientState {
+	states := make(map[string]store.ClientState, len(clients))
+	for _, client := range clients {
+		states[client.ID] = store.ClientState{Enabled: client.Enabled, Revoked: client.Revoked}
+	}
+	return states
+}
+
+func settingsFingerprint(settings store.Settings) string {
+	value := strings.Join([]string{settings.PublicHost, strconv.Itoa(settings.PublicPort), settings.XrayAPIListen, strconv.Itoa(settings.InternalInboundPort), settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint}, "\x00")
+	hash := sha256.Sum256([]byte(value))
+	return hex.EncodeToString(hash[:])
+}
+
+func clientsFingerprint(clients []store.Client) string {
+	ordered := append([]store.Client(nil), clients...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	var value strings.Builder
+	for _, client := range ordered {
+		fmt.Fprintf(&value, "%s\x00%s\x00%t\x00%t\n", client.ID, client.UUID, client.Enabled, client.Revoked)
+	}
+	hash := sha256.Sum256([]byte(value.String()))
+	return hex.EncodeToString(hash[:])
 }
 
 func (s *server) backups(w http.ResponseWriter, r *http.Request) {
@@ -1297,6 +1666,7 @@ func (s *server) prepareCandidateLocked(ctx context.Context, settings store.Sett
 	}
 	if err := s.supervisor.Validate(ctx, path, operationID); err != nil {
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		_ = os.Remove(path)
 		return "", "", err
 	}
 	return path, operationID, nil

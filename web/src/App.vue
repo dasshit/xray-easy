@@ -6,6 +6,9 @@ type Admin = { username: string; totp_enabled?: boolean; recovery_codes_remainin
 type Client = { id: string; name: string; enabled: boolean; revoked: boolean; fingerprint?: string; online: boolean; last_seen?: string; upload_bytes: number; download_bytes: number }
 type TOTPStatus = { enabled: boolean; recovery_codes_remaining: number }
 type TOTPSetup = { setup_token: string; secret: string; otpauth_uri: string; recovery_codes: string[]; expires_in: number }
+type Settings = { public_host: string; public_port: number; reality_target: string; reality_sni: string; client_fingerprint: string; protocol: string; network: string; security: string; flow: string }
+type SettingsDiff = { field: string; from: string; to: string }
+type SettingsChange = { change_id: string; expires_in: number; expected_confirmation: string; requires_confirmation: boolean; diff: SettingsDiff[]; consequences: string[]; revoked_clients: number; settings: Settings; confirmation: string }
 
 class APIError extends Error {
   code?: string
@@ -27,16 +30,19 @@ const totpSetup = ref<TOTPSetup | null>(null)
 const totpConfirmCode = ref('')
 const disableTOTPForm = ref({ password: '', code: '' })
 const lastBackup = ref('')
+const settings = ref<Settings | null>(null)
+const settingsForm = ref({ publicHost: '', realityTarget: '', realitySNI: '', clientFingerprint: 'chrome', rotatePrivateKey: false })
+const pendingSettings = ref<SettingsChange | null>(null)
 const loginNeedsTOTP = ref(false)
 const loginUsesRecovery = ref(false)
 let events: EventSource | null = null
 
 const text = {
   en: {
-    title: 'Xray-easy', setup: 'Initial setup', login: 'Administrator login', username: 'Username', password: 'Password', host: 'Public host or IPv4', port: 'Public port (from Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Create administrator', signIn: 'Sign in', ready: 'Devices', newDevice: 'Device name', fingerprint: 'Fingerprint', createDevice: 'Create device', profile: 'Profile', qr: 'QR code', download: 'Download JSON', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', revoke: 'Revoke', logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', security: 'Account security', backup: 'Create backup', backupCreated: 'Backup created', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
+    title: 'Xray-easy', setup: 'Initial setup', login: 'Administrator login', username: 'Username', password: 'Password', host: 'Public host or IPv4', port: 'Public port (from Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Create administrator', signIn: 'Sign in', ready: 'Devices', newDevice: 'Device name', fingerprint: 'Fingerprint', createDevice: 'Create device', profile: 'Profile', qr: 'QR code', download: 'Download JSON', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', revoke: 'Revoke', logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', security: 'Account security', backup: 'Create backup', backupCreated: 'Backup created', settings: 'Node settings', saveSettings: 'Review changes', applySettings: 'Apply settings', cancelSettings: 'Cancel', rotateKey: 'Generate a new REALITY key', confirmation: 'Confirmation', settingsWarning: 'Existing device profiles may stop working and will be revoked.', expected: 'Type exactly', settingsDiff: 'Changes', consequences: 'Consequences', revokedClients: 'Profiles to revoke', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
   },
   ru: {
-    title: 'Xray-easy', setup: 'Первичная настройка', login: 'Вход администратора', username: 'Имя пользователя', password: 'Пароль', host: 'Публичный адрес или IPv4', port: 'Публичный порт (из Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Создать администратора', signIn: 'Войти', ready: 'Устройства', newDevice: 'Имя устройства', fingerprint: 'Fingerprint', createDevice: 'Создать устройство', profile: 'Профиль', qr: 'QR-код', download: 'Скачать JSON', enabled: 'включено', disabled: 'выключено', revoked: 'отозвано', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', revoke: 'Отозвать', logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', security: 'Безопасность аккаунта', backup: 'Создать backup', backupCreated: 'Backup создан', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
+    title: 'Xray-easy', setup: 'Первичная настройка', login: 'Вход администратора', username: 'Имя пользователя', password: 'Пароль', host: 'Публичный адрес или IPv4', port: 'Публичный порт (из Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Создать администратора', signIn: 'Войти', ready: 'Устройства', newDevice: 'Имя устройства', fingerprint: 'Fingerprint', createDevice: 'Создать устройство', profile: 'Профиль', qr: 'QR-код', download: 'Скачать JSON', enabled: 'включено', disabled: 'выключено', revoked: 'отозвано', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', revoke: 'Отозвать', logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', security: 'Безопасность аккаунта', backup: 'Создать backup', backupCreated: 'Backup создан', settings: 'Настройки узла', saveSettings: 'Проверить изменения', applySettings: 'Применить настройки', cancelSettings: 'Отмена', rotateKey: 'Сгенерировать новый REALITY-ключ', confirmation: 'Подтверждение', settingsWarning: 'Старые профили могут перестать работать и будут отозваны.', expected: 'Введите точно', settingsDiff: 'Изменения', consequences: 'Последствия', revokedClients: 'Профилей будет отозвано', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
   },
 }
 
@@ -63,9 +69,13 @@ async function load() {
   } catch (cause) { showError(cause) }
 }
 
-async function loadAuthenticated() { await Promise.all([loadClients(), loadTOTPStatus()]) }
+async function loadAuthenticated() { await Promise.all([loadClients(), loadTOTPStatus(), loadSettings()]) }
 async function loadClients() { clients.value = await request<Client[]>('/api/clients') }
 async function loadTOTPStatus() { totpStatus.value = await request<TOTPStatus>('/api/auth/totp/status') }
+async function loadSettings() {
+  settings.value = await request<Settings>('/api/settings')
+  settingsForm.value = { publicHost: settings.value.public_host, realityTarget: settings.value.reality_target, realitySNI: settings.value.reality_sni, clientFingerprint: settings.value.client_fingerprint, rotatePrivateKey: false }
+}
 
 function connectEvents() {
   if (events || !admin.value) return
@@ -113,6 +123,23 @@ async function createBackup() {
   busy.value = true; error.value = ''
   try { const result = await request<{ name: string }>('/api/backups', { method: 'POST' }); lastBackup.value = result.name }
   catch (cause) { showError(cause) } finally { busy.value = false }
+}
+
+async function reviewSettings() {
+  busy.value = true; error.value = ''; pendingSettings.value = null
+  try {
+    const result = await request<Omit<SettingsChange, 'confirmation'>>('/api/settings', { method: 'PATCH', body: JSON.stringify({ public_host: settingsForm.value.publicHost, reality_target: settingsForm.value.realityTarget, reality_sni: settingsForm.value.realitySNI, client_fingerprint: settingsForm.value.clientFingerprint, rotate_private_key: settingsForm.value.rotatePrivateKey }) })
+    pendingSettings.value = { ...result, confirmation: '' }
+  } catch (cause) { showError(cause) } finally { busy.value = false }
+}
+
+async function applySettings() {
+  if (!pendingSettings.value) return
+  busy.value = true; error.value = ''
+  try {
+    await request('/api/settings/apply', { method: 'POST', body: JSON.stringify({ change_id: pendingSettings.value.change_id, confirmation: pendingSettings.value.confirmation }) })
+    pendingSettings.value = null; await loadSettings(); await loadClients()
+  } catch (cause) { showError(cause) } finally { busy.value = false }
 }
 
 async function startTOTPSetup() {
@@ -186,6 +213,26 @@ function formatLastSeen(value?: string) { if (!value) return ''; return new Date
       <div class="device-create"><input v-model="newDevice.name" :placeholder="t().newDevice" @keyup.enter="createDevice" /><select v-model="newDevice.fingerprint"><option value="">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option></select><button :disabled="busy || !newDevice.name" @click="createDevice">{{ t().createDevice }}</button></div>
       <ul class="devices"><li v-for="client in clients" :key="client.id"><span><strong>{{ client.name }}</strong><small>{{ client.revoked ? t().revoked : client.enabled ? t().enabled : t().disabled }} · {{ client.online ? t().online : t().offline }} · {{ t().traffic }} ↑{{ formatBytes(client.upload_bytes) }} ↓{{ formatBytes(client.download_bytes) }}<template v-if="client.last_seen"> · {{ formatLastSeen(client.last_seen) }}</template></small></span><span><button class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked && !client.enabled" class="secondary" @click="changeState(client, 'enable')">{{ t().enable }}</button><button v-if="!client.revoked && client.enabled" class="secondary" @click="changeState(client, 'disable')">{{ t().disable }}</button><button v-if="!client.revoked" class="danger" @click="changeState(client, 'revoke')">{{ t().revoke }}</button></span></li></ul>
       <div v-if="selectedProfile" class="profile"><label>VLESS URI<textarea readonly :value="selectedProfile.uri"></textarea></label><img :src="`/api/clients/${selectedProfile.client_id}/profile?format=qr`" :alt="t().qr" /><a :href="`/api/clients/${selectedProfile.client_id}/profile?format=json`">{{ t().download }}</a></div>
+      <section v-if="settings" class="settings-panel">
+        <h2>{{ t().settings }}</h2>
+        <label>{{ t().host }}<input v-model="settingsForm.publicHost" /></label>
+        <label>{{ t().target }}<input v-model="settingsForm.realityTarget" /></label>
+        <label>{{ t().sni }}<input v-model="settingsForm.realitySNI" /></label>
+        <label>{{ t().fingerprint }}<select v-model="settingsForm.clientFingerprint"><option value="chrome">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option><option value="android">android</option><option value="random">random</option></select></label>
+        <label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label>
+        <p class="hint">{{ t().settingsWarning }}</p>
+        <button class="secondary" :disabled="busy" @click="reviewSettings">{{ t().saveSettings }}</button>
+        <div v-if="pendingSettings" class="settings-review">
+          <h3>{{ t().settingsDiff }}</h3>
+          <ul><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul>
+          <h3>{{ t().consequences }}</h3>
+          <ul><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul>
+          <p v-if="pendingSettings.revoked_clients">{{ t().revokedClients }}: {{ pendingSettings.revoked_clients }}</p>
+          <label v-if="pendingSettings.requires_confirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expected_confirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label>
+          <button :disabled="busy || (pendingSettings.requires_confirmation && pendingSettings.confirmation !== pendingSettings.expected_confirmation)" @click="applySettings">{{ t().applySettings }}</button>
+          <button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancelSettings }}</button>
+        </div>
+      </section>
       <section class="security">
         <h2>{{ t().security }}</h2>
         <button class="secondary" :disabled="busy" @click="createBackup">{{ t().backup }}</button><p v-if="lastBackup" class="backup-name">{{ t().backupCreated }}: {{ lastBackup }}</p>

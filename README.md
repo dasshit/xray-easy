@@ -30,6 +30,10 @@ The current slice implements the usable device and administration flow:
   authenticated by `XRAY_EASY_MASTER_KEY`; the last 10 backups are retained;
 - restore is an SSH-only CLI operation with a maintenance lock, manifest
   verification, master-key preflight and the literal `RESTORE` confirmation;
+- node settings can be reviewed in the UI before apply; changing the public
+  host, REALITY target/SNI or private key shows a diff, creates an automatic
+  backup, validates the candidate through the supervisor and revokes old
+  device profiles after exact `REVOKE`/`ROTATE` confirmation;
 - the Vue dashboard is embedded into the control-plane image;
 - `compose.stage0.yaml` keeps the supervisor and Xray API off the host network.
 
@@ -95,3 +99,7 @@ docker compose -f compose.stage1.yaml exec xray-easy xray-easy restore <backup-n
 Backups are directories containing `state.db`, a redacted active configuration,
 metadata and `manifest.json`. They are not downloadable from the Web UI; copy
 them from the VDS with SSH/SCP when needed.
+
+The node settings panel also allows changing the public host, REALITY target/SNI
+and client fingerprint default. Private-key rotation generates a new key pair;
+all existing profiles are revoked and must be issued again after the apply.

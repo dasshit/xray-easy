@@ -71,6 +71,37 @@ func ValidateTarget(target, sni string) error {
 	return nil
 }
 
+// ValidatePublicHost accepts the MVP profile endpoint formats: a DNS hostname
+// or IPv4 address. IPv6 is deliberately deferred so Compose publishing and
+// client import use the same well-defined host format.
+func ValidatePublicHost(host string) error {
+	host = strings.TrimSpace(host)
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, "/?#\t\r\n :") {
+		return errors.New("public host must be a DNS name or IPv4 address")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.To4() == nil {
+			return errors.New("public host must be a DNS name or IPv4 address")
+		}
+		return nil
+	}
+	name := strings.TrimSuffix(host, ".")
+	if name == "" {
+		return errors.New("public host must be a DNS name or IPv4 address")
+	}
+	for _, label := range strings.Split(name, ".") {
+		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
+			return errors.New("public host must be a DNS name or IPv4 address")
+		}
+		for _, char := range label {
+			if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-') {
+				return errors.New("public host must be a DNS name or IPv4 address")
+			}
+		}
+	}
+	return nil
+}
+
 func base64RawURL(value []byte) string {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	var out strings.Builder

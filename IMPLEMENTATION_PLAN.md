@@ -15,15 +15,21 @@ VDS и передаёт `XRAY_PUBLIC_PORT` как единственную на�
 аутентифицированный SSE, TOTP с зашифрованным секретом, одноразовые recovery-
 коды, двухшаговый вход и logout-all.
 
-Следующими обязательными срезами остаются полноценный settings rotation с
-подтверждением, redacted diagnostics/SSE и release E2E-проверка импорта в
-V2Rage на macOS/iOS.
+Следующими обязательными срезами остаются redacted diagnostics/SSE и release
+E2E-проверка импорта в V2Rage на macOS/iOS.
 
 Backup/restore уже реализованы: control plane и CLI используют общий
 межпроцессный maintenance lock; SQLite snapshot создаётся через `VACUUM INTO`,
 backup содержит redacted config, metadata и HMAC-authenticated manifest, а
 restore проверяет целостность и master key до изменения state, делает
 pre-restore backup и применяет восстановленное состояние через supervisor.
+
+Settings rotation уже реализован: PATCH/validate строят короткоживущий
+confirmation challenge и redacted diff, apply повторно проверяет target/SNI,
+состав устройств и текущую ревизию, создаёт automatic backup, валидирует и
+применяет candidate через supervisor, а затем одной SQLite-транзакцией меняет
+settings и отзывает старые профили. Ротация private key требует `ROTATE`,
+остальные node-level изменения с массовым отзывом — `REVOKE`.
 
 ## 1. Результат исследования и границы продукта
 
@@ -869,12 +875,13 @@ Smoke-проверка выполнена на чистом Compose volume: setu
 серверного и клиентского JSON, QR, state transitions и восстановление
 `active.json` после перезапуска.
 
-Реализованные срезы TOTP и backup/restore добавили CLI-команды `admin
+Реализованные срезы TOTP, backup/restore и settings rotation добавили CLI-команды `admin
 logout-all`,
 `admin reset-totp` и `admin recovery-codes`, запускаемые через
 `docker compose exec`, а также `backup create`, `backup list` и
-`restore <name> RESTORE`. Следующий срез: settings rotation в maintenance
-mode. До публикации образа CI должен заменить tag на immutable
+`restore <name> RESTORE`; settings rotation выполняется через Web UI с
+preview/diff и подтверждением `ROTATE` или `REVOKE`. Следующий срез:
+redacted diagnostics и release E2E. До публикации образа CI должен заменить tag на immutable
 digest и добавить проверку upstream checksum для pinned Xray release.
 
 ## Источники

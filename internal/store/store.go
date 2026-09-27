@@ -56,6 +56,11 @@ type Client struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+type ClientState struct {
+	Enabled bool
+	Revoked bool
+}
+
 // TrafficSnapshot is the durable checkpoint for the counters returned by
 // Xray's StatsService. Xray counters are process-local and can reset after a
 // restart, so total_* are accumulated by the control plane while raw_* keep
@@ -518,6 +523,33 @@ func (s *Store) GetSettings(ctx context.Context) (Settings, error) {
 func (s *Store) UpdateSettings(ctx context.Context, settings Settings) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+// UpdateSettingsAndClientStates commits a node settings change and the
+// corresponding client state transitions as one SQLite transaction. It is
+// used by settings rotation so a failed apply cannot leave the database with
+// only half of the intended revocation.
+func (s *Store) UpdateSettingsAndClientStates(ctx context.Context, settings Settings, states map[string]ClientState) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	for id, state := range states {
+		result, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, updated_at=? WHERE id=?`, boolInt(state.Enabled), boolInt(state.Revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
+		if err != nil {
+			return err
+		}
+		if count, err := result.RowsAffected(); err != nil {
+			return err
+		} else if count != 1 {
+			return fmt.Errorf("client %s not found", id)
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) CreateClient(ctx context.Context, client Client, uuid, email, shortID string) error {

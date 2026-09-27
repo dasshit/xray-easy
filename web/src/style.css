@@ -26,6 +26,13 @@ button:disabled { opacity: .55; cursor: wait; }
 textarea { width: 100%; min-height: 92px; resize: vertical; border: 1px solid #cbd3df; border-radius: 8px; padding: 10px; font: 12px ui-monospace, monospace; }
 .security { margin-top: 28px; padding-top: 22px; border-top: 1px solid #e1e6ef; }
 .security h2 { margin: 0 0 12px; font-size: 1.1rem; }
+.settings-panel { margin-top: 28px; padding-top: 22px; border-top: 1px solid #e1e6ef; }
+.settings-panel h2, .settings-review h3 { margin: 0 0 12px; font-size: 1.1rem; }
+.settings-panel .checkbox { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.settings-panel .checkbox input { width: auto; }
+.settings-review { margin-top: 16px; padding: 14px; background: #fff8e7; border: 1px solid #f0d48a; border-radius: 8px; }
+.settings-review ul { margin: 8px 0 16px; padding-left: 20px; }
+.hint { color: #7b5c18; font-size: 13px; }
 .recovery-codes { white-space: pre-wrap; background: #f4f6fa; border: 1px solid #e1e6ef; border-radius: 8px; padding: 12px; font: 13px ui-monospace, monospace; }
 .backup-name { color: #556176; font: 12px ui-monospace, monospace; overflow-wrap: anywhere; }
 @media (max-width: 620px) { .devices li { align-items: flex-start; flex-direction: column; } .devices li > span:last-child { width: 100%; } .device-create { flex-wrap: wrap; } .device-create input { min-width: 100%; } }

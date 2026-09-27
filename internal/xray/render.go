@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 const (
@@ -232,7 +231,10 @@ func buildClientJSON(settings Settings, client Client, fingerprint string) ([]by
 }
 
 func validateSettings(settings Settings) error {
-	if strings.TrimSpace(settings.PublicHost) == "" || settings.PublicPort < 1 || settings.PublicPort > 65535 {
+	if err := ValidatePublicHost(settings.PublicHost); err != nil {
+		return err
+	}
+	if settings.PublicPort < 1 || settings.PublicPort > 65535 {
 		return errors.New("public host and port are required")
 	}
 	if settings.XrayAPIListen == "" || settings.InternalInboundPort < 1 || settings.InternalInboundPort > 65535 {
