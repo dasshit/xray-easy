@@ -1,0 +1,22 @@
+# The Xray image is pinned by XRAY_VERSION. Before publishing an image, CI must
+# resolve the tag to an immutable digest and record the upstream checksum.
+ARG XRAY_VERSION=26.9.8
+
+FROM ghcr.io/xtls/xray-core:${XRAY_VERSION} AS xray
+
+FROM golang:1.24-alpine AS supervisor-build
+WORKDIR /src
+COPY go.mod ./
+COPY cmd ./cmd
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/xray-supervisor ./cmd/xray-supervisor
+
+FROM alpine:3.22
+RUN addgroup -S -g 10001 xray && adduser -S -D -H -u 10001 -G xray xray \
+    && apk add --no-cache ca-certificates
+COPY --from=xray /usr/local/bin/xray /usr/local/bin/xray
+COPY --from=supervisor-build /out/xray-supervisor /usr/local/bin/xray-supervisor
+RUN mkdir -p /etc/xray /run/xray \
+    && chown -R xray:xray /etc/xray /run/xray /usr/local/bin/xray /usr/local/bin/xray-supervisor
+USER 10001:10001
+EXPOSE 8443 10085 10086
+ENTRYPOINT ["/usr/local/bin/xray-supervisor"]

@@ -1,6 +1,7 @@
 # Go
 /bin/
 /dist/
+.cache/
 *.test
 *.out
 coverage.out

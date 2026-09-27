@@ -1,0 +1,109 @@
+name: xray-easy-stage1
+
+services:
+  init-volumes:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data /config
+        if [ ! -f /config/active.json ]; then cp /bootstrap/active.json /config/active.json; fi
+        chown -R 10001:10001 /data /config
+    volumes:
+      - app_data:/data
+      - xray_config:/config
+      - ./prototype/config-stage1:/bootstrap:ro
+
+  xray:
+    build:
+      context: .
+      dockerfile: Dockerfile.xray
+      args:
+        XRAY_VERSION: ${XRAY_VERSION:-26.9.8}
+    restart: unless-stopped
+    user: "10001:10001"
+    command:
+      - --config-dir
+      - /etc/xray
+      - --xray-bin
+      - /usr/local/bin/xray
+      - --token-file
+      - /run/secrets/xray_supervisor_token
+      - --listen
+      - 172.31.241.2:10086
+    ports:
+      - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
+    volumes:
+      - xray_config:/etc/xray:ro
+    secrets:
+      - xray_supervisor_token
+    networks:
+      control:
+        ipv4_address: 172.31.241.2
+      egress: {}
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/xray-supervisor
+        - healthcheck
+        - --url
+        - http://172.31.241.2:10086/health
+        - --token-file
+        - /run/secrets/xray_supervisor_token
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  xray-easy:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      XRAY_EASY_DATA_DIR: /data
+      XRAY_EASY_LISTEN: 0.0.0.0:8080
+      XRAY_EASY_MASTER_KEY: ${XRAY_EASY_MASTER_KEY:?set XRAY_EASY_MASTER_KEY in .env}
+      XRAY_SUPERVISOR_URL: http://172.31.241.2:10086
+    ports:
+      - "127.0.0.1:${XRAY_EASY_UI_PORT:-8080}:8080/tcp"
+    volumes:
+      - app_data:/data
+      - xray_config:/etc/xray
+    secrets:
+      - xray_supervisor_token
+    networks:
+      control:
+        ipv4_address: 172.31.241.3
+      ui: {}
+    depends_on:
+      xray:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+secrets:
+  xray_supervisor_token:
+    file: ./prototype/secrets/xray_supervisor_token
+
+volumes:
+  app_data:
+  xray_config:
+
+networks:
+  control:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.241.0/24
+  egress: {}
+  ui: {}

@@ -282,7 +282,7 @@ Audit хранит actor, action, entity, timestamp и redacted diff бесср�
 - порт не конфликтует с UI/API;
 - target хранится с явным портом и нормализованной DNS/IP-формой;
 - конфигурация проходит `xray run -test`;
-- target probe через `xray tls ping` выполняется supervisor-ом с timeout и ограничением исходящего запроса, а результат не считается бессрочной гарантией доступности.
+- target probe выполняется supervisor-ом как ограниченный TLS handshake с timeout и SSRF/private-range защитой; результат не считается бессрочной гарантией доступности.
 
 ## 7. Профили устройств
 
@@ -800,6 +800,27 @@ UI проекта — это сложная прикладная часть: wiz
 - Xray запускается официальным pinned binary как дочерний процесс.
 
 TypeScript/Nuxt backend остаётся только альтернативой для отдельного прототипа и не является целевым стеком проекта.
+
+## 15. Статус реализации
+
+Первый исполнимый срез добавлен в репозиторий:
+
+- `cmd/xray-supervisor` — PID 1 supervisor с HMAC-authenticated API `v1`;
+- `Dockerfile.xray` — multi-stage образ с pinned Xray image tag и supervisor;
+- `compose.stage0.yaml` — внутренние control/egress сети и непубликуемые Xray API;
+- `prototype/config/active.json` — bootstrap-конфигурация без публичного inbound.
+
+Также добавлен второй исполнимый срез:
+
+- `cmd/xray-easy` и `internal/store` — SQLite-backed control plane с миграцией,
+  setup/status и сессиями администратора;
+- `internal/auth` — Argon2id password hashing;
+- `Dockerfile.control` и `compose.stage1.yaml` — control plane рядом с
+  supervisor, UI bind-ится только на loopback VDS.
+
+Следующий срез должен добавить renderer VLESS + REALITY и supervisor client,
+связать Vue shell с этими API. До публикации образа CI должен заменить tag на
+immutable digest и добавить проверку upstream checksum для pinned Xray release.
 
 ## Источники
 

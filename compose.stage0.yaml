@@ -1,0 +1,54 @@
+name: xray-easy-stage0
+
+services:
+  xray:
+    build:
+      context: .
+      dockerfile: Dockerfile.xray
+      args:
+        XRAY_VERSION: ${XRAY_VERSION:-26.9.8}
+    restart: unless-stopped
+    user: "10001:10001"
+    command:
+      - --config-dir
+      - /etc/xray
+      - --xray-bin
+      - /usr/local/bin/xray
+      - --token-file
+      - /run/secrets/xray_supervisor_token
+      - --listen
+      - 172.31.240.2:10086
+    ports:
+      - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
+    volumes:
+      - ./prototype/config:/etc/xray:ro
+    secrets:
+      - xray_supervisor_token
+    networks:
+      control:
+        ipv4_address: 172.31.240.2
+      egress: {}
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/xray-supervisor
+        - healthcheck
+        - --url
+        - http://172.31.240.2:10086/health
+        - --token-file
+        - /run/secrets/xray_supervisor_token
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+secrets:
+  xray_supervisor_token:
+    file: ./prototype/secrets/xray_supervisor_token
+
+networks:
+  control:
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.31.240.0/24
+  egress: {}
