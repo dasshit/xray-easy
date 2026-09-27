@@ -818,7 +818,8 @@ TypeScript/Nuxt backend остаётся только альтернативой
 
 ## 15. Статус реализации
 
-В репозитории зафиксированы два базовых исполнимых среза.
+В репозитории зафиксированы исполнимые срезы supervisor, control plane,
+профилей и realtime-статистики.
 
 Срез процесса Xray:
 
@@ -836,22 +837,32 @@ TypeScript/Nuxt backend остаётся только альтернативой
 - `internal/xray` — генерация ключей, renderer VLESS + REALITY + TCP/Vision и
   клиентские URI/JSON-профили;
 - `internal/supervisor` — HMAC-клиент validate/apply/probe;
+- `internal/xrayapi` — generated protobuf subset из pinned Xray 26.9.8 для
+  HandlerService и StatsService; control plane подключает пользователей и
+  получает per-user counters без импорта всего `xray-core`;
+- `internal/stats` — SQLite checkpoints, delta accumulation после рестартов,
+  online/last-seen расчёт и подписки для SSE;
 - `Dockerfile.control` и `compose.stage1.yaml` — control plane рядом с
   supervisor, UI bind-ится только на loopback VDS;
 - Vue dashboard — создание устройств, enable/disable/revoke, QR, VLESS URI и
-  JSON download.
+  JSON download, online/last-seen и upload/download totals.
+
+Изменения устройств сначала проходят обычную validate/render pipeline. Если
+HandlerService доступен, add/enable/disable/revoke применяются к работающему
+Xray без рестарта; полный `active.json` всё равно сохраняется для восстановления.
+При недоступном API используется уже проверенный supervisor apply. Фоновый
+reconciler сверяет пользователей в inbound с SQLite и исправляет расхождения.
+StatsService опрашивается раз в 30 секунд, а dashboard получает обновления через
+аутентифицированный SSE stream.
 
 Smoke-проверка выполнена на чистом Compose volume: setup с
 `XRAY_PUBLIC_PORT`, TLS target probe, создание профиля, `xray run -test` для
 серверного и клиентского JSON, QR, state transitions и восстановление
 `active.json` после перезапуска.
 
-Следующий срез должен добавить generated Xray gRPC adapter для HandlerService и
-StatsService, reconciliation после рестарта, `traffic_snapshots`, online/last
-seen/накопительные counters и обновление Dashboard через SSE. После этого
-реализуются TOTP/recovery, backups/restore, settings rotation и CLI maintenance
-mode. До публикации образа CI должен заменить tag на immutable digest и добавить
-проверку upstream checksum для pinned Xray release.
+Следующий срез: TOTP/recovery, backups/restore, settings rotation и CLI
+maintenance mode. До публикации образа CI должен заменить tag на immutable
+digest и добавить проверку upstream checksum для pinned Xray release.
 
 ## Источники
 

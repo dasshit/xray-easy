@@ -20,6 +20,7 @@ web/.vite/
 !.env.example
 secrets/
 !prototype/secrets/
+prototype/secrets/*
 !prototype/secrets/.gitkeep
 /data/
 /backups/

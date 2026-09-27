@@ -21,10 +21,12 @@ import (
 	"github.com/skip2/go-qrcode"
 	"xray-easy/internal/auth"
 	"xray-easy/internal/secret"
+	"xray-easy/internal/stats"
 	"xray-easy/internal/store"
 	"xray-easy/internal/supervisor"
 	"xray-easy/internal/ui"
 	"xray-easy/internal/xray"
+	"xray-easy/internal/xrayapi"
 )
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
@@ -38,6 +40,8 @@ type server struct {
 	publicPort       int
 	defaultAPIListen string
 	supervisor       supervisor.Client
+	stats            *stats.Manager
+	handler          *xrayapi.HandlerClient
 	applyMu          sync.Mutex
 }
 
@@ -58,6 +62,11 @@ type loginRequest struct {
 type clientRequest struct {
 	Name        string `json:"name"`
 	Fingerprint string `json:"fingerprint"`
+}
+
+type clientResponse struct {
+	store.Client
+	stats.ClientStats
 }
 
 func main() {
@@ -83,17 +92,26 @@ func main() {
 	if err != nil {
 		fatal(err)
 	}
+	apiListen := envOr("XRAY_API_LISTEN", "127.0.0.1:10085")
+	statsClient := xrayapi.NewStatsClient(apiListen)
+	defer statsClient.Close()
+	handlerClient := xrayapi.NewHandlerClient(apiListen)
+	defer handlerClient.Close()
 	s := &server{
 		store:            db,
 		masterKey:        masterKey,
 		configDir:        configDir,
 		publicPort:       publicPort,
-		defaultAPIListen: envOr("XRAY_API_LISTEN", "127.0.0.1:10085"),
+		defaultAPIListen: apiListen,
 		supervisor: supervisor.Client{
 			BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
 			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
 		},
+		handler: handlerClient,
 	}
+	s.stats = stats.NewManager(db, statsClient)
+	s.stats.Start(ctx)
+	s.startReconciler(ctx)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/healthz", s.healthz)
 	mux.HandleFunc("/api/readyz", s.readyz)
@@ -103,10 +121,11 @@ func main() {
 	mux.HandleFunc("/api/auth/logout", s.logout)
 	mux.HandleFunc("/api/me", s.me)
 	mux.HandleFunc("/api/settings", s.settings)
+	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/clients", s.clients)
 	mux.HandleFunc("/api/clients/", s.clientRoute)
 	mux.Handle("/", ui.Handler())
-	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: requestLimit(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
+	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: requestLimit(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second}
 	fmt.Fprintf(os.Stderr, "xray-easy control plane listening on %s\n", serverHTTP.Addr)
 	if err := serverHTTP.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fatal(err)
@@ -274,6 +293,59 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username})
 }
 
+func (s *server) events(w http.ResponseWriter, r *http.Request) {
+	if _, err := s.authenticated(r); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	if s.stats == nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "statistics are unavailable"})
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "streaming is unavailable"})
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache, no-store")
+	w.Header().Set("Connection", "keep-alive")
+	notifications, unsubscribe := s.stats.Subscribe()
+	defer unsubscribe()
+
+	send := func() error {
+		payload, err := json.Marshal(map[string]any{"type": "stats", "at": time.Now().UTC(), "clients": s.stats.Snapshot()})
+		if err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintf(w, "event: stats\ndata: %s\n\n", payload); err != nil {
+			return err
+		}
+		flusher.Flush()
+		return nil
+	}
+	if err := send(); err != nil {
+		return
+	}
+	heartbeat := time.NewTicker(20 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-notifications:
+			if err := send(); err != nil {
+				return
+			}
+		case <-heartbeat.C:
+			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
+}
+
 func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.authenticated(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
@@ -308,7 +380,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list clients"})
 			return
 		}
-		writeJSON(w, http.StatusOK, clients)
+		writeJSON(w, http.StatusOK, s.withStats(clients))
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -346,7 +418,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusCreated, client)
+	writeJSON(w, http.StatusCreated, s.withStats([]store.Client{client})[0])
 }
 
 func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
@@ -367,7 +439,7 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 1 && r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, client)
+		writeJSON(w, http.StatusOK, s.withStats([]store.Client{client})[0])
 		return
 	}
 	if len(parts) == 2 && parts[1] == "profile" && r.Method == http.MethodGet {
@@ -418,7 +490,11 @@ func (s *server) createClient(ctx context.Context, settings store.Settings, priv
 	}
 	client.UUID, client.Email, client.ShortID = uuid, clientEmail, shortID
 	clients = append(clients, client)
-	if err := s.applyClientsLocked(ctx, settings, privateKey, clients, actorID, "client.create", clientID); err != nil {
+	if err := s.applyClientsLiveLocked(ctx, settings, privateKey, clients, actorID, "client.create", clientID,
+		func() error { return s.handler.AddUser(ctx, client.Email, client.UUID, xray.Flow) },
+		func() error { return s.handler.RemoveUser(ctx, client.Email) },
+		nil, nil,
+	); err != nil {
 		_ = s.store.DeleteClient(ctx, clientID)
 		return store.Client{}, err
 	}
@@ -453,49 +529,109 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 			clients[i].Enabled, clients[i].Revoked = enabled, revoked
 		}
 	}
-	if err := s.applyClientsLocked(r.Context(), settings, privateKey, clients, actorID, "client.state", client.ID); err != nil {
+	oldEnabled, oldRevoked := client.Enabled, client.Revoked
+	wasActive, willBeActive := oldEnabled && !oldRevoked, enabled && !revoked
+	mutate := func() error { return nil }
+	rollback := func() error { return nil }
+	if willBeActive && !wasActive {
+		mutate = func() error { return s.handler.AddUser(r.Context(), client.Email, client.UUID, xray.Flow) }
+		rollback = func() error { return s.handler.RemoveUser(r.Context(), client.Email) }
+	} else if wasActive && !willBeActive {
+		mutate = func() error { return s.handler.RemoveUser(r.Context(), client.Email) }
+		rollback = func() error { return s.handler.AddUser(r.Context(), client.Email, client.UUID, xray.Flow) }
+	}
+	persist := func() error { return s.store.SetClientState(r.Context(), client.ID, enabled, revoked) }
+	rollbackPersist := func() error { return s.store.SetClientState(r.Context(), client.ID, oldEnabled, oldRevoked) }
+	if err := s.applyClientsLiveLocked(r.Context(), settings, privateKey, clients, actorID, "client.state", client.ID, mutate, rollback, persist, rollbackPersist); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	if err := s.store.SetClientState(r.Context(), client.ID, enabled, revoked); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not persist client state"})
-		return
-	}
 	updated, _ := s.store.GetClient(r.Context(), client.ID)
-	writeJSON(w, http.StatusOK, updated)
+	writeJSON(w, http.StatusOK, s.withStats([]store.Client{updated})[0])
 }
 
-func (s *server) applyClients(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string) error {
+func (s *server) withStats(clients []store.Client) []clientResponse {
+	snapshot := map[string]stats.ClientStats{}
+	if s.stats != nil {
+		snapshot = s.stats.Snapshot()
+	}
+	result := make([]clientResponse, 0, len(clients))
+	for _, client := range clients {
+		result = append(result, clientResponse{Client: client, ClientStats: snapshot[client.ID]})
+	}
+	return result
+}
+
+func (s *server) startReconciler(ctx context.Context) {
+	go func() {
+		reconcileCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+		if err := s.reconcileRunning(reconcileCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "xray handler reconciliation skipped: %v\n", err)
+		}
+		cancel()
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				reconcileCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
+				if err := s.reconcileRunning(reconcileCtx); err != nil {
+					fmt.Fprintf(os.Stderr, "xray handler reconciliation skipped: %v\n", err)
+				}
+				cancel()
+			}
+		}
+	}()
+}
+
+func (s *server) reconcileRunning(ctx context.Context) error {
+	if s.handler == nil {
+		return nil
+	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
-	return s.applyClientsLocked(ctx, settings, privateKey, clients, actorID, action, entityID)
+	clients, err := s.store.ListClients(ctx)
+	if err != nil {
+		return err
+	}
+	if len(clients) == 0 {
+		return nil
+	}
+	running, err := s.handler.Users(ctx)
+	if err != nil {
+		return err
+	}
+	active := make(map[string]store.Client)
+	for _, client := range clients {
+		if client.Enabled && !client.Revoked {
+			active[client.Email] = client
+		}
+	}
+	runningSet := make(map[string]struct{}, len(running))
+	for _, email := range running {
+		runningSet[email] = struct{}{}
+		if _, ok := active[email]; !ok {
+			if err := s.handler.RemoveUser(ctx, email); err != nil {
+				return err
+			}
+		}
+	}
+	for email, client := range active {
+		if _, ok := runningSet[email]; ok {
+			continue
+		}
+		if err := s.handler.AddUser(ctx, email, client.UUID, xray.Flow); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *server) applyClientsLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string) error {
-	xrayClients := make([]xray.Client, 0, len(clients))
-	for _, client := range clients {
-		xrayClients = append(xrayClients, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
-	}
-	rendered, err := xray.RenderServerConfig(xray.Settings{PublicHost: settings.PublicHost, PublicPort: settings.PublicPort, XrayAPIListen: settings.XrayAPIListen, RealityTarget: settings.RealityTarget, RealitySNI: settings.RealitySNI, RealityPrivateKey: privateKey, RealityPublicKey: settings.RealityPublicKey, ClientFingerprint: settings.ClientFingerprint, InternalInboundPort: settings.InternalInboundPort}, xrayClients)
+	path, operationID, err := s.prepareCandidateLocked(ctx, settings, privateKey, clients)
 	if err != nil {
-		return fmt.Errorf("render Xray config: %w", err)
-	}
-	operationID, err := randomID()
-	if err != nil {
-		return err
-	}
-	revision := time.Now().UnixNano()
-	operation := store.ApplyOperation{ID: operationID, Revision: revision, State: "pending", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}
-	if err := s.store.CreateApplyOperation(ctx, operation); err != nil {
-		return err
-	}
-	path := filepath.Join(s.configDir, "candidates", operationID+".json")
-	if err := writeAtomic(path, rendered); err != nil {
-		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
-		return err
-	}
-	if err := s.supervisor.Validate(ctx, path, operationID); err != nil {
-		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "validated", "")
@@ -504,13 +640,99 @@ func (s *server) applyClientsLocked(ctx context.Context, settings store.Settings
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
-	active := filepath.Join(s.configDir, "active.json")
-	if err := os.Rename(path, active); err != nil {
+	if err := s.promoteCandidateLocked(ctx, path, operationID, actorID, action, entityID); err != nil {
 		// The candidate is running, but it was not promoted to the durable
 		// active path. Ask the supervisor to restore the previous active file.
-		_ = s.supervisor.Apply(ctx, active, operationID+"-rollback")
-		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 		return err
+	}
+	return nil
+}
+
+func (s *server) applyClientsLiveLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string, mutate, rollback, persist, rollbackPersist func() error) error {
+	path, operationID, err := s.prepareCandidateLocked(ctx, settings, privateKey, clients)
+	if err != nil {
+		return err
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "validated", "")
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
+
+	liveApplied := mutate == nil
+	if mutate != nil {
+		if err := mutate(); err != nil {
+			// A down or older Xray API must not block administration. Applying the
+			// already validated full config is the recovery-compatible fallback.
+			if fallbackErr := s.supervisor.Apply(ctx, path, operationID); fallbackErr != nil {
+				_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", fallbackErr.Error())
+				return fmt.Errorf("dynamic Xray update failed (%v), config apply failed: %w", err, fallbackErr)
+			}
+			liveApplied = false
+		} else {
+			liveApplied = true
+		}
+	}
+	if persist != nil {
+		if err := persist(); err != nil {
+			if liveApplied && rollback != nil {
+				_ = rollback()
+			} else if !liveApplied {
+				_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+			}
+			_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+			return fmt.Errorf("persist client change: %w", err)
+		}
+	}
+	if err := os.Rename(path, filepath.Join(s.configDir, "active.json")); err != nil {
+		if rollbackPersist != nil {
+			_ = rollbackPersist()
+		}
+		if liveApplied && rollback != nil {
+			_ = rollback()
+		} else if !liveApplied {
+			_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+		}
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return fmt.Errorf("promote Xray config: %w", err)
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "committed", "")
+	_ = s.store.AddAudit(ctx, actorID, action, "client", entityID, "configuration applied")
+	return nil
+}
+
+func (s *server) prepareCandidateLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client) (string, string, error) {
+	xrayClients := make([]xray.Client, 0, len(clients))
+	for _, client := range clients {
+		xrayClients = append(xrayClients, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
+	}
+	rendered, err := xray.RenderServerConfig(xray.Settings{PublicHost: settings.PublicHost, PublicPort: settings.PublicPort, XrayAPIListen: settings.XrayAPIListen, RealityTarget: settings.RealityTarget, RealitySNI: settings.RealitySNI, RealityPrivateKey: privateKey, RealityPublicKey: settings.RealityPublicKey, ClientFingerprint: settings.ClientFingerprint, InternalInboundPort: settings.InternalInboundPort}, xrayClients)
+	if err != nil {
+		return "", "", fmt.Errorf("render Xray config: %w", err)
+	}
+	operationID, err := randomID()
+	if err != nil {
+		return "", "", err
+	}
+	now := time.Now().UTC()
+	operation := store.ApplyOperation{ID: operationID, Revision: now.UnixNano(), State: "pending", CreatedAt: now, UpdatedAt: now}
+	if err := s.store.CreateApplyOperation(ctx, operation); err != nil {
+		return "", "", err
+	}
+	path := filepath.Join(s.configDir, "candidates", operationID+".json")
+	if err := writeAtomic(path, rendered); err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return "", "", err
+	}
+	if err := s.supervisor.Validate(ctx, path, operationID); err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return "", "", err
+	}
+	return path, operationID, nil
+}
+
+func (s *server) promoteCandidateLocked(ctx context.Context, path, operationID, actorID, action, entityID string) error {
+	if err := os.Rename(path, filepath.Join(s.configDir, "active.json")); err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return fmt.Errorf("promote Xray config: %w", err)
 	}
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "committed", "")
 	_ = s.store.AddAudit(ctx, actorID, action, "client", entityID, "configuration applied")

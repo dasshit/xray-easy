@@ -53,6 +53,20 @@ type Client struct {
 	UpdatedAt         time.Time `json:"updated_at"`
 }
 
+// TrafficSnapshot is the durable checkpoint for the counters returned by
+// Xray's StatsService. Xray counters are process-local and can reset after a
+// restart, so total_* are accumulated by the control plane while raw_* keep
+// the last observed Xray values for reset detection.
+type TrafficSnapshot struct {
+	ClientID      string
+	RawUpload     int64
+	RawDownload   int64
+	TotalUpload   int64
+	TotalDownload int64
+	LastSeenAt    time.Time
+	LastPolledAt  time.Time
+}
+
 type ApplyOperation struct {
 	ID        string
 	Revision  int64
@@ -151,6 +165,15 @@ CREATE TABLE IF NOT EXISTS audit_events (
   entity_id TEXT NOT NULL,
   redacted_diff TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS traffic_snapshots (
+  client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE,
+  raw_upload INTEGER NOT NULL DEFAULT 0,
+  raw_download INTEGER NOT NULL DEFAULT 0,
+  total_upload INTEGER NOT NULL DEFAULT 0,
+  total_download INTEGER NOT NULL DEFAULT 0,
+  last_seen_at TEXT NOT NULL DEFAULT '',
+  last_polled_at TEXT NOT NULL
 );
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
@@ -326,6 +349,45 @@ func (s *Store) SetClientState(ctx context.Context, id string, enabled, revoked 
 
 func (s *Store) DeleteClient(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM clients WHERE id=?`, id)
+	return err
+}
+
+func (s *Store) ListTrafficSnapshots(ctx context.Context) (map[string]TrafficSnapshot, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT client_id, raw_upload, raw_download, total_upload, total_download, last_seen_at, last_polled_at FROM traffic_snapshots`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]TrafficSnapshot)
+	for rows.Next() {
+		var snapshot TrafficSnapshot
+		var lastSeen, lastPolled string
+		if err := rows.Scan(&snapshot.ClientID, &snapshot.RawUpload, &snapshot.RawDownload, &snapshot.TotalUpload, &snapshot.TotalDownload, &lastSeen, &lastPolled); err != nil {
+			return nil, err
+		}
+		if lastSeen != "" {
+			snapshot.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
+		}
+		snapshot.LastPolledAt, _ = time.Parse(time.RFC3339Nano, lastPolled)
+		result[snapshot.ClientID] = snapshot
+	}
+	return result, rows.Err()
+}
+
+func (s *Store) UpsertTrafficSnapshot(ctx context.Context, snapshot TrafficSnapshot) error {
+	if snapshot.ClientID == "" {
+		return errors.New("client id is required")
+	}
+	lastSeen := ""
+	if !snapshot.LastSeenAt.IsZero() {
+		lastSeen = snapshot.LastSeenAt.UTC().Format(time.RFC3339Nano)
+	}
+	lastPolled := snapshot.LastPolledAt
+	if lastPolled.IsZero() {
+		lastPolled = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO traffic_snapshots(client_id, raw_upload, raw_download, total_upload, total_download, last_seen_at, last_polled_at) VALUES(?,?,?,?,?,?,?)
+ON CONFLICT(client_id) DO UPDATE SET raw_upload=excluded.raw_upload, raw_download=excluded.raw_download, total_upload=excluded.total_upload, total_download=excluded.total_download, last_seen_at=excluded.last_seen_at, last_polled_at=excluded.last_polled_at`, snapshot.ClientID, snapshot.RawUpload, snapshot.RawDownload, snapshot.TotalUpload, snapshot.TotalDownload, lastSeen, lastPolled.UTC().Format(time.RFC3339Nano))
 	return err
 }
 
