@@ -20,6 +20,8 @@ import (
 
 	"github.com/skip2/go-qrcode"
 	"xray-easy/internal/auth"
+	"xray-easy/internal/backup"
+	"xray-easy/internal/maintenance"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/stats"
 	"xray-easy/internal/store"
@@ -39,6 +41,8 @@ type server struct {
 	masterKey        []byte
 	configDir        string
 	publicPort       int
+	dataDir          string
+	maintenancePath  string
 	defaultAPIListen string
 	supervisor       supervisor.Client
 	stats            *stats.Manager
@@ -130,6 +134,8 @@ func main() {
 		masterKey:        masterKey,
 		configDir:        configDir,
 		publicPort:       publicPort,
+		dataDir:          dataDir,
+		maintenancePath:  filepath.Join(dataDir, "maintenance.lock"),
 		defaultAPIListen: apiListen,
 		supervisor: supervisor.Client{
 			BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
@@ -157,6 +163,7 @@ func main() {
 	mux.HandleFunc("/api/auth/totp/disable", s.totpDisable)
 	mux.HandleFunc("/api/me", s.me)
 	mux.HandleFunc("/api/settings", s.settings)
+	mux.HandleFunc("/api/backups", s.backups)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/clients", s.clients)
 	mux.HandleFunc("/api/clients/", s.clientRoute)
@@ -181,10 +188,27 @@ func loadMasterKey() ([]byte, error) {
 }
 
 func runCLI(ctx context.Context, args []string) error {
-	if len(args) < 2 || args[0] != "admin" {
-		return errors.New("usage: xray-easy admin <logout-all|reset-totp|recovery-codes>")
+	if len(args) == 0 {
+		return cliUsageError()
 	}
 	dataDir := envOr("XRAY_EASY_DATA_DIR", "/data")
+	configDir := envOr("XRAY_EASY_CONFIG_DIR", "/etc/xray")
+	switch args[0] {
+	case "admin":
+		return runAdminCLI(ctx, dataDir, args[1:])
+	case "backup":
+		return runBackupCLI(ctx, dataDir, configDir, args[1:])
+	case "restore":
+		return runRestoreCLI(ctx, dataDir, configDir, args[1:])
+	default:
+		return cliUsageError()
+	}
+}
+
+func runAdminCLI(ctx context.Context, dataDir string, args []string) error {
+	if len(args) != 1 {
+		return cliUsageError()
+	}
 	db, err := store.Open(ctx, filepath.Join(dataDir, "state.db"))
 	if err != nil {
 		return err
@@ -194,7 +218,7 @@ func runCLI(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	switch args[1] {
+	switch args[0] {
 	case "logout-all":
 		if err := db.DeleteAllSessions(ctx, admin.ID); err != nil {
 			return fmt.Errorf("logout all sessions: %w", err)
@@ -235,8 +259,157 @@ func runCLI(ctx context.Context, args []string) error {
 		}
 		return nil
 	default:
-		return errors.New("usage: xray-easy admin <logout-all|reset-totp|recovery-codes>")
+		return cliUsageError()
 	}
+}
+
+func runBackupCLI(ctx context.Context, dataDir, configDir string, args []string) error {
+	if len(args) != 1 || args[0] != "create" && args[0] != "list" {
+		return cliUsageError()
+	}
+	masterKey, err := loadMasterKey()
+	if err != nil {
+		return err
+	}
+	db, err := store.Open(ctx, filepath.Join(dataDir, "state.db"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	lock, err := maintenance.Acquire(ctx, filepath.Join(dataDir, "maintenance.lock"))
+	if err != nil {
+		return fmt.Errorf("acquire maintenance lock: %w", err)
+	}
+	defer lock.Close()
+	manager := backup.NewManager(db, dataDir, configDir, masterKey)
+	if args[0] == "list" {
+		items, err := manager.List()
+		if err != nil {
+			return err
+		}
+		for _, item := range items {
+			fmt.Printf("%s\t%s\n", item.Name, item.CreatedAt.UTC().Format(time.RFC3339))
+		}
+		return nil
+	}
+	item, err := manager.Create("manual")
+	if err != nil {
+		return err
+	}
+	fmt.Println(item.Name)
+	return nil
+}
+
+func runRestoreCLI(ctx context.Context, dataDir, configDir string, args []string) error {
+	if len(args) != 2 || args[1] != "RESTORE" {
+		return errors.New("usage: xray-easy restore <backup-name> RESTORE")
+	}
+	masterKey, err := loadMasterKey()
+	if err != nil {
+		return err
+	}
+	db, err := store.Open(ctx, filepath.Join(dataDir, "state.db"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	lock, err := maintenance.Acquire(ctx, filepath.Join(dataDir, "maintenance.lock"))
+	if err != nil {
+		return fmt.Errorf("acquire maintenance lock: %w", err)
+	}
+	defer lock.Close()
+	manager := backup.NewManager(db, dataDir, configDir, masterKey)
+	target, err := manager.Verify(args[0])
+	if err != nil {
+		return err
+	}
+	if err := verifyBackupMasterKey(target, masterKey); err != nil {
+		return err
+	}
+	preRestore, err := manager.CreatePreserving("pre-restore", target.Name)
+	if err != nil {
+		return fmt.Errorf("create pre-restore backup: %w", err)
+	}
+	if err := manager.RestoreState(target); err != nil {
+		return fmt.Errorf("restore state: %w", err)
+	}
+	publicPort, err := configuredPublicPort()
+	if err != nil {
+		return err
+	}
+	if err := applyRestoredState(ctx, db, masterKey, configDir, publicPort); err != nil {
+		_ = manager.RestoreState(preRestore)
+		_ = applyRestoredState(ctx, db, masterKey, configDir, publicPort)
+		return fmt.Errorf("apply restored state: %w (state rolled back from %s)", err, preRestore.Name)
+	}
+	admin, _ := db.FirstAdmin(ctx)
+	_ = db.AddAudit(ctx, admin.ID, "backup.restore", "backup", target.Name, "backup restored and applied")
+	fmt.Printf("restored %s\n", target.Name)
+	return nil
+}
+
+func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
+	settings, err := store.ReadSettingsFromDatabase(info.StatePath)
+	if err != nil {
+		return err
+	}
+	if settings.RealityPrivateKeyEnc != "" {
+		if _, err := secret.Open(masterKey, settings.RealityPrivateKeyEnc, "reality_private_key"); err != nil {
+			return errors.New("backup was created with a different XRAY_EASY_MASTER_KEY")
+		}
+	}
+	return nil
+}
+
+func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int) error {
+	settings, err := db.GetSettings(ctx)
+	if err != nil {
+		return err
+	}
+	settings.PublicPort = publicPort
+	privateKey, err := secret.Open(masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		return fmt.Errorf("decrypt restored REALITY key: %w", err)
+	}
+	clients, err := db.ListClients(ctx)
+	if err != nil {
+		return err
+	}
+	xrayClients := make([]xray.Client, 0, len(clients))
+	for _, client := range clients {
+		xrayClients = append(xrayClients, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
+	}
+	rendered, err := xray.RenderServerConfig(xray.Settings{PublicHost: settings.PublicHost, PublicPort: settings.PublicPort, XrayAPIListen: settings.XrayAPIListen, RealityTarget: settings.RealityTarget, RealitySNI: settings.RealitySNI, RealityPrivateKey: privateKey, RealityPublicKey: settings.RealityPublicKey, ClientFingerprint: settings.ClientFingerprint, InternalInboundPort: settings.InternalInboundPort}, xrayClients)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Join(configDir, "candidates"), 0o700); err != nil {
+		return err
+	}
+	operationID, err := randomID()
+	if err != nil {
+		return err
+	}
+	candidate := filepath.Join(configDir, "candidates", operationID+".json")
+	defer os.Remove(candidate)
+	if err := writeAtomic(candidate, rendered); err != nil {
+		return err
+	}
+	sup := supervisor.Client{BaseURL: envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"), TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token")}
+	if err := sup.Validate(ctx, candidate, operationID); err != nil {
+		return err
+	}
+	if err := sup.Apply(ctx, candidate, operationID); err != nil {
+		return err
+	}
+	if err := os.Rename(candidate, filepath.Join(configDir, "active.json")); err != nil {
+		return err
+	}
+	return nil
+}
+
+func cliUsageError() error {
+	return errors.New("usage: xray-easy admin <logout-all|reset-totp|recovery-codes> | backup <create|list> | restore <backup-name> RESTORE")
 }
 
 func configuredPublicPort() (int, error) {
@@ -715,6 +888,44 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusMethodNotAllowed, nil)
 }
 
+func (s *server) backups(w http.ResponseWriter, r *http.Request) {
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
+	switch r.Method {
+	case http.MethodGet:
+		items, err := manager.List()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list backups"})
+			return
+		}
+		response := make([]map[string]any, 0, len(items))
+		for _, item := range items {
+			response = append(response, map[string]any{"name": item.Name, "created_at": item.CreatedAt})
+		}
+		writeJSON(w, http.StatusOK, response)
+	case http.MethodPost:
+		lock, err := maintenance.Acquire(r.Context(), s.maintenancePath)
+		if err != nil {
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "maintenance lock is unavailable"})
+			return
+		}
+		defer lock.Close()
+		item, err := manager.Create("manual")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create backup", "detail": err.Error()})
+			return
+		}
+		_ = s.store.AddAudit(r.Context(), admin.ID, "backup.create", "backup", item.Name, "manual backup created")
+		writeJSON(w, http.StatusCreated, map[string]any{"name": item.Name, "created_at": item.CreatedAt})
+	default:
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+	}
+}
+
 func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -939,6 +1150,11 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 	}
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
+	if err != nil {
+		return err
+	}
+	defer maintenanceLock.Close()
 	clients, err := s.store.ListClients(ctx)
 	if err != nil {
 		return err
@@ -977,6 +1193,11 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 }
 
 func (s *server) applyClientsLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string) error {
+	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
+	if err != nil {
+		return err
+	}
+	defer maintenanceLock.Close()
 	path, operationID, err := s.prepareCandidateLocked(ctx, settings, privateKey, clients)
 	if err != nil {
 		return err
@@ -997,6 +1218,11 @@ func (s *server) applyClientsLocked(ctx context.Context, settings store.Settings
 }
 
 func (s *server) applyClientsLiveLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string, mutate, rollback, persist, rollbackPersist func() error) error {
+	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
+	if err != nil {
+		return err
+	}
+	defer maintenanceLock.Close()
 	path, operationID, err := s.prepareCandidateLocked(ctx, settings, privateKey, clients)
 	if err != nil {
 		return err

@@ -15,10 +15,15 @@ VDS и передаёт `XRAY_PUBLIC_PORT` как единственную на�
 аутентифицированный SSE, TOTP с зашифрованным секретом, одноразовые recovery-
 коды, двухшаговый вход и logout-all.
 
-Следующими обязательными срезами остаются backups/restore, полноценный
-settings rotation с
+Следующими обязательными срезами остаются полноценный settings rotation с
 подтверждением, redacted diagnostics/SSE и release E2E-проверка импорта в
 V2Rage на macOS/iOS.
+
+Backup/restore уже реализованы: control plane и CLI используют общий
+межпроцессный maintenance lock; SQLite snapshot создаётся через `VACUUM INTO`,
+backup содержит redacted config, metadata и HMAC-authenticated manifest, а
+restore проверяет целостность и master key до изменения state, делает
+pre-restore backup и применяет восстановленное состояние через supervisor.
 
 ## 1. Результат исследования и границы продукта
 
@@ -864,10 +869,12 @@ Smoke-проверка выполнена на чистом Compose volume: setu
 серверного и клиентского JSON, QR, state transitions и восстановление
 `active.json` после перезапуска.
 
-Реализованный срез TOTP также добавил CLI-команды `admin logout-all`,
+Реализованные срезы TOTP и backup/restore добавили CLI-команды `admin
+logout-all`,
 `admin reset-totp` и `admin recovery-codes`, запускаемые через
-`docker compose exec`. Следующий срез: backups/restore и settings rotation в
-maintenance mode. До публикации образа CI должен заменить tag на immutable
+`docker compose exec`, а также `backup create`, `backup list` и
+`restore <name> RESTORE`. Следующий срез: settings rotation в maintenance
+mode. До публикации образа CI должен заменить tag на immutable
 digest и добавить проверку upstream checksum для pinned Xray release.
 
 ## Источники

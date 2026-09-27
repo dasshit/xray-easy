@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -94,6 +95,107 @@ func Open(ctx context.Context, path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
+// BackupTo creates a transactionally consistent SQLite snapshot. VACUUM INTO
+// includes committed WAL contents and never exposes the live database file to
+// callers.
+func (s *Store) BackupTo(path string) error {
+	if path == "" {
+		return errors.New("invalid backup path")
+	}
+	_ = os.Remove(path)
+	if _, err := s.db.Exec(`VACUUM INTO ?`, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func ValidateDatabase(path string) error {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	if err := db.Ping(); err != nil {
+		return err
+	}
+	for _, table := range databaseTables {
+		var exists int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&exists); err != nil {
+			return err
+		}
+		if exists != 1 {
+			return fmt.Errorf("database table %s is missing", table)
+		}
+	}
+	return nil
+}
+
+func ReadSettingsFromDatabase(path string) (Settings, error) {
+	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	if err != nil {
+		return Settings{}, err
+	}
+	defer db.Close()
+	var settings Settings
+	err = db.QueryRow(`SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Settings{}, errors.New("settings are not initialized")
+	}
+	return settings, err
+}
+
+func (s *Store) RestoreFrom(path string) error {
+	if err := ValidateDatabase(path); err != nil {
+		return err
+	}
+	conn, err := s.db.Conn(context.Background())
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(context.Background(), `ATTACH DATABASE ? AS restore_source`, path); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), `DETACH DATABASE restore_source`)
+	if _, err := conn.ExecContext(context.Background(), `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), `PRAGMA foreign_keys=ON`)
+	tx, err := conn.BeginTx(context.Background(), &sql.TxOptions{Isolation: sql.LevelSerializable})
+	if err != nil {
+		return err
+	}
+	for _, table := range databaseTables {
+		if _, err := tx.Exec(`DELETE FROM main.` + table); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("clear table %s: %w", table, err)
+		}
+	}
+	for _, table := range databaseTables {
+		if _, err := tx.Exec(`INSERT INTO main.` + table + ` SELECT * FROM restore_source.` + table); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("restore table %s: %w", table, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return nil
+}
+
+var databaseTables = []string{
+	"schema_migrations",
+	"settings",
+	"admin_users",
+	"sessions",
+	"totp_recovery_codes",
+	"clients",
+	"config_revisions",
+	"apply_operations",
+	"audit_events",
+	"traffic_snapshots",
+}
 
 func (s *Store) migrate(ctx context.Context) error {
 	const schema = `

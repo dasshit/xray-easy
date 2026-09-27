@@ -26,11 +26,15 @@ The current slice implements the usable device and administration flow:
   hashes are stored. Password + TOTP is required on subsequent logins;
 - the UI has logout-all-sessions, and the control-plane CLI supports
   `admin logout-all`, `admin reset-totp` and `admin recovery-codes`;
+- plaintext backups are created from the UI or CLI inside `/data/backups` with a SHA-256 manifest
+  authenticated by `XRAY_EASY_MASTER_KEY`; the last 10 backups are retained;
+- restore is an SSH-only CLI operation with a maintenance lock, manifest
+  verification, master-key preflight and the literal `RESTORE` confirmation;
 - the Vue dashboard is embedded into the control-plane image;
 - `compose.stage0.yaml` keeps the supervisor and Xray API off the host network.
 
-Backups/restore, settings rotation and the complete diagnostics/API surface
-from the plan are still subsequent slices.
+Settings rotation and the complete diagnostics/API surface from the plan are
+still subsequent slices.
 
 ## Run the stage 0 container
 
@@ -79,3 +83,15 @@ docker compose -f compose.stage1.yaml exec xray-easy xray-easy admin recovery-co
 
 `recovery-codes` prints a new one-time set and immediately invalidates the
 previous set. `reset-totp` disables TOTP and revokes all sessions.
+
+Create and inspect backups from SSH:
+
+```sh
+docker compose -f compose.stage1.yaml exec xray-easy xray-easy backup create
+docker compose -f compose.stage1.yaml exec xray-easy xray-easy backup list
+docker compose -f compose.stage1.yaml exec xray-easy xray-easy restore <backup-name> RESTORE
+```
+
+Backups are directories containing `state.db`, a redacted active configuration,
+metadata and `manifest.json`. They are not downloadable from the Web UI; copy
+them from the VDS with SSH/SCP when needed.

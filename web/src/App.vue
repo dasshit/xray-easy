@@ -26,16 +26,17 @@ const totpStatus = ref<TOTPStatus | null>(null)
 const totpSetup = ref<TOTPSetup | null>(null)
 const totpConfirmCode = ref('')
 const disableTOTPForm = ref({ password: '', code: '' })
+const lastBackup = ref('')
 const loginNeedsTOTP = ref(false)
 const loginUsesRecovery = ref(false)
 let events: EventSource | null = null
 
 const text = {
   en: {
-    title: 'Xray-easy', setup: 'Initial setup', login: 'Administrator login', username: 'Username', password: 'Password', host: 'Public host or IPv4', port: 'Public port (from Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Create administrator', signIn: 'Sign in', ready: 'Devices', newDevice: 'Device name', fingerprint: 'Fingerprint', createDevice: 'Create device', profile: 'Profile', qr: 'QR code', download: 'Download JSON', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', revoke: 'Revoke', logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', security: 'Account security', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
+    title: 'Xray-easy', setup: 'Initial setup', login: 'Administrator login', username: 'Username', password: 'Password', host: 'Public host or IPv4', port: 'Public port (from Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Create administrator', signIn: 'Sign in', ready: 'Devices', newDevice: 'Device name', fingerprint: 'Fingerprint', createDevice: 'Create device', profile: 'Profile', qr: 'QR code', download: 'Download JSON', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', revoke: 'Revoke', logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', security: 'Account security', backup: 'Create backup', backupCreated: 'Backup created', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
   },
   ru: {
-    title: 'Xray-easy', setup: 'Первичная настройка', login: 'Вход администратора', username: 'Имя пользователя', password: 'Пароль', host: 'Публичный адрес или IPv4', port: 'Публичный порт (из Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Создать администратора', signIn: 'Войти', ready: 'Устройства', newDevice: 'Имя устройства', fingerprint: 'Fingerprint', createDevice: 'Создать устройство', profile: 'Профиль', qr: 'QR-код', download: 'Скачать JSON', enabled: 'включено', disabled: 'выключено', revoked: 'отозвано', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', revoke: 'Отозвать', logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', security: 'Безопасность аккаунта', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
+    title: 'Xray-easy', setup: 'Первичная настройка', login: 'Вход администратора', username: 'Имя пользователя', password: 'Пароль', host: 'Публичный адрес или IPv4', port: 'Публичный порт (из Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Создать администратора', signIn: 'Войти', ready: 'Устройства', newDevice: 'Имя устройства', fingerprint: 'Fingerprint', createDevice: 'Создать устройство', profile: 'Профиль', qr: 'QR-код', download: 'Скачать JSON', enabled: 'включено', disabled: 'выключено', revoked: 'отозвано', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', revoke: 'Отозвать', logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', security: 'Безопасность аккаунта', backup: 'Создать backup', backupCreated: 'Backup создан', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
   },
 }
 
@@ -105,6 +106,12 @@ async function logout() { await request('/api/auth/logout', { method: 'POST' });
 async function logoutAll() {
   busy.value = true; error.value = ''
   try { await request('/api/auth/logout-all', { method: 'POST' }); events?.close(); events = null; admin.value = null; totpStatus.value = null }
+  catch (cause) { showError(cause) } finally { busy.value = false }
+}
+
+async function createBackup() {
+  busy.value = true; error.value = ''
+  try { const result = await request<{ name: string }>('/api/backups', { method: 'POST' }); lastBackup.value = result.name }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 
@@ -181,6 +188,7 @@ function formatLastSeen(value?: string) { if (!value) return ''; return new Date
       <div v-if="selectedProfile" class="profile"><label>VLESS URI<textarea readonly :value="selectedProfile.uri"></textarea></label><img :src="`/api/clients/${selectedProfile.client_id}/profile?format=qr`" :alt="t().qr" /><a :href="`/api/clients/${selectedProfile.client_id}/profile?format=json`">{{ t().download }}</a></div>
       <section class="security">
         <h2>{{ t().security }}</h2>
+        <button class="secondary" :disabled="busy" @click="createBackup">{{ t().backup }}</button><p v-if="lastBackup" class="backup-name">{{ t().backupCreated }}: {{ lastBackup }}</p>
         <p>{{ t().totp }}: <strong>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</strong></p>
         <template v-if="!totpStatus?.enabled && !totpSetup"><button :disabled="busy" @click="startTOTPSetup">{{ t().enableTOTP }}</button></template>
         <template v-if="totpSetup">
