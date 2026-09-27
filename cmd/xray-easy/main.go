@@ -24,6 +24,7 @@ import (
 	"xray-easy/internal/stats"
 	"xray-easy/internal/store"
 	"xray-easy/internal/supervisor"
+	"xray-easy/internal/totp"
 	"xray-easy/internal/ui"
 	"xray-easy/internal/xray"
 	"xray-easy/internal/xrayapi"
@@ -43,6 +44,8 @@ type server struct {
 	stats            *stats.Manager
 	handler          *xrayapi.HandlerClient
 	applyMu          sync.Mutex
+	totpMu           sync.Mutex
+	pendingTOTP      map[string]pendingTOTP
 }
 
 type initializeRequest struct {
@@ -55,8 +58,27 @@ type initializeRequest struct {
 }
 
 type loginRequest struct {
-	Username string `json:"username"`
+	Username     string `json:"username"`
+	Password     string `json:"password"`
+	TOTPCode     string `json:"totp_code"`
+	RecoveryCode string `json:"recovery_code"`
+}
+
+type totpSetupRequest struct {
+	SetupToken string `json:"setup_token"`
+	Code       string `json:"code"`
+}
+
+type totpDisableRequest struct {
 	Password string `json:"password"`
+	Code     string `json:"code"`
+}
+
+type pendingTOTP struct {
+	Token     string
+	Secret    string
+	Codes     []string
+	ExpiresAt time.Time
 }
 
 type clientRequest struct {
@@ -70,6 +92,12 @@ type clientResponse struct {
 }
 
 func main() {
+	if len(os.Args) > 1 {
+		if err := runCLI(context.Background(), os.Args[1:]); err != nil {
+			fatal(err)
+		}
+		return
+	}
 	ctx := context.Background()
 	dataDir := envOr("XRAY_EASY_DATA_DIR", "/data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
@@ -107,7 +135,8 @@ func main() {
 			BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
 			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
 		},
-		handler: handlerClient,
+		handler:     handlerClient,
+		pendingTOTP: make(map[string]pendingTOTP),
 	}
 	s.stats = stats.NewManager(db, statsClient)
 	s.stats.Start(ctx)
@@ -118,7 +147,14 @@ func main() {
 	mux.HandleFunc("/api/setup/status", s.setupStatus)
 	mux.HandleFunc("/api/setup/initialize", s.initialize)
 	mux.HandleFunc("/api/auth/login", s.login)
+	mux.HandleFunc("/api/auth/login/totp", s.loginTOTP)
+	mux.HandleFunc("/api/auth/login/recovery", s.loginRecovery)
 	mux.HandleFunc("/api/auth/logout", s.logout)
+	mux.HandleFunc("/api/auth/logout-all", s.logoutAll)
+	mux.HandleFunc("/api/auth/totp/status", s.totpStatus)
+	mux.HandleFunc("/api/auth/totp/setup", s.totpSetup)
+	mux.HandleFunc("/api/auth/totp/enable", s.totpEnable)
+	mux.HandleFunc("/api/auth/totp/disable", s.totpDisable)
 	mux.HandleFunc("/api/me", s.me)
 	mux.HandleFunc("/api/settings", s.settings)
 	mux.HandleFunc("/api/events", s.events)
@@ -142,6 +178,65 @@ func loadMasterKey() ([]byte, error) {
 		return nil, errors.New("XRAY_EASY_MASTER_KEY must be base64 and decode to at least 32 bytes")
 	}
 	return key, nil
+}
+
+func runCLI(ctx context.Context, args []string) error {
+	if len(args) < 2 || args[0] != "admin" {
+		return errors.New("usage: xray-easy admin <logout-all|reset-totp|recovery-codes>")
+	}
+	dataDir := envOr("XRAY_EASY_DATA_DIR", "/data")
+	db, err := store.Open(ctx, filepath.Join(dataDir, "state.db"))
+	if err != nil {
+		return err
+	}
+	defer db.Close()
+	admin, err := db.FirstAdmin(ctx)
+	if err != nil {
+		return err
+	}
+	switch args[1] {
+	case "logout-all":
+		if err := db.DeleteAllSessions(ctx, admin.ID); err != nil {
+			return fmt.Errorf("logout all sessions: %w", err)
+		}
+		_ = db.AddAudit(ctx, admin.ID, "auth.logout_all_cli", "admin", admin.ID, "all sessions revoked")
+		fmt.Println("all admin sessions revoked")
+		return nil
+	case "reset-totp":
+		if err := db.DisableTOTP(ctx, admin.ID); err != nil {
+			return fmt.Errorf("reset TOTP: %w", err)
+		}
+		if err := db.DeleteAllSessions(ctx, admin.ID); err != nil {
+			return fmt.Errorf("revoke sessions: %w", err)
+		}
+		_ = db.AddAudit(ctx, admin.ID, "auth.totp_reset_cli", "admin", admin.ID, "TOTP disabled and sessions revoked")
+		fmt.Println("TOTP disabled and all admin sessions revoked")
+		return nil
+	case "recovery-codes":
+		if !admin.TOTPEnabled {
+			return errors.New("TOTP is not enabled")
+		}
+		codes := make([]string, 10)
+		hashes := make([]string, 0, len(codes))
+		for i := range codes {
+			codes[i], err = totp.NewRecoveryCode()
+			if err != nil {
+				return err
+			}
+			hashes = append(hashes, auth.HashRecoveryCode(codes[i]))
+		}
+		if err := db.ReplaceRecoveryCodes(ctx, admin.ID, hashes); err != nil {
+			return fmt.Errorf("replace recovery codes: %w", err)
+		}
+		_ = db.AddAudit(ctx, admin.ID, "auth.recovery_rotate_cli", "admin", admin.ID, "recovery codes replaced")
+		fmt.Println("New one-time recovery codes:")
+		for _, code := range codes {
+			fmt.Println(code)
+		}
+		return nil
+	default:
+		return errors.New("usage: xray-easy admin <logout-all|reset-totp|recovery-codes>")
+	}
 }
 
 func configuredPublicPort() (int, error) {
@@ -262,18 +357,101 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	admin, err := s.store.FindAdmin(r.Context(), req.Username)
-	if err != nil || !auth.VerifyPassword(req.Password, admin.PasswordHash) {
+	admin, err := s.passwordAdmin(r.Context(), req.Username, req.Password)
+	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials"})
 		return
 	}
-	token, err := s.store.CreateSession(r.Context(), admin.ID, 3*time.Hour)
+	if admin.TOTPEnabled {
+		if req.TOTPCode == "" {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "TOTP code required", "code": "totp_required"})
+			return
+		}
+		if err := s.verifyTOTP(admin, req.TOTPCode); err != nil {
+			writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid TOTP code", "code": "totp_invalid"})
+			return
+		}
+	}
+	s.issueSession(w, r, admin)
+}
+
+func (s *server) loginTOTP(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	var req loginRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	admin, err := s.passwordAdmin(r.Context(), req.Username, req.Password)
+	if err != nil || !admin.TOTPEnabled {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials"})
+		return
+	}
+	if err := s.verifyTOTP(admin, req.TOTPCode); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid TOTP code", "code": "totp_invalid"})
+		return
+	}
+	s.issueSession(w, r, admin)
+}
+
+func (s *server) loginRecovery(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	var req loginRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	admin, err := s.passwordAdmin(r.Context(), req.Username, req.Password)
+	if err != nil || !admin.TOTPEnabled || auth.ValidateRecoveryCode(req.RecoveryCode) != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials or recovery code"})
+		return
+	}
+	consumed, err := s.store.ConsumeRecoveryCode(r.Context(), admin.ID, auth.HashRecoveryCode(req.RecoveryCode))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not consume recovery code"})
+		return
+	}
+	if !consumed {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials or recovery code"})
+		return
+	}
+	s.issueSession(w, r, admin)
+}
+
+func (s *server) passwordAdmin(ctx context.Context, username, password string) (store.Admin, error) {
+	admin, err := s.store.FindAdmin(ctx, username)
+	if err != nil || !auth.VerifyPassword(password, admin.PasswordHash) {
+		return store.Admin{}, errors.New("invalid credentials")
+	}
+	return admin, nil
+}
+
+func (s *server) verifyTOTP(admin store.Admin, code string) error {
+	if !admin.TOTPEnabled || admin.TOTPSecretEnc == "" {
+		return errors.New("TOTP is not enabled")
+	}
+	secretValue, err := secret.Open(s.masterKey, admin.TOTPSecretEnc, "totp_secret")
+	if err != nil || !totp.Validate(secretValue, strings.TrimSpace(code), time.Now().UTC()) {
+		return errors.New("invalid TOTP code")
+	}
+	return nil
+}
+
+func (s *server) issueSession(w http.ResponseWriter, r *http.Request, admin store.Admin) {
+	const sessionTTL = 3 * time.Hour
+	token, err := s.store.CreateSession(r.Context(), admin.ID, sessionTTL)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create session"})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int((3 * time.Hour) / time.Second)})
-	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username, "expires_in": int((3 * time.Hour) / time.Second)})
+	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL / time.Second)})
+	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username, "totp_enabled": admin.TOTPEnabled, "expires_in": int(sessionTTL / time.Second)})
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
@@ -284,13 +462,176 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
+func (s *server) logoutAll(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	if err := s.store.DeleteAllSessions(r.Context(), admin.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not revoke sessions"})
+		return
+	}
+	_ = s.store.AddAudit(r.Context(), admin.ID, "auth.logout_all", "admin", admin.ID, "all sessions revoked")
+	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	writeJSON(w, http.StatusNoContent, nil)
+}
+
 func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username})
+	count, _ := s.store.RecoveryCodeCount(r.Context(), admin.ID)
+	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username, "totp_enabled": admin.TOTPEnabled, "recovery_codes_remaining": count})
+}
+
+func (s *server) totpStatus(w http.ResponseWriter, r *http.Request) {
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	count, err := s.store.RecoveryCodeCount(r.Context(), admin.ID)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read TOTP status"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": admin.TOTPEnabled, "recovery_codes_remaining": count})
+}
+
+func (s *server) totpSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	if admin.TOTPEnabled {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "TOTP is already enabled"})
+		return
+	}
+	secretValue, err := totp.NewSecret()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	token, err := randomID()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create TOTP setup token"})
+		return
+	}
+	codes := make([]string, 10)
+	for i := range codes {
+		codes[i], err = totp.NewRecoveryCode()
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+			return
+		}
+	}
+	s.totpMu.Lock()
+	s.pendingTOTP[admin.ID] = pendingTOTP{Token: token, Secret: secretValue, Codes: codes, ExpiresAt: time.Now().UTC().Add(10 * time.Minute)}
+	s.totpMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"setup_token":    token,
+		"secret":         secretValue,
+		"otpauth_uri":    totp.OTPAuthURI(secretValue, "xray-easy", admin.Username),
+		"recovery_codes": codes,
+		"expires_in":     600,
+	})
+}
+
+func (s *server) totpEnable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	var req totpSetupRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	s.totpMu.Lock()
+	pending, ok := s.pendingTOTP[admin.ID]
+	if ok && (pending.Token != req.SetupToken || time.Now().UTC().After(pending.ExpiresAt)) {
+		ok = false
+	}
+	s.totpMu.Unlock()
+	if !ok {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "TOTP setup expired; start again"})
+		return
+	}
+	if !totp.Validate(pending.Secret, req.Code, time.Now().UTC()) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid TOTP code"})
+		return
+	}
+	encrypted, err := secret.Seal(s.masterKey, pending.Secret, "totp_secret")
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encrypt TOTP secret"})
+		return
+	}
+	hashes := make([]string, 0, len(pending.Codes))
+	for _, code := range pending.Codes {
+		hashes = append(hashes, auth.HashRecoveryCode(code))
+	}
+	if err := s.store.SetTOTP(r.Context(), admin.ID, encrypted, hashes); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not save TOTP settings"})
+		return
+	}
+	s.totpMu.Lock()
+	delete(s.pendingTOTP, admin.ID)
+	s.totpMu.Unlock()
+	_ = s.store.AddAudit(r.Context(), admin.ID, "auth.totp_enable", "admin", admin.ID, "TOTP enabled")
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "recovery_codes_remaining": len(hashes)})
+}
+
+func (s *server) totpDisable(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	var req totpDisableRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
+	if !admin.TOTPEnabled || !auth.VerifyPassword(req.Password, admin.PasswordHash) {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "password or TOTP code is invalid"})
+		return
+	}
+	if err := s.verifyTOTP(admin, req.Code); err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "password or TOTP code is invalid"})
+		return
+	}
+	if err := s.store.DisableTOTP(r.Context(), admin.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not disable TOTP"})
+		return
+	}
+	if err := s.store.DeleteAllSessions(r.Context(), admin.ID); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not revoke sessions"})
+		return
+	}
+	_ = s.store.AddAudit(r.Context(), admin.ID, "auth.totp_disable", "admin", admin.ID, "TOTP disabled")
+	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	writeJSON(w, http.StatusNoContent, nil)
 }
 
 func (s *server) events(w http.ResponseWriter, r *http.Request) {
@@ -314,6 +655,9 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	defer unsubscribe()
 
 	send := func() error {
+		if _, err := s.authenticated(r); err != nil {
+			return err
+		}
 		payload, err := json.Marshal(map[string]any{"type": "stats", "at": time.Now().UTC(), "clients": s.stats.Snapshot()})
 		if err != nil {
 			return err
@@ -338,6 +682,9 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-heartbeat.C:
+			if _, err := s.authenticated(r); err != nil {
+				return
+			}
 			if _, err := fmt.Fprint(w, ": keep-alive\n\n"); err != nil {
 				return
 			}

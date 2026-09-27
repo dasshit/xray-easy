@@ -4,16 +4,19 @@
 
 ## Текущий статус реализации
 
-В репозитории уже собран первый вертикальный срез: отдельные контейнеры
+В репозитории уже собран рабочий вертикальный срез: отдельные контейнеры
 control plane и `xray-supervisor`, SQLite-модель установки и устройств,
 AES-GCM envelope для REALITY private key, setup с TLS probe, typed renderer
 VLESS + REALITY + TCP/Vision, атомарные candidate-файлы с `xray run -test`,
 применение с rollback к `active.json`, а также Vue dashboard с QR, VLESS URI,
 JSON export и enable/disable/revoke. Compose публикует UI только на loopback
 VDS и передаёт `XRAY_PUBLIC_PORT` как единственную настройку внешнего порта.
+Добавлены StatsService polling, reconciliation через HandlerService,
+аутентифицированный SSE, TOTP с зашифрованным секретом, одноразовые recovery-
+коды, двухшаговый вход и logout-all.
 
-Следующими обязательными срезами остаются TOTP/recovery, reconciliation и
-StatsService polling, backups/restore, полноценный settings rotation с
+Следующими обязательными срезами остаются backups/restore, полноценный
+settings rotation с
 подтверждением, redacted diagnostics/SSE и release E2E-проверка импорта в
 V2Rage на macOS/iOS.
 
@@ -342,8 +345,9 @@ POST   /api/auth/logout-all
 GET    /api/auth/sessions
 DELETE /api/auth/sessions/:id
 POST   /api/auth/password
-POST   /api/auth/totp/start
-POST   /api/auth/totp/verify
+GET    /api/auth/totp/status
+POST   /api/auth/totp/setup
+POST   /api/auth/totp/enable
 POST   /api/auth/totp/disable
 GET    /api/me
 
@@ -860,7 +864,9 @@ Smoke-проверка выполнена на чистом Compose volume: setu
 серверного и клиентского JSON, QR, state transitions и восстановление
 `active.json` после перезапуска.
 
-Следующий срез: TOTP/recovery, backups/restore, settings rotation и CLI
+Реализованный срез TOTP также добавил CLI-команды `admin logout-all`,
+`admin reset-totp` и `admin recovery-codes`, запускаемые через
+`docker compose exec`. Следующий срез: backups/restore и settings rotation в
 maintenance mode. До публикации образа CI должен заменить tag на immutable
 digest и добавить проверку upstream checksum для pinned Xray release.
 

@@ -19,9 +19,11 @@ type Store struct {
 }
 
 type Admin struct {
-	ID           string
-	Username     string
-	PasswordHash string
+	ID            string
+	Username      string
+	PasswordHash  string
+	TOTPSecretEnc string
+	TOTPEnabled   bool
 }
 
 type SetupStatus struct {
@@ -118,6 +120,8 @@ CREATE TABLE IF NOT EXISTS admin_users (
   id TEXT PRIMARY KEY,
   username TEXT NOT NULL UNIQUE COLLATE NOCASE,
   password_hash TEXT NOT NULL,
+  totp_secret_enc TEXT NOT NULL DEFAULT '',
+  totp_enabled INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -130,6 +134,14 @@ CREATE TABLE IF NOT EXISTS sessions (
   last_seen_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS sessions_expiry_idx ON sessions(expires_at);
+CREATE TABLE IF NOT EXISTS totp_recovery_codes (
+  id TEXT PRIMARY KEY,
+  admin_user_id TEXT NOT NULL REFERENCES admin_users(id) ON DELETE CASCADE,
+  code_hash TEXT NOT NULL UNIQUE,
+  used_at TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS totp_recovery_admin_idx ON totp_recovery_codes(admin_user_id, used_at);
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
@@ -180,6 +192,8 @@ CREATE TABLE IF NOT EXISTS traffic_snapshots (
 		return fmt.Errorf("migrate sqlite: %w", err)
 	}
 	for _, column := range []string{
+		`ALTER TABLE admin_users ADD COLUMN totp_secret_enc TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE admin_users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE settings ADD COLUMN xray_api_listen TEXT NOT NULL DEFAULT '127.0.0.1:10085'`,
 		`ALTER TABLE settings ADD COLUMN internal_inbound_port INTEGER NOT NULL DEFAULT 8443`,
 		`ALTER TABLE settings ADD COLUMN reality_target TEXT NOT NULL DEFAULT ''`,
@@ -246,10 +260,12 @@ func (s *Store) Initialize(ctx context.Context, username, passwordHash, publicHo
 
 func (s *Store) FindAdmin(ctx context.Context, username string) (Admin, error) {
 	var admin Admin
-	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash FROM admin_users WHERE username = ? COLLATE NOCASE`, strings.TrimSpace(username)).Scan(&admin.ID, &admin.Username, &admin.PasswordHash)
+	var enabled int
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, totp_secret_enc, totp_enabled FROM admin_users WHERE username = ? COLLATE NOCASE`, strings.TrimSpace(username)).Scan(&admin.ID, &admin.Username, &admin.PasswordHash, &admin.TOTPSecretEnc, &enabled)
 	if errors.Is(err, sql.ErrNoRows) {
 		return Admin{}, errors.New("admin not found")
 	}
+	admin.TOTPEnabled = enabled != 0
 	return admin, err
 }
 
@@ -271,10 +287,12 @@ func (s *Store) SessionAdmin(ctx context.Context, token string) (Admin, error) {
 	hash := sha256.Sum256([]byte(token))
 	var admin Admin
 	var expires string
-	err := s.db.QueryRowContext(ctx, `SELECT a.id, a.username, a.password_hash, s.expires_at FROM sessions s JOIN admin_users a ON a.id=s.admin_user_id WHERE s.token_hash=?`, hash[:]).Scan(&admin.ID, &admin.Username, &admin.PasswordHash, &expires)
+	var enabled int
+	err := s.db.QueryRowContext(ctx, `SELECT a.id, a.username, a.password_hash, a.totp_secret_enc, a.totp_enabled, s.expires_at FROM sessions s JOIN admin_users a ON a.id=s.admin_user_id WHERE s.token_hash=?`, hash[:]).Scan(&admin.ID, &admin.Username, &admin.PasswordHash, &admin.TOTPSecretEnc, &enabled, &expires)
 	if err != nil {
 		return Admin{}, errors.New("session not found")
 	}
+	admin.TOTPEnabled = enabled != 0
 	expiresAt, err := time.Parse(time.RFC3339Nano, expires)
 	if err != nil || time.Now().UTC().After(expiresAt) {
 		_, _ = s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash=?`, hash[:])
@@ -288,6 +306,102 @@ func (s *Store) DeleteSession(ctx context.Context, token string) error {
 	hash := sha256.Sum256([]byte(token))
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash=?`, hash[:])
 	return err
+}
+
+func (s *Store) DeleteAllSessions(ctx context.Context, adminID string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE admin_user_id=?`, adminID)
+	return err
+}
+
+// SetTOTP replaces the encrypted secret and recovery-code hashes atomically.
+// Raw recovery codes must never be passed here; only their hashes are stored.
+func (s *Store) SetTOTP(ctx context.Context, adminID, secretEnc string, recoveryHashes []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `UPDATE admin_users SET totp_secret_enc=?, totp_enabled=1, updated_at=? WHERE id=?`, secretEnc, now, adminID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM totp_recovery_codes WHERE admin_user_id=?`, adminID); err != nil {
+		return err
+	}
+	for _, hash := range recoveryHashes {
+		id, err := randomID()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO totp_recovery_codes(id, admin_user_id, code_hash, created_at) VALUES(?,?,?,?)`, id, adminID, hash, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func (s *Store) DisableTOTP(ctx context.Context, adminID string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `UPDATE admin_users SET totp_secret_enc='', totp_enabled=0, updated_at=? WHERE id=?`, now, adminID); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM totp_recovery_codes WHERE admin_user_id=?`, adminID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func (s *Store) ConsumeRecoveryCode(ctx context.Context, adminID, codeHash string) (bool, error) {
+	result, err := s.db.ExecContext(ctx, `UPDATE totp_recovery_codes SET used_at=? WHERE admin_user_id=? AND code_hash=? AND used_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), adminID, codeHash)
+	if err != nil {
+		return false, err
+	}
+	count, err := result.RowsAffected()
+	return count == 1, err
+}
+
+func (s *Store) RecoveryCodeCount(ctx context.Context, adminID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM totp_recovery_codes WHERE admin_user_id=? AND used_at IS NULL`, adminID).Scan(&count)
+	return count, err
+}
+
+func (s *Store) FirstAdmin(ctx context.Context) (Admin, error) {
+	var admin Admin
+	var enabled int
+	err := s.db.QueryRowContext(ctx, `SELECT id, username, password_hash, totp_secret_enc, totp_enabled FROM admin_users ORDER BY created_at LIMIT 1`).Scan(&admin.ID, &admin.Username, &admin.PasswordHash, &admin.TOTPSecretEnc, &enabled)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Admin{}, errors.New("admin not found")
+	}
+	admin.TOTPEnabled = enabled != 0
+	return admin, err
+}
+
+func (s *Store) ReplaceRecoveryCodes(ctx context.Context, adminID string, recoveryHashes []string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `DELETE FROM totp_recovery_codes WHERE admin_user_id=?`, adminID); err != nil {
+		return err
+	}
+	for _, hash := range recoveryHashes {
+		id, err := randomID()
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO totp_recovery_codes(id, admin_user_id, code_hash, created_at) VALUES(?,?,?,?)`, id, adminID, hash, now); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (s *Store) GetSettings(ctx context.Context) (Settings, error) {
