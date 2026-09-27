@@ -1,0 +1,823 @@
+# Xray-easy: детальный план реализации
+
+Дата исследования: 2026-09-27.
+
+## 1. Результат исследования и границы продукта
+
+### 1.1. Что повторяем из опыта wg-easy
+
+`wg-easy` объединяет в одном контейнере Web UI, серверную логику и управление VPN-движком. У него есть мастер первого запуска, постоянное хранилище, CRUD клиентов, QR-код и файл конфигурации для клиента, включение/выключение и срок действия клиента, CLI, аутентификация, 2FA и Prometheus. В текущей версии используются Nuxt/Vue, Pinia, Tailwind, SQLite-совместимое хранилище через Drizzle, Argon2, QR и OIDC-зависимости.
+
+Для Xray-easy нужно сохранить этот пользовательский сценарий:
+
+1. `docker compose up -d`.
+2. Открыть мастер в браузере.
+3. Указать адрес и параметры узла, создать пароль администратора.
+4. Нажать «Создать устройство».
+5. Показать QR-код и ссылку, которую пользователь импортирует в приложение на телефоне или компьютере.
+6. Позже создавать, отключать, отзывать и удалять устройства без редактирования JSON по SSH.
+
+### 1.2. Что принципиально отличается от WireGuard
+
+Xray — это прокси-платформа, а не готовый L3 VPN-интерфейс. Пользователю требуется совместимое клиентское приложение (v2rayN, v2rayNG, NekoBox, Hiddify, Shadowrocket и т. п.). Сервер Xray принимает входящий VLESS-трафик, применяет routing и отправляет его через outbound; маршрутизация всей ОС клиента зависит от выбранного приложения и его режима.
+
+У Xray конфигурация состоит из `inbounds`, `outbounds`, `routing`, `policy`, `stats`, `log`, `api` и других модулей. Профиль устройства — это один пользователь VLESS (UUID, email, flow) плюс общие параметры транспорта и REALITY. Поэтому модель данных должна отделять настройки узла от устройств.
+
+### 1.3. Граница MVP
+
+MVP поддерживает только один безопасный и хорошо документированный пресет:
+
+- VLESS;
+- REALITY;
+- TCP/RAW transport;
+- `xtls-rprx-vision` для совместимых клиентов;
+- один входящий порт, по умолчанию 443;
+- outbound `freedom`;
+- несколько устройств в одном inbound;
+- UI, QR, VLESS share link и JSON;
+- включение, отключение, отзыв и статистика по устройству; все профили бессрочные;
+- Docker Compose для amd64 и arm64.
+
+В MVP не включать другие протоколы и transport/security варианты: VMess, Trojan, Shadowsocks, Hysteria, TUN, TLS/WS, сложный редактор routing, multi-node, ACME и автоматическую установку reverse proxy. Эти функции требуют отдельных UX и совместимости и должны добавляться после стабильного базового сценария.
+
+Зафиксированный пресет: **VLESS + REALITY + TCP/RAW + XTLS Vision**.
+
+Внутри pinned-версии Xray нужно явно зафиксировать точные имена полей: для текущего
+пресета используется `streamSettings.network = "tcp"` (транспорт RAW в новой
+терминологии Xray), `security = "reality"` и `flow = "xtls-rprx-vision"`.
+`fingerprint` является параметром клиентского REALITY-профиля, а не настройкой
+серверного inbound. Изменение fingerprint меняет только повторно выдаваемые
+клиентские профили и само по себе не требует перезапуска Xray или отзыва старых
+профилей.
+
+MVP предназначен для чистой установки. Импорт существующих Xray JSON/JSONC и автоматическая миграция внешних конфигураций не поддерживаются; такую функцию можно спроектировать отдельно после появления стабильной схемы версий.
+
+### 1.4. Модель пользователей MVP
+
+Первая версия рассчитана на **одного администратора одной установки на одном VPS**. Он управляет профилями семьи, друзей или собственных устройств. В MVP не включать несколько администраторов, роли, RBAC, мультитенантность и управление несколькими Xray-узлами из одной панели. Схему `admin_users` оставить расширяемой, чтобы эти функции можно было добавить позже без миграции основной модели устройств.
+
+Даже при доступе к UI только через SSH-туннель панель требует отдельный пароль администратора. TOTP включается как дополнительный фактор. Это защищает от случайного расширения bind-адреса, локального доступа к VDS и компрометации уже открытого SSH-сеанса.
+
+Пароль обязателен при setup. TOTP не блокирует первый вход: администратор подключается с паролем, после чего UI предлагает настроить TOTP и настойчиво рекомендует завершить настройку.
+
+При включении TOTP UI один раз показывает набор одноразовых recovery-кодов. В базе хранятся только их хэши; повторно показать коды нельзя. При потере устройства остаётся резервный сброс через SSH CLI.
+
+Отключение TOTP в UI требует текущий пароль и действующий TOTP-код; без обоих факторов остаётся только аварийный CLI reset через SSH.
+
+Перевыпуск recovery-кодов выполняется только через CLI; при создании нового набора старые коды немедленно инвалидируются.
+
+## 2. Факты, на которых основан дизайн
+
+### 2.1. wg-easy
+
+- Официальный compose хранит состояние в named volume `/etc/wireguard`, публикует UDP-порт WireGuard и TCP-порт UI, запускается с `restart: unless-stopped`; актуальный пример использует образ major-тега `15`.
+- Мастер setup запрашивает администратора, host и port; MVP предназначен для чистой установки и не импортирует прежнее Xray-состояние.
+- В текущей документации клиент имеет имя, enabled/disabled, срок действия, адреса и действия Save/Revert/Delete.
+- API wg-easy находится под `/api`, но официальная документация прямо предупреждает, что API пока нестабилен; аутентификация в примере — Basic Auth, 2FA API не поддерживает.
+- Для первого запуска есть unattended-переменные `INIT_*`; они используются только при первом старте и после этого должны быть удалены, чтобы не оставлять пароль в окружении.
+- Prometheus включается из панели и отдаёт `/metrics/prometheus` с опциональным Bearer password.
+- Лицензия wg-easy — AGPL-3.0-only. Код и UI Xray-easy следует писать самостоятельно; собственный код проекта лицензируется под AGPL-3.0-or-later.
+
+### 2.2. Xray
+
+- Официальный способ установки вне контейнера — `XTLS/Xray-install`; он ставит бинарник, systemd unit, конфигурацию и logrotate. В контейнере systemd не нужен: Xray запускается как дочерний процесс управляющего сервиса.
+- Официальный контейнер публикуется как `ghcr.io/xtls/xray-core`; версию нужно фиксировать, а не использовать непредсказуемый `latest`.
+- VLESS идентифицирует пользователя UUID; `email` используется для различения пользователей и является ключом пользовательской статистики.
+- HandlerService умеет добавлять и удалять пользователей из VLESS inbound через gRPC. StatsService умеет читать пользовательские и системные счётчики.
+- Для статистики нужна секция `stats`, а в `policy.levels` нужно включить `statsUserUplink`, `statsUserDownlink` и, при необходимости, `statsUserOnline`. Пользователь без `email` не получает пользовательскую статистику.
+- Xray API — gRPC. Его нужно слушать только на loopback/внутреннем Docker-сокете; порт нельзя публиковать наружу.
+- REALITY на сервере требует `target`/`dest`, `serverNames`, `privateKey` и `shortIds`; клиент использует соответствующие `serverName`, публичный ключ и `shortId`. REALITY пересылает неавторизованный трафик на target, поэтому неверный target может превратить узел в открытый форвардер.
+- REALITY допускается только с совместимыми transport-методами. Генерируемый JSON необходимо проверять именно тем pinned-бинарником Xray, который попадёт в образ; нельзя полагаться только на TypeScript-схему.
+- Официальный пример Xray показывает серверный VLESS+REALITY и клиентский outbound; его следует использовать как фикстуру для renderer и интеграционных тестов.
+
+## 3. Пользовательские сценарии
+
+### 3.1. Первый запуск
+
+1. Пользователь монтирует `/data` и запускает контейнер.
+2. Пользователь создаёт SSH-туннель с локального компьютера, например `ssh -N -L 8080:127.0.0.1:8080 user@vds`, и открывает `http://127.0.0.1:8080`.
+3. `/api/setup/status` сообщает, что система не инициализирована; остальные endpoints требуют setup.
+4. В документации перед запуском указать требования: Docker/Compose, внешний IPv4 или DNS-имя, свободный TCP-порт из `XRAY_PUBLIC_PORT` и правило firewall/security group. Нужно отдельно предупредить о конфликте с уже работающим сервисом на выбранном порту.
+5. Мастер создаёт администратора: имя выбирается пользователем, пароль сразу хэшируется Argon2id. Затем мастер просит public host/IP. Значение сохраняется в настройках и может быть изменено позже. Публичный порт не редактируется в UI: он берётся из `XRAY_PUBLIC_PORT` в Compose и показывается в setup как read-only. Для REALITY собственный сертификат и ACME-домен в MVP не нужны; public host всё равно должен быть адресом, по которому клиент достигнет VPS.
+6. Мастер предлагает пресет `VLESS + REALITY + Vision` и принимает один target, один выбранный SNI и client fingerprint default; short ID генерируется отдельно для каждого устройства.
+7. Сервис генерирует UUID для первого устройства, пару X25519 и short ID; private key сохраняется только в защищённом состоянии, public key показывается в профиле.
+8. Сервис выполняет target probe через supervisor с ограниченным timeout, строит конфигурацию, запускает `xray run -test -config ...`, проверяет локальную доступность Xray и только затем применяет её.
+9. Последним шагом wizard создаёт первый профиль устройства; UI показывает статус Xray, QR, VLESS-ссылку, JSON и кнопки копирования/скачивания.
+
+Мастер предлагает версионируемый список проверенных пар REALITY target/SNI и позволяет открыть ручной advanced-ввод. Для любого варианта выполняются TLS-проверка, проверка допустимых SNI, SSRF/private-range проверки и проверка риска open forwarder. Если target/SNI не проходит проверку, мастер показывает понятную ошибку и не сохраняет частично инициализированную конфигурацию.
+
+Список target/SNI поставляется внутри release image и имеет собственную версию/дату проверки. Панель не загружает его из сети во время запуска; ручной advanced-ввод проходит те же проверки и `xray tls ping`/TLS validation. Изменения каталога проходят тот же release review, что и изменение pinned Xray, и не применяются автоматически на уже настроенном узле.
+
+### 3.2. Создание устройства
+
+Форма первого устройства является последним шагом setup wizard. Она содержит только необходимые поля: понятное имя и необязательный fingerprint override. Сервис автоматически генерирует уникальный short ID для каждого устройства; ручное значение доступно в advanced-настройках и проходит проверку уникальности. UUID и email генерируются сервисом; email делается детерминированным, например `device-<internal-id>@xray-easy`. После завершения wizard пользователь сразу попадает на Dashboard с этим профилем.
+
+JSON-файл в MVP — стандартный полный клиентский Xray-конфиг: локальный SOCKS
+inbound на `127.0.0.1:10808` и один VLESS outbound с полями `address`, `port`,
+`uuid`, `encryption`, `flow`, `network`, `security`, `serverName`, `fingerprint`,
+`publicKey` и `shortId`. В нём нет server-side `privateKey`, API endpoint или admin
+credentials. Схема фиксируется как `xray-client/v1`, проверяется JSON Schema и
+fixtures, а ручной импорт выполняется в V2Rage на macOS/iOS.
+
+В MVP нет индивидуальных квот, ограничений скорости, расписаний доступа, срока действия и per-client policy. Для устройства доступны только enable/disable, отзыв и статистика; все созданные профили бессрочные.
+
+После сохранения UI показывает:
+
+- QR-код с VLESS URI;
+- VLESS URI в текстовом виде;
+- JSON для Xray-клиента;
+- кнопку скачать профиль;
+- кнопку «Отозвать».
+
+Отображаемое имя устройства можно изменить после создания без отзыва профиля, смены UUID или short ID. При повторной выдаче URI обновляется только fragment с именем устройства.
+
+В MVP профиль выдаётся только для конкретного устройства через QR, VLESS-ссылку или JSON-файл. Подписки и постоянные subscription URL не входят в первую версию; их добавить отдельным этапом с token rotation, revocation и rate limiting.
+
+UUID и служебные поля устройства скрыты в обычной карточке и доступны только в advanced/debug. Private key, admin credentials и другие server-side секреты через UI не показываются.
+
+### 3.3. Отключение и отзыв
+
+- `disabled` удаляет пользователя из in-memory VLESS inbound через HandlerService. Pinned Xray должен подтвердить, что новые соединения отклоняются; поведение уже установленных соединений фиксируется интеграционным тестом и не обещается UI до подтверждения.
+- `revoked` выполняет ту же операцию удаления пользователя и навсегда запрещает профиль; повторное включение не разрешается, новый профиль получает новый UUID. Если конкретная версия Xray закрывает существующее соединение сразу, это считается фактическим поведением pinned-релиза.
+- В MVP нет `expires_at` и планировщика истечения профилей; временные профили оставить для следующего этапа.
+
+### 3.4. Восстановление
+
+В каталоге `/data/backups` сервис автоматически сохраняет SQLite, redacted-конфигурацию и метаданные версии перед опасными изменениями и обновлением. В MVP backup-файлы не шифруются и защищаются правами `0600`, SSH-доступом и правами Docker volume; backup считается содержащим bearer credentials и не выдаётся через Web UI. Для каждого backup создаются manifest с SHA-256 и HMAC-SHA-256 через master key, а также атомарная временная копия с `fsync`/`rename`. Хранятся последние 10 backup-файлов; более старые удаляются только после успешного создания нового backup. Восстановление выполняется в maintenance mode через CLI и требует подтверждения. После восстановления renderer пересобирает конфигурацию и применяет её только после `xray run -test`.
+
+## 4. Архитектура
+
+### 4.1. Процессы и границы
+
+Для MVP использовать два постоянно работающих контейнера в одном Compose-проекте; отдельный одноразовый `init-volumes` подготавливает владельца named volumes при первом старте:
+
+```text
+Browser
+  -> SSH local port forwarding (`localhost:8080` -> VDS `127.0.0.1:8080`)
+  -> xray-easy API + static UI :8080
+       |-- SQLite /data/state.db
+       |-- Config renderer -> shared xray-config volume
+       |-- gRPC client -> xray:10085 (Xray Handler/Stats API)
+       `-- control client -> xray:10086 (private supervisor API)
+
+xray service
+  |-- xray-supervisor (PID 1)
+  |     |-- validates candidate config with `xray run -test`
+  |     |-- starts/restarts pinned Xray child
+  |     `-- exposes private apply/status API :10086
+  |-- official pinned Xray binary
+  |     `-- Xray API :10085, bound only to the Compose control network
+  `-- public inbound :8443 inside container -> host ${XRAY_PUBLIC_PORT:-443}/tcp
+```
+
+`xray`-контейнер должен быть производным от официального Xray image или собираться из официального pinned binary и содержать только маленький `xray-supervisor`. Supervisor нужен потому, что Compose не предоставляет приложению безопасный способ перезапустить другой контейнер, а Xray не имеет общего reload API для всех transport/REALITY/routing-настроек. Docker socket в `xray-easy` не монтировать.
+
+### 4.2. Канонический источник состояния
+
+SQLite — единственный источник правды для узла, устройств и ревизий. JSON Xray — производный артефакт. Нельзя редактировать его напрямую из UI и затем пытаться угадывать состояние БД.
+
+Control plane является единственным писателем в `xray-config`: он монтирует volume на чтение/запись. Xray-контейнер и supervisor получают этот volume только на чтение. В volume хранятся `desired.json`, принятый `active.json`, candidate-файлы и статус последнего apply. Supervisor не изменяет volume сам, а только проверяет указанный candidate и управляет дочерним Xray.
+
+Для каждого изменения control plane создаёт запись `apply_operations` с уникальным
+operation ID и состояниями `pending -> validated -> applying -> applied -> committed`
+либо `failed`. DB-транзакция не удерживается во время сетевого вызова к Xray:
+
+1. проверить входные данные, права и `If-Match`/revision;
+2. записать candidate desired-состояние и operation в SQLite, не изменяя committed rows;
+3. сформировать candidate во временном файле mode 0600 из candidate snapshot и сделать `fsync`;
+4. попросить supervisor выполнить `xray run -test` своим pinned-бинарником;
+5. применить HandlerService или запросить supervisor restart для node-level изменений;
+6. атомарно заменить `desired.json`/`active.json` только после успешного apply;
+7. атомарной DB-транзакцией заменить committed rows candidate-состоянием и зафиксировать operation и config revision как `committed`;
+8. при ошибке пометить operation `failed`, сохранить последнюю рабочую ревизию и не выдавать новый профиль.
+
+Внешние вызовы должны быть идемпотентными по operation ID. При старте control plane
+обрабатывает незавершённые operations, удаляет/помечает незавершённые candidates,
+сравнивает committed SQLite с HandlerService и выполняет reconciliation. Последнее
+подтверждённое desired-состояние является источником восстановления; временные файлы
+и candidate rows не считаются рабочей конфигурацией.
+
+### 4.3. Применение изменений
+
+- Создание, включение, отключение и отзыв устройства: перед удалением прочитать и сохранить последний StatsService counter, затем использовать `AlterInbound`/HandlerService через адаптер pinned-версии. После успешного вызова control plane обновляет производный `desired.json`.
+- Изменение target, выбранного SNI, ключей REALITY, transport или routing: control plane записывает candidate, supervisor выполняет `validate` и `apply`, затем останавливает дочерний Xray с grace period и запускает его заново. Поскольку оба процесса используют один порт `8443`, краткий разрыв соединений при node-level apply допустим и явно показывается в UI. Supervisor не записывает volume. Смена `XRAY_PUBLIC_PORT` или public host меняет публикацию Compose/клиентские профили, но не внутренний Xray inbound `8443`; здесь нужен подтверждённый profile rotation и health check после пересоздания Compose, а не обязательный restart дочернего Xray.
+- Supervisor предоставляет versioned protocol `v1` с операциями `validate`, `apply`, `probe-target`, `status`, `health` и ограниченным `logs` endpoint; запросы содержат operation ID, nonce и HMAC. Endpoint доступен только по Compose control network. Xray gRPC API и supervisor bind-ятся только на IP интерфейса `control`, определяемый при старте, а не на `0.0.0.0` обеих сетей; порты не публикуются на host.
+- При недоступности Xray API или supervisor UI показывает `apply pending/failed` и оставляет последнюю рабочую конфигурацию.
+- Supervisor автоматически перезапускает дочерний Xray с backoff после падения; после серии неудачных запусков health state становится `degraded`, а причины и число попыток доступны в UI/CLI. Контейнеры используют `restart: unless-stopped`.
+- При старте supervisor запускает последнюю принятую `active.json`; после старта control plane сверяет пользователей из БД с HandlerService и выполняет reconciliation. При отсутствии принятой конфигурации используется bootstrap-конфиг без публичного inbound.
+
+При чистом volume `xray-supervisor` запускает минимальный bootstrap-конфиг без публичного inbound, но с локальными Handler/Stats API. Поэтому `xray` может быть healthy до завершения setup wizard, а первый пользовательский конфиг включается через `apply` после заполнения host, target и SNI. Одноразовый `init-volumes` запускается до обоих сервисов, создаёт каталоги и выставляет UID/GID `10001:10001`; основной control plane и Xray после этого работают non-root. Нельзя полагаться на owner, который Docker присвоит пустому named volume автоматически.
+
+## 5. Модель данных
+
+### `settings`
+
+- `id`, `schema_version`, `public_host`, `public_port` (effective value from `XRAY_PUBLIC_PORT`, read-only in UI);
+- `protocol`, `network`, `security`, `flow`, `client_fingerprint_default`;
+- `reality_target` (normalized host:port), `reality_sni`, `reality_catalog_version`, `reality_private_key`;
+- параметры генерации short ID;
+- `api_listen`, `xray_version`, `active_revision`, `created_at`, `updated_at`.
+
+REALITY private key шифровать в SQLite envelope-ключом через HKDF-SHA-256 с purpose
+`xray-easy/runtime` и AES-256-GCM с versioned blob `v1:nonce:ciphertext`; сам master key не
+сохранять в базе. Публичный ключ вычислять из private key при рендеринге и не
+хранить второй независимой копией. Во время работы полный `active.json` содержит
+private key и поэтому защищается как секрет mode 0600; в backup и diagnostics этот
+ключ удаляется. Не писать private key, UUID, URI и QR в обычный application log.
+Потеря master key делает зашифрованный runtime state невосстановимым.
+
+`XRAY_EASY_MASTER_KEY` обязателен уже при первом запуске. Требуется base64-значение, кодирующее минимум 32 байта; документация предлагает создать его командой `openssl rand -base64 32`. Если переменная отсутствует или имеет неверный формат, control plane не переходит в ready-состояние и сообщает причину в logs и `doctor`; ключ автоматически не генерируется и в `/data` не сохраняется.
+
+### `clients`
+
+- `id` — внутренний ULID/UUID;
+- `name`, `email`, `xray_uuid`;
+- `short_id`, `fingerprint_override`; `flow` наследуется от зафиксированного MVP-пресета и не хранится у клиента отдельно;
+- `status` (`active`, `disabled`, `revoked`); boolean `enabled` не хранить отдельно, а вычислять из status;
+- `created_at`, `updated_at`, `revoked_at`, `last_seen_at` (UTC, RFC 3339 at API boundary);
+- `profile_version` для optimistic concurrency.
+
+UUID и short ID должны иметь уникальные индексы. Отображаемое имя устройства не обязано быть уникальным; устройства различаются по внутреннему ID, UUID и short ID. Имя валидируется на backend: ASCII-латиница, цифры и `-`, длина 1–64 символа; пробелы, Unicode, emoji, переносы строк и прочие символы запрещены. Удаление из UI по умолчанию переводит запись в `revoked`, физическое удаление оставить отдельной административной операцией. `purge` разрешён только после успешного удаления пользователя из HandlerService и отдельного confirmation challenge; затем удаляются client credentials, counters и profile metadata, а redacted audit остаётся.
+
+### `admin_users`, `sessions`, `totp_secrets`
+
+- уникальное имя администратора, выбранное при setup;
+- Argon2id password hash;
+- server-side sessions с rotation и абсолютным сроком жизни 3 часа, после чего требуется повторный вход;
+- CSRF token и audit metadata;
+- зашифрованный TOTP secret (тем же envelope-механизмом master key) и хэши одноразовых recovery-кодов.
+
+OIDC и несколько администраторов оставить для следующей фазы, но не ломать схему добавлением одного захардкоженного пользователя.
+
+### `audit_events`, `config_revisions`, `apply_operations`, `traffic_snapshots`
+
+Audit хранит actor, action, entity, timestamp и redacted diff бессрочно вместе с `/data` и backup. `config_revisions` хранит hash, статус проверки и причину неуспешного apply. `apply_operations` хранит operation ID, desired revision, этап и ошибку внешнего вызова. `traffic_snapshots` хранит последний прочитанный Xray counter, накопительные totals, время polling и признак counter reset.
+
+В MVP UI показывает online-статус, `last seen` и накопительные upload/download bytes по каждому устройству. Xray-easy опрашивает StatsService каждые 30 секунд с `reset=false` и считает устройство online, если counter изменился хотя бы один раз за последние 5 минут; это собственное правило панели, а не изменение Xray `statsUserOnline`. Полноценные исторические графики и time-series retention не входят в обязательный первый релиз. После пересоздания Xray абсолютные counters сравниваются с последним snapshot: при уменьшении counter фиксируется reset, в totals добавляется только безопасная текущая дельта. Трафик между последним polling и внезапным падением Xray может не попасть в totals; UI и документация отмечают эту точность.
+
+## 6. Генератор конфигурации
+
+Писать чистую функцию `renderXrayConfig(settings, clients, runtimeOptions)`, возвращающую строгий JSON без комментариев. Минимальная структура:
+
+- `log`: error/warning по умолчанию; access log отключён, его отдельное операционное включение допускается только с redaction policy;
+- `stats: {}`;
+- `policy.levels[0]`: user uplink/downlink stats; `statsUserOnline` можно включить для диагностики, но online в UI рассчитывается собственной пятиминутной логикой по counter snapshots;
+- `api`: HandlerService, StatsService, LoggerService на адресе Xray-контейнера, доступном только из Compose control network;
+- один VLESS inbound с активными клиентами;
+- `streamSettings.security = reality`, соответствующие transport settings;
+- `outbounds`: только `freedom` с фиксированным tag `direct`;
+- минимальный routing, без скрытых geo/rule defaults.
+
+Все поля, которые зависят от версии Xray (`network`/transport naming, REALITY aliases, flow), должны быть закрыты адаптером версии и покрыты fixtures. В CI нужно проверять каждую fixture соответствующим Xray binary.
+
+Перед сохранением проверять:
+
+- UUID, short ID, host, port, SNI и target;
+- `XRAY_PUBLIC_PORT` как целое число 1–65535; привилегированный host-порт требует соответствующих прав Docker;
+- target не разрешается в loopback, private, link-local, multicast и metadata IP; advanced override в MVP не отключает эту защиту, а только позволяет ввести адрес вне встроенного каталога;
+- SNI входит в допустимый список target либо подтверждён TLS/SAN probe;
+- private/public X25519 key pair соответствует друг другу;
+- short ID имеет допустимую hex-длину и присутствует в server list;
+- включённый flow совместим с transport/security;
+- порт не конфликтует с UI/API;
+- target хранится с явным портом и нормализованной DNS/IP-формой;
+- конфигурация проходит `xray run -test`;
+- target probe через `xray tls ping` выполняется supervisor-ом с timeout и ограничением исходящего запроса, а результат не считается бессрочной гарантией доступности.
+
+## 7. Профили устройств
+
+### 7.1. VLESS URI
+
+Генерировать стандартную ссылку вида:
+
+```text
+vless://UUID@PUBLIC_HOST:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=SERVER_NAME&fp=chrome&pbk=PUBLIC_KEY&sid=SHORT_ID&type=tcp#DEVICE_NAME
+```
+
+Значения URL-кодировать, имя профиля кодировать как fragment. Нельзя строить строку конкатенацией без URL encoder.
+
+### 7.2. Форматы выдачи
+
+- QR содержит ровно VLESS URI;
+- текстовая ссылка копируется отдельной кнопкой;
+- JSON содержит только клиентские поля и не содержит server-side `privateKey`, API endpoint или admin credentials;
+- Для активного устройства профиль можно повторно показать или скачать через аутентифицированный Web UI. Повторная выдача не меняет UUID, short ID или profile version; при компрометации используется отдельное действие revoke.
+- опциональная подписка — отдельный случай с длинным случайным token, revocation и rate limit.
+
+В MVP тестировать URI и JSON с выбранными macOS/iOS-клиентами. Нельзя объявлять формат совместимым со всеми клиентами без матрицы тестов.
+
+Целевые платформы первой версии по итогам интервью — **macOS и iOS**. Обязательная ручная E2E-проверка выполняется в **V2Rage**. Автоматизировать импорт в приложение не требуется; ручной сценарий импорта должен входить в release checklist. VLESS URI и JSON остаются стандартным клиентским форматом.
+
+Сетевой адрес MVP — IPv4 или DNS-имя. Полноценная поддержка IPv6, включая формат URI, bind/firewall-проверки и E2E-матрицу, переносится на следующий этап.
+
+## 8. API и UI
+
+### 8.1. API endpoints
+
+```text
+GET    /api/healthz
+GET    /api/readyz
+GET    /api/setup/status
+POST   /api/setup/initialize
+POST   /api/auth/login
+POST   /api/auth/login/totp
+POST   /api/auth/login/recovery
+POST   /api/auth/logout
+POST   /api/auth/logout-all
+GET    /api/auth/sessions
+DELETE /api/auth/sessions/:id
+POST   /api/auth/password
+POST   /api/auth/totp/start
+POST   /api/auth/totp/verify
+POST   /api/auth/totp/disable
+GET    /api/me
+
+GET    /api/settings
+PATCH  /api/settings
+POST   /api/settings/validate
+POST   /api/settings/apply
+GET    /api/operations/:id
+
+GET    /api/clients
+POST   /api/clients
+GET    /api/clients/:id
+PATCH  /api/clients/:id
+POST   /api/clients/:id/enable
+POST   /api/clients/:id/disable
+POST   /api/clients/:id/revoke
+DELETE /api/clients/:id       # только явное purge
+GET    /api/clients/:id/profile?format=uri|json|qr
+
+GET    /api/stats/summary
+GET    /api/stats/clients/:id
+GET    /api/logs?component=xray|app&cursor=...
+GET    /api/events              # authenticated Server-Sent Events stream
+GET    /api/backups
+POST   /api/backups
+GET    /api/audit?cursor=...
+```
+
+Формат API версионируется заголовком `X-Xray-Easy-Api-Version: 1` и описывается
+генерируемой OpenAPI-схемой. Для profile endpoint `format=json` означает полный
+`xray-client/v1` config, `format=uri` — VLESS URI, `format=qr` — PNG/SVG с этой URI.
+
+Все mutation endpoints после setup требуют session и CSRF. `If-Match`/revision применяется к изменениям settings/clients, где возможна перезапись параллельной вкладкой; auth/logout/backup используют отдельные idempotency keys или одноразовые токены. `setup/initialize` и `auth/login` являются отдельными одноразовыми flow. Для опасных изменений сервер выдаёт короткоживущий confirmation challenge, связанный с revision и типом операции; UI передаёт его вместе с `ROTATE`/`REVOKE`. Публичную subscription выдавать только под случайным token URL и не смешивать с admin API.
+
+Ошибки API имеют стабильные машинные коды (`validation_error`, `conflict`,
+`apply_pending`, `apply_failed`, `degraded`, `reauth_required`, `rate_limited`)
+и redacted human-readable message. UI не должен разбирать текст логов для определения
+состояния операции; для этого используется `/api/operations/:id` и SSE event.
+
+Профили и QR отдаются с `Cache-Control: no-store`, `Pragma: no-cache`, ограниченным
+`Content-Disposition` и без записи URI в access/audit log. Login с включённым TOTP
+имеет явный второй шаг (`password` -> `totp` или recovery code), а session cookie
+создаётся только после завершения обоих факторов.
+
+### 8.2. Экраны
+
+1. Setup: администратор, public host/port, пресет, target/SNI, проверка и итоговый статус.
+2. Dashboard: состояние Xray, активные устройства, online, uplink/downlink, последняя ошибка apply; обновления через authenticated SSE stream и ручной refresh после reconnect.
+3. Devices: имя, status, last seen, traffic, QR/share/download/copy.
+4. Diagnostics: только ограниченный tail последних `error`/`warn` записей приложения и Xray; supervisor держит bounded ring buffer, перед отдачей UI записи проходят redaction секретов, UUID, private key, полных URI и других bearer-значений. Access log по умолчанию отключён; после операционного включения он доступен в Docker logs/CLI и не попадает в Web UI.
+5. Localization: русский и английский языки поставляются в MVP; по умолчанию выбирается язык браузера, администратор может переопределить его в настройках, для остальных языков используется английский fallback.
+6. Device modal: создание, редактирование имени и fingerprint override, enable/disable/revoke.
+7. Node settings: только безопасные поля MVP; изменение transport/ключей требует явного подтверждения, потому что старые профили могут перестать работать.
+8. Logs/diagnostics: redacted последние ошибки, состояние supervisor и инструкции по firewall/портам.
+9. Account: смена пароля, TOTP, active sessions.
+
+## 9. Docker и операционная модель
+
+### 9.1. Images
+
+Собрать два multi-stage image с одинаковым non-root UID/GID `10001:10001`:
+
+1. `xray-easy`: Go backend, собранный TypeScript/Vue UI, migrations, CA certificates и встроенный supervisor client;
+2. `xray-easy-xray`: официальный pinned Xray binary плюс маленький `xray-supervisor`, который является PID 1 и запускает дочерний Xray;
+3. checksum pinned Xray release проверяется в CI;
+4. OCI labels, SBOM, non-root UID;
+5. локальная сборка через `docker compose build` собирает образ текущей архитектуры VDS;
+6. release multi-arch выполняется отдельным CI workflow через `docker buildx build --platform linux/amd64,linux/arm64`; без registry результат экспортируется как OCI archive или собирается отдельно для каждой архитектуры;
+7. публикацию в GHCR/Docker Hub и tag policy (`major`, `major.minor`, exact version) оставить отдельным этапом, `latest` не использовать в production документации.
+
+### 9.2. Compose
+
+Основной способ установки и документации MVP — готовые `compose.yaml` и `.env.example`. Пользователь создаёт каталог проекта, заранее создаёт supervisor secret командой `umask 077; mkdir -p secrets; openssl rand -base64 32 > secrets/xray_supervisor_token`, задаёт постоянный `XRAY_EASY_MASTER_KEY`, заполняет переменные и запускает `docker compose up -d`. Compose запускает одноразовый `init-volumes` автоматически. Файл secret не коммитится. Отдельный `docker run`-сценарий в MVP не поддерживается, чтобы не дублировать настройку контейнеров, volumes, secrets и сетей.
+
+Минимальная схема:
+
+```yaml
+services:
+  init-volumes:
+    image: local/xray-easy:${XRAY_EASY_VERSION:-dev}
+    build:
+      context: .
+      target: xray-easy
+    user: "0:0"
+    entrypoint: ["/app/bin/xray-easy"]
+    command: ["init-volumes"]
+    volumes:
+      - xray_easy_data:/data
+      - xray_config:/shared-xray-config
+    network_mode: none
+    restart: "no"
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE]
+
+  xray-easy:
+    image: local/xray-easy:${XRAY_EASY_VERSION:-dev}
+    build:
+      context: .
+      target: xray-easy
+    ports:
+      - "127.0.0.1:8080:8080/tcp"
+    user: "10001:10001"
+    volumes:
+      - xray_easy_data:/data
+      - xray_config:/shared-xray-config
+    environment:
+      XRAY_EASY_DATA_DIR: /data
+      XRAY_EASY_UI_LISTEN: 0.0.0.0:8080
+      XRAY_EASY_MASTER_KEY: ${XRAY_EASY_MASTER_KEY:?set a persistent master key}
+      XRAY_PUBLIC_PORT: ${XRAY_PUBLIC_PORT:-443}
+      XRAY_EASY_XRAY_API: xray:10085
+      XRAY_EASY_XRAY_SUPERVISOR: http://xray:10086
+      XRAY_EASY_XRAY_SUPERVISOR_TOKEN_FILE: /run/secrets/xray_supervisor_token
+    secrets:
+      - xray_supervisor_token
+    networks:
+      - control
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+      xray:
+        condition: service_healthy
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "/app/bin/healthcheck"]
+
+  xray:
+    image: local/xray-easy-xray:${XRAY_XRAY_VERSION:-pinned}
+    build:
+      context: .
+      target: xray-easy-xray
+    command: ["xray-supervisor", "--config-dir", "/etc/xray"]
+    ports:
+      - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
+    user: "10001:10001"
+    expose:
+      - "10085"
+      - "10086"
+    volumes:
+      - xray_config:/etc/xray:ro
+    secrets:
+      - xray_supervisor_token
+    networks:
+      - control
+      - egress
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    read_only: true
+    tmpfs: [/tmp]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    healthcheck:
+      test: ["CMD", "xray-supervisor", "healthcheck"]
+
+volumes:
+  xray_easy_data:
+  xray_config:
+
+secrets:
+  xray_supervisor_token:
+    file: ./secrets/xray_supervisor_token
+
+networks:
+  control:
+    internal: true
+  egress:
+```
+
+Xray слушает внутри контейнера 8443, чтобы не требовать root или `CAP_NET_BIND_SERVICE`; host maps it to `${XRAY_PUBLIC_PORT}`. UI/API публикуются только на loopback VDS и доступны администратору через SSH local port forwarding. Reverse proxy для панели не требуется в MVP и может быть добавлен отдельно для advanced deployment. `xray_config` монтируется в control plane на запись, а в Xray read-only. `init-volumes` выставляет ownership до старта обоих долгоживущих контейнеров; supervisor не заменяет файлы в volume.
+
+В MVP master key принимается из `XRAY_EASY_MASTER_KEY`; документация предупреждает,
+что environment виден пользователю Docker с правом `inspect`. Для production
+deployment допускается эквивалентный `XRAY_EASY_MASTER_KEY_FILE` через Docker secret,
+но значение всё равно должно декодироваться в base64-ключ минимум 32 байта.
+
+Compose-сеть `control` позволяет обращаться к сервису по имени `xray`; Docker Compose сохраняет это имя при пересоздании контейнера, даже если внутренний IP изменился. Порты 10085/10086 не публикуются наружу.
+
+### 9.3. Обновления
+
+- версии Xray и control plane фиксируются в `compose.yaml`/`.env` и в lock-файле сборки;
+- для локальной установки обновление выполняется вручную: backup, получение новой версии исходников, `docker compose build --pull`, затем controlled restart и проверка health; `docker compose pull` используется только в будущем registry-сценарии;
+- при failed health администратор возвращает предыдущий исходный checkout и пересобирает локальные образы, а backup перед обновлением сохраняется;
+- обновлять Xray и control plane независимо, но тестировать совместимость в release matrix;
+- перед upgrade создавать backup и config hash;
+- запускать миграции до старта HTTP;
+- при failed migration не удалять старый state;
+- в UI показывать точную версию Xray и приложения, но не скачивать и не устанавливать обновления автоматически;
+- поддержать `xray-easy doctor`/CLI: `init-volumes`, config test, status, backup, restore, reset admin password, logout-all, rotate master key, clients list, clients profile.
+
+Восстановление доступа выполняется только через SSH и CLI внутри control-plane контейнера, например `docker compose exec xray-easy admin reset`. CLI сначала получает maintenance lock через локальный lock-файл/daemon coordination, ждёт завершения apply и polling, затем меняет пароль/сбрасывает TOTP; постоянное имя администратора, SQLite, устройства и Xray-конфигурация не изменяются. Restore и master-key rotation используют тот же maintenance protocol. `doctor` отдельно проверяет наличие supervisor secret, права `0600`, master key и доступность shared volume.
+
+## 10. Безопасность
+
+- Argon2id, cookie `HttpOnly; SameSite=Strict`, CSRF, проверка Host/Origin и rate limit тяжёлых profile/export операций. HTTP server добавляет CSP, `X-Content-Type-Options: nosniff` и `Referrer-Policy: no-referrer`. При стандартном SSH-туннеле UI работает по HTTP на loopback, поэтому `Secure` у cookie не выставляется; он включается только при явно настроенном HTTPS reverse proxy. Login rate limit в MVP не добавляется: UI доступен только через SSH-туннель. TOTP является дополнительным фактором, а не заменой SSH.
+- TOTP как функция первой стабильной версии; OIDC — после появления нескольких администраторов.
+- Никогда не публиковать Xray gRPC API, SQLite и `/data`.
+- Права volume: каталог 0700, state/config/key 0600; не печатать секреты в errors и health response.
+- Профиль устройства является bearer credential: предупреждать UI, поддержать отзыв и не хранить URI в audit/log.
+- Проверять target и DNS-результаты против SSRF/private ranges на каждом probe/apply, учитывать DNS rebinding и timeout. Показать предупреждение о REALITY fallback/open-forwarder; fallback rate limits по умолчанию не включать из-за fingerprinting, а target catalog должен избегать CDN/open-forwarder риска.
+- Проверять размер/частоту QR и export requests, ограничивать log tail и subscription. Endpoint `/api/logs` отдаёт только последние `error`/`warn` записи из bounded supervisor ring buffer с cursor/лимитом; access-логи через UI не показываются.
+- Ввести технические ограничения размера страницы, запроса, QR и rendered config. При этом продуктового лимита числа устройств нет, но UI явно показывает предупреждение при приближении к лимитам памяти/размера конфигурации.
+- Профильные endpoints используют `Cache-Control: no-store`; URI не попадают в history/audit, а CLI не принимает bearer credentials через аргументы командной строки.
+- `doctor` проверяет системные часы и наличие рабочего DNS/egress; при существенном clock skew показывает предупреждение, потому что REALITY handshake зависит от времени.
+- Избегать произвольного шаблона JSON от пользователя в MVP: только typed fields. Raw config editor добавить только с отдельной моделью угроз.
+- Не добавлять expiry-планировщик в MVP; статус устройства меняется только через enable/disable/revoke.
+
+## 11. Тестирование и критерии готовности
+
+### Unit
+
+- UUID/short ID/host/port/SNI/target validators;
+- renderer fixtures для чистого старта, одного клиента, нескольких клиентов, disabled/revoked;
+- VLESS URI parser/serializer и URL encoding;
+- QR decode обратно в исходную URI;
+- миграции и optimistic concurrency;
+- redaction logger.
+
+### Integration
+
+- запуск pinned Xray с generated config;
+- `xray run -test` supervisor-ом на каждом изменении;
+- add/remove user через HandlerService и проверка фактического поведения старых соединений;
+- target probe через supervisor с timeout и ограниченным egress;
+- StatsService counter и online state;
+- аварийный restart и восстановление из SQLite;
+- backup/restore в maintenance mode, manifest integrity и upgrade schema;
+- проверка восстановления повреждённого или подменённого backup по manifest;
+- отказ restore с другим master key до изменения state;
+- отказ supervisor от повторного nonce/operation и неверной HMAC;
+- IPv4/DNS и конфликт host ports; IPv6-тесты перенести после MVP.
+
+### End-to-end
+
+- чистый `docker compose up` -> setup -> first QR -> client Xray/SOCKS -> HTTPS request;
+- создать два устройства, убедиться, что отключение одного не отключает второе;
+- revoke старого URI и проверить отказ нового подключения; отдельно зафиксировать поведение уже установленного соединения для pinned Xray;
+- бессрочные профили без expiry-планировщика;
+- UI через SSH local port forwarding без внешней публикации;
+- ручная проверка импорта QR/URI/JSON в V2Rage на macOS и iOS.
+- проверка полного JSON-профиля и outbound-фрагмента на обеих платформах;
+- smoke-проверка Web UI в актуальных Safari и Chromium/Chrome на macOS.
+
+### Security/operations
+
+- auth/CSRF/session fixation/rate-limit;
+- SSRF target checks;
+- отсутствие private key/UUID/URI в логе;
+- отказ при неверном TOTP/recovery code и logout-all;
+- отсутствие `Secure` cookie в HTTP SSH-tunnel и его наличие в HTTPS deployment;
+- read-only rootfs и non-root;
+- rollback при невалидном config;
+- fault injection между каждым состоянием apply operation;
+- корректный ownership shared volumes после одноразового `init-volumes` и при повторном `docker compose up`;
+- control plane и Xray запускаются без Docker socket, NET_ADMIN и SYS_MODULE;
+- Xray API и supervisor API не публикуются на host, а config volume монтируется в Xray read-only;
+- image scan, SBOM, checksum verification.
+
+Критерий MVP: новый пользователь с чистым Docker host за 10 минут получает рабочий профиль, импортирует его в один из двух проверенных клиентов, видит трафик по устройству, может отозвать профиль, а после перезапуска контейнера состояние и доступы совпадают с UI.
+
+## 12. Этапы реализации
+
+### Этап 0 — RFC и прототип протокола
+
+- выбрать pinned Xray release;
+- собрать минимальный VLESS+REALITY config из официального примера;
+- проверить X25519, target/SNI, URI, оба JSON-формата и импорт в двух клиентах;
+- проверить HandlerService и StatsService через локальный gRPC, включая disable/revoke и существующие соединения; операции `AlterInbound` реализовать через generated pinned proto/TypedMessage adapter, а не через JSON grpcurl;
+- проверить `xray-supervisor` в отдельном контейнере: bootstrap, validate, probe-target, apply, logs, crash recovery и read-only config mount;
+- зафиксировать operation journal, recovery protocol и ownership shared volume;
+- зафиксировать решение по лицензии и public host/port UX.
+
+### Этап 1 — каркас и контейнер
+
+- Go control plane + TypeScript/Vue/Vite UI, собранный и встроенный через `go:embed`;
+- SQLite migrations, structured logging, health/readiness;
+- отдельный `xray-supervisor` image на базе pinned official Xray binary;
+- reproducible native images и отдельный buildx workflow для amd64/arm64 с compose control/egress networks;
+- config renderer + supervisor validation через `xray run -test`.
+
+### Этап 2 — setup wizard
+
+- state machine `uninitialized -> initializing -> ready`;
+- admin/password, settings, key generation;
+- operation journal и atomic initial apply;
+- CLI doctor/status/backup;
+- документация запуска и SSH port forwarding; reverse proxy оставить optional advanced deployment.
+
+### Этап 3 — устройства и профили
+
+- clients schema и CRUD;
+- HandlerService add/remove;
+- enable/disable/revoke;
+- VLESS URI, QR, JSON download;
+- dashboard и diagnostics.
+
+### Этап 4 — статистика и защита
+
+- StatsService polling и persistent snapshots;
+- online/traffic cards;
+- Argon2 sessions, CSRF, TOTP;
+- audit, redaction, SSRF/target checks;
+- supervisor logs и maintenance mode для CLI.
+
+### Этап 5 — release hardening
+
+- upgrade/migrations/rollback;
+- compatibility matrix clients;
+- integration/e2e/security tests;
+- SBOM, image signing/checksums, vulnerability scanning;
+- русская и английская документация, troubleshooting.
+
+### Этап 6 — расширения после MVP
+
+- TLS + домен + ACME;
+- XHTTP/gRPC/WebSocket presets;
+- subscription tokens;
+- VMess/Trojan/Shadowsocks/Hysteria adapters;
+- OIDC, multi-admin и RBAC;
+- multi-node control plane;
+- routing templates и per-client policy/limits.
+
+## 13. Зафиксированные решения перед началом кода
+
+1. **Пресет MVP:** VLESS + REALITY + TCP/RAW + Vision.
+2. **Сетевой контракт:** один публичный inbound на `${XRAY_PUBLIC_PORT:-443}:8443/tcp`; значение `XRAY_PUBLIC_PORT` задаётся в `.env`/Compose и является единой точкой настройки публикации и клиентских ссылок. Web UI/API не публикуются наружу, контейнерный порт UI привязывается к `127.0.0.1` на VDS и доступен через SSH local port forwarding.
+3. **Хранилище:** SQLite в `/data`, производный JSON, REALITY private key шифруется через обязательный `XRAY_EASY_MASTER_KEY`; backup остаётся plaintext с правами 0600.
+4. **Применение:** control plane является единственным писателем desired/active config; operation journal обеспечивает recovery, HandlerService используется для CRUD пользователей, private supervisor API — для validate/probe/apply/status/logs и graceful restart дочернего Xray; Docker socket не используется.
+5. **Поддерживаемые клиенты:** целевые платформы MVP — macOS и iOS; обязательный ручной клиент — V2Rage.
+6. **Адресация:** IPv4 и DNS-имена в MVP; IPv6 после MVP.
+7. **Лицензия:** собственный код Xray-easy распространять под AGPL-3.0-or-later; лицензии Xray, Project X и сторонних компонентов перечислить отдельно в `NOTICE`/документации и проверить перед публикацией.
+8. **Трафик:** показывать Xray counters и persistent totals. Online — собственное правило Xray-easy: изменение counter в течение последних 5 минут; reset counter фиксируется отдельно, а totals не уменьшаются.
+9. **Совместимость версии:** Xray и клиентские параметры pin-ятся и проверяются в CI; пользовательские raw JSON в MVP не поддерживаются.
+10. **Логи:** access log по умолчанию отключён; supervisor держит bounded ring buffer `error`/`warn`, в Web UI показывается только ограниченный redacted tail. Операционное включение access log отдельно документируется для Docker logs/CLI с предупреждением о чувствительных адресах назначения.
+11. **Проверка после apply:** автоматически проверять конфигурацию, bind порта внутри Xray-контейнера и health Xray локально; конфликт host-порта проверяется Docker/Compose и дополнительно диагностируется `doctor`, потому что control plane не видит namespace хоста. Внешнюю доступность администратор проверяет вручную через V2Rage.
+12. **Firewall:** приложение не меняет firewall хоста и не требует `NET_ADMIN`; `doctor` и документация показывают требуемый TCP-порт, а правила VDS настраивает администратор.
+13. **Backup retention:** автоматически хранить 10 последних backup-файлов и удалять более старые только после успешного нового backup; manifest содержит SHA-256 и HMAC-SHA-256.
+14. **Сессия:** server-side admin session ротируется и имеет абсолютный срок жизни не более 3 часов; после него требуется повторный вход. Продление бесконечным idle-трафиком не допускается.
+15. **Число устройств:** прикладного лимита нет; остаются rate limit, pagination, максимальный размер rendered config/QR и защитные ограничения на размер/частоту запросов.
+16. **Профили:** активные QR/URI/JSON можно повторно получить после админской аутентификации; повторная выдача не ротирует credentials, для компрометации используется revoke.
+17. **Удаление:** обычное удаление переводит устройство в `revoked` и сохраняет историю; физический `purge` выполняется отдельным действием с явным подтверждением.
+18. **Audit:** последние действия администратора показываются в UI через `/api/audit`, полная audit-история хранится в SQLite и доступна через CLI/diagnostics. После `purge` redacted-события устройства сохраняются с внутренним ID и временем.
+19. **Сессии:** настройки и CLI предоставляют действие «выйти со всех сессий» для немедленного сброса активных admin sessions.
+20. **Диагностика:** CLI-команда `doctor bundle` формирует архив с redacted-конфигурацией, версиями, health-статусом и последними ошибками без секретов; target probe выполняется только через ограниченный supervisor API.
+21. **Метрики:** Prometheus endpoint не входит в MVP; его добавить после стабилизации базовой статистики и модели доступа.
+22. **Public host:** смена IPv4/DNS-host явно предупреждает, отзывает все существующие профили и требует создать их заново.
+23. **Public port:** изменение `XRAY_PUBLIC_PORT` между запусками считается опасным изменением; control plane обнаруживает расхождение, предупреждает, отзывает старые профили и требует создать новые.
+24. **Срок профиля:** все устройства в MVP бессрочные; `expires_at`, expiry-планировщик и автоматическое истечение переносятся на следующий этап.
+25. **Online:** устройство считается online при трафике/изменении counter за последние 5 минут; старые данные отображаются только как `last seen`.
+26. **Обновление UI:** Dashboard получает изменения через аутентифицированный SSE stream; после разрыва выполняется ручной или автоматический initial refresh.
+27. **Локализация:** русский и английский в MVP; определение по системному языку с ручным override и английским fallback.
+28. **Архитектуры:** локальный `docker compose build` собирает текущую архитектуру; CI отдельно выполняет buildx multi-arch для `linux/amd64` и `linux/arm64`, pinned Xray binaries и fixtures проверяются для обеих архитектур. Без registry результатом CI является OCI archive или два отдельных image archive. Публикация в registry отложена.
+29. **CLI:** команды backup/restore/doctor/reset вызываются внутри работающего `xray-easy` контейнера через `docker exec` или `docker compose exec`, но сначала получают maintenance lock и синхронизируются с daemon; отдельный host-бинарник не входит в MVP.
+30. **Пароль:** администратор меняет пароль в UI после проверки текущего пароля; CLI reset используется для аварийного восстановления доступа.
+31. **Парольная политика:** минимум 12 символов без принудительных правил сложности; пароль хранится только как Argon2id hash.
+32. **TOTP recovery:** при включении TOTP выдаются одноразовые recovery-коды, в SQLite сохраняются только их хэши; CLI reset остаётся резервом.
+33. **Login rate limit:** отдельное ограничение неудачных входов не включать в MVP; профильные/export-операции всё равно ограничиваются.
+34. **Audit retention:** audit-история хранится бессрочно в `/data` и входит в backup SQLite.
+35. **Fingerprint:** default клиентского профиля — `chrome`; отдельное устройство может задать override, иначе наследует default. Это client-side поле и не является server-side Xray setting.
+36. **Short ID:** каждому устройству автоматически генерируется уникальный short ID; ручной advanced-ввод допускается только после проверки формата и уникальности.
+37. **Имя администратора:** имя выбирается в setup wizard, нормализуется в каноническую форму без учёта регистра и является постоянным уникальным логином единственного администратора установки; после setup оно не изменяется, включая CLI reset.
+38. **Имена устройств:** отображаемые имена могут повторяться; уникальность обеспечивается внутренним ID, UUID и short ID.
+39. **Формат имени:** имя устройства содержит только ASCII-латинские буквы, цифры и `-`, длина 1–64 символа; пробелы, Unicode, emoji и прочие символы не допускаются.
+40. **Переименование:** имя можно менять без ротации credentials и отзыва профиля; изменяется только отображение и URI fragment.
+41. **Технические поля:** UUID и служебные поля скрыты по умолчанию и доступны только в advanced/debug; server-side секреты не показываются.
+42. **Переинициализация:** UI и CLI не предоставляют полного destructive reset; для чистого старта администратор вручную удаляет Docker volumes по SSH после остановки Compose.
+43. **Restore и master key:** backup можно восстановить только с исходным `XRAY_EASY_MASTER_KEY`; при несовпадении операция отклоняется до изменения state.
+44. **Rollback:** автоматического отката image tags нет; после failed health администратор вручную возвращает предыдущие версии, используя сохранённый backup при необходимости.
+45. **Опасные изменения:** смена public host/port, REALITY target/SNI/private key и других node-level transport settings показывает diff и последствия, требует отдельный confirmation challenge и `ROTATE`/`REVOKE`, затем создаёт backup и только после этого выполняет apply. Изменение client fingerprint не относится к node-level apply.
+46. **Подтверждение ротации:** для операций с массовым отзывом UI требует ввести `ROTATE` или `REVOKE` в зависимости от типа операции; одной кнопки недостаточно.
+47. **Подтверждение restore:** CLI требует выбрать имя backup, ввести `RESTORE` и выполнить dry-run проверки до изменения state.
+48. **Degraded режим:** при неуспешном apply или состоянии `degraded` блокируются mutations, требующие изменения Xray; просмотр, backup и diagnostics остаются доступны.
+49. **Disable/revoke:** обе операции удаляют пользователя из HandlerService; точное поведение уже существующих соединений определяется pinned Xray и проверяется интеграционным тестом. `revoke` окончательно блокирует credentials.
+50. **Ручной backup:** Web UI и CLI позволяют создать backup вручную; перед записью проверяются доступное место и целостность текущей ревизии.
+51. **Перенос backup:** Web UI не выдаёт backup-файлы на скачивание; перенос с VDS выполняется через SSH/SCP.
+52. **Client fingerprint default:** его можно изменить после setup без перезапуска Xray; новые и повторно выдаваемые профили используют новое значение, старые URI остаются действительными до revoke.
+53. **Fingerprint устройства:** override отдельного устройства можно изменить без отзыва UUID; новая выдача использует новое значение, старый URI продолжает работать до явного revoke.
+54. **Short ID устройства:** после создания short ID неизменяем; для нового значения устройство отзывается и создаётся новый профиль с новым UUID.
+55. **Master key format:** `XRAY_EASY_MASTER_KEY` — base64 минимум 32 байта, генерируется через `openssl rand -base64 32`; автоматическая генерация запрещена.
+56. **Ротация master key:** выполняется только отдельной CLI-командой через SSH, после backup и явного подтверждения; UI эту операцию не предлагает. Команда в maintenance mode пере-шифровывает все encrypted fields, проверяет расшифровку и только затем заменяет master-key metadata.
+57. **Docker runtime:** официальная матрица MVP рассчитана на обычный Docker Engine с Compose; rootless Docker не входит в поддержку первой версии.
+58. **Host OS:** официальная матрица MVP — Linux VDS на `amd64` и `arm64` с Docker Engine/Compose; конкретный дистрибутив не фиксируется, Docker Desktop не входит.
+59. **TOTP отключение:** отключить TOTP в UI можно только после ввода текущего пароля и действующего TOTP-кода; аварийный CLI reset остаётся отдельным сценарием.
+60. **Recovery-коды:** перевыпуск доступен только через CLI и сразу инвалидирует предыдущий набор.
+61. **Регистр логина:** имя администратора сравнивается без учёта регистра и хранится в канонической форме.
+62. **Формат логина:** 3–32 символа, только латиница, цифры, `-` и `_`; Unicode и пробелы запрещены.
+63. **Браузеры админки:** обязательная матрица UI — актуальные Safari и Chromium/Chrome на macOS; мобильный Safari для администрирования не обязателен.
+64. **Purge и audit:** физическое удаление очищает данные устройства, но не удаляет redacted audit-события.
+65. **Registry:** в MVP готовые образы не публикуются; основной сценарий — локальная native-сборка через `docker compose build`, а multi-arch CI использует buildx и OCI archive. Выбор GHCR/Docker Hub отложен.
+
+После setup target и выбранный SNI можно изменить из UI с явным подтверждением и повторной проверкой. Ротация REALITY private key выполняется отдельным действием; публичный порт по-прежнему меняется только через `XRAY_PUBLIC_PORT` в Compose.
+
+Смена public host/IP имеет такой же опасный статус: после подтверждения старые профили переводятся в `revoked`, а новые профили создаются после применения нового адреса.
+
+`XRAY_PUBLIC_PORT` остаётся настройкой Compose и не редактируется в UI. Если control plane видит, что эффективный порт отличается от сохранённой ревизии, он блокирует выдачу старых профилей, показывает предупреждение и предлагает выполнить подтверждённую ротацию с отзывом старых профилей.
+
+Ротация private key в MVP не поддерживает переходный период: после явного подтверждения все существующие профили переводятся в `revoked`, старый ключ перестаёт использоваться, а устройства создаются заново с новым public key. Двухключевой transition mode оставить для следующего этапа.
+
+Смена REALITY target или выбранного SNI имеет такое же поведение: после явного подтверждения старые профили переводятся в `revoked`, конфигурация применяется через supervisor, а устройства создаются заново с обновлёнными параметрами. Параллельная поддержка старых и новых параметров не входит в MVP.
+
+Смена client fingerprint default не изменяет server-side конфигурацию Xray и не отзывает старые профили: старые URI продолжают работать, а новые выдачи используют обновлённое значение. Отдельный fingerprint override устройства изменяется тем же способом.
+
+## 14. Выбор языка и технологического стека
+
+### Принятое решение
+
+Для реализации Xray-easy выбран production-стек: **Go для control plane/backend + TypeScript/Vue для Web UI**.
+
+В браузере всё равно выполняется JavaScript, поэтому «один язык» применим только к серверной части. Go и TypeScript здесь не дублируют друг друга: Go отвечает за процесс Xray, gRPC, конфигурацию и безопасность, TypeScript — за богатый интерфейс, QR и клиентское состояние.
+
+### Почему Go является основным языком backend
+
+- Xray-core сам написан на Go, официальные proto и gRPC-типы естественно подключаются из Go-модуля; в Xray уже используются `google.golang.org/grpc` и `google.golang.org/protobuf`.
+- Go даёт один статический backend-бинарник, простой multi-arch build и небольшой runtime image.
+- Управление дочерним Xray-процессом в supervisor, сигналами и backoff, а также таймерами статистики в control plane проще сделать без Node event-loop edge cases.
+- `CGO_ENABLED=0` позволяет избежать зависимости от системного компилятора в runtime и упростить arm64/amd64 images.
+- `embed` позволяет упаковать собранный UI в тот же бинарник; отдельный Node runtime в production-контейнере не требуется.
+
+Предлагаемый Go stack:
+
+- HTTP: стандартная библиотека + `chi`;
+- SQLite: `database/sql` + pure-Go SQLite driver, миграции отдельными SQL-файлами;
+- auth: `golang.org/x/crypto/argon2`, secure cookies, CSRF middleware;
+- Xray API: generated Go stubs из proto pinned Xray release;
+- supervisor: `os/exec`, process group, context cancellation, backoff и health state;
+- тесты: Go unit/integration tests, Docker-based Xray fixture.
+
+### Почему TypeScript/Vue остаётся в UI
+
+UI проекта — это сложная прикладная часть: wizard, таблица устройств, QR modal, clipboard, optimistic updates, логи и responsive layout. Vue 3 + TypeScript + Vite дают быстрый цикл разработки и привычную компонентную модель. Сборка отдаёт статические assets, которые Go сервер обслуживает через `go:embed`.
+
+Рекомендуемый UI stack:
+
+- Vue 3 + TypeScript;
+- Vite;
+- Pinia или небольшой typed store;
+- Tailwind либо другой фиксированный CSS layer;
+- `qrcode` только для отображения уже сформированной URI;
+- OpenAPI-generated client или typed ручной API client.
+
+### Сравнение альтернатив
+
+| Вариант | Сильные стороны | Основные издержки | Решение |
+|---|---|---|---|
+| Go + TypeScript/Vue | Нативная интеграция с Xray gRPC, статический backend, маленький runtime, хороший UI | Два языка и два toolchain | **Рекомендуется** |
+| TypeScript/Nuxt end-to-end | Максимально похож на текущий wg-easy, один язык приложения, очень быстрый UI MVP | Node runtime, более тяжёлый image, gRPC stubs и child-process lifecycle менее естественны, чем в Go | Запасной вариант при сильной TS-команде |
+| Rust + TypeScript | Сильная типобезопасность, статичный бинарник, низкое потребление памяти | Меньше готовых Xray-примеров, выше стоимость разработки и onboarding | Не выбирать для первого релиза |
+| Python + TypeScript | Быстрый прототип и много библиотек | Runtime/dependency footprint, сложнее reproducible multi-arch image и долгосрочная эксплуатация | Только исследовательский прототип |
+| Go + HTMX/server-rendered UI | Один серверный язык, простая доставка | UX хуже подходит для QR, modal flows, optimistic updates и realtime diagnostics | Не выбирать для wg-easy-подобного интерфейса |
+
+### Почему не встраивать Xray как Go library
+
+Не следует импортировать весь `xray-core` и запускать core внутри control plane. Это жёстко связывает релизы, усложняет shutdown и увеличивает blast radius ошибки UI. Надёжнее запускать официальный Xray binary как дочерний процесс, а управление пользователями и статистикой выполнять через локальный gRPC API.
+
+### Статус решения
+
+Решение принято и должно использоваться в реализации после этапа 0:
+
+- Go — backend, управление Xray, gRPC, SQLite, auth, config renderer и supervisor;
+- TypeScript/Vue — Web UI;
+- Vite — сборка UI;
+- собранный UI встраивается в Go binary через `go:embed`;
+- Xray запускается официальным pinned binary как дочерний процесс.
+
+TypeScript/Nuxt backend остаётся только альтернативой для отдельного прототипа и не является целевым стеком проекта.
+
+## Источники
+
+- [wg-easy repository](https://github.com/wg-easy/wg-easy)
+- [wg-easy Getting Started](https://wg-easy.github.io/wg-easy/latest/getting-started/)
+- [wg-easy Setup](https://wg-easy.github.io/wg-easy/latest/guides/setup/)
+- [wg-easy Edit Client](https://wg-easy.github.io/wg-easy/latest/guides/clients/)
+- [wg-easy API](https://wg-easy.github.io/wg-easy/latest/advanced/api/)
+- [wg-easy Unattended Setup](https://github.com/wg-easy/wg-easy/blob/master/docs/content/advanced/config/unattended-setup.md)
+- [wg-easy Prometheus](https://wg-easy.github.io/wg-easy/latest/advanced/metrics/prometheus/)
+- [Xray-core repository and official Docker image](https://github.com/XTLS/Xray-core)
+- [Xray official installation script](https://github.com/XTLS/Xray-install)
+- [Xray server guide](https://xtls.github.io/en/document/level-0/ch07-xray-server.html)
+- [Xray VLESS inbound](https://xtls.github.io/en/config/inbounds/vless.html)
+- [Xray REALITY](https://xtls.github.io/en/config/transports/reality.html)
+- [Xray API](https://xtls.github.io/en/config/api.html)
+- [Xray policy and per-user statistics](https://xtls.github.io/en/config/policy.html)
+- [Xray statistics](https://xtls.github.io/en/config/stats.html)
+- [Official VLESS+REALITY server example](https://github.com/XTLS/Xray-examples/blob/main/VLESS-TCP-XTLS-Vision-REALITY/config_server.jsonc)
+- [Official VLESS+REALITY client example](https://github.com/XTLS/Xray-examples/blob/main/VLESS-TCP-XTLS-Vision-REALITY/config_client.jsonc)
+- [Xray client guide and share links](https://xtls.github.io/en/document/level-0/ch08-xray-clients.html)

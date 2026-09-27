@@ -1,0 +1,30 @@
+# Go
+/bin/
+/dist/
+*.test
+*.out
+coverage.out
+
+# Node / TypeScript / Vue
+node_modules/
+.npm/
+.pnpm-store/
+web/dist/
+web/.vite/
+*.tsbuildinfo
+
+# Local configuration and generated runtime state
+.env
+.env.*
+!.env.example
+secrets/
+/data/
+/backups/
+*.db
+*.db-shm
+*.db-wal
+
+# IDE and OS files
+.DS_Store
+.idea/
+.vscode/
