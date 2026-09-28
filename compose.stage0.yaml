@@ -1,6 +1,22 @@
 name: xray-easy-stage0
 
 services:
+  init-supervisor-secret:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /target
+        install -m 0400 -o 10001 -g 10001 /source/xray_supervisor_token /target/xray_supervisor_token
+    volumes:
+      - xray_supervisor_token_data:/target
+    secrets:
+      - source: xray_supervisor_token
+        target: /source/xray_supervisor_token
+
   xray:
     build:
       context: .
@@ -22,12 +38,14 @@ services:
       - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
     volumes:
       - ./prototype/config:/etc/xray:ro
-    secrets:
-      - xray_supervisor_token
+      - xray_supervisor_token_data:/run/secrets:ro
     networks:
       control:
         ipv4_address: 172.31.240.2
       egress: {}
+    depends_on:
+      init-supervisor-secret:
+        condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
@@ -44,6 +62,9 @@ services:
 secrets:
   xray_supervisor_token:
     file: ./prototype/secrets/xray_supervisor_token
+
+volumes:
+  xray_supervisor_token_data:
 
 networks:
   control:

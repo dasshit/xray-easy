@@ -436,7 +436,7 @@ GET    /api/audit?cursor=...
 
 ### 9.2. Compose
 
-Основной способ установки и документации MVP — готовые `compose.yaml` и `.env.example`. Пользователь создаёт каталог проекта, заранее создаёт supervisor secret командой `umask 077; mkdir -p secrets; openssl rand -base64 32 > secrets/xray_supervisor_token`, задаёт постоянный `XRAY_EASY_MASTER_KEY`, заполняет переменные и запускает `docker compose up -d`. Compose запускает одноразовый `init-volumes` автоматически. Файл secret не коммитится. Отдельный `docker run`-сценарий в MVP не поддерживается, чтобы не дублировать настройку контейнеров, volumes, secrets и сетей.
+Основной способ установки и документации MVP — готовые `compose.yaml` и `.env.example`. Пользователь создаёт каталог проекта, заранее создаёт supervisor secret командой `umask 077; mkdir -p secrets; openssl rand -base64 32 > secrets/xray_supervisor_token`, задаёт постоянный `XRAY_EASY_MASTER_KEY`, заполняет переменные и запускает `docker compose up -d`. Compose запускает одноразовые `init-volumes` и `init-supervisor-secret`: второй читает host secret с правами `0600` и копирует его в named volume с владельцем UID `10001` и mode `0400`, чтобы долгоживущие контейнеры оставались non-root. Файл secret не коммитится. Отдельный `docker run`-сценарий в MVP не поддерживается, чтобы не дублировать настройку контейнеров, volumes, secrets и сетей.
 
 Минимальная схема:
 

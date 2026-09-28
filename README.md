@@ -80,6 +80,10 @@ ssh -N -L 8080:127.0.0.1:8080 user@vds
 Open `http://127.0.0.1:8080`, finish setup, then create a device and import its
 QR/URI/JSON profile into V2Rage.
 
+Compose copies the host secret through a one-shot root init service into a
+Docker volume owned by UID `10001`; the host file can remain mode `0600` while
+the long-running containers stay non-root.
+
 Administrative recovery commands run inside the control-plane container:
 
 ```sh

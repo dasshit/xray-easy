@@ -17,6 +17,22 @@ services:
       - xray_config:/config
       - ./prototype/config-stage1:/bootstrap:ro
 
+  init-supervisor-secret:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /target
+        install -m 0400 -o 10001 -g 10001 /source/xray_supervisor_token /target/xray_supervisor_token
+    volumes:
+      - xray_supervisor_token_data:/target
+    secrets:
+      - source: xray_supervisor_token
+        target: /source/xray_supervisor_token
+
   xray:
     build:
       context: .
@@ -38,14 +54,15 @@ services:
       - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
     volumes:
       - xray_config:/etc/xray:ro
-    secrets:
-      - xray_supervisor_token
+      - xray_supervisor_token_data:/run/secrets:ro
     networks:
       control:
         ipv4_address: 172.31.241.2
       egress: {}
     depends_on:
       init-volumes:
+        condition: service_completed_successfully
+      init-supervisor-secret:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -79,8 +96,7 @@ services:
     volumes:
       - app_data:/data
       - xray_config:/etc/xray
-    secrets:
-      - xray_supervisor_token
+      - xray_supervisor_token_data:/run/secrets:ro
     networks:
       control:
         ipv4_address: 172.31.241.3
@@ -101,6 +117,7 @@ secrets:
 volumes:
   app_data:
   xray_config:
+  xray_supervisor_token_data:
 
 networks:
   control:

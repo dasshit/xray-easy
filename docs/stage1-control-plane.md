@@ -26,6 +26,11 @@ the UI port to VDS loopback, ready for SSH local forwarding. It uses a separate
 development subnet (`172.31.241.0/24`) so both compose fixtures can run at the
 same time.
 
+The one-shot `init-supervisor-secret` service reads the host secret as root and
+copies it into a named Docker volume with owner `10001:10001` and mode `0400`.
+This keeps the source file at mode `0600` and lets both non-root services read
+the shared token.
+
 Set a master key and run:
 
 ```sh

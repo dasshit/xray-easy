@@ -17,6 +17,10 @@ chmod 600 prototype/secrets/xray_supervisor_token
 The file is intentionally ignored by Git. The same secret is used by the
 control plane to sign requests to the private supervisor API.
 
+Compose copies this file through the one-shot `init-supervisor-secret` service
+into a named volume owned by UID `10001`, so the source can safely remain mode
+`0600` while the supervisor runs as a non-root user.
+
 The prototype compose file exposes only the Xray public TCP port. Ports 10085
 and 10086 bind to `172.31.240.2`, the service address on the internal control
 network, and are not published to the host or the egress network.
