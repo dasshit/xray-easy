@@ -110,7 +110,7 @@ export async function mountApp(handler: RequestHandler) {
   return { wrapper, requests, fetchMock, eventSources: FakeEventSource.instances }
 }
 
-export function defaultHandler({ initialized = true, authenticated = false, clients = [] as Client[], settingsData = settings } = {}): RequestHandler {
+export function defaultHandler({ initialized = true, authenticated = false, clients = [] as Client[], settingsData = settings, totpData = totpStatus } = {}): RequestHandler {
   return ({ method, url }) => {
     if (method === 'GET' && url === '/api/setup/status') return { body: { initialized, public_port: 8443 } }
     if (method === 'GET' && url === '/api/me') return authenticated ? { body: admin } : { status: 401, body: { error: 'Unauthorized' } }
@@ -118,13 +118,20 @@ export function defaultHandler({ initialized = true, authenticated = false, clie
     if (method === 'POST' && url === '/api/clients') return { status: 201, body: { ...sampleClient, name: 'new-device' } }
     const profilePath = url.match(/^\/api\/clients\/([^/]+)\/profile\?format=uri$/)
     if (method === 'GET' && profilePath) return { body: { client_id: profilePath[1], uri: `vless://${profilePath[1]}@vpn.example.com:443?security=reality#phone`, json: { id: profilePath[1] } } }
-    if (method === 'GET' && url === '/api/auth/totp/status') return { body: totpStatus }
+    if (method === 'GET' && url === '/api/auth/totp/status') return { body: totpData }
     if (method === 'GET' && url === '/api/settings') return { body: settingsData }
     if (method === 'GET' && url === '/api/status') return { body: nodeStatus }
     if (method === 'GET' && url === '/api/logs?component=xray&limit=100') return { body: { entries: xrayEntries } }
     if (method === 'GET' && url === '/api/logs?component=app&limit=100') return { body: { entries: appEntries } }
     return { status: 404, body: { error: `No mock route for ${method} ${url}` } }
   }
+}
+
+export async function openTab(wrapper: VueWrapper, label: string): Promise<void> {
+  const tab = wrapper.findAll('[role="tab"]').find(item => item.text() === label)
+  if (!tab) throw new Error(`Tab not found: ${label}`)
+  await tab.trigger('click')
+  await flushPromises()
 }
 
 export async function submitLogin(wrapper: VueWrapper) {

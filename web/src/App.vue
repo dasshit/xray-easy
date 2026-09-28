@@ -77,7 +77,11 @@ function statusTone(state?: string) {
 }
 
 function diagnosticCount(level: string) {
-  return diagnostics.value.filter(entry => entry.level.toLowerCase() === level).length
+  const normalizedLevel = level.toLowerCase()
+  return diagnostics.value.filter(entry => {
+    const entryLevel = entry.level.toLowerCase()
+    return entryLevel === normalizedLevel || (normalizedLevel === 'warn' && entryLevel === 'warning')
+  }).length
 }
 
 function diagnosticTone(level: string) {
