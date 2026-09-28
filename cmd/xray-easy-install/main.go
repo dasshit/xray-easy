@@ -83,146 +83,121 @@ func composeEnvironment() []string {
 }
 
 func main() {
-	if len(os.Args) != 2 {
-		fmt.Fprintln(os.Stderr, "usage: xray-easy-install <repository-directory>")
-		os.Exit(2)
+	os.Exit(runMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+}
+
+func runMain(args []string, input, output *os.File, errorsOut io.Writer) int {
+	if len(args) != 1 {
+		fmt.Fprintln(errorsOut, "usage: xray-easy-install <repository-directory>")
+		return 2
 	}
-	if err := run(context.Background(), os.Args[1], os.Stdin, os.Stdout, dockerRunner{os.Stdout}); err != nil {
-		fmt.Fprintln(os.Stderr, "Installation stopped:", err)
-		os.Exit(1)
+	restore, err := enterTerminal(input, output)
+	if err != nil {
+		fmt.Fprintln(errorsOut, "Cannot open terminal:", err)
+		return 1
 	}
+	ctx, stop := installerContext()
+	result, err := runInstall(ctx, args[0], input, output, dockerRunner{output: output})
+	stop()
+	restore()
+	if err != nil {
+		fmt.Fprintln(errorsOut, "Installation stopped:", err)
+		return 1
+	}
+	if !result.started {
+		fmt.Fprintln(output, "Installation cancelled. No containers were changed.")
+		return 0
+	}
+	printNextSteps(output, result.config)
+	return 0
 }
 
 func run(ctx context.Context, root string, input io.Reader, output io.Writer, runner commandRunner) error {
-	ui := wizard{reader: bufio.NewReader(input), out: output}
-	ui.heading("XRAY-EASY", "Private Xray server · guided installation")
-	ui.step("1/4", "Checking Docker")
+	_, err := runInstall(ctx, root, input, output, runner)
+	return err
+}
+
+type installResult struct {
+	config  configuration
+	started bool
+}
+
+func runInstall(ctx context.Context, root string, input io.Reader, output io.Writer, runner commandRunner) (installResult, error) {
+	ui := newWizard(input, output)
+	defer ui.close()
+	if docker, ok := runner.(dockerRunner); ok {
+		docker.output = ui
+		runner = docker
+	}
+	ui.step(1, "Checking Docker")
 	if err := runner.run(ctx, root, false, "compose", "version"); err != nil {
-		return fmt.Errorf("Docker Compose v2 is required: %w", err)
+		return installResult{}, fmt.Errorf("Docker Compose v2 is required: %w", err)
 	}
 	if err := runner.run(ctx, root, false, "info", "--format", "{{.ServerVersion}}"); err != nil {
-		return fmt.Errorf("cannot reach the Docker daemon: %w", err)
+		return installResult{}, fmt.Errorf("cannot reach the Docker daemon: %w", err)
 	}
-	fmt.Fprintln(output, "  ✓ Docker and Compose are available")
+	ui.message("Docker and Compose are available")
 
 	envPath := filepath.Join(root, ".env")
 	_, statErr := os.Stat(envPath)
 	if statErr != nil && !errors.Is(statErr, os.ErrNotExist) {
-		return statErr
+		return installResult{}, statErr
 	}
 	existing := statErr == nil
-	ui.step("2/4", "Configuration")
+	ui.step(2, "Configuration")
 	var cfg configuration
 	var err error
 	if existing {
 		cfg, err = loadConfiguration(root)
 		if err != nil {
-			return fmt.Errorf("existing .env is invalid; fix it without replacing the master key: %w", err)
+			return installResult{}, fmt.Errorf("existing .env is invalid; fix it without replacing the master key: %w", err)
 		}
-		fmt.Fprintln(output, "  Existing .env and supervisor token found; they will be reused.")
+		ui.message("Existing .env and supervisor token found; they will be reused.")
 	} else {
 		cfg = configuration{project: defaultProject, version: defaultVersion, tokenPath: newTokenPath}
-		cfg.public, err = ui.port("Public Xray TCP port", 443)
+		cfg.public, cfg.ui, err = ui.ports(ctx, 443, 8080)
 		if err != nil {
-			return err
-		}
-		for {
-			cfg.ui, err = ui.port("Web UI port (VDS loopback only)", 8080)
-			if err != nil {
-				return err
+			if errors.Is(err, errCancelled) {
+				return installResult{}, nil
 			}
-			if cfg.ui != cfg.public {
-				break
-			}
-			fmt.Fprintln(output, "  Choose a different Web UI port; both use the host TCP stack.")
+			return installResult{}, err
 		}
 	}
 
-	ui.step("3/4", "Review")
-	fmt.Fprintf(output, "  Xray version     %s\n  Public TCP port  %d\n  Web UI           127.0.0.1:%d\n  Compose project  %s\n", cfg.version, cfg.public, cfg.ui, cfg.project)
+	ui.review(cfg)
 	if !existing {
-		fmt.Fprintln(output, "  A master key and supervisor token will be generated and saved locally.")
+		ui.message("A master key and supervisor token will be generated and saved locally.")
 	}
-	proceed, err := ui.confirm("Build and start Xray-easy now?")
+	proceed, err := ui.confirm(ctx)
 	if err != nil {
-		return err
+		return installResult{}, err
 	}
 	if !proceed {
-		fmt.Fprintln(output, "  Cancelled. No containers were changed.")
-		return nil
+		return installResult{}, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return installResult{}, err
 	}
 	if !existing {
 		if err := createConfiguration(root, cfg); err != nil {
-			return err
+			return installResult{}, err
 		}
-		fmt.Fprintln(output, "  ✓ Saved .env and supervisor token with private file permissions")
+		ui.message("Saved .env and supervisor token with private file permissions")
 	}
 
-	ui.step("4/4", "Building and starting containers")
+	ui.step(4, "Building and starting containers")
 	if err := runner.run(ctx, root, false, "compose", "-f", "compose.yaml", "config", "--quiet"); err != nil {
-		return fmt.Errorf("Compose configuration is invalid: %w", err)
+		return installResult{}, fmt.Errorf("Compose configuration is invalid: %w", err)
 	}
 	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"); err != nil {
-		return fmt.Errorf("Compose could not start; configuration was kept for a retry: %w", err)
+		return installResult{}, fmt.Errorf("Compose could not start; configuration was kept for a retry: %w%s", err, ui.logTail(8))
 	}
-	fmt.Fprintf(output, "\n  ✓ Xray-easy is running.\n\n  On your computer, open an SSH tunnel:\n    ssh -N -L %d:127.0.0.1:%d user@your-vds\n\n  Then visit http://127.0.0.1:%d to create the admin and first device.\n  Allow inbound TCP %d through the VDS firewall for clients.\n", cfg.ui, cfg.ui, cfg.ui, cfg.public)
-	return nil
+	ui.message("Xray-easy is running")
+	return installResult{config: cfg, started: true}, nil
 }
 
-type wizard struct {
-	reader *bufio.Reader
-	out    io.Writer
-}
-
-func (w wizard) heading(name, description string) {
-	fmt.Fprintf(w.out, "\n  ╭──────────────────────────────────────────────────╮\n  │ %-48s │\n  │ %-48s │\n  ╰──────────────────────────────────────────────────╯\n", name, description)
-}
-
-func (w wizard) step(number, title string) {
-	fmt.Fprintf(w.out, "\n  [%s] %s\n", number, title)
-}
-
-func (w wizard) answer(prompt string) (string, error) {
-	fmt.Fprintf(w.out, "  %s: ", prompt)
-	line, err := w.reader.ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("terminal input ended: %w", err)
-	}
-	return strings.TrimSpace(line), nil
-}
-
-func (w wizard) port(label string, fallback int) (int, error) {
-	for {
-		value, err := w.answer(fmt.Sprintf("%s [%d]", label, fallback))
-		if err != nil {
-			return 0, err
-		}
-		if value == "" {
-			return fallback, nil
-		}
-		port, err := parsePort(value)
-		if err == nil {
-			return port, nil
-		}
-		fmt.Fprintln(w.out, "  Enter a TCP port between 1 and 65535.")
-	}
-}
-
-func (w wizard) confirm(label string) (bool, error) {
-	for {
-		value, err := w.answer(label + " [Y/n]")
-		if err != nil {
-			return false, err
-		}
-		switch strings.ToLower(value) {
-		case "", "y", "yes":
-			return true, nil
-		case "n", "no":
-			return false, nil
-		default:
-			fmt.Fprintln(w.out, "  Enter y or n.")
-		}
-	}
+func printNextSteps(output io.Writer, cfg configuration) {
+	fmt.Fprintf(output, "Xray-easy is running.\n\nOn your computer:\n  ssh -N -L %d:127.0.0.1:%d user@your-vds\n\nOpen http://127.0.0.1:%d to create the admin and first device.\nAllow inbound TCP %d through the VDS firewall for clients.\n", cfg.ui, cfg.ui, cfg.ui, cfg.public)
 }
 
 func parsePort(value string) (int, error) {

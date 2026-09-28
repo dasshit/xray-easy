@@ -28,32 +28,31 @@ cd xray-easy
 ```
 
 The repository is currently private, so GitHub access is required to clone it.
-The installer builds its terminal UI in a temporary Docker container, checks
+The installer builds its terminal UI in a temporary Docker container, then
+opens a full-screen terminal workspace. Use **↑/↓ or Tab** to move between
+fields, **Enter** to continue, **Esc** to cancel, and **Ctrl+C** to stop. It checks
 Docker/Compose, asks for the public and panel ports, generates the master key
 and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
 mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
 services to become healthy. A repeat run reuses the existing keys and Docker
 volumes.
 
-Example installer session (shortened):
+Example configuration screen (shortened):
 
 ```text
-  [1/4] Checking Docker
-  ✓ Docker and Compose are available
+  XRAY-EASY  /  PRIVATE SERVER INSTALLER
+  01 CHECK     02 CONFIGURE     03 REVIEW     04 START
 
-  [2/4] Configuration
-  Public Xray TCP port [443]:
-  Web UI port (VDS loopback only) [8080]:
+  02 / 04   Configuration
+  ╭─────────────────────────────────────────────────────╮
+  │  Public Xray TCP port                               │
+  │  › [ 443 ]                                          │
+  │  Web UI port on VDS loopback                         │
+  │    [ 8080 ]                                         │
+  │  The panel is reached through an SSH tunnel.        │
+  ╰─────────────────────────────────────────────────────╯
 
-  [3/4] Review
-  Xray version     26.7.28
-  Public TCP port  443
-  Web UI           127.0.0.1:8080
-  Compose project  xray-easy
-  Build and start Xray-easy now? [Y/n]:
-
-  [4/4] Building and starting containers
-  ✓ Xray-easy is running.
+  ↑↓ / Tab  Move     Enter  Continue     Esc  Cancel
 ```
 
 On **your own computer**, start a tunnel to the VPS (replace the user and
