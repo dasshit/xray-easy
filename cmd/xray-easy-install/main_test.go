@@ -1,0 +1,401 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+type fakeRunner struct {
+	calls  []string
+	failOn string
+}
+
+func (r *fakeRunner) run(_ context.Context, _ string, _ bool, args ...string) error {
+	call := strings.Join(args, " ")
+	r.calls = append(r.calls, call)
+	if strings.Contains(call, r.failOn) && r.failOn != "" {
+		return errors.New("simulated Docker failure")
+	}
+	return nil
+}
+
+func TestInstallAndRetryPreserveSecrets(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{}
+	var output bytes.Buffer
+	if err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 4 || !strings.Contains(runner.calls[3], "up -d --build --wait") {
+		t.Fatalf("unexpected Docker calls: %v", runner.calls)
+	}
+	envPath := filepath.Join(root, ".env")
+	tokenPath := filepath.Join(root, "secrets", "xray_supervisor_token")
+	firstEnv := readPrivateFile(t, envPath)
+	firstToken := readPrivateFile(t, tokenPath)
+	values, err := readEnvironmentFile(envPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := base64.StdEncoding.DecodeString(values["XRAY_EASY_MASTER_KEY"])
+	if err != nil || len(key) != 32 {
+		t.Fatalf("invalid generated master key: len=%d err=%v", len(key), err)
+	}
+	if values["XRAY_EASY_PROJECT_NAME"] != defaultProject || values["XRAY_SUPERVISOR_TOKEN_SOURCE"] != newTokenPath {
+		t.Fatalf("unexpected configuration: %#v", values)
+	}
+	if strings.Contains(output.String(), values["XRAY_EASY_MASTER_KEY"]) || strings.Contains(output.String(), strings.TrimSpace(firstToken)) {
+		t.Fatal("installation output leaked a secret")
+	}
+
+	runner.calls = nil
+	output.Reset()
+	if err := run(context.Background(), root, strings.NewReader("\n"), &output, runner); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPrivateFile(t, envPath); got != firstEnv {
+		t.Fatal("retry replaced .env")
+	}
+	if got := readPrivateFile(t, tokenPath); got != firstToken {
+		t.Fatal("retry replaced the supervisor token")
+	}
+	if !strings.Contains(output.String(), "Existing .env") {
+		t.Fatal("retry did not show existing configuration")
+	}
+}
+
+func TestCancellationLeavesNoConfiguration(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{}
+	var output bytes.Buffer
+	if err := run(context.Background(), root, strings.NewReader("\n\nn\n"), &output, runner); err != nil {
+		t.Fatal(err)
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("cancelled wizard ran Compose: %v", runner.calls)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".env")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("cancelled wizard created .env: %v", err)
+	}
+}
+
+func TestInvalidPortsAreReprompted(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{}
+	var output bytes.Buffer
+	input := "65536\n4443\n4443\n8080\ny\n"
+	if err := run(context.Background(), root, strings.NewReader(input), &output, runner); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readEnvironmentFile(filepath.Join(root, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["XRAY_PUBLIC_PORT"] != "4443" || values["XRAY_EASY_UI_PORT"] != "8080" {
+		t.Fatalf("ports were not saved: %#v", values)
+	}
+	if !strings.Contains(output.String(), "Choose a different Web UI port") {
+		t.Fatal("matching host ports were not explained")
+	}
+}
+
+func TestInvalidExistingKeyIsNeverReplaced(t *testing.T) {
+	root := t.TempDir()
+	envPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(envPath, []byte("XRAY_EASY_MASTER_KEY=bad\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runner := &fakeRunner{}
+	var output bytes.Buffer
+	err := run(context.Background(), root, strings.NewReader(""), &output, runner)
+	if err == nil || !strings.Contains(err.Error(), "master key") && !strings.Contains(err.Error(), "MASTER_KEY") {
+		t.Fatalf("expected master key error, got %v", err)
+	}
+	if got := readPrivateFile(t, envPath); got != "XRAY_EASY_MASTER_KEY=bad\n" {
+		t.Fatal("invalid existing key was replaced")
+	}
+	if len(runner.calls) != 2 {
+		t.Fatalf("invalid configuration ran Compose: %v", runner.calls)
+	}
+}
+
+func TestLegacyConfigurationKeepsProjectAndToken(t *testing.T) {
+	root := t.TempDir()
+	token := filepath.Join(root, "prototype", "secrets", "xray_supervisor_token")
+	if err := os.MkdirAll(filepath.Dir(token), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(token, []byte("legacy-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{42}, 32))
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("XRAY_EASY_MASTER_KEY="+key+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := loadConfiguration(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.project != legacyProject || cfg.tokenPath != oldTokenPath || cfg.public != 443 {
+		t.Fatalf("legacy config changed: %+v", cfg)
+	}
+}
+
+func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{failOn: "up -d"}
+	var output bytes.Buffer
+	err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner)
+	if err == nil || !strings.Contains(err.Error(), "retry") {
+		t.Fatalf("expected retryable Compose error, got %v", err)
+	}
+	firstEnv := readPrivateFile(t, filepath.Join(root, ".env"))
+	firstToken := readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token"))
+	runner.failOn = ""
+	runner.calls = nil
+	if err := run(context.Background(), root, strings.NewReader("\n"), &output, runner); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPrivateFile(t, filepath.Join(root, ".env")); got != firstEnv {
+		t.Fatal("retry after Compose failure replaced the master key")
+	}
+	if got := readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token")); got != firstToken {
+		t.Fatal("retry after Compose failure replaced the token")
+	}
+}
+
+func TestReadEnvironmentFileDoesNotEchoMalformedSecrets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".env")
+	secret := "XRAY_EASY_MASTER_KEY with private material"
+	if err := os.WriteFile(path, []byte(secret+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := readEnvironmentFile(path)
+	if err == nil || strings.Contains(fmt.Sprint(err), secret) {
+		t.Fatalf("malformed line leaked: %v", err)
+	}
+}
+
+func TestDockerRunnerUsesLocalConfigurationAndReportsFailures(t *testing.T) {
+	root := t.TempDir()
+	docker := filepath.Join(root, "docker")
+	logPath := filepath.Join(root, "docker.log")
+	script := "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$*\" \"${XRAY_PUBLIC_PORT-unset}\" \"${COMPOSE_PROJECT_NAME-unset}\" >> \"$FAKE_DOCKER_LOG\"\nif [ \"$1\" = fail ]; then echo 'simulated compose error' >&2; exit 17; fi\necho 'docker output'\n"
+	if err := os.WriteFile(docker, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", root+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_DOCKER_LOG", logPath)
+	t.Setenv("XRAY_PUBLIC_PORT", "9999")
+	t.Setenv("COMPOSE_PROJECT_NAME", "wrong-project")
+	var output bytes.Buffer
+	runner := dockerRunner{output: &output}
+	if err := runner.run(context.Background(), root, false, "compose", "version"); err != nil {
+		t.Fatal(err)
+	}
+	if output.Len() != 0 {
+		t.Fatal("quiet Docker command printed output")
+	}
+	if err := runner.run(context.Background(), root, true, "compose", "up"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output.String(), "docker output") {
+		t.Fatal("visible Docker output was hidden")
+	}
+	if err := runner.run(context.Background(), root, false, "fail"); err == nil || !strings.Contains(err.Error(), "simulated compose error") {
+		t.Fatalf("quiet Docker error lost details: %v", err)
+	}
+	if err := runner.run(context.Background(), root, true, "fail"); err == nil || !strings.Contains(err.Error(), "exit status 17") {
+		t.Fatalf("visible Docker error was lost: %v", err)
+	}
+	log := readFile(t, logPath)
+	if strings.Contains(log, "9999") || strings.Contains(log, "wrong-project") || !strings.Contains(log, "unset|unset") {
+		t.Fatalf("shell environment overrode .env: %s", log)
+	}
+}
+
+func TestDockerFailureAndClosedInputStopBeforeWriting(t *testing.T) {
+	for _, failedCommand := range []string{"compose version", "info --format"} {
+		t.Run(failedCommand, func(t *testing.T) {
+			root := t.TempDir()
+			runner := &fakeRunner{failOn: failedCommand}
+			var output bytes.Buffer
+			if err := run(context.Background(), root, strings.NewReader(""), &output, runner); err == nil {
+				t.Fatal("expected Docker preflight failure")
+			}
+			if _, err := os.Stat(filepath.Join(root, ".env")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("preflight wrote .env: %v", err)
+			}
+		})
+	}
+	root := t.TempDir()
+	var output bytes.Buffer
+	if err := run(context.Background(), root, strings.NewReader(""), &output, &fakeRunner{}); err == nil || !strings.Contains(err.Error(), "input ended") {
+		t.Fatalf("expected closed terminal error, got %v", err)
+	}
+	for _, input := range []string{"\n", "\n\n"} {
+		if err := run(context.Background(), root, strings.NewReader(input), &output, &fakeRunner{}); err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("expected closed terminal error after %q, got %v", input, err)
+		}
+	}
+}
+
+func TestComposeValidationFailureKeepsSecrets(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{failOn: "config --quiet"}
+	var output bytes.Buffer
+	err := run(context.Background(), root, strings.NewReader("\n\nmaybe\ny\n"), &output, runner)
+	if err == nil || !strings.Contains(err.Error(), "Compose configuration is invalid") {
+		t.Fatalf("expected config error, got %v", err)
+	}
+	if !strings.Contains(output.String(), "Enter y or n") {
+		t.Fatal("invalid confirmation was not handled")
+	}
+	readPrivateFile(t, filepath.Join(root, ".env"))
+	readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token"))
+	if len(runner.calls) != 3 {
+		t.Fatalf("invalid Compose config proceeded to up: %v", runner.calls)
+	}
+}
+
+func TestPartialInstallReusesTokenAndDoesNotReplaceEnv(t *testing.T) {
+	root := t.TempDir()
+	secretPath := filepath.Join(root, "secrets", "xray_supervisor_token")
+	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretPath, []byte("existing-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080, tokenPath: newTokenPath}); err != nil {
+		t.Fatal(err)
+	}
+	if got := readPrivateFile(t, secretPath); got != "existing-token\n" {
+		t.Fatal("partial installation replaced the token")
+	}
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080, tokenPath: newTokenPath}); err == nil {
+		t.Fatal("second configuration write replaced .env")
+	}
+}
+
+func TestInvalidTokenAndEnvironmentAreRejected(t *testing.T) {
+	root := t.TempDir()
+	secretPath := filepath.Join(root, "secrets", "xray_supervisor_token")
+	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateToken(secretPath); err == nil {
+		t.Fatal("empty token accepted")
+	}
+	if err := createConfiguration(root, configuration{}); err == nil {
+		t.Fatal("empty existing token accepted during setup")
+	}
+	if err := os.Remove(secretPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateToken(secretPath); err == nil {
+		t.Fatal("missing token accepted")
+	}
+	if err := os.Mkdir(secretPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateToken(secretPath); err == nil {
+		t.Fatal("directory accepted as a token")
+	}
+	if err := os.Remove(secretPath); err != nil {
+		t.Fatal(err)
+	}
+	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{42}, 32))
+	for _, line := range []string{
+		"XRAY_PUBLIC_PORT=65536",
+		"XRAY_EASY_UI_PORT=0",
+		"XRAY_PUBLIC_PORT=8080",
+		"XRAY_PUBLIC_PORT=443",
+	} {
+		env := "XRAY_EASY_MASTER_KEY=" + key + "\n" + line + "\n"
+		if err := os.WriteFile(filepath.Join(root, ".env"), []byte(env), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := loadConfiguration(root); err == nil {
+			t.Fatalf("invalid configuration accepted: %s", line)
+		}
+	}
+}
+
+func TestPrivateFileWriteAndEnvReaderBoundaries(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "secret")
+	if err := writeNewPrivateFile(path, "first"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeNewPrivateFile(path, "second"); err == nil {
+		t.Fatal("private file was overwritten")
+	}
+	if got := readPrivateFile(t, path); got != "first" {
+		t.Fatal("private file contents changed")
+	}
+	if err := writeNewPrivateFile(filepath.Join(root, "missing", "secret"), "value"); err == nil {
+		t.Fatal("write to missing directory succeeded")
+	}
+	if _, err := readEnvironmentFile(filepath.Join(root, "missing.env")); err == nil {
+		t.Fatal("missing .env was accepted")
+	}
+	envPath := filepath.Join(root, ".env")
+	if err := os.WriteFile(envPath, []byte("# comment\n  KEY = 'quoted' \n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readEnvironmentFile(envPath)
+	if err != nil || values["KEY"] != "quoted" {
+		t.Fatalf("quoted .env value rejected: %#v, %v", values, err)
+	}
+}
+
+func TestSetupRejectsUnusableSecretsDirectory(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "secrets"), []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var output bytes.Buffer
+	err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, &fakeRunner{})
+	if err == nil || !strings.Contains(err.Error(), "secrets directory") {
+		t.Fatalf("expected secrets directory error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".env")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed setup wrote .env: %v", err)
+	}
+}
+
+func readFile(t *testing.T, path string) string {
+	t.Helper()
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
+}
+
+func readPrivateFile(t *testing.T, path string) string {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("%s has permissions %o, want 0600", path, info.Mode().Perm())
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(content)
+}
