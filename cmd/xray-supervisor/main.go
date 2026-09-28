@@ -282,7 +282,15 @@ func (s *supervisor) safePath(path string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("resolve config dir: %w", err)
 	}
+	base, err = filepath.EvalSymlinks(base)
+	if err != nil {
+		return "", fmt.Errorf("resolve config dir: %w", err)
+	}
 	full, err := filepath.Abs(path)
+	if err != nil {
+		return "", fmt.Errorf("resolve config path: %w", err)
+	}
+	full, err = filepath.EvalSymlinks(full)
 	if err != nil {
 		return "", fmt.Errorf("resolve config path: %w", err)
 	}
@@ -454,6 +462,13 @@ func (s *supervisor) handleProbe(w http.ResponseWriter, r *http.Request) {
 }
 
 func probeTarget(target, sni string) error {
+	dialer := &net.Dialer{Timeout: 5 * time.Second}
+	return probeTargetWith(target, sni, net.DefaultResolver.LookupIP, func(address string, config *tls.Config) (net.Conn, error) {
+		return tls.DialWithDialer(dialer, "tcp", address, config)
+	})
+}
+
+func probeTargetWith(target, sni string, lookupIP func(context.Context, string, string) ([]net.IP, error), dialTLS func(string, *tls.Config) (net.Conn, error)) error {
 	host, port, err := net.SplitHostPort(target)
 	if err != nil || host == "" || port == "" {
 		return errors.New("target must be host:port")
@@ -470,7 +485,7 @@ func probeTarget(target, sni string) error {
 		addresses = append(addresses, ip)
 	} else {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		addresses, err = net.DefaultResolver.LookupIP(ctx, "ip", host)
+		addresses, err = lookupIP(ctx, "ip", host)
 		cancel()
 		if err != nil {
 			return fmt.Errorf("resolve target: %w", err)
@@ -487,10 +502,9 @@ func probeTarget(target, sni string) error {
 	// Dial the address returned by the same DNS lookup that passed the SSRF
 	// checks. Using the hostname here would allow a DNS rebinding between the
 	// check and the TLS connection.
-	dialer := net.Dialer{Timeout: 5 * time.Second}
 	var lastErr error
 	for _, address := range addresses {
-		conn, dialErr := tls.DialWithDialer(&dialer, "tcp", net.JoinHostPort(address.String(), port), &tls.Config{ServerName: sni, MinVersion: tls.VersionTLS12})
+		conn, dialErr := dialTLS(net.JoinHostPort(address.String(), port), &tls.Config{ServerName: sni, MinVersion: tls.VersionTLS12})
 		if dialErr == nil {
 			_ = conn.Close()
 			return nil
@@ -530,6 +544,10 @@ func redact(value string) string {
 }
 
 func runHealthcheck(url, tokenFile string) error {
+	return runHealthcheckWithClient(url, tokenFile, &http.Client{Timeout: 5 * time.Second})
+}
+
+func runHealthcheckWithClient(url, tokenFile string, client *http.Client) error {
 	body := []byte{}
 	nonce := fmt.Sprintf("health-%d", time.Now().UnixNano())
 	secret, err := os.ReadFile(tokenFile)
@@ -547,7 +565,6 @@ func runHealthcheck(url, tokenFile string) error {
 	req.Header.Set("X-Xray-Operation", "healthcheck")
 	req.Header.Set("X-Xray-Nonce", nonce)
 	req.Header.Set("X-Xray-Signature", hex.EncodeToString(mac.Sum(nil)))
-	client := http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return err

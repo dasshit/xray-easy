@@ -23,19 +23,25 @@ type ClientStats struct {
 	DownloadBytes int64      `json:"download_bytes"`
 }
 
+// StatsAPI is the small Xray boundary needed by the polling manager.
+type StatsAPI interface {
+	Poll(context.Context) ([]xrayapi.UserStats, error)
+}
+
 type Manager struct {
 	store *store.Store
-	api   *xrayapi.StatsClient
+	api   StatsAPI
 
 	mu        sync.RWMutex
 	latest    map[string]ClientStats
 	subs      map[chan struct{}]struct{}
 	interval  time.Duration
 	lastError string
+	now       func() time.Time
 }
 
-func NewManager(db *store.Store, api *xrayapi.StatsClient) *Manager {
-	return &Manager{store: db, api: api, latest: make(map[string]ClientStats), subs: make(map[chan struct{}]struct{}), interval: defaultPollInterval}
+func NewManager(db *store.Store, api StatsAPI) *Manager {
+	return &Manager{store: db, api: api, latest: make(map[string]ClientStats), subs: make(map[chan struct{}]struct{}), interval: defaultPollInterval, now: time.Now}
 }
 
 func (m *Manager) Start(ctx context.Context) {
@@ -74,7 +80,7 @@ func (m *Manager) Poll(ctx context.Context) error {
 		m.setError(err)
 		return fmt.Errorf("list traffic snapshots: %w", err)
 	}
-	now := time.Now().UTC()
+	now := m.now().UTC()
 	next := make(map[string]ClientStats, len(clients))
 	for _, client := range clients {
 		snapshot := previous[client.ID]
