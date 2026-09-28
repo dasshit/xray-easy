@@ -2,6 +2,7 @@ import eslint from '@eslint/js'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
 import vue from 'eslint-plugin-vue'
+import vueAccessibility from 'eslint-plugin-vuejs-accessibility'
 import vueParser from 'vue-eslint-parser'
 
 const webFiles = ['src/**/*.{ts,vue}', 'test/**/*.ts']
@@ -24,6 +25,23 @@ function restrictLayerImports(forbiddenLayers, layerName, disallowVue = true) {
   return ['error', { patterns }]
 }
 
+const vueAccessibilityConfigs = vueAccessibility.configs['flat/recommended'].map(config => ({
+  ...config,
+  ...(config.rules ? {
+    rules: Object.fromEntries(Object.entries(config.rules).map(([rule, setting]) => [
+      rule,
+      Array.isArray(setting) ? ['error', ...setting.slice(1)] : 'error',
+    ])),
+  } : {}),
+}))
+
+const vueAccessibilityOverrides = {
+  rules: {
+    // Explicit `for` attributes and implicit wrapping labels are both valid HTML.
+    'vuejs-accessibility/label-has-for': ['error', { required: { some: ['nesting', 'id'] } }],
+  },
+}
+
 export default tseslint.config(
   {
     ignores: ['dist/**', 'coverage/**'],
@@ -43,6 +61,7 @@ export default tseslint.config(
     },
     rules: {
       '@typescript-eslint/consistent-type-imports': 'error',
+      '@typescript-eslint/strict-boolean-expressions': 'error',
       'no-console': 'error',
       'vue/html-self-closing': 'off',
       'vue/max-attributes-per-line': 'off',
@@ -113,4 +132,6 @@ export default tseslint.config(
       },
     },
   },
+  ...vueAccessibilityConfigs,
+  vueAccessibilityOverrides,
 )

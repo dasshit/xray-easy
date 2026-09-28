@@ -111,7 +111,8 @@ export async function mountApp(handler: RequestHandler) {
   const requests: RequestRecord[] = []
   const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof Request ? input.url : input.toString()
-    const method = (init?.method || 'GET').toUpperCase()
+    const methodName = init?.method
+    const method = (methodName === undefined || methodName === '' ? 'GET' : methodName).toUpperCase()
     let body: unknown
     if (typeof init?.body === 'string') body = JSON.parse(init.body)
     const request = { url, method, body }

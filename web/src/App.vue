@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { inject, onBeforeUnmount, onMounted, ref } from 'vue'
+import { inject, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { APIError } from './application/errors'
 import type { EventSubscription, XrayEasyGateway } from './application/ports/xrayEasyGateway'
 import { clientActionFor } from './domain/models'
@@ -25,6 +25,7 @@ const api = requireGateway(inject(xrayEasyGatewayKey))
 const theme = ref<Theme>(readTheme())
 const activeSection = ref<Section>('profiles')
 const createModalOpen = ref(false)
+const newDeviceNameInput = ref<HTMLInputElement | null>(null)
 const clientAction = ref<ClientAction>(null)
 const setupForm = ref({ username: 'admin', password: '', publicHost: '', publicPort: 443, realityTarget: 'www.cloudflare.com:443', realitySNI: 'www.cloudflare.com' })
 const loginForm = ref({ username: 'admin', password: '', totpCode: '', recoveryCode: '' })
@@ -59,7 +60,7 @@ function toggleTheme() { applyTheme(theme.value === 'dark' ? 'light' : 'dark') }
 
 function statusLabel(state?: string) {
   const labels: Record<string, string> = { running: t().running, unavailable: t().unavailable, starting: t().starting, stopped: t().stopped }
-  return labels[state || ''] || t().unknown
+  return labels[state ?? ''] ?? t().unknown
 }
 
 function statusTone(state?: string) {
@@ -90,7 +91,7 @@ async function load() {
   error.value = ''
   try {
     setup.value = await api.setup.status()
-    if (setup.value.publicPort) setupForm.value.publicPort = setup.value.publicPort
+    if (setup.value.publicPort !== undefined) setupForm.value.publicPort = setup.value.publicPort
     if (setup.value.initialized) {
       try { admin.value = await api.auth.current() } catch { admin.value = null }
       if (admin.value) { await loadAuthenticated(); connectEvents() }
@@ -168,7 +169,12 @@ async function loginRecovery() {
 async function logout() { busy.value = true; error.value = ''; try { await api.auth.logout(); stopEvents(); admin.value = null; totpStatus.value = null } catch (cause) { showError(cause) } finally { busy.value = false } }
 async function logoutAll() { busy.value = true; error.value = ''; try { await api.auth.logoutAll(); stopEvents(); admin.value = null; totpStatus.value = null } catch (cause) { showError(cause) } finally { busy.value = false } }
 
-function openCreateModal() { error.value = ''; newDevice.value = { name: '', fingerprint: '' }; createModalOpen.value = true }
+function openCreateModal() {
+  error.value = ''
+  newDevice.value = { name: '', fingerprint: '' }
+  createModalOpen.value = true
+  void nextTick(() => newDeviceNameInput.value?.focus())
+}
 function closeCreateModal() { if (!busy.value) createModalOpen.value = false }
 async function createDevice() {
   busy.value = true; error.value = ''
@@ -309,10 +315,10 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         </div>
       </section>
 
-      <div v-if="createModalOpen" class="modal-backdrop" @click.self="closeCreateModal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-profile-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="create-profile-title">{{ t().createProfile }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeCreateModal">×</button></div><form @submit.prevent="createDevice"><label>{{ t().newDevice }}<input v-model="newDevice.name" class="device-name-input" :placeholder="t().newDevice" autofocus required maxlength="64" /></label><label>{{ t().fingerprint }}<select v-model="newDevice.fingerprint"><option value="">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option></select></label><div class="modal-actions"><button type="button" class="secondary" @click="closeCreateModal">{{ t().cancel }}</button><button type="submit" :disabled="busy || !newDevice.name.trim()">{{ t().createDevice }}</button></div></form></div></div>
-      <div v-if="clientAction" class="modal-backdrop" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
-      <div v-if="selectedProfile" class="modal-backdrop" @click.self="closeProfile"><div class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-delivery-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="profile-delivery-title">{{ t().profileFor }} {{ selectedClient()?.name || '' }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeProfile">×</button></div><p class="hint profile-hint">{{ t().scanHint }}</p><div class="profile-delivery"><div class="qr-panel"><span class="qr-label">{{ t().qr }}</span><img class="qr" :src="api.clients.profileQrUrl(selectedProfile.clientId)" :alt="t().qr" /></div><div class="profile-link-panel"><label>{{ t().copyUri }}<textarea readonly :value="selectedProfile.uri"></textarea></label><button class="secondary copy-button" @click="copyProfileUri"><span aria-hidden="true">⧉</span>{{ copiedProfile ? t().copied : t().copy }}</button><a class="download-link" :href="api.clients.profileJsonUrl(selectedProfile.clientId)"><span aria-hidden="true">↓</span>{{ t().jsonFile }}</a></div></div></div></div>
-      <div v-if="pendingSettings" class="modal-backdrop" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
+      <div v-if="createModalOpen" class="modal-backdrop" role="presentation" @click.self="closeCreateModal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-profile-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="create-profile-title">{{ t().createProfile }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeCreateModal">×</button></div><form @submit.prevent="createDevice"><label>{{ t().newDevice }}<input ref="newDeviceNameInput" v-model="newDevice.name" class="device-name-input" :placeholder="t().newDevice" required maxlength="64" /></label><label>{{ t().fingerprint }}<select v-model="newDevice.fingerprint"><option value="">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option></select></label><div class="modal-actions"><button type="button" class="secondary" @click="closeCreateModal">{{ t().cancel }}</button><button type="submit" :disabled="busy || !newDevice.name.trim()">{{ t().createDevice }}</button></div></form></div></div>
+      <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
+      <div v-if="selectedProfile" class="modal-backdrop" role="presentation" @click.self="closeProfile"><div class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-delivery-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="profile-delivery-title">{{ t().profileFor }} {{ selectedClient()?.name || '' }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeProfile">×</button></div><p class="hint profile-hint">{{ t().scanHint }}</p><div class="profile-delivery"><div class="qr-panel"><span class="qr-label">{{ t().qr }}</span><img class="qr" :src="api.clients.profileQrUrl(selectedProfile.clientId)" :alt="t().qr" /></div><div class="profile-link-panel"><label>{{ t().copyUri }}<textarea readonly :value="selectedProfile.uri"></textarea></label><button class="secondary copy-button" @click="copyProfileUri"><span aria-hidden="true">⧉</span>{{ copiedProfile ? t().copied : t().copy }}</button><a class="download-link" :href="api.clients.profileJsonUrl(selectedProfile.clientId)"><span aria-hidden="true">↓</span>{{ t().jsonFile }}</a></div></div></div></div>
+      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
     </section>
   </main>
 </template>

@@ -15,7 +15,9 @@ describe('profile list and creation', () => {
     expect(wrapper.text()).toContain('No profiles yet')
     await findButton(wrapper, 'Create profile').trigger('click')
     expect(wrapper.get('[role="dialog"]').text()).toContain('Device name')
-    expect(wrapper.get('input.device-name-input').attributes('maxlength')).toBe('64')
+    const nameInput = wrapper.get('input.device-name-input')
+    expect(nameInput.attributes('maxlength')).toBe('64')
+    expect(document.activeElement).toBe(nameInput.element)
   })
 
   it('creates a profile with the selected fingerprint and opens its delivery view', async () => {
@@ -155,12 +157,12 @@ describe('profile lifecycle confirmation', () => {
     await findButton(wrapper.get('.device-card'), scenario.label).trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="dialog"]').text()).toContain('Confirm action')
-    if (scenario.revoked) expect(wrapper.get('[role="dialog"]').text()).toContain('cannot be undone')
+    if (scenario.revoked === true) expect(wrapper.get('[role="dialog"]').text()).toContain('cannot be undone')
     await findButton(wrapper.get('[role="dialog"]'), scenario.label).trigger('click')
     await flushPromises()
     expect(requests.some(request => request.url === `/api/clients/${sampleClient.id}/${scenario.action}` && request.method === 'POST')).toBe(true)
-    expect(wrapper.get('.device-card').text()).toContain(scenario.revoked ? 'revoked' : scenario.expectedEnabled ? 'enabled' : 'disabled')
-    if (scenario.revoked) expect(wrapper.get('.device-card').findAll('button')).toHaveLength(0)
+    expect(wrapper.get('.device-card').text()).toContain(scenario.revoked === true ? 'revoked' : scenario.expectedEnabled ? 'enabled' : 'disabled')
+    if (scenario.revoked === true) expect(wrapper.get('.device-card').findAll('button')).toHaveLength(0)
   })
 
   it('does not apply an action that was canceled', async () => {

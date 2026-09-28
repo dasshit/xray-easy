@@ -11,6 +11,6 @@ export function formatBytes(value: number): string {
 }
 
 export function formatTimestamp(value: string | undefined, language: 'en' | 'ru'): string {
-  if (!value) return ''
+  if (value === undefined || value === '') return ''
   return new Date(value).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-US')
 }

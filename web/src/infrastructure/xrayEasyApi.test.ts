@@ -10,7 +10,7 @@ function requester(responses: Record<string, unknown>) {
   const send = vi.fn(<T>(url: string, options?: RequestInit): Promise<T> => {
     calls.push({ url, ...(options === undefined ? {} : { options }) })
     const result = responses[url]
-    if (result && typeof result === 'object' && 'responses' in result) {
+    if (result !== undefined && result !== null && typeof result === 'object' && 'responses' in result) {
       return Promise.resolve((result.responses as unknown[]).shift() as T)
     }
     return Promise.resolve(result as T)

@@ -147,7 +147,10 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
     clients: {
       list: async (): Promise<Client[]> => (await send<ClientDto[]>('/api/clients')).map(mapClient),
       create: async (name: string, fingerprint?: string): Promise<Client> => mapClient(await send<ClientDto>('/api/clients', {
-        method: 'POST', body: JSON.stringify({ name, fingerprint: fingerprint || undefined }),
+        method: 'POST', body: JSON.stringify({
+          name,
+          ...(fingerprint === undefined || fingerprint === '' ? {} : { fingerprint }),
+        }),
       })),
       profile: async (clientId: string): Promise<ProfileDelivery> => {
         const dto = await send<ProfileDeliveryDto>(`/api/clients/${encodeURIComponent(clientId)}/profile?format=uri`)
