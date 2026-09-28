@@ -172,6 +172,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .security-panel { max-width: none; }
 .security-status { display: inline-flex; align-items: center; gap: 2px; margin: 3px 0 12px; color: var(--muted); font-size: .86rem; }
 .security-status.enabled { color: var(--success); }
+.security-action-button { display: block; margin-top: 8px; }
 .checkbox { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .checkbox input { width: auto; }
 .recovery-codes { white-space: pre-wrap; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); font: 13px ui-monospace, monospace; }
