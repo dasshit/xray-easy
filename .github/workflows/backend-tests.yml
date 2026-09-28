@@ -1,4 +1,4 @@
-name: Backend tests
+name: Project tests
 
 on:
   push:
@@ -9,6 +9,49 @@ permissions:
   contents: read
 
 jobs:
+  web:
+    name: Web unit tests, types, and build
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - name: Install web dependencies
+        run: npm ci
+        working-directory: web
+
+      - name: Check web types
+        run: npm run typecheck
+        working-directory: web
+
+      - name: Run web unit tests
+        run: npm test
+        working-directory: web
+
+      - name: Collect web coverage report
+        run: npm run test:coverage
+        working-directory: web
+
+      - name: Build web app
+        run: npm run build
+        working-directory: web
+
+      - name: Upload web coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-coverage-report
+          path: web/coverage/
+          if-no-files-found: ignore
+
   go:
     name: Go unit tests, race detector, and coverage
     runs-on: ubuntu-latest

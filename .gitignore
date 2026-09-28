@@ -12,6 +12,7 @@ node_modules/
 .pnpm-store/
 web/dist/
 web/.vite/
+web/coverage/
 *.tsbuildinfo
 
 # Local configuration and generated runtime state

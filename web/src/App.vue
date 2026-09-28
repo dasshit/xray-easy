@@ -2,7 +2,7 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { APIError, request } from './infrastructure/api'
 import { clientActionFor } from './domain/models'
-import type { Admin, Client, ClientAction, DiagnosticEntry, NodeStatus, Section, Settings, SettingsChange, SetupStatus, Theme, TOTPSetup, TOTPStatus } from './domain/models'
+import type { Admin, Client, ClientAction, ClientActionType, DiagnosticEntry, NodeStatus, Section, Settings, SettingsChange, SetupStatus, Theme, TOTPSetup, TOTPStatus } from './domain/models'
 import { formatBytes, formatTimestamp, persistLanguage, persistTheme, readLanguage, readTheme } from './application/ui'
 
 const setup = ref<SetupStatus | null>(null)
@@ -161,7 +161,7 @@ async function copyProfileUri() {
   try { await navigator.clipboard.writeText(selectedProfile.value.uri); copiedProfile.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedProfile.value = false }, 2200) }
   catch (cause) { showError(cause) }
 }
-function openClientAction(client: Client, action: 'enable' | 'disable' | 'revoke') { error.value = ''; clientAction.value = { client, action } }
+function openClientAction(client: Client, action: ClientActionType | null) { if (!action) return; error.value = ''; clientAction.value = { client, action } }
 function closeClientAction() { if (!busy.value) clientAction.value = null }
 async function confirmClientAction() {
   if (!clientAction.value) return
@@ -203,8 +203,8 @@ function handleKeydown(event: KeyboardEvent) { if (event.key === 'Escape') close
 
 onMounted(() => { applyTheme(theme.value); window.addEventListener('keydown', handleKeydown); void load() })
 onBeforeUnmount(() => { events?.close(); window.removeEventListener('keydown', handleKeydown) })
-function actionTitle(action?: ClientAction['action']) { if (action === 'enable') return t().enableConfirm; if (action === 'disable') return t().disableConfirm; return t().removeConfirm }
-function actionLabel(action?: ClientAction['action']) { if (action === 'enable') return t().enable; if (action === 'disable') return t().disable; return t().remove }
+function actionTitle(action?: ClientActionType) { if (action === 'enable') return t().enableConfirm; if (action === 'disable') return t().disableConfirm; return t().removeConfirm }
+function actionLabel(action?: ClientActionType) { if (action === 'enable') return t().enable; if (action === 'disable') return t().disable; return t().remove }
 </script>
 
 <template>
