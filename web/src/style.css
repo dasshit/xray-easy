@@ -173,6 +173,10 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .security-status { display: inline-flex; align-items: center; gap: 2px; margin: 3px 0 12px; color: var(--muted); font-size: .86rem; }
 .security-status.enabled { color: var(--success); }
 .security-action-button { display: block; margin-top: 8px; }
+.totp-setup-grid { display: grid; grid-template-columns: minmax(170px, .72fr) minmax(0, 1.28fr); gap: 18px; align-items: start; margin: 14px 0 18px; }
+.totp-setup-fields { min-width: 0; }
+.totp-qr-panel { align-self: start; padding: 12px; }
+.totp-qr { width: min(230px, 100%); margin: 10px auto; }
 .checkbox { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .checkbox input { width: auto; }
 .recovery-codes { white-space: pre-wrap; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); font: 13px ui-monospace, monospace; }
@@ -214,6 +218,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .device-actions { width: 100%; flex-wrap: wrap; gap: 12px 18px; }
   .header-actions { gap: 12px; }
   .settings-grid, .security-grid, .diagnostics-overview { grid-template-columns: 1fr; }
+  .totp-setup-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .topbar { align-items: center; }

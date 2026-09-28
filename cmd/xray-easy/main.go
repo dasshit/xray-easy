@@ -886,10 +886,17 @@ func (s *server) totpSetup(w http.ResponseWriter, r *http.Request) {
 	s.totpMu.Lock()
 	s.pendingTOTP[admin.ID] = pendingTOTP{Token: token, Secret: secretValue, Codes: codes, ExpiresAt: time.Now().UTC().Add(10 * time.Minute)}
 	s.totpMu.Unlock()
+	otpauthURI := totp.OTPAuthURI(secretValue, "xray-easy", admin.Username)
+	qrPNG, err := qrcode.Encode(otpauthURI, qrcode.Medium, 512)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encode TOTP QR"})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"setup_token":    token,
 		"secret":         secretValue,
-		"otpauth_uri":    totp.OTPAuthURI(secretValue, "xray-easy", admin.Username),
+		"otpauth_uri":    otpauthURI,
+		"qr_png":         base64.StdEncoding.EncodeToString(qrPNG),
 		"recovery_codes": codes,
 		"expires_in":     600,
 	})

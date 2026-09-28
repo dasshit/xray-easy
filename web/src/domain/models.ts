@@ -12,7 +12,7 @@ export type Client = {
   download_bytes: number
 }
 export type TOTPStatus = { enabled: boolean; recovery_codes_remaining: number }
-export type TOTPSetup = { setup_token: string; secret: string; otpauth_uri: string; recovery_codes: string[]; expires_in: number }
+export type TOTPSetup = { setup_token: string; secret: string; otpauth_uri: string; qr_png?: string; recovery_codes: string[]; expires_in: number }
 export type Settings = {
   public_host: string
   public_port: number
