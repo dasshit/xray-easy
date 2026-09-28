@@ -46,9 +46,9 @@ type server struct {
 	dataDir          string
 	maintenancePath  string
 	defaultAPIListen string
-	supervisor       supervisor.Client
+	supervisor       supervisorAPI
 	stats            *stats.Manager
-	handler          *xrayapi.HandlerClient
+	handler          xrayHandlerAPI
 	applyMu          sync.Mutex
 	settingsMu       sync.Mutex
 	pendingSettings  map[string]pendingSettingsChange
@@ -57,6 +57,20 @@ type server struct {
 	diagnosticBuffer *diagnostics.Buffer
 	totpMu           sync.Mutex
 	pendingTOTP      map[string]pendingTOTP
+}
+
+type supervisorAPI interface {
+	Validate(context.Context, string, string) error
+	Apply(context.Context, string, string) error
+	ProbeTarget(context.Context, string, string) error
+	Status(context.Context) (supervisor.Status, error)
+	Logs(context.Context) ([]string, error)
+}
+
+type xrayHandlerAPI interface {
+	AddUser(context.Context, string, string, string) error
+	RemoveUser(context.Context, string) error
+	Users(context.Context) ([]string, error)
 }
 
 type initializeRequest struct {
@@ -152,26 +166,43 @@ func main() {
 		return
 	}
 	ctx := context.Background()
+	s, cleanup, err := initializeControlPlane(ctx)
+	if err != nil {
+		fatal(err)
+	}
+	defer cleanup()
+	s.stats.Start(ctx)
+	s.startReconciler(ctx)
+	mux := newMux(s)
+	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: requestLimit(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second}
+	fmt.Fprintf(os.Stderr, "xray-easy control plane listening on %s\n", serverHTTP.Addr)
+	if err := serverHTTP.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fatal(err)
+	}
+}
+
+func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 	dataDir := envOr("XRAY_EASY_DATA_DIR", "/data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
-		fatal(err)
+		return nil, nil, err
 	}
 	masterKey, err := loadMasterKey()
 	if err != nil {
-		fatal(err)
+		return nil, nil, err
 	}
 	db, err := store.Open(ctx, filepath.Join(dataDir, "state.db"))
 	if err != nil {
-		fatal(err)
+		return nil, nil, err
 	}
-	defer db.Close()
 	configDir := envOr("XRAY_EASY_CONFIG_DIR", "/etc/xray")
 	if err := os.MkdirAll(filepath.Join(configDir, "candidates"), 0o700); err != nil {
-		fatal(err)
+		_ = db.Close()
+		return nil, nil, err
 	}
 	publicPort, err := configuredPublicPort()
 	if err != nil {
-		fatal(err)
+		_ = db.Close()
+		return nil, nil, err
 	}
 	apiListen := envOr("XRAY_API_LISTEN", "127.0.0.1:10085")
 	statsClient := xrayapi.NewStatsClient(apiListen)
@@ -197,8 +228,15 @@ func main() {
 		pendingTOTP:      make(map[string]pendingTOTP),
 	}
 	s.stats = stats.NewManager(db, statsClient)
-	s.stats.Start(ctx)
-	s.startReconciler(ctx)
+	cleanup := func() {
+		_ = statsClient.Close()
+		_ = handlerClient.Close()
+		_ = db.Close()
+	}
+	return s, cleanup, nil
+}
+
+func newMux(s *server) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/healthz", s.healthz)
 	mux.HandleFunc("/api/readyz", s.readyz)
@@ -224,11 +262,7 @@ func main() {
 	mux.HandleFunc("/api/clients", s.clients)
 	mux.HandleFunc("/api/clients/", s.clientRoute)
 	mux.Handle("/", ui.Handler())
-	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: requestLimit(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second}
-	fmt.Fprintf(os.Stderr, "xray-easy control plane listening on %s\n", serverHTTP.Addr)
-	if err := serverHTTP.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fatal(err)
-	}
+	return mux
 }
 
 func loadMasterKey() ([]byte, error) {
@@ -357,6 +391,10 @@ func runBackupCLI(ctx context.Context, dataDir, configDir string, args []string)
 }
 
 func runRestoreCLI(ctx context.Context, dataDir, configDir string, args []string) error {
+	return runRestoreCLIWithApplier(ctx, dataDir, configDir, args, applyRestoredState)
+}
+
+func runRestoreCLIWithApplier(ctx context.Context, dataDir, configDir string, args []string, applyState func(context.Context, *store.Store, []byte, string, int) error) error {
 	if len(args) != 2 || args[1] != "RESTORE" {
 		return errors.New("usage: xray-easy restore <backup-name> RESTORE")
 	}
@@ -393,9 +431,9 @@ func runRestoreCLI(ctx context.Context, dataDir, configDir string, args []string
 	if err != nil {
 		return err
 	}
-	if err := applyRestoredState(ctx, db, masterKey, configDir, publicPort); err != nil {
+	if err := applyState(ctx, db, masterKey, configDir, publicPort); err != nil {
 		_ = manager.RestoreState(preRestore)
-		_ = applyRestoredState(ctx, db, masterKey, configDir, publicPort)
+		_ = applyState(ctx, db, masterKey, configDir, publicPort)
 		return fmt.Errorf("apply restored state: %w (state rolled back from %s)", err, preRestore.Name)
 	}
 	admin, _ := db.FirstAdmin(ctx)
@@ -418,6 +456,11 @@ func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
 }
 
 func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int) error {
+	sup := supervisor.Client{BaseURL: envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"), TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token")}
+	return applyRestoredStateWithSupervisor(ctx, db, masterKey, configDir, publicPort, sup)
+}
+
+func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int, sup supervisorAPI) error {
 	settings, err := db.GetSettings(ctx)
 	if err != nil {
 		return err
@@ -448,7 +491,6 @@ func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, 
 	if err := writeAtomic(candidate, rendered); err != nil {
 		return err
 	}
-	sup := supervisor.Client{BaseURL: envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"), TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token")}
 	if err := sup.Validate(ctx, candidate, operationID); err != nil {
 		return err
 	}
