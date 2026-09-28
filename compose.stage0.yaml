@@ -68,6 +68,7 @@ volumes:
 
 networks:
   control:
+    enable_ipv6: true
     internal: true
     ipam:
       config:

@@ -62,6 +62,10 @@ the Xray container. The stage 0 prototype config is deliberately a bootstrap
 config without a public inbound; use stage 1 for the control plane and setup
 wizard that generate the first public configuration.
 
+The Compose control network has IPv6 enabled. This is required by some Docker
+hosts for reliable dual-stack name resolution and keeps the control-plane
+network behaviour consistent with a host-installed Xray deployment.
+
 For the current control-plane slice, put a generated base64 master key in
 `.env` and use `compose.stage1.yaml`. Its UI port is published only on
 `127.0.0.1` for

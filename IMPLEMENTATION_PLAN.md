@@ -699,7 +699,10 @@ Compose-сеть `control` позволяет обращаться к серви
 3. **Хранилище:** SQLite в `/data`, производный JSON, REALITY private key шифруется через обязательный `XRAY_EASY_MASTER_KEY`; backup остаётся plaintext с правами 0600.
 4. **Применение:** control plane является единственным писателем desired/active config; operation journal обеспечивает recovery, HandlerService используется для CRUD пользователей, private supervisor API — для validate/probe/apply/status/logs и graceful restart дочернего Xray; Docker socket не используется.
 5. **Поддерживаемые клиенты:** целевые платформы MVP — macOS и iOS; обязательный ручной клиент — V2Rage.
-6. **Адресация:** IPv4 и DNS-имена в MVP; IPv6 после MVP.
+6. **Адресация:** IPv4 и DNS-имена в MVP; для сети Compose `control` включён
+   IPv6, что нужно для стабильной работы на dual-stack Docker-хостах. Полная
+   поддержка публичной IPv6-точки и профилей остаётся отдельным этапом с
+   проверками маршрутизации префикса и firewall.
 7. **Лицензия:** собственный код Xray-easy распространять под AGPL-3.0-or-later; лицензии Xray, Project X и сторонних компонентов перечислить отдельно в `NOTICE`/документации и проверить перед публикацией.
 8. **Трафик:** показывать Xray counters и persistent totals. Online — собственное правило Xray-easy: изменение counter в течение последних 5 минут; reset counter фиксируется отдельно, а totals не уменьшаются.
 9. **Совместимость версии:** Xray и клиентские параметры pin-ятся и проверяются в CI; пользовательские raw JSON в MVP не поддерживаются.

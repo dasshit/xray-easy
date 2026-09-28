@@ -1581,11 +1581,10 @@ func (s *server) createClient(ctx context.Context, settings store.Settings, priv
 	}
 	client.UUID, client.Email, client.ShortID = uuid, clientEmail, shortID
 	clients = append(clients, client)
-	if err := s.applyClientsLiveLocked(ctx, settings, privateKey, clients, actorID, "client.create", clientID,
-		func() error { return s.handler.AddUser(ctx, client.Email, client.UUID, xray.Flow) },
-		func() error { return s.handler.RemoveUser(ctx, client.Email) },
-		nil, nil,
-	); err != nil {
+	// A client changes the REALITY shortIds list as well as the VLESS user
+	// list. HandlerService can mutate the latter, but it cannot update
+	// realitySettings.shortIds, so the complete candidate must be applied.
+	if err := s.applyClientsLiveLocked(ctx, settings, privateKey, clients, actorID, "client.create", clientID, nil, nil); err != nil {
 		_ = s.store.DeleteClient(ctx, clientID)
 		return store.Client{}, err
 	}
@@ -1621,19 +1620,11 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 		}
 	}
 	oldEnabled, oldRevoked := client.Enabled, client.Revoked
-	wasActive, willBeActive := oldEnabled && !oldRevoked, enabled && !revoked
-	mutate := func() error { return nil }
-	rollback := func() error { return nil }
-	if willBeActive && !wasActive {
-		mutate = func() error { return s.handler.AddUser(r.Context(), client.Email, client.UUID, xray.Flow) }
-		rollback = func() error { return s.handler.RemoveUser(r.Context(), client.Email) }
-	} else if wasActive && !willBeActive {
-		mutate = func() error { return s.handler.RemoveUser(r.Context(), client.Email) }
-		rollback = func() error { return s.handler.AddUser(r.Context(), client.Email, client.UUID, xray.Flow) }
-	}
 	persist := func() error { return s.store.SetClientState(r.Context(), client.ID, enabled, revoked) }
 	rollbackPersist := func() error { return s.store.SetClientState(r.Context(), client.ID, oldEnabled, oldRevoked) }
-	if err := s.applyClientsLiveLocked(r.Context(), settings, privateKey, clients, actorID, "client.state", client.ID, mutate, rollback, persist, rollbackPersist); err != nil {
+	// Enabling, disabling and revoking also change REALITY shortIds. Apply the
+	// full candidate through supervisor instead of only mutating HandlerService.
+	if err := s.applyClientsLiveLocked(r.Context(), settings, privateKey, clients, actorID, "client.state", client.ID, persist, rollbackPersist); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1752,7 +1743,7 @@ func (s *server) applyClientsLocked(ctx context.Context, settings store.Settings
 	return nil
 }
 
-func (s *server) applyClientsLiveLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string, mutate, rollback, persist, rollbackPersist func() error) error {
+func (s *server) applyClientsLiveLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string, persist, rollbackPersist func() error) error {
 	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
 	if err != nil {
 		return err
@@ -1765,27 +1756,17 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings store.Sett
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "validated", "")
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 
-	liveApplied := mutate == nil
-	if mutate != nil {
-		if err := mutate(); err != nil {
-			// A down or older Xray API must not block administration. Applying the
-			// already validated full config is the recovery-compatible fallback.
-			if fallbackErr := s.supervisor.Apply(ctx, path, operationID); fallbackErr != nil {
-				_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", fallbackErr.Error())
-				return fmt.Errorf("dynamic Xray update failed (%v), config apply failed: %w", err, fallbackErr)
-			}
-			liveApplied = false
-		} else {
-			liveApplied = true
-		}
+	// A complete candidate is needed whenever the client set changes: the
+	// HandlerService can add/remove VLESS users, but it cannot update the
+	// REALITY shortIds list. Apply the candidate through supervisor so the
+	// child Xray process starts with both lists in sync.
+	if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		return err
 	}
 	if persist != nil {
 		if err := persist(); err != nil {
-			if liveApplied && rollback != nil {
-				_ = rollback()
-			} else if !liveApplied {
-				_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
-			}
+			_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 			_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 			return fmt.Errorf("persist client change: %w", err)
 		}
@@ -1794,11 +1775,7 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings store.Sett
 		if rollbackPersist != nil {
 			_ = rollbackPersist()
 		}
-		if liveApplied && rollback != nil {
-			_ = rollback()
-		} else if !liveApplied {
-			_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
-		}
+		_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return fmt.Errorf("promote Xray config: %w", err)
 	}
