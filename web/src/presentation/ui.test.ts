@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatBytes, formatTimestamp, persistLanguage, persistTheme, readLanguage, readTheme } from './ui'
+import { formatBytes, formatTimestamp } from './format'
+import { persistLanguage, readLanguage, useI18n } from './i18n'
+import { persistTheme, readTheme } from './theme'
+import { translations } from './i18n/messages'
 
 describe('browser preferences', () => {
   beforeEach(() => {
@@ -7,9 +10,7 @@ describe('browser preferences', () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: false })))
   })
 
-  afterEach(() => {
-    vi.unstubAllGlobals()
-  })
+  afterEach(() => vi.unstubAllGlobals())
 
   it('prefers an explicitly saved theme and otherwise follows the system preference', () => {
     vi.stubGlobal('matchMedia', vi.fn(() => ({ matches: true })))
@@ -58,6 +59,20 @@ describe('browser preferences', () => {
   it('persists a manually selected language', () => {
     persistLanguage('ru')
     expect(window.localStorage.getItem('xray-easy-language')).toBe('ru')
+  })
+
+  it('changes the reactive language and translations together', () => {
+    window.localStorage.setItem('xray-easy-language', 'en')
+    const i18n = useI18n()
+    expect(i18n.t().title).toBe('Xray-easy')
+    i18n.toggleLanguage()
+    expect(i18n.language.value).toBe('ru')
+    expect(i18n.t().title).toBe('Xray-easy')
+    expect(window.localStorage.getItem('xray-easy-language')).toBe('ru')
+  })
+
+  it('keeps translation keys aligned between supported languages', () => {
+    expect(Object.keys(translations.ru).sort()).toEqual(Object.keys(translations.en).sort())
   })
 })
 

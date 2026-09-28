@@ -1,6 +1,10 @@
 import { afterEach, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
-import type { Client, DiagnosticEntry, NodeStatus, Settings, TOTPStatus } from '../src/domain/models'
+import type { DiagnosticEntry } from '../src/application/models'
+import type { Client } from '../src/domain/models'
+import type { ClientDto, NodeStatusDto, SettingsDto, TOTPStatusDto } from '../src/infrastructure/api-contracts'
+import { xrayEasyApi } from '../src/infrastructure/xrayEasyApi'
+import { xrayEasyGatewayKey } from '../src/presentation/api'
 import App from '../src/App.vue'
 
 export type RequestRecord = { url: string; method: string; body: unknown }
@@ -14,11 +18,11 @@ export const sampleClient: Client = {
   revoked: false,
   fingerprint: 'safari',
   online: false,
-  last_seen: '2026-09-27T12:30:00Z',
-  upload_bytes: 2048,
-  download_bytes: 1024,
+  lastSeen: '2026-09-27T12:30:00Z',
+  uploadBytes: 2048,
+  downloadBytes: 1024,
 }
-export const settings: Settings = {
+export const settings: SettingsDto = {
   public_host: 'vpn.example.com',
   public_port: 443,
   reality_target: 'www.example.com:443',
@@ -29,10 +33,24 @@ export const settings: Settings = {
   security: 'reality',
   flow: 'xtls-rprx-vision',
 }
-export const totpStatus: TOTPStatus = { enabled: false, recovery_codes_remaining: 0 }
-export const nodeStatus: NodeStatus = { state: 'running', restart_count: 2 }
+export const totpStatus: TOTPStatusDto = { enabled: false, recovery_codes_remaining: 0 }
+export const nodeStatus: NodeStatusDto = { state: 'running', restart_count: 2 }
 export const xrayEntries: DiagnosticEntry[] = []
 export const appEntries: DiagnosticEntry[] = []
+
+export function clientDto(client: Client): ClientDto {
+  return {
+    id: client.id,
+    name: client.name,
+    enabled: client.enabled,
+    revoked: client.revoked,
+    fingerprint: client.fingerprint,
+    online: client.online,
+    last_seen: client.lastSeen,
+    upload_bytes: client.uploadBytes,
+    download_bytes: client.downloadBytes,
+  }
+}
 
 export function jsonResponse(body: unknown, status = 200): Response {
   return {
@@ -104,7 +122,10 @@ export async function mountApp(handler: RequestHandler) {
   vi.stubGlobal('fetch', fetchMock)
   vi.stubGlobal('EventSource', FakeEventSource)
 
-  const wrapper = mount(App, { attachTo: document.body })
+  const wrapper = mount(App, {
+    attachTo: document.body,
+    global: { provide: { [xrayEasyGatewayKey as symbol]: xrayEasyApi } },
+  })
   mounted.push(wrapper)
   await flushPromises()
   return { wrapper, requests, fetchMock, eventSources: FakeEventSource.instances }
@@ -114,8 +135,8 @@ export function defaultHandler({ initialized = true, authenticated = false, clie
   return ({ method, url }) => {
     if (method === 'GET' && url === '/api/setup/status') return { body: { initialized, public_port: 8443 } }
     if (method === 'GET' && url === '/api/me') return authenticated ? { body: admin } : { status: 401, body: { error: 'Unauthorized' } }
-    if (method === 'GET' && url === '/api/clients') return { body: clients }
-    if (method === 'POST' && url === '/api/clients') return { status: 201, body: { ...sampleClient, name: 'new-device' } }
+    if (method === 'GET' && url === '/api/clients') return { body: clients.map(clientDto) }
+    if (method === 'POST' && url === '/api/clients') return { status: 201, body: clientDto({ ...sampleClient, name: 'new-device' }) }
     const profilePath = url.match(/^\/api\/clients\/([^/]+)\/profile\?format=uri$/)
     if (method === 'GET' && profilePath) return { body: { client_id: profilePath[1], uri: `vless://${profilePath[1]}@vpn.example.com:443?security=reality#phone`, json: { id: profilePath[1] } } }
     if (method === 'GET' && url === '/api/auth/totp/status') return { body: totpData }

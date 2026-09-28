@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Client } from '../src/domain/models'
-import { defaultHandler, flushPromises, mountApp, sampleClient, type RequestRecord } from './appHarness'
+import { clientDto, defaultHandler, flushPromises, mountApp, sampleClient, type RequestRecord } from './appHarness'
 
 type ButtonFinder = { text(): string; trigger(event: string): Promise<unknown> }
 function findButton(wrapper: { findAll(selector: string): ButtonFinder[] }, label: string) {
@@ -23,7 +23,7 @@ describe('profile list and creation', () => {
     const created = { ...sampleClient, id: 'new-id', name: 'work mac', fingerprint: 'safari' }
     const { wrapper } = await mountApp(request => {
       requests.push(request)
-      if (request.method === 'POST' && request.url === '/api/clients') return { status: 201, body: created }
+      if (request.method === 'POST' && request.url === '/api/clients') return { status: 201, body: clientDto(created) }
       return defaultHandler({ authenticated: true })(request)
     })
 
@@ -48,7 +48,7 @@ describe('profile list and creation', () => {
     const requests: RequestRecord[] = []
     const { wrapper } = await mountApp(request => {
       requests.push(request)
-      if (request.method === 'POST' && request.url === '/api/clients') return { status: 201, body: { ...sampleClient, name: 'tablet' } }
+      if (request.method === 'POST' && request.url === '/api/clients') return { status: 201, body: clientDto({ ...sampleClient, name: 'tablet' }) }
       return defaultHandler({ authenticated: true })(request)
     })
     await findButton(wrapper, 'Create profile').trigger('click')
@@ -149,7 +149,7 @@ describe('profile lifecycle confirmation', () => {
     const updated = { ...scenario.initial, enabled: scenario.expectedEnabled, revoked: scenario.revoked ?? false }
     const { wrapper } = await mountApp(request => {
       requests.push(request)
-      if (request.url === `/api/clients/${sampleClient.id}/${scenario.action}`) return { body: updated }
+      if (request.url === `/api/clients/${sampleClient.id}/${scenario.action}`) return { body: clientDto(updated) }
       return defaultHandler({ authenticated: true, clients: [scenario.initial] })(request)
     })
     await findButton(wrapper.get('.device-card'), scenario.label).trigger('click')

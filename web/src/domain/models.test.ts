@@ -8,8 +8,8 @@ function client(overrides: Partial<Client> = {}): Client {
     enabled: true,
     revoked: false,
     online: false,
-    upload_bytes: 0,
-    download_bytes: 0,
+    uploadBytes: 0,
+    downloadBytes: 0,
     ...overrides,
   }
 }

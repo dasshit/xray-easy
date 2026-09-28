@@ -1,12 +1,6 @@
-export class APIError extends Error {
-  code?: string
+import { APIError } from '../application/errors'
 
-  constructor(message: string, code?: string) {
-    super(message)
-    this.name = 'APIError'
-    this.code = code
-  }
-}
+export { APIError } from '../application/errors'
 
 export async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options })
