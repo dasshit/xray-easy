@@ -44,11 +44,11 @@ export function clientDto(client: Client): ClientDto {
     name: client.name,
     enabled: client.enabled,
     revoked: client.revoked,
-    fingerprint: client.fingerprint,
     online: client.online,
-    last_seen: client.lastSeen,
     upload_bytes: client.uploadBytes,
     download_bytes: client.downloadBytes,
+    ...(client.fingerprint === undefined ? {} : { fingerprint: client.fingerprint }),
+    ...(client.lastSeen === undefined ? {} : { last_seen: client.lastSeen }),
   }
 }
 
@@ -129,6 +129,12 @@ export async function mountApp(handler: RequestHandler) {
   mounted.push(wrapper)
   await flushPromises()
   return { wrapper, requests, fetchMock, eventSources: FakeEventSource.instances }
+}
+
+export function itemAt<T>(items: readonly T[], index: number): T {
+  const item = items[index]
+  if (item === undefined) throw new Error(`Expected an item at index ${index}`)
+  return item
 }
 
 export function defaultHandler({ initialized = true, authenticated = false, clients = [] as Client[], settingsData = settings, totpData = totpStatus, statusData = nodeStatus } = {}): RequestHandler {

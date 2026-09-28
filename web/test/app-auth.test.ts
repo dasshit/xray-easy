@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultHandler, flushPromises, mountApp, submitLogin } from './appHarness'
+import { defaultHandler, flushPromises, itemAt, mountApp, submitLogin } from './appHarness'
 
 describe('setup and authentication screens', () => {
   it('shows an initial setup status error', async () => {
@@ -69,7 +69,7 @@ describe('setup and authentication screens', () => {
       '/api/logs?component=app&limit=100',
     ]))
     expect(eventSources).toHaveLength(1)
-    expect(eventSources[0].url).toBe('/api/events')
+    expect(itemAt(eventSources, 0).url).toBe('/api/events')
   })
 
   it('shows login failure and releases the busy state', async () => {
@@ -175,7 +175,7 @@ describe('session exit', () => {
     await wrapper.findAll('button.secondary').find(button => button.text() === label)!.trigger('click')
     await flushPromises()
     expect(requests.some(request => request.url === path && request.method === 'POST')).toBe(true)
-    expect(eventSources[0].closed).toBe(true)
+    expect(itemAt(eventSources, 0).closed).toBe(true)
     expect(wrapper.text()).toContain('Administrator login')
   })
 
@@ -189,6 +189,6 @@ describe('session exit', () => {
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Could not revoke sessions')
     expect(wrapper.text()).toContain('Profiles')
-    expect(eventSources[0].closed).toBe(false)
+    expect(itemAt(eventSources, 0).closed).toBe(false)
   })
 })

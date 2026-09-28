@@ -23,7 +23,11 @@ function post(body?: unknown): RequestInit {
 }
 
 function mapAdmin(dto: AdminDto): Admin {
-  return { username: dto.username, totpEnabled: dto.totp_enabled, recoveryCodesRemaining: dto.recovery_codes_remaining }
+  return {
+    username: dto.username,
+    ...(dto.totp_enabled === undefined ? {} : { totpEnabled: dto.totp_enabled }),
+    ...(dto.recovery_codes_remaining === undefined ? {} : { recoveryCodesRemaining: dto.recovery_codes_remaining }),
+  }
 }
 
 function mapClient(dto: ClientDto): Client {
@@ -32,11 +36,11 @@ function mapClient(dto: ClientDto): Client {
     name: dto.name,
     enabled: dto.enabled,
     revoked: dto.revoked,
-    fingerprint: dto.fingerprint,
     online: dto.online,
-    lastSeen: dto.last_seen,
     uploadBytes: dto.upload_bytes,
     downloadBytes: dto.download_bytes,
+    ...(dto.fingerprint === undefined ? {} : { fingerprint: dto.fingerprint }),
+    ...(dto.last_seen === undefined ? {} : { lastSeen: dto.last_seen }),
   }
 }
 
@@ -72,9 +76,9 @@ function mapTOTPSetup(dto: TOTPSetupDto): TOTPSetup {
     setupToken: dto.setup_token,
     secret: dto.secret,
     otpauthUri: dto.otpauth_uri,
-    qrPng: dto.qr_png,
     recoveryCodes: dto.recovery_codes,
     expiresIn: dto.expires_in,
+    ...(dto.qr_png === undefined ? {} : { qrPng: dto.qr_png }),
   }
 }
 
@@ -82,10 +86,10 @@ function mapNodeStatus(dto: NodeStatusDto): NodeStatus {
   return {
     state: dto.state,
     restartCount: dto.restart_count,
-    lastError: dto.last_error,
-    lastExit: dto.last_exit,
-    statsLastError: dto.stats_last_error,
-    supervisorError: dto.supervisor_error,
+    ...(dto.last_error === undefined ? {} : { lastError: dto.last_error }),
+    ...(dto.last_exit === undefined ? {} : { lastExit: dto.last_exit }),
+    ...(dto.stats_last_error === undefined ? {} : { statsLastError: dto.stats_last_error }),
+    ...(dto.supervisor_error === undefined ? {} : { supervisorError: dto.supervisor_error }),
   }
 }
 
@@ -102,7 +106,10 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
     setup: {
       status: async (): Promise<SetupStatus> => {
         const dto = await send<SetupStatusDto>('/api/setup/status')
-        return { initialized: dto.initialized, publicPort: dto.public_port }
+        return {
+          initialized: dto.initialized,
+          ...(dto.public_port === undefined ? {} : { publicPort: dto.public_port }),
+        }
       },
       initialize: (input: InitializeSetupCommand): Promise<void> => sendVoid('/api/setup/initialize', {
         method: 'POST',

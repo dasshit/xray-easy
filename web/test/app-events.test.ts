@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { defaultHandler, FakeEventSource, flushPromises, mountApp, sampleClient, type RequestRecord } from './appHarness'
+import { defaultHandler, FakeEventSource, flushPromises, itemAt, mountApp, sampleClient, type RequestRecord } from './appHarness'
 
 describe('theme and language preferences in the interface', () => {
   it('toggles theme and persists it for the next visit', async () => {
@@ -37,7 +37,7 @@ describe('SSE updates and recovery', () => {
     })
     clients = [sampleClient]
     const requestsBefore = requests.filter(request => request.url === '/api/clients').length
-    eventSources[0].emit('stats')
+    itemAt(eventSources, 0).emit('stats')
     await flushPromises()
     expect(requests.filter(request => request.url === '/api/clients')).toHaveLength(requestsBefore + 1)
     expect(wrapper.get('.device-card').text()).toContain('phone')
@@ -51,7 +51,7 @@ describe('SSE updates and recovery', () => {
     })
     const statusCalls = requests.filter(request => request.url === '/api/status').length
     const logCalls = requests.filter(request => request.url.startsWith('/api/logs?')).length
-    eventSources[0].emit('status')
+    itemAt(eventSources, 0).emit('status')
     await flushPromises()
     expect(requests.filter(request => request.url === '/api/status')).toHaveLength(statusCalls + 1)
     expect(requests.filter(request => request.url.startsWith('/api/logs?'))).toHaveLength(logCalls + 2)
@@ -60,8 +60,8 @@ describe('SSE updates and recovery', () => {
   it('closes an errored stream and reconnects once after three seconds', async () => {
     const { eventSources } = await mountApp(defaultHandler({ authenticated: true }))
     vi.useFakeTimers()
-    eventSources[0].fail()
-    expect(eventSources[0].closed).toBe(true)
+    itemAt(eventSources, 0).fail()
+    expect(itemAt(eventSources, 0).closed).toBe(true)
     await vi.advanceTimersByTimeAsync(2999)
     expect(FakeEventSource.instances).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(1)
@@ -76,7 +76,7 @@ describe('SSE updates and recovery', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     vi.useFakeTimers()
-    eventSources[0].fail()
+    itemAt(eventSources, 0).fail()
     await wrapper.findAll('button.secondary').find(button => button.text() === 'Sign out')!.trigger('click')
     await flushPromises()
     await vi.advanceTimersByTimeAsync(5000)
@@ -87,7 +87,7 @@ describe('SSE updates and recovery', () => {
   it('does not reconnect after the component unmounts', async () => {
     const { wrapper, eventSources } = await mountApp(defaultHandler({ authenticated: true }))
     vi.useFakeTimers()
-    eventSources[0].fail()
+    itemAt(eventSources, 0).fail()
     wrapper.unmount()
     await vi.advanceTimersByTimeAsync(5000)
     expect(eventSources).toHaveLength(1)
@@ -96,7 +96,7 @@ describe('SSE updates and recovery', () => {
   it('closes an active stream when the component unmounts', async () => {
     const { wrapper, eventSources } = await mountApp(defaultHandler({ authenticated: true }))
     wrapper.unmount()
-    expect(eventSources[0].closed).toBe(true)
+    expect(itemAt(eventSources, 0).closed).toBe(true)
   })
 
   it('keeps the administrator signed in and reports a failed logout', async () => {
@@ -108,7 +108,7 @@ describe('SSE updates and recovery', () => {
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Logout failed')
     expect(wrapper.text()).toContain('Profiles')
-    expect(eventSources[0].closed).toBe(false)
+    expect(itemAt(eventSources, 0).closed).toBe(false)
   })
 
   it('renders starting, stopped, and unknown service states', async () => {

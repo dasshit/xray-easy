@@ -6,6 +6,24 @@ import vueParser from 'vue-eslint-parser'
 
 const webFiles = ['src/**/*.{ts,vue}', 'test/**/*.ts']
 
+function restrictLayerImports(forbiddenLayers, layerName, disallowVue = true) {
+  const patterns = [
+    {
+      regex: `^(\\.\\./)+(${forbiddenLayers.join('|')})(/|$)`,
+      message: `The ${layerName} layer cannot import ${forbiddenLayers.join(', ')}.`,
+    },
+  ]
+
+  if (disallowVue) {
+    patterns.push({
+      group: ['vue', 'vue/*'],
+      message: `The ${layerName} layer must stay independent from Vue.`,
+    })
+  }
+
+  return ['error', { patterns }]
+}
+
 export default tseslint.config(
   {
     ignores: ['dist/**', 'coverage/**'],
@@ -25,11 +43,42 @@ export default tseslint.config(
     },
     rules: {
       '@typescript-eslint/consistent-type-imports': 'error',
-      'no-console': ['warn', { allow: ['warn', 'error'] }],
+      'no-console': 'error',
       'vue/html-self-closing': 'off',
       'vue/max-attributes-per-line': 'off',
       'vue/singleline-html-element-content-newline': 'off',
       'vue/no-v-html': 'error',
+    },
+  },
+  {
+    files: ['src/domain/**/*.ts'],
+    rules: {
+      'no-restricted-imports': restrictLayerImports(['application', 'infrastructure', 'presentation'], 'domain'),
+    },
+  },
+  {
+    files: ['src/application/**/*.ts'],
+    rules: {
+      'no-restricted-imports': restrictLayerImports(['infrastructure', 'presentation'], 'application'),
+    },
+  },
+  {
+    files: ['src/infrastructure/**/*.ts'],
+    rules: {
+      'no-restricted-imports': restrictLayerImports(['presentation'], 'infrastructure'),
+    },
+  },
+  {
+    files: ['src/presentation/**/*.{ts,vue}'],
+    rules: {
+      'no-restricted-imports': restrictLayerImports(['infrastructure'], 'presentation', false),
+    },
+  },
+  {
+    files: ['src/**/*.{ts,vue}'],
+    rules: {
+      '@typescript-eslint/no-non-null-assertion': 'error',
+      '@typescript-eslint/no-unnecessary-condition': 'warn',
     },
   },
   {

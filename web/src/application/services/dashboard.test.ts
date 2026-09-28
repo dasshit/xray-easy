@@ -82,7 +82,7 @@ describe('authenticated dashboard service', () => {
 
     const result = await loadDiagnosticsSnapshot(api)
     expect(result).toHaveLength(100)
-    expect(result[0].message).toBe('event-15')
+    expect(result[0]?.message).toBe('event-15')
     expect(result.at(-1)?.message).toBe('event-64')
     expect(api.diagnostics.logs).toHaveBeenNthCalledWith(1, 'xray', 100)
     expect(api.diagnostics.logs).toHaveBeenNthCalledWith(2, 'app', 100)

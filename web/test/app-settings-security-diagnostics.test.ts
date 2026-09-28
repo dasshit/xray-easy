@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultHandler, flushPromises, mountApp, openTab, settings, sampleClient, type RequestRecord } from './appHarness'
+import { defaultHandler, flushPromises, itemAt, mountApp, openTab, settings, sampleClient, type RequestRecord } from './appHarness'
 
 const preview = {
   change_id: 'change-123',
@@ -25,9 +25,9 @@ describe('connection settings', () => {
     })
     await openTab(wrapper, 'Settings')
     const inputs = wrapper.findAll('.settings-card input')
-    await inputs[0].setValue('new.example.com')
-    await inputs[1].setValue('target.example.com:443')
-    await inputs[2].setValue('target.example.com')
+    await itemAt(inputs, 0).setValue('new.example.com')
+    await itemAt(inputs, 1).setValue('target.example.com:443')
+    await itemAt(inputs, 2).setValue('target.example.com')
     await wrapper.get('.settings-card select').setValue('safari')
     await wrapper.get('.settings-card-danger input[type="checkbox"]').setValue(true)
     await wrapper.get('.section-actions button').trigger('click')
@@ -53,7 +53,7 @@ describe('connection settings', () => {
 
     expect(requests.find(request => request.url === '/api/settings/apply')?.body).toEqual({ change_id: 'change-123', confirmation: 'REVOKE' })
     expect(wrapper.findAll('[role="dialog"]')).toHaveLength(0)
-    expect((wrapper.findAll('.settings-card input')[0].element as HTMLInputElement).value).toBe('new.example.com')
+    expect((itemAt(wrapper.findAll('.settings-card input'), 0).element as HTMLInputElement).value).toBe('new.example.com')
     expect(wrapper.get('[role="status"]').text()).toContain('Changes saved')
   })
 
@@ -213,7 +213,7 @@ describe('backups and TOTP security', () => {
     await findButton(wrapper, 'Disable TOTP').trigger('click')
     await flushPromises()
     expect(requests.find(request => request.url === '/api/auth/totp/disable')?.body).toEqual({ password: 'correct-password', code: '654321' })
-    expect(eventSources[0].closed).toBe(true)
+    expect(itemAt(eventSources, 0).closed).toBe(true)
     expect(wrapper.text()).toContain('Administrator login')
   })
 
@@ -229,7 +229,7 @@ describe('backups and TOTP security', () => {
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Invalid TOTP code')
     expect(wrapper.text()).toContain('TOTP is enabled')
-    expect(eventSources[0].closed).toBe(false)
+    expect(itemAt(eventSources, 0).closed).toBe(false)
   })
 })
 

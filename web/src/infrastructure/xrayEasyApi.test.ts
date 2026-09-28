@@ -8,7 +8,7 @@ function sequence(...values: unknown[]) {
 function requester(responses: Record<string, unknown>) {
   const calls: Array<{ url: string; options?: RequestInit }> = []
   const send = vi.fn(<T>(url: string, options?: RequestInit): Promise<T> => {
-    calls.push({ url, options })
+    calls.push({ url, ...(options === undefined ? {} : { options }) })
     const result = responses[url]
     if (result && typeof result === 'object' && 'responses' in result) {
       return Promise.resolve((result.responses as unknown[]).shift() as T)
@@ -19,6 +19,29 @@ function requester(responses: Record<string, unknown>) {
 }
 
 describe('Xray-easy API adapter', () => {
+  it('omits absent optional wire fields from mapped domain models', async () => {
+    const { send } = requester({
+      '/api/setup/status': { initialized: true },
+      '/api/me': { username: 'admin' },
+      '/api/clients': [{ id: 'client-1', name: 'phone', enabled: true, revoked: false, online: false, upload_bytes: 0, download_bytes: 0 }],
+      '/api/auth/totp/setup': {
+        setup_token: 'setup-token', secret: 'secret', otpauth_uri: 'otpauth://totp/test', recovery_codes: [], expires_in: 300,
+      },
+      '/api/status': { state: 'running', restart_count: 0 },
+    })
+    const api = createXrayEasyApi(send)
+
+    await expect(api.setup.status()).resolves.toEqual({ initialized: true })
+    await expect(api.auth.current()).resolves.toEqual({ username: 'admin' })
+    await expect(api.clients.list()).resolves.toEqual([{
+      id: 'client-1', name: 'phone', enabled: true, revoked: false, online: false, uploadBytes: 0, downloadBytes: 0,
+    }])
+    await expect(api.auth.beginTOTPSetup()).resolves.toEqual({
+      setupToken: 'setup-token', secret: 'secret', otpauthUri: 'otpauth://totp/test', recoveryCodes: [], expiresIn: 300,
+    })
+    await expect(api.diagnostics.status()).resolves.toEqual({ state: 'running', restartCount: 0 })
+  })
+
   it('maps setup and administrator wire values and sends setup fields in API format', async () => {
     const { send, calls } = requester({
       '/api/setup/status': { initialized: false, public_port: 18443 },
@@ -105,7 +128,7 @@ describe('Xray-easy API adapter', () => {
       settings,
     })
     expect('confirmation' in preview).toBe(false)
-    expect(calls[1].options?.body).toBe(JSON.stringify({
+    expect(calls[1]?.options?.body).toBe(JSON.stringify({
       public_host: 'vpn.example.test', reality_target: 'target.example.test:443', reality_sni: 'target.example.test',
       client_fingerprint: 'safari', rotate_private_key: true,
     }))
@@ -124,7 +147,10 @@ describe('Xray-easy API adapter', () => {
 
   it('maps diagnostics and exposes backup and authentication requests', async () => {
     const { send, calls } = requester({
-      '/api/status': { state: 'running', restart_count: 2, stats_last_error: 'stats offline' },
+      '/api/status': {
+        state: 'running', restart_count: 2, last_error: 'xray failing', last_exit: 'exited (1)',
+        stats_last_error: 'stats offline', supervisor_error: 'supervisor warning',
+      },
       '/api/logs?component=xray&limit=50': { entries: [{ at: '2026-09-28T12:00:00Z', component: 'xray', level: 'warn', message: 'warning' }] },
       '/api/backups': { name: 'backup.tar' },
       '/api/auth/login': { username: 'admin', totp_enabled: false },
@@ -135,7 +161,10 @@ describe('Xray-easy API adapter', () => {
     })
     const api = createXrayEasyApi(send)
 
-    await expect(api.diagnostics.status()).resolves.toEqual({ state: 'running', restartCount: 2, statsLastError: 'stats offline' })
+    await expect(api.diagnostics.status()).resolves.toEqual({
+      state: 'running', restartCount: 2, lastError: 'xray failing', lastExit: 'exited (1)',
+      statsLastError: 'stats offline', supervisorError: 'supervisor warning',
+    })
     await expect(api.diagnostics.logs('xray', 50)).resolves.toEqual([{ at: '2026-09-28T12:00:00Z', component: 'xray', level: 'warn', message: 'warning' }])
     await expect(api.backups.create()).resolves.toEqual({ name: 'backup.tar' })
     await expect(api.auth.login('admin', 'password')).resolves.toMatchObject({ username: 'admin', totpEnabled: false })

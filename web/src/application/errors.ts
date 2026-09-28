@@ -4,6 +4,6 @@ export class APIError extends Error {
   constructor(message: string, code?: string) {
     super(message)
     this.name = 'APIError'
-    this.code = code
+    if (code !== undefined) this.code = code
   }
 }
