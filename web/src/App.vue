@@ -13,6 +13,7 @@ type NodeStatus = { state: string; restart_count: number; last_error?: string; l
 type DiagnosticEntry = { at: string; component: string; level: string; message: string }
 type Section = 'profiles' | 'settings' | 'diagnostics' | 'security'
 type ClientAction = { client: Client; action: 'enable' | 'disable' | 'revoke' } | null
+type Theme = 'light' | 'dark'
 
 class APIError extends Error {
   code?: string
@@ -27,6 +28,7 @@ const selectedProfile = ref<{ client_id: string; uri: string; json: unknown } | 
 const error = ref('')
 const busy = ref(false)
 const language = ref<'en' | 'ru'>(navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en')
+const theme = ref<Theme>(initialTheme())
 const activeSection = ref<Section>('profiles')
 const createModalOpen = ref(false)
 const clientAction = ref<ClientAction>(null)
@@ -52,7 +54,7 @@ const text = {
     profiles: 'Profiles', profile: 'Profile', createProfile: 'Create profile', newDevice: 'Device name', fingerprint: 'Fingerprint', createDevice: 'Create profile', emptyProfiles: 'No profiles yet. Create the first profile for a device.',
     qr: 'QR code', download: 'Download JSON', copyUri: 'VLESS URI', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', remove: 'Delete profile', close: 'Close', cancel: 'Cancel', confirm: 'Confirm', action: 'Confirm action', enableConfirm: 'Enable this profile?', disableConfirm: 'Disable this profile? The device will stop connecting until it is enabled again.', removeConfirm: 'Delete this profile? Its credentials will be revoked permanently.', noUndo: 'Revocation cannot be undone.',
     logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', settings: 'Settings', saveSettings: 'Review changes', applySettings: 'Apply settings', rotateKey: 'Generate a new REALITY key', confirmation: 'Confirmation', settingsWarning: 'Existing device profiles may stop working and will be revoked.', expected: 'Type exactly', settingsDiff: 'Changes', consequences: 'Consequences', revokedClients: 'Profiles to revoke',
-    diagnostics: 'Diagnostics', xrayState: 'Xray state', restarts: 'Restarts', refreshDiagnostics: 'Refresh diagnostics', noDiagnostics: 'No warnings or errors',
+    diagnostics: 'Diagnostics', xrayState: 'Xray state', restarts: 'Restarts', refreshDiagnostics: 'Refresh diagnostics', noDiagnostics: 'No warnings or errors', useLightTheme: 'Light theme', useDarkTheme: 'Dark theme',
     security: 'Security', backup: 'Create backup', backupCreated: 'Backup created', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
   },
   ru: {
@@ -60,12 +62,27 @@ const text = {
     profiles: 'Профили', profile: 'Профиль', createProfile: 'Создать профиль', newDevice: 'Имя устройства', fingerprint: 'Fingerprint', createDevice: 'Создать профиль', emptyProfiles: 'Профилей пока нет. Создайте первый профиль для устройства.',
     qr: 'QR-код', download: 'Скачать JSON', copyUri: 'VLESS URI', enabled: 'включён', disabled: 'выключен', revoked: 'отозван', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', remove: 'Удалить профиль', close: 'Закрыть', cancel: 'Отмена', confirm: 'Подтвердить', action: 'Подтверждение действия', enableConfirm: 'Включить профиль?', disableConfirm: 'Выключить профиль? Устройство перестанет подключаться, пока профиль не будет включён снова.', removeConfirm: 'Удалить профиль? Его учётные данные будут отозваны навсегда.', noUndo: 'Отзыв нельзя отменить.',
     logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', settings: 'Настройки', saveSettings: 'Проверить изменения', applySettings: 'Применить настройки', rotateKey: 'Сгенерировать новый REALITY-ключ', confirmation: 'Подтверждение', settingsWarning: 'Старые профили могут перестать работать и будут отозваны.', expected: 'Введите точно', settingsDiff: 'Изменения', consequences: 'Последствия', revokedClients: 'Профилей будет отозвано',
-    diagnostics: 'Диагностика', xrayState: 'Состояние Xray', restarts: 'Перезапуски', refreshDiagnostics: 'Обновить диагностику', noDiagnostics: 'Предупреждений и ошибок нет',
+    diagnostics: 'Диагностика', xrayState: 'Состояние Xray', restarts: 'Перезапуски', refreshDiagnostics: 'Обновить диагностику', noDiagnostics: 'Предупреждений и ошибок нет', useLightTheme: 'Светлая тема', useDarkTheme: 'Тёмная тема',
     security: 'Безопасность', backup: 'Создать backup', backupCreated: 'Backup создан', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
   },
 }
 
 const t = () => text[language.value]
+
+function initialTheme(): Theme {
+  if (typeof window === 'undefined') return 'light'
+  const stored = window.localStorage.getItem('xray-easy-theme')
+  if (stored === 'light' || stored === 'dark') return stored
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+}
+
+function applyTheme(next: Theme) {
+  theme.value = next
+  document.documentElement.dataset.theme = next
+  window.localStorage.setItem('xray-easy-theme', next)
+}
+
+function toggleTheme() { applyTheme(theme.value === 'dark' ? 'light' : 'dark') }
 
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
   const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options })
@@ -169,7 +186,7 @@ async function confirmTOTP() {
 }
 async function disableTOTP() { busy.value = true; error.value = ''; try { await request('/api/auth/totp/disable', { method: 'POST', body: JSON.stringify(disableTOTPForm.value) }); admin.value = null; totpStatus.value = null; disableTOTPForm.value = { password: '', code: '' }; events?.close(); events = null } catch (cause) { showError(cause) } finally { busy.value = false } }
 
-onMounted(load)
+onMounted(() => { applyTheme(theme.value); void load() })
 onBeforeUnmount(() => events?.close())
 function formatBytes(value: number) { if (!value) return '0 B'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; let amount = value; let unit = 0; while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1 }; return `${amount.toFixed(amount >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}` }
 function formatLastSeen(value?: string) { if (!value) return ''; return new Date(value).toLocaleString(language.value === 'ru' ? 'ru-RU' : 'en-US') }
@@ -179,7 +196,7 @@ function actionLabel(action?: ClientAction['action']) { if (action === 'enable')
 
 <template>
   <main class="shell">
-    <header class="topbar"><strong>{{ t().title }}</strong><button class="language" @click="language = language === 'en' ? 'ru' : 'en'">{{ t().language }}</button></header>
+    <header class="topbar"><strong>{{ t().title }}</strong><div class="topbar-actions"><button class="theme-toggle" :aria-label="theme === 'dark' ? t().useLightTheme : t().useDarkTheme" @click="toggleTheme">{{ theme === 'dark' ? '☀' : '☾' }}<span>{{ theme === 'dark' ? t().useLightTheme : t().useDarkTheme }}</span></button><button class="language" @click="language = language === 'en' ? 'ru' : 'en'">{{ t().language }}</button></div></header>
     <section class="card error-card" v-if="error"><p class="error">{{ error }}</p></section>
     <section class="card auth-card" v-if="!setup?.initialized">
       <h1>{{ t().setup }}</h1><label>{{ t().username }}<input v-model="setupForm.username" autocomplete="username" /></label><label>{{ t().password }}<input v-model="setupForm.password" type="password" autocomplete="new-password" /></label><label>{{ t().host }}<input v-model="setupForm.publicHost" placeholder="vpn.example.com" /></label><label>{{ t().port }}<input v-model.number="setupForm.publicPort" type="number" readonly /></label><label>{{ t().target }}<input v-model="setupForm.realityTarget" placeholder="www.cloudflare.com:443" /></label><label>{{ t().sni }}<input v-model="setupForm.realitySNI" placeholder="www.cloudflare.com" /></label><button :disabled="busy" @click="initialize">{{ t().create }}</button>
