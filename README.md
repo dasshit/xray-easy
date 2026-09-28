@@ -6,9 +6,10 @@ VLESS + REALITY + TCP/RAW + XTLS Vision profiles for their devices. The panel
 is bound to the server's loopback address; open it through an SSH tunnel.
 
 The current pinned Xray version is **26.7.28**. It was selected for compatibility
-with the current V2Rage client and supports the gRPC API used for live device
-changes and statistics. Manual release testing on macOS/iOS remains on the
-checklist. The complete product scope and remaining release work are in
+with V2Rage and supports the gRPC API used for live device changes and
+statistics. Connection and profile behavior on a real VPS were checked manually
+during development. Recheck V2Rage when changing Xray, profile generation or
+Compose networking. The complete product scope and implementation notes are in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Quick start
@@ -36,6 +37,9 @@ and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
 mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
 services to become healthy. A repeat run reuses the existing keys and Docker
 volumes.
+
+The installer builds the application images locally from this checkout for the
+VPS architecture. Prebuilt images are not distributed.
 
 Example configuration screen (shortened):
 
@@ -82,7 +86,8 @@ public inbound is created when the first device is applied.
 - Node settings with a preview of changes, confirmation and an automatic
   backup before changes that revoke existing profiles.
 - Password login, optional TOTP with recovery codes, three-hour sessions, and
-  a command to sign out all sessions.
+  a command to sign out all sessions. The Security page can change the
+  administrator password; the change ends every active session.
 - Diagnostics showing supervisor state and recent redacted warnings/errors.
 - Manual and automatic backups in `/data/backups`; the last ten are retained.
   Backups are plaintext, so protect the VPS and any copies you export.
@@ -120,6 +125,7 @@ Administrative commands run inside the control-plane container:
 
 ```sh
 docker compose exec xray-easy xray-easy admin logout-all
+docker compose exec xray-easy xray-easy admin reset-password
 docker compose exec xray-easy xray-easy admin reset-totp
 docker compose exec xray-easy xray-easy admin recovery-codes
 docker compose exec xray-easy xray-easy backup create
@@ -130,8 +136,10 @@ docker compose exec xray-easy xray-easy restore BACKUP_NAME RESTORE
 Use an actual name from `backup list` in place of `BACKUP_NAME`. Restore checks
 the backup and master key and creates a backup of the current state before
 applying it. Recovery-code reissue invalidates previous codes; TOTP reset
-revokes all sessions. To copy the unencrypted backup directories to the VPS
-filesystem before transferring them over SSH:
+revokes all sessions. Password reset prompts twice without echoing input and
+revokes all sessions; run it in an interactive terminal without `-T`. To copy
+the unencrypted backup directories to the VPS filesystem before transferring
+them over SSH:
 
 ```sh
 docker compose cp xray-easy:/data/backups ./backups

@@ -213,6 +213,7 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
       })),
       logout: (): Promise<void> => sendVoid('/api/auth/logout', post()),
       logoutAll: (): Promise<void> => sendVoid('/api/auth/logout-all', post()),
+      changePassword: (currentPassword: string, newPassword: string): Promise<void> => sendVoid('/api/auth/password', post({ current_password: currentPassword, new_password: newPassword })),
       totpStatus: async (): Promise<TOTPStatus> => {
         const dto = await sendDto(send, '/api/auth/totp/status', TOTPStatusDtoSchema)
         return { enabled: dto.enabled, recoveryCodesRemaining: dto.recovery_codes_remaining }

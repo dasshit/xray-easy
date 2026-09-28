@@ -33,6 +33,7 @@ const totpStatus = ref<TOTPStatus | null>(null)
 const totpSetup = ref<TOTPSetup | null>(null)
 const totpConfirmCode = ref('')
 const disableTOTPForm = ref({ password: '', code: '' })
+const changePasswordForm = ref({ currentPassword: '', newPassword: '', confirmation: '' })
 const lastBackup = ref('')
 const settings = ref<Settings | null>(null)
 const settingsForm = ref({ publicHost: '', realityTarget: '', realitySNI: '', clientFingerprint: 'chrome', rotatePrivateKey: false })
@@ -263,6 +264,25 @@ async function logout() { busy.value = true; error.value = ''; try { await api.a
 async function logoutAll() { busy.value = true; error.value = ''; try { await api.auth.logoutAll(); stopEvents(); admin.value = null; totpStatus.value = null } catch (cause) { showError(cause) } finally { busy.value = false } }
 
 /**
+ * Change the administrator password and return to the login screen after the server revokes all sessions.
+ */
+async function changePassword() {
+  busy.value = true; error.value = ''
+  try {
+    await api.auth.changePassword(changePasswordForm.value.currentPassword, changePasswordForm.value.newPassword)
+    stopEvents()
+    loginForm.value.username = admin.value?.username ?? loginForm.value.username
+    loginForm.value.password = ''
+    loginNeedsTOTP.value = false
+    loginUsesRecovery.value = false
+    admin.value = null
+    totpStatus.value = null
+    changePasswordForm.value = { currentPassword: '', newPassword: '', confirmation: '' }
+    showSuccess(t().passwordChanged)
+  } catch (cause) { showError(cause) } finally { busy.value = false }
+}
+
+/**
  * Reset the new-device form, open its dialog, and focus the name field.
  */
 function openCreateModal() {
@@ -462,6 +482,16 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       <section v-if="activeSection === 'security'" class="section-panel security-panel">
         <div class="section-heading"><div><p class="eyebrow">{{ t().security }}</p><h2>{{ t().security }}</h2><p class="muted">{{ t().totp }}: <strong>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</strong></p></div></div>
         <div class="security-grid">
+          <article class="security-card">
+            <div class="card-heading"><div><h3>{{ t().passwordSecurityTitle }}</h3><p class="hint">{{ t().passwordSecurityHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌑</span></div>
+            <form @submit.prevent="changePassword">
+              <label>{{ t().currentPassword }}<input v-model="changePasswordForm.currentPassword" type="password" autocomplete="current-password" required /></label>
+              <label>{{ t().newPassword }}<input v-model="changePasswordForm.newPassword" type="password" autocomplete="new-password" minlength="12" required /></label>
+              <label>{{ t().confirmNewPassword }}<input v-model="changePasswordForm.confirmation" type="password" autocomplete="new-password" minlength="12" required /></label>
+              <p v-if="changePasswordForm.confirmation && changePasswordForm.newPassword !== changePasswordForm.confirmation" class="hint">{{ t().passwordMismatch }}</p>
+              <button class="secondary security-action-button" type="submit" :disabled="busy || changePasswordForm.newPassword.length < 12 || changePasswordForm.newPassword !== changePasswordForm.confirmation">{{ t().changePassword }}</button>
+            </form>
+          </article>
           <article class="security-card">
             <div class="card-heading"><div><h3>{{ t().backupTitle }}</h3><p class="hint">{{ t().backupHelp }}</p></div><span class="settings-icon" aria-hidden="true">▣</span></div>
             <button class="secondary" :disabled="busy" @click="createBackup">{{ t().backup }}</button>

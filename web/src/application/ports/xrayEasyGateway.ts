@@ -87,6 +87,13 @@ export interface XrayEasyGateway {
      */
     logoutAll(): Promise<void>
     /**
+     * Change the administrator password and end every active session.
+     * @param currentPassword - The current administrator password.
+     * @param newPassword - The replacement password, at least twelve characters long.
+     * @rejects {Error} When the current password is invalid or the replacement password is rejected.
+     */
+    changePassword(currentPassword: string, newPassword: string): Promise<void>
+    /**
      * Read whether TOTP is enabled and how many recovery codes remain.
      * @returns The TOTP enrollment status.
      * @rejects {Error} When the TOTP status request fails.

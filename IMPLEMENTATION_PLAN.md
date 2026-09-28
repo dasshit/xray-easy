@@ -18,8 +18,14 @@ supervisor держит bounded tail, control plane отдаёт только re
 errors через authenticated `/api/status` и `/api/logs`, а `/api/events` передаёт
 stats/status updates.
 
-Следующим обязательным срезом остаётся release E2E-проверка импорта в V2Rage
-на macOS/iOS.
+В Security добавлены смена пароля с проверкой текущего пароля и аварийный
+`admin reset-password`. Обе операции сохраняют Argon2id hash и отзывают все
+активные сессии; CLI вводит пароль в интерактивном терминале без echo.
+
+Подключение и работу профилей на реальной VDS через V2Rage проверяли вручную
+во время разработки; обнаруженные проблемы с REALITY, версией Xray и Docker IPv6
+уже исправлены. Сценарии импорта и подключения остаются регрессионной проверкой
+при изменении Xray, генерации профилей и Compose.
 
 Backup/restore уже реализованы: control plane и CLI используют общий
 межпроцессный maintenance lock; SQLite snapshot создаётся через `VACUUM INTO`,
@@ -429,15 +435,16 @@ GET    /api/audit?cursor=...
 
 ### 9.1. Images
 
-Собрать два multi-stage image с одинаковым non-root UID/GID `10001:10001`:
+`./install.sh` вызывает `docker compose up -d --build --wait` и собирает два
+образа из текущего checkout непосредственно на VDS:
 
-1. `xray-easy`: Go backend, собранный TypeScript/Vue UI, migrations, CA certificates и встроенный supervisor client;
-2. `xray-easy-xray`: официальный pinned Xray binary плюс маленький `xray-supervisor`, который является PID 1 и запускает дочерний Xray;
-3. checksum pinned Xray release проверяется в CI;
-4. OCI labels, SBOM, non-root UID;
-5. локальная сборка через `docker compose build` собирает образ текущей архитектуры VDS;
-6. release multi-arch выполняется отдельным CI workflow через `docker buildx build --platform linux/amd64,linux/arm64`; без registry результат экспортируется как OCI archive или собирается отдельно для каждой архитектуры;
-7. публикацию в GHCR/Docker Hub и tag policy (`major`, `major.minor`, exact version) оставить отдельным этапом, `latest` не использовать в production документации.
+1. `xray-easy`: Go backend, собранный TypeScript/Vue UI, migrations и CA certificates;
+2. `xray-easy-xray`: бинарник из официального образа закреплённой версии Xray и `xray-supervisor`, который является PID 1 и запускает дочерний Xray.
+
+Оба долгоживущих контейнера работают с UID/GID `10001:10001`. Сборка идёт под
+архитектуру целевой машины: `linux/amd64` либо `linux/arm64`. Готовые образы,
+OCI-архивы и multi-arch manifests проект не выпускает; CI проверяет исходный
+код и тесты, а установка собирает образы на хосте пользователя.
 
 ### 9.2. Compose
 
@@ -556,16 +563,26 @@ Compose-сеть `control` позволяет обращаться к серви
 ### 9.3. Обновления
 
 - версии Xray и control plane фиксируются в `compose.yaml`/`.env` и в lock-файле сборки;
-- для локальной установки обновление выполняется вручную: backup, получение новой версии исходников, `docker compose build --pull`, затем controlled restart и проверка health; `docker compose pull` используется только в будущем registry-сценарии;
+- обновление выполняется вручную: backup, получение новой версии исходников,
+  повторный запуск `./install.sh` и проверка health;
 - при failed health администратор возвращает предыдущий исходный checkout и пересобирает локальные образы, а backup перед обновлением сохраняется;
-- обновлять Xray и control plane независимо, но тестировать совместимость в release matrix;
+- при изменении закреплённой версии Xray повторять проверку V2Rage, gRPC API и
+  generated config на целевых платформах;
 - перед upgrade создавать backup и config hash;
 - запускать миграции до старта HTTP;
 - при failed migration не удалять старый state;
 - в UI показывать точную версию Xray и приложения, но не скачивать и не устанавливать обновления автоматически;
 - поддержать `xray-easy doctor`/CLI: `init-volumes`, config test, status, backup, restore, reset admin password, logout-all, rotate master key, clients list, clients profile.
 
-Восстановление доступа выполняется только через SSH и CLI внутри control-plane контейнера, например `docker compose exec xray-easy admin reset`. CLI сначала получает maintenance lock через локальный lock-файл/daemon coordination, ждёт завершения apply и polling, затем меняет пароль/сбрасывает TOTP; постоянное имя администратора, SQLite, устройства и Xray-конфигурация не изменяются. Restore и master-key rotation используют тот же maintenance protocol. `doctor` отдельно проверяет наличие supervisor secret, права `0600`, master key и доступность shared volume.
+Восстановление пароля выполняется через SSH-команду
+`docker compose exec xray-easy xray-easy admin reset-password`. CLI требует
+интерактивный терминал, дважды запрашивает новый пароль без echo, проверяет
+минимальную длину и отзывает все сессии транзакционно вместе со сменой hash.
+Сброс TOTP выполняется отдельной командой `admin reset-totp`. Имя
+администратора, устройства и Xray-конфигурация не изменяются. Restore и
+master-key rotation используют тот же maintenance protocol. `doctor` отдельно
+проверяет наличие supervisor secret, права `0600`, master key и доступность
+shared volume.
 
 ## 10. Безопасность
 
@@ -631,9 +648,9 @@ Compose-сеть `control` позволяет обращаться к серви
 - корректный ownership shared volumes после одноразового `init-volumes` и при повторном `docker compose up`;
 - control plane и Xray запускаются без Docker socket, NET_ADMIN и SYS_MODULE;
 - Xray API и supervisor API не публикуются на host, а config volume монтируется в Xray read-only;
-- image scan, SBOM, checksum verification.
+- проверка версий и уязвимостей зависимостей перед обновлением исходников.
 
-Критерий MVP: новый пользователь с чистым Docker host за 10 минут получает рабочий профиль, импортирует его в один из двух проверенных клиентов, видит трафик по устройству, может отозвать профиль, а после перезапуска контейнера состояние и доступы совпадают с UI.
+Критерий MVP: новый пользователь с чистым Docker host за 10 минут получает рабочий профиль, импортирует его в V2Rage, видит трафик по устройству, может отозвать профиль, а после перезапуска контейнера состояние и доступы совпадают с UI.
 
 ## 12. Этапы реализации
 
@@ -653,7 +670,7 @@ Compose-сеть `control` позволяет обращаться к серви
   поставляется статическими файлами в runtime image;
 - SQLite migrations, structured logging, health/readiness;
 - отдельный `xray-supervisor` image на базе pinned official Xray binary;
-- reproducible native images и отдельный buildx workflow для amd64/arm64 с compose control/egress networks;
+- локальная сборка на `amd64` и `arm64` через Compose с control/egress networks;
 - config renderer + supervisor validation через `xray run -test`.
 
 ### Этап 2 — setup wizard
@@ -683,9 +700,9 @@ Compose-сеть `control` позволяет обращаться к серви
 ### Этап 5 — release hardening
 
 - upgrade/migrations/rollback;
-- compatibility matrix clients;
+- повторяемая ручная проверка V2Rage при изменениях Xray и профилей;
 - integration/e2e/security tests;
-- SBOM, image signing/checksums, vulnerability scanning;
+- проверка зависимостей и операционной документации;
 - русская и английская документация, troubleshooting.
 
 ### Этап 6 — расширения после MVP
@@ -730,7 +747,9 @@ Compose-сеть `control` позволяет обращаться к серви
 25. **Online:** устройство считается online при трафике/изменении counter за последние 5 минут; старые данные отображаются только как `last seen`.
 26. **Обновление UI:** Dashboard получает изменения через аутентифицированный SSE stream; после разрыва выполняется ручной или автоматический initial refresh.
 27. **Локализация:** русский и английский в MVP; определение по системному языку с ручным override и английским fallback.
-28. **Архитектуры:** локальный `docker compose build` собирает текущую архитектуру; CI отдельно выполняет buildx multi-arch для `linux/amd64` и `linux/arm64`, pinned Xray binaries и fixtures проверяются для обеих архитектур. Без registry результатом CI является OCI archive или два отдельных image archive. Публикация в registry отложена.
+28. **Архитектуры:** установка собирает образы на целевой Linux VDS через
+    `docker compose up -d --build --wait`; поддерживаются `amd64` и `arm64`.
+    Готовые образы и OCI-архивы проект не выпускает.
 29. **CLI:** команды backup/restore/doctor/reset вызываются внутри работающего `xray-easy` контейнера через `docker exec` или `docker compose exec`, но сначала получают maintenance lock и синхронизируются с daemon; отдельный host-бинарник не входит в MVP.
 30. **Пароль:** администратор меняет пароль в UI после проверки текущего пароля; CLI reset используется для аварийного восстановления доступа.
 31. **Парольная политика:** минимум 12 символов без принудительных правил сложности; пароль хранится только как Argon2id hash.
@@ -767,7 +786,9 @@ Compose-сеть `control` позволяет обращаться к серви
 62. **Формат логина:** 3–32 символа, только латиница, цифры, `-` и `_`; Unicode и пробелы запрещены.
 63. **Браузеры админки:** обязательная матрица UI — актуальные Safari и Chromium/Chrome на macOS; мобильный Safari для администрирования не обязателен.
 64. **Purge и audit:** физическое удаление очищает данные устройства, но не удаляет redacted audit-события.
-65. **Registry:** в MVP готовые образы не публикуются; основной сценарий — локальная native-сборка через `docker compose build`, а multi-arch CI использует buildx и OCI archive. Выбор GHCR/Docker Hub отложен.
+65. **Доставка:** пользователь клонирует исходники и запускает `./install.sh`;
+    образы собираются локально. Публикация готовых образов и CI-сборка
+    multi-arch архивов не входят в план проекта.
 
 После setup target и выбранный SNI можно изменить из UI с явным подтверждением и повторной проверкой. Ротация REALITY private key выполняется отдельным действием; публичный порт по-прежнему меняется только через `XRAY_PUBLIC_PORT` в Compose.
 
@@ -893,15 +914,16 @@ Smoke-проверка выполнена на чистом Compose volume: setu
 серверного и клиентского JSON, QR, state transitions и восстановление
 `active.json` после перезапуска.
 
-Реализованные срезы TOTP, backup/restore, settings rotation и diagnostics добавили CLI-команды `admin
+Реализованные срезы пароля, TOTP, backup/restore, settings rotation и diagnostics добавили CLI-команды `admin
 logout-all`,
-`admin reset-totp` и `admin recovery-codes`, запускаемые через
+`admin reset-password`, `admin reset-totp` и `admin recovery-codes`, запускаемые через
 `docker compose exec`, а также `backup create`, `backup list` и
 `restore <name> RESTORE`; settings rotation выполняется через Web UI с
 preview/diff и подтверждением `ROTATE` или `REVOKE`; diagnostics доступны через
-redacted `/api/status`, `/api/logs` и SSE `/api/events`. Следующий срез — release
-E2E. До публикации образа CI должен заменить tag на immutable
-digest и добавить проверку upstream checksum для pinned Xray release.
+redacted `/api/status`, `/api/logs` и SSE `/api/events`. Подключение через
+V2Rage на реальной VDS уже проверено вручную во время разработки. Пользователь
+устанавливает проект из исходников, а `./install.sh` собирает образы локально;
+публикация образов и отдельная multi-arch release-сборка не планируются.
 
 ## Источники
 

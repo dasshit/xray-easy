@@ -398,6 +398,33 @@ func (s *Store) DeleteAllSessions(ctx context.Context, adminID string) error {
 	return err
 }
 
+// ChangeAdminPassword updates the password hash and revokes every session in one transaction.
+func (s *Store) ChangeAdminPassword(ctx context.Context, adminID, passwordHash string) error {
+	if adminID == "" || passwordHash == "" {
+		return errors.New("admin ID and password hash are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	result, err := tx.ExecContext(ctx, `UPDATE admin_users SET password_hash=?, updated_at=? WHERE id=?`, passwordHash, time.Now().UTC().Format(time.RFC3339Nano), adminID)
+	if err != nil {
+		return err
+	}
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if updated != 1 {
+		return errors.New("admin not found")
+	}
+	if _, err := tx.ExecContext(ctx, `DELETE FROM sessions WHERE admin_user_id=?`, adminID); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 // SetTOTP replaces the encrypted secret and recovery-code hashes atomically.
 // Raw recovery codes must never be passed here; only their hashes are stored.
 func (s *Store) SetTOTP(ctx context.Context, adminID, secretEnc string, recoveryHashes []string) error {

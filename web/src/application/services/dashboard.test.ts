@@ -9,7 +9,7 @@ function gateway(overrides: GatewayOverrides = {}): XrayEasyGateway {
     setup: { status: vi.fn(), initialize: vi.fn() },
     auth: {
       current: vi.fn(), login: vi.fn(), loginWithTOTP: vi.fn(), loginWithRecoveryCode: vi.fn(),
-      logout: vi.fn(), logoutAll: vi.fn(), totpStatus: vi.fn().mockResolvedValue({ enabled: false, recoveryCodesRemaining: 0 }),
+      logout: vi.fn(), logoutAll: vi.fn(), changePassword: vi.fn(), totpStatus: vi.fn().mockResolvedValue({ enabled: false, recoveryCodesRemaining: 0 }),
       beginTOTPSetup: vi.fn(), enableTOTP: vi.fn(), disableTOTP: vi.fn(),
     },
     clients: { list: vi.fn().mockResolvedValue([]), create: vi.fn(), profile: vi.fn(), setAction: vi.fn(), profileQrUrl: vi.fn(), profileJsonUrl: vi.fn() },

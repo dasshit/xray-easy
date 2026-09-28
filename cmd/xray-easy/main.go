@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -97,6 +98,11 @@ type totpSetupRequest struct {
 type totpDisableRequest struct {
 	Password string `json:"password"`
 	Code     string `json:"code"`
+}
+
+type passwordChangeRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
 }
 
 type pendingTOTP struct {
@@ -247,6 +253,7 @@ func newMux(s *server) *http.ServeMux {
 	mux.HandleFunc("/api/auth/login/recovery", s.loginRecovery)
 	mux.HandleFunc("/api/auth/logout", s.logout)
 	mux.HandleFunc("/api/auth/logout-all", s.logoutAll)
+	mux.HandleFunc("/api/auth/password", s.changePassword)
 	mux.HandleFunc("/api/auth/totp/status", s.totpStatus)
 	mux.HandleFunc("/api/auth/totp/setup", s.totpSetup)
 	mux.HandleFunc("/api/auth/totp/enable", s.totpEnable)
@@ -309,6 +316,27 @@ func runAdminCLI(ctx context.Context, dataDir string, args []string) error {
 		return err
 	}
 	switch args[0] {
+	case "reset-password":
+		lock, err := maintenance.Acquire(ctx, filepath.Join(dataDir, "maintenance.lock"))
+		if err != nil {
+			return fmt.Errorf("acquire maintenance lock: %w", err)
+		}
+		defer lock.Close()
+		newPassword, err := readNewPassword()
+		if err != nil {
+			return err
+		}
+		defer clear(newPassword)
+		passwordHash, err := auth.HashPassword(string(newPassword))
+		if err != nil {
+			return err
+		}
+		if err := db.ChangeAdminPassword(ctx, admin.ID, passwordHash); err != nil {
+			return fmt.Errorf("reset administrator password: %w", err)
+		}
+		_ = db.AddAudit(ctx, admin.ID, "auth.password_reset_cli", "admin", admin.ID, "administrator password reset; all sessions revoked")
+		fmt.Println("administrator password changed; all sessions were revoked")
+		return nil
 	case "logout-all":
 		if err := db.DeleteAllSessions(ctx, admin.ID); err != nil {
 			return fmt.Errorf("logout all sessions: %w", err)
@@ -351,6 +379,33 @@ func runAdminCLI(ctx context.Context, dataDir string, args []string) error {
 	default:
 		return cliUsageError()
 	}
+}
+
+func readNewPassword() ([]byte, error) {
+	fd := int(os.Stdin.Fd())
+	fmt.Fprint(os.Stderr, "New administrator password (at least 12 characters): ")
+	password, err := readPasswordLineNoEcho(fd)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		return nil, fmt.Errorf("read new password (use an interactive terminal; run docker compose exec without -T): %w", err)
+	}
+	if len(password) < 12 {
+		clear(password)
+		return nil, errors.New("password must contain at least 12 characters")
+	}
+	fmt.Fprint(os.Stderr, "Confirm new password: ")
+	confirmation, err := readPasswordLineNoEcho(fd)
+	fmt.Fprintln(os.Stderr)
+	if err != nil {
+		clear(password)
+		return nil, fmt.Errorf("read password confirmation: %w", err)
+	}
+	defer clear(confirmation)
+	if subtle.ConstantTimeCompare(password, confirmation) != 1 {
+		clear(password)
+		return nil, errors.New("passwords do not match")
+	}
+	return password, nil
 }
 
 func runBackupCLI(ctx context.Context, dataDir, configDir string, args []string) error {
@@ -504,7 +559,7 @@ func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, mast
 }
 
 func cliUsageError() error {
-	return errors.New("usage: xray-easy admin <logout-all|reset-totp|recovery-codes> | backup <create|list> | restore <backup-name> RESTORE")
+	return errors.New("usage: xray-easy admin <logout-all|reset-password|reset-totp|recovery-codes> | backup <create|list> | restore <backup-name> RESTORE")
 }
 
 func configuredPublicPort() (int, error) {
@@ -750,6 +805,39 @@ func (s *server) logoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.AddAudit(r.Context(), admin.ID, "auth.logout_all", "admin", admin.ID, "all sessions revoked")
+	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	writeJSON(w, http.StatusNoContent, nil)
+}
+
+func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
+	admin, err := s.authenticated(r)
+	if err != nil {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
+		return
+	}
+	var req passwordChangeRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
+	}
+	if !auth.VerifyPassword(req.CurrentPassword, admin.PasswordHash) {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"code": "invalid_credentials", "error": "current password is incorrect"})
+		return
+	}
+	passwordHash, err := auth.HashPassword(req.NewPassword)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
+	}
+	if err := s.store.ChangeAdminPassword(r.Context(), admin.ID, passwordHash); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not change administrator password"})
+		return
+	}
+	_ = s.store.AddAudit(r.Context(), admin.ID, "auth.password_change", "admin", admin.ID, "administrator password changed; all sessions revoked")
 	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
 	writeJSON(w, http.StatusNoContent, nil)
 }
