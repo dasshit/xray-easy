@@ -46,29 +46,57 @@ let events: EventSubscription | null = null
 let reconnectTimer: number | null = null
 let disposed = false
 
+/**
+ * Return the configured application gateway or fail when dependency injection is missing.
+ * @param gateway - The gateway provided by the application composition root.
+ * @returns The gateway used by the UI.
+ * @throws {Error} When the application gateway was not provided.
+ */
 function requireGateway(gateway: XrayEasyGateway | undefined): XrayEasyGateway {
   if (!gateway) throw new Error('XrayEasyGateway was not provided')
   return gateway
 }
 
+/**
+ * Apply the selected theme and persist it for the next visit.
+ * @param next - The theme to activate.
+ */
 function applyTheme(next: Theme) {
   theme.value = next
   persistTheme(next)
 }
 
+/**
+ * Switch between the light and dark themes.
+ */
 function toggleTheme() { applyTheme(theme.value === 'dark' ? 'light' : 'dark') }
 
+/**
+ * Translate a server state into the status label shown in the UI.
+ * @param state - The server state, when it is known.
+ * @returns The localized status label.
+ */
 function statusLabel(state?: string) {
   const labels: Record<string, string> = { running: t().running, unavailable: t().unavailable, starting: t().starting, stopped: t().stopped }
   return labels[state ?? ''] ?? t().unknown
 }
 
+/**
+ * Choose the visual tone for a server state.
+ * @param state - The server state to classify.
+ * @returns The semantic status tone used by the UI.
+ */
 function statusTone(state?: string) {
   if (state === 'running') return 'positive'
   if (state === 'unavailable' || state === 'stopped') return 'negative'
   return 'neutral'
 }
 
+/**
+ * Count diagnostic entries at the requested severity.
+ * @param level - The severity to count; warn also matches warning.
+ * @returns The number of matching entries.
+ */
 function diagnosticCount(level: string) {
   const normalizedLevel = level.toLowerCase()
   return diagnostics.value.filter(entry => {
@@ -77,6 +105,11 @@ function diagnosticCount(level: string) {
   }).length
 }
 
+/**
+ * Choose the visual tone for a diagnostic severity.
+ * @param level - The severity to classify.
+ * @returns The semantic tone used by the UI.
+ */
 function diagnosticTone(level: string) {
   const normalized = level.toLowerCase()
   if (normalized === 'error') return 'negative'
@@ -84,9 +117,20 @@ function diagnosticTone(level: string) {
   return 'neutral'
 }
 
+/**
+ * Replace any success notice with an error message.
+ * @param cause - The failure to display.
+ */
 function showError(cause: unknown) { successMessage.value = ''; error.value = cause instanceof Error ? cause.message : 'Request failed' }
+/**
+ * Replace any error with a temporary success notice.
+ * @param message - The localized success message.
+ */
 function showSuccess(message: string) { error.value = ''; successMessage.value = message; window.setTimeout(() => { successMessage.value = '' }, 3500) }
 
+/**
+ * Load setup state and, when authenticated, the dashboard data.
+ */
 async function load() {
   error.value = ''
   try {
@@ -98,6 +142,10 @@ async function load() {
     }
   } catch (cause) { showError(cause) }
 }
+/**
+ * Refresh all dashboard data for the current administrator.
+ * @rejects {Error} When a required authenticated API request fails.
+ */
 async function loadAuthenticated() {
   const dashboard = await loadAuthenticatedDashboard(api)
   clients.value = dashboard.clients
@@ -113,14 +161,38 @@ async function loadAuthenticated() {
   nodeStatus.value = dashboard.nodeStatus
   diagnostics.value = dashboard.diagnostics
 }
+/**
+ * Refresh the device list from the API.
+ * @rejects {Error} When the device list request fails.
+ */
 async function loadClients() { clients.value = await api.clients.list() }
+/**
+ * Refresh the administrator two-factor status.
+ * @rejects {Error} When the TOTP status request fails.
+ */
 async function loadTOTPStatus() { totpStatus.value = await api.auth.totpStatus() }
+/**
+ * Refresh the Xray node status.
+ * @rejects {Error} When the node status request fails.
+ */
 async function loadStatus() { nodeStatus.value = await loadNodeStatusSnapshot(api) }
+/**
+ * Refresh the recent diagnostic entries.
+ * @rejects {Error} When the diagnostics request fails.
+ */
 async function loadDiagnostics() { diagnostics.value = await loadDiagnosticsSnapshot(api) }
+/**
+ * Load current server settings and reset the editable form to those values.
+ * @rejects {Error} When the settings request fails.
+ */
 async function loadSettings() {
   settings.value = await api.settings.get()
   settingsForm.value = { publicHost: settings.value.publicHost, realityTarget: settings.value.realityTarget, realitySNI: settings.value.realitySni, clientFingerprint: settings.value.clientFingerprint, rotatePrivateKey: false }
 }
+/**
+ * Open the authenticated server event stream once and refresh UI data as events arrive.
+ * @throws {Error} When the event stream cannot be opened.
+ */
 function connectEvents() {
   if (disposed || events || !admin.value) return
   events = api.events.connect({
@@ -137,6 +209,9 @@ function connectEvents() {
     },
   })
 }
+/**
+ * Close the event stream and cancel any pending reconnect.
+ */
 function stopEvents() {
   if (reconnectTimer !== null) {
     window.clearTimeout(reconnectTimer)
@@ -146,51 +221,103 @@ function stopEvents() {
   events = null
 }
 
+/**
+ * Submit the first-run settings and prepare the login form.
+ */
 async function initialize() {
   busy.value = true; error.value = ''
   try { await api.setup.initialize({ username: setupForm.value.username, password: setupForm.value.password, publicHost: setupForm.value.publicHost, publicPort: setupForm.value.publicPort, realityTarget: setupForm.value.realityTarget, realitySni: setupForm.value.realitySNI }); loginForm.value.username = setupForm.value.username; setup.value = { initialized: true } }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
+/**
+ * Authenticate with the administrator password and load the dashboard.
+ */
 async function login() {
   busy.value = true; error.value = ''
   try { admin.value = await api.auth.login(loginForm.value.username, loginForm.value.password); loginNeedsTOTP.value = false; await loadAuthenticated(); connectEvents() }
   catch (cause) { if (cause instanceof APIError && cause.code === 'totp_required') loginNeedsTOTP.value = true; else showError(cause) } finally { busy.value = false }
 }
+/**
+ * Authenticate with the password and the current TOTP code.
+ */
 async function loginTOTP() {
   busy.value = true; error.value = ''
   try { admin.value = await api.auth.loginWithTOTP(loginForm.value.username, loginForm.value.password, loginForm.value.totpCode); loginNeedsTOTP.value = false; await loadAuthenticated(); connectEvents() }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
+/**
+ * Authenticate with the password and a one-time recovery code.
+ */
 async function loginRecovery() {
   busy.value = true; error.value = ''
   try { admin.value = await api.auth.loginWithRecoveryCode(loginForm.value.username, loginForm.value.password, loginForm.value.recoveryCode); loginNeedsTOTP.value = false; await loadAuthenticated(); connectEvents() }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
+/**
+ * End the current administrator session and clear authenticated UI state.
+ */
 async function logout() { busy.value = true; error.value = ''; try { await api.auth.logout(); stopEvents(); admin.value = null; totpStatus.value = null } catch (cause) { showError(cause) } finally { busy.value = false } }
+/**
+ * End every administrator session and clear authenticated UI state.
+ */
 async function logoutAll() { busy.value = true; error.value = ''; try { await api.auth.logoutAll(); stopEvents(); admin.value = null; totpStatus.value = null } catch (cause) { showError(cause) } finally { busy.value = false } }
 
+/**
+ * Reset the new-device form, open its dialog, and focus the name field.
+ */
 function openCreateModal() {
   error.value = ''
   newDevice.value = { name: '', fingerprint: '' }
   createModalOpen.value = true
   void nextTick(() => newDeviceNameInput.value?.focus())
 }
+/**
+ * Close the new-device dialog when no operation is in progress.
+ */
 function closeCreateModal() { if (!busy.value) createModalOpen.value = false }
+/**
+ * Create a device, add it to the list, and show its connection profile.
+ */
 async function createDevice() {
   busy.value = true; error.value = ''
   try { const created = await api.clients.create(newDevice.value.name, newDevice.value.fingerprint || undefined); clients.value.push(created); createModalOpen.value = false; await showProfile(created) }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
+/**
+ * Load and display the connection profile for a device.
+ * @param client - The device whose profile should be displayed.
+ */
 async function showProfile(client: Client) { try { copiedProfile.value = false; selectedProfile.value = await api.clients.profile(client.id) } catch (cause) { showError(cause) } }
+/**
+ * Close the profile dialog when no operation is in progress.
+ */
 function closeProfile() { if (!busy.value) { selectedProfile.value = null; copiedProfile.value = false } }
+/**
+ * Find the device associated with the currently displayed profile.
+ * @returns The matching device, or undefined if it is no longer in the list.
+ */
 function selectedClient() { return clients.value.find(client => client.id === selectedProfile.value?.clientId) }
+/**
+ * Copy the selected VLESS URI to the clipboard and report the result.
+ */
 async function copyProfileUri() {
   if (!selectedProfile.value) return
   try { await navigator.clipboard.writeText(selectedProfile.value.uri); copiedProfile.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedProfile.value = false }, 2200) }
   catch (cause) { showError(cause) }
 }
+/**
+ * Open confirmation for a valid device action.
+ * @param client - The device to update.
+ * @param action - The requested action, or null when no action is allowed.
+ */
 function openClientAction(client: Client, action: ClientActionType | null) { if (!action) return; error.value = ''; clientAction.value = { client, action } }
+/**
+ * Close the device-action dialog when no operation is in progress.
+ */
 function closeClientAction() { if (!busy.value) clientAction.value = null }
+/**
+ * Apply the confirmed device action and update the device list.
+ */
 async function confirmClientAction() {
   if (!clientAction.value) return
   const { client, action } = clientAction.value
@@ -199,27 +326,48 @@ async function confirmClientAction() {
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 
+/**
+ * Create a backup and show its name in a success notice.
+ */
 async function createBackup() { busy.value = true; error.value = ''; try { const result = await api.backups.create(); lastBackup.value = result.name; showSuccess(t().backupReady) } catch (cause) { showError(cause) } finally { busy.value = false } }
+/**
+ * Request a settings preview and open the confirmation step.
+ */
 async function reviewSettings() {
   busy.value = true; error.value = ''; pendingSettings.value = null
   try { const result = await api.settings.preview({ publicHost: settingsForm.value.publicHost, realityTarget: settingsForm.value.realityTarget, realitySni: settingsForm.value.realitySNI, clientFingerprint: settingsForm.value.clientFingerprint, rotatePrivateKey: settingsForm.value.rotatePrivateKey }); pendingSettings.value = { ...result, confirmation: '' } }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
+/**
+ * Apply the confirmed settings and refresh affected dashboard data.
+ */
 async function applySettings() {
   if (!pendingSettings.value) return
   busy.value = true; error.value = ''
   try { await api.settings.apply(pendingSettings.value.changeId, pendingSettings.value.confirmation); pendingSettings.value = null; await loadSettings(); await loadClients(); showSuccess(t().saved) }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
+/**
+ * Request a new TOTP enrollment secret and QR code.
+ */
 async function startTOTPSetup() { busy.value = true; error.value = ''; try { totpSetup.value = await api.auth.beginTOTPSetup() } catch (cause) { showError(cause) } finally { busy.value = false } }
+/**
+ * Confirm TOTP enrollment with the code entered by the administrator.
+ */
 async function confirmTOTP() {
   if (!totpSetup.value) return
   busy.value = true; error.value = ''
   try { await api.auth.enableTOTP(totpSetup.value.setupToken, totpConfirmCode.value); totpSetup.value = null; totpConfirmCode.value = ''; await loadTOTPStatus() }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
+/**
+ * Disable TOTP after server-side password and code verification, then end the session.
+ */
 async function disableTOTP() { busy.value = true; error.value = ''; try { await api.auth.disableTOTP(disableTOTPForm.value.password, disableTOTPForm.value.code); admin.value = null; totpStatus.value = null; disableTOTPForm.value = { password: '', code: '' }; stopEvents() } catch (cause) { showError(cause) } finally { busy.value = false } }
 
+/**
+ * Close the topmost active dialog when no operation is in progress.
+ */
 function closeActiveModal() {
   if (busy.value) return
   if (pendingSettings.value) { pendingSettings.value = null; return }
@@ -227,11 +375,25 @@ function closeActiveModal() {
   if (clientAction.value) { closeClientAction(); return }
   if (createModalOpen.value) closeCreateModal()
 }
+/**
+ * Close the active dialog when the administrator presses Escape.
+ * @param event - The keyboard event received from the window.
+ */
 function handleKeydown(event: KeyboardEvent) { if (event.key === 'Escape') closeActiveModal() }
 
 onMounted(() => { disposed = false; applyTheme(theme.value); window.addEventListener('keydown', handleKeydown); void load() })
 onBeforeUnmount(() => { disposed = true; stopEvents(); window.removeEventListener('keydown', handleKeydown) })
+/**
+ * Return the localized confirmation title for a device action.
+ * @param action - The action to describe, when one is selected.
+ * @returns The localized dialog title.
+ */
 function actionTitle(action?: ClientActionType) { if (action === 'enable') return t().enableConfirm; if (action === 'disable') return t().disableConfirm; return t().removeConfirm }
+/**
+ * Return the localized button label for a device action.
+ * @param action - The action to label, when one is selected.
+ * @returns The localized action label.
+ */
 function actionLabel(action?: ClientActionType) { if (action === 'enable') return t().enable; if (action === 'disable') return t().disable; return t().remove }
 </script>
 

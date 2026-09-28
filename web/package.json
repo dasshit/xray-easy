@@ -22,6 +22,7 @@
     "@vitest/coverage-v8": "^5.0.2",
     "@vue/test-utils": "^2.5.1",
     "eslint": "^10.11.0",
+    "eslint-plugin-jsdoc": "^64.5.4",
     "eslint-plugin-vue": "^10.11.1",
     "eslint-plugin-vuejs-accessibility": "^2.6.0",
     "globals": "^17.12.0",

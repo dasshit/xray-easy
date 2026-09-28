@@ -38,11 +38,21 @@ export type SettingsChange = {
 export type ClientActionType = 'enable' | 'disable' | 'revoke'
 export type ClientAction = { client: Client; action: ClientActionType } | null
 
+/**
+ * Determine the next enable or disable action allowed for a device.
+ * @param client - The device whose current state determines the action.
+ * @returns The allowed action, or null when the device is revoked.
+ */
 export function clientActionFor(client: Client): ClientActionType | null {
   if (client.revoked) return null
   return client.enabled ? 'disable' : 'enable'
 }
 
+/**
+ * Check whether a device may be enabled.
+ * @param client - The device to inspect.
+ * @returns True when the device is neither revoked nor already enabled.
+ */
 export function canEnableClient(client: Client): boolean {
   return !client.revoked && !client.enabled
 }

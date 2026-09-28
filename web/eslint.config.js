@@ -1,6 +1,7 @@
 import eslint from '@eslint/js'
 import globals from 'globals'
 import tseslint from 'typescript-eslint'
+import jsdoc from 'eslint-plugin-jsdoc'
 import vue from 'eslint-plugin-vue'
 import vueAccessibility from 'eslint-plugin-vuejs-accessibility'
 import vueParser from 'vue-eslint-parser'
@@ -67,6 +68,41 @@ export default tseslint.config(
       'vue/max-attributes-per-line': 'off',
       'vue/singleline-html-element-content-newline': 'off',
       'vue/no-v-html': 'error',
+    },
+  },
+  {
+    files: ['src/**/*.{ts,vue}'],
+    ignores: ['src/**/*.test.ts'],
+    plugins: {
+      jsdoc,
+    },
+    settings: {
+      jsdoc: {
+        mode: 'typescript',
+      },
+    },
+    rules: {
+      'jsdoc/check-param-names': 'error',
+      'jsdoc/check-tag-names': ['error', { definedTags: ['rejects'], typed: true }],
+      // Cover named implementations and interface contracts while leaving inline callbacks concise.
+      'jsdoc/require-jsdoc': ['error', {
+        require: {
+          FunctionDeclaration: true,
+          MethodDefinition: true,
+        },
+        contexts: ['TSMethodSignature'],
+      }],
+      'jsdoc/require-description': 'error',
+      'jsdoc/require-description-complete-sentence': 'error',
+      'jsdoc/require-param': 'error',
+      'jsdoc/require-param-description': 'error',
+      'jsdoc/require-returns': 'error',
+      'jsdoc/require-returns-check': 'error',
+      'jsdoc/require-returns-description': 'error',
+      'jsdoc/require-throws': 'error',
+      'jsdoc/require-throws-description': 'error',
+      'jsdoc/require-throws-type': 'error',
+      'jsdoc/require-rejects': 'error',
     },
   },
   {

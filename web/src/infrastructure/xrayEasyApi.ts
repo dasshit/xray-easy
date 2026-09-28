@@ -31,14 +31,33 @@ import type {
 
 export type JsonRequester = (url: string, options?: RequestInit) => Promise<unknown>
 
+/**
+ * Build fetch options for a JSON POST request.
+ * @param body - Optional request data to JSON-encode.
+ * @returns POST request options with a JSON body when provided.
+ */
 function post(body?: unknown): RequestInit {
   return { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }
 }
 
+/**
+ * Send a request and validate its response using the supplied schema.
+ * @param send - The JSON requester used to send the request.
+ * @param url - The API path to request.
+ * @param schema - The schema expected for the response.
+ * @param options - Optional fetch settings for the request.
+ * @returns The validated response value.
+ * @rejects {Error} When the request fails or its response does not match the schema.
+ */
 async function sendDto<T>(send: JsonRequester, url: string, schema: ZodType<T>, options?: RequestInit): Promise<T> {
   return parseResponse(await send(url, options), schema)
 }
 
+/**
+ * Convert the administrator API response into the application model.
+ * @param dto - The validated administrator response.
+ * @returns The administrator domain model.
+ */
 function mapAdmin(dto: AdminDto): Admin {
   return {
     username: dto.username,
@@ -47,6 +66,11 @@ function mapAdmin(dto: AdminDto): Admin {
   }
 }
 
+/**
+ * Convert a device API response into the application model.
+ * @param dto - The validated device response.
+ * @returns The device domain model.
+ */
 function mapClient(dto: ClientDto): Client {
   return {
     id: dto.id,
@@ -61,6 +85,11 @@ function mapClient(dto: ClientDto): Client {
   }
 }
 
+/**
+ * Convert the settings API response into the application model.
+ * @param dto - The validated settings response.
+ * @returns The settings domain model.
+ */
 function mapSettings(dto: SettingsDto): Settings {
   return {
     publicHost: dto.public_host,
@@ -75,6 +104,11 @@ function mapSettings(dto: SettingsDto): Settings {
   }
 }
 
+/**
+ * Convert a settings preview response into the application model.
+ * @param dto - The validated settings-change response.
+ * @returns The preview and consequences without the UI confirmation field.
+ */
 function mapSettingsChange(dto: SettingsChangeDto): Omit<SettingsChange, 'confirmation'> {
   return {
     changeId: dto.change_id,
@@ -88,6 +122,11 @@ function mapSettingsChange(dto: SettingsChangeDto): Omit<SettingsChange, 'confir
   }
 }
 
+/**
+ * Convert a TOTP enrollment response into the application model.
+ * @param dto - The validated TOTP setup response.
+ * @returns The TOTP setup details, including optional QR image data.
+ */
 function mapTOTPSetup(dto: TOTPSetupDto): TOTPSetup {
   return {
     setupToken: dto.setup_token,
@@ -99,6 +138,11 @@ function mapTOTPSetup(dto: TOTPSetupDto): TOTPSetup {
   }
 }
 
+/**
+ * Convert a node status response into the application model.
+ * @param dto - The validated node status response.
+ * @returns The node status model.
+ */
 function mapNodeStatus(dto: NodeStatusDto): NodeStatus {
   return {
     state: dto.state,
@@ -110,12 +154,28 @@ function mapNodeStatus(dto: NodeStatusDto): NodeStatus {
   }
 }
 
+/**
+ * Convert a diagnostic response into the application model.
+ * @param dto - The validated diagnostic entry response.
+ * @returns The diagnostic entry model.
+ */
 function mapDiagnostic(dto: DiagnosticEntryDto): DiagnosticEntry {
   return { at: dto.at, component: dto.component, level: dto.level, message: dto.message }
 }
 
+/**
+ * Create the application gateway that translates application operations into HTTP requests.
+ * @param send - The JSON requester to use; defaults to the shared fetch implementation.
+ * @returns The gateway for setup, authentication, devices, settings, backups, diagnostics, and events.
+ */
 export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGateway {
-  const sendVoid = async (url: string, options?: RequestInit): Promise<void> => {
+  /**
+   * Send a command whose successful response has no data to return.
+   * @param url - The API path to request.
+   * @param options - Optional fetch settings for the request.
+   * @rejects {Error} When the request fails.
+   */
+  async function sendVoid(url: string, options?: RequestInit): Promise<void> {
     await send(url, options)
   }
 
