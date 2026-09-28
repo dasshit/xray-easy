@@ -156,8 +156,19 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 	runner := &fakeRunner{failOn: "up -d"}
 	var output bytes.Buffer
 	err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner)
-	if err == nil || !strings.Contains(err.Error(), "retry") {
+	if err == nil || !strings.Contains(err.Error(), "troubleshooting") || !strings.Contains(err.Error(), "docker compose -f compose.yaml logs --tail=100 --timestamps xray xray-easy") {
 		t.Fatalf("expected retryable Compose error, got %v", err)
+	}
+	for _, recoveryCommand := range []string{
+		"docker compose -f compose.yaml exec -T xray-easy xray-easy doctor bundle",
+		"docker compose -f compose.yaml run --rm --no-deps xray-easy doctor bundle",
+	} {
+		if !strings.Contains(err.Error(), recoveryCommand) {
+			t.Errorf("Compose failure omitted recovery command %q: %v", recoveryCommand, err)
+		}
+	}
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "compose -f compose.yaml ps --all") || !strings.Contains(strings.Join(runner.calls, "\n"), "compose -f compose.yaml logs --tail=100 --timestamps xray xray-easy") {
+		t.Fatalf("startup diagnostics were not collected: %v", runner.calls)
 	}
 	firstEnv := readPrivateFile(t, filepath.Join(root, ".env"))
 	firstToken := readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token"))
@@ -212,7 +223,7 @@ func TestDockerRunnerUsesLocalConfigurationAndReportsFailures(t *testing.T) {
 	root := t.TempDir()
 	docker := filepath.Join(root, "docker")
 	logPath := filepath.Join(root, "docker.log")
-	script := "#!/bin/sh\nprintf '%s|%s|%s\\n' \"$*\" \"${XRAY_PUBLIC_PORT-unset}\" \"${COMPOSE_PROJECT_NAME-unset}\" >> \"$FAKE_DOCKER_LOG\"\nif [ \"$1\" = fail ]; then echo 'simulated compose error' >&2; exit 17; fi\necho 'docker output'\n"
+	script := "#!/bin/sh\nprintf '%s|%s|%s|%s\\n' \"$*\" \"${XRAY_PUBLIC_PORT-unset}\" \"${COMPOSE_PROJECT_NAME-unset}\" \"${XRAY_EASY_BUILD_VERSION-unset}\" >> \"$FAKE_DOCKER_LOG\"\nif [ \"$1\" = fail ]; then echo 'simulated compose error' >&2; exit 17; fi\necho 'docker output'\n"
 	if err := os.WriteFile(docker, []byte(script), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -220,6 +231,7 @@ func TestDockerRunnerUsesLocalConfigurationAndReportsFailures(t *testing.T) {
 	t.Setenv("FAKE_DOCKER_LOG", logPath)
 	t.Setenv("XRAY_PUBLIC_PORT", "9999")
 	t.Setenv("COMPOSE_PROJECT_NAME", "wrong-project")
+	t.Setenv("XRAY_EASY_BUILD_VERSION", "build-test")
 	var output bytes.Buffer
 	runner := dockerRunner{output: &output}
 	if err := runner.run(context.Background(), root, false, "compose", "version"); err != nil {
@@ -241,7 +253,7 @@ func TestDockerRunnerUsesLocalConfigurationAndReportsFailures(t *testing.T) {
 		t.Fatalf("visible Docker error was lost: %v", err)
 	}
 	log := readFile(t, logPath)
-	if strings.Contains(log, "9999") || strings.Contains(log, "wrong-project") || !strings.Contains(log, "unset|unset") {
+	if strings.Contains(log, "9999") || strings.Contains(log, "wrong-project") || !strings.Contains(log, "unset|unset|build-test") {
 		t.Fatalf("shell environment overrode .env: %s", log)
 	}
 }

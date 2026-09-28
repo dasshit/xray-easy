@@ -35,6 +35,12 @@ esac
 build_dir=$(mktemp -d)
 trap 'rm -rf "$build_dir"' EXIT HUP INT TERM
 
+if app_version=$(git -C "$project_dir" describe --tags --always --dirty 2>/dev/null); then
+  :
+else
+  app_version=source
+fi
+
 echo 'Preparing the Xray-easy installer...'
 docker run --rm --network none \
   --user "$(id -u):$(id -g)" \
@@ -44,4 +50,4 @@ docker run --rm --network none \
   golang:1.24-alpine \
   sh -ec 'CGO_ENABLED=0 go build -trimpath -o /out/xray-easy-install ./cmd/xray-easy-install'
 
-"$build_dir/xray-easy-install" "$project_dir"
+XRAY_EASY_BUILD_VERSION="$app_version" "$build_dir/xray-easy-install" "$project_dir"

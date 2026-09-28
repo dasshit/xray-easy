@@ -16,11 +16,19 @@ import (
 )
 
 const (
-	defaultVersion = "26.7.28"
-	defaultProject = "xray-easy"
-	legacyProject  = "xray-easy-stage1"
-	newTokenPath   = "./secrets/xray_supervisor_token"
-	oldTokenPath   = "./prototype/secrets/xray_supervisor_token"
+	defaultVersion          = "26.7.28"
+	defaultProject          = "xray-easy"
+	legacyProject           = "xray-easy-stage1"
+	newTokenPath            = "./secrets/xray_supervisor_token"
+	oldTokenPath            = "./prototype/secrets/xray_supervisor_token"
+	startupRecoveryCommands = `Useful commands from the repository directory:
+  docker compose -f compose.yaml ps --all
+  docker compose -f compose.yaml logs --tail=100 --timestamps xray xray-easy
+  docker compose -f compose.yaml exec -T xray-easy xray-easy doctor
+  docker compose -f compose.yaml exec -T xray-easy xray-easy doctor bundle
+
+If xray-easy is stopped, create a report with a one-off container:
+  docker compose -f compose.yaml run --rm --no-deps xray-easy doctor bundle`
 )
 
 type configuration struct {
@@ -190,7 +198,10 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		return installResult{}, fmt.Errorf("Compose configuration is invalid: %w", err)
 	}
 	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"); err != nil {
-		return installResult{}, fmt.Errorf("Compose could not start; configuration was kept for a retry: %w%s", err, ui.logTail(8))
+		ui.step(4, "Collecting startup diagnostics")
+		ui.message("Compose did not become healthy. Collecting service state and recent logs; containers and configuration are preserved.")
+		collectStartupDiagnostics(ctx, root, runner, ui)
+		return installResult{}, fmt.Errorf("Compose could not start; containers and configuration were kept for troubleshooting: %w%s\n\n%s", err, ui.logTail(12), startupRecoveryCommands)
 	}
 	ui.step(4, "Verifying the installation")
 	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "exec", "-T", "xray-easy", "xray-easy", "doctor"); err != nil {
@@ -201,6 +212,21 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	ui.step(4, "Doctor checks completed")
 	ui.message("Doctor completed. Review any warnings above; Xray-easy is running.")
 	return installResult{config: cfg, started: true}, nil
+}
+
+// collectStartupDiagnostics shows the current Compose state and recent service
+// logs in the installer's terminal after startup or health-check failure.
+func collectStartupDiagnostics(ctx context.Context, root string, runner commandRunner, ui *wizard) {
+	commands := [][]string{
+		{"compose", "-f", "compose.yaml", "ps", "--all"},
+		{"compose", "-f", "compose.yaml", "logs", "--tail=100", "--timestamps", "xray", "xray-easy"},
+	}
+	for _, args := range commands {
+		ui.message("Running docker " + strings.Join(args, " "))
+		if err := runner.run(ctx, root, true, args...); err != nil {
+			ui.message("Could not collect one diagnostic command; recovery commands are shown after the installer exits.")
+		}
+	}
 }
 
 func printNextSteps(output io.Writer, cfg configuration) {

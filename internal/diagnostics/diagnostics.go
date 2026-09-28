@@ -1,6 +1,10 @@
 package diagnostics
 
 import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"io"
 	"regexp"
 	"strings"
 	"sync"
@@ -82,4 +86,57 @@ func Redact(value string) string {
 	})
 	value = uuidPattern.ReplaceAllString(value, "[REDACTED-UUID]")
 	return strings.TrimSpace(value)
+}
+
+// RedactJSON parses a JSON document and masks credential-bearing values and
+// identifying client fields before the document is included in a support bundle.
+func RedactJSON(document []byte) ([]byte, error) {
+	decoder := json.NewDecoder(bytes.NewReader(document))
+	decoder.UseNumber()
+	var value any
+	if err := decoder.Decode(&value); err != nil {
+		return nil, err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return nil, errors.New("multiple JSON values")
+		}
+		return nil, err
+	}
+	redacted := redactJSONValue(value)
+	return json.MarshalIndent(redacted, "", "  ")
+}
+
+func redactJSONValue(value any) any {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, item := range typed {
+			if sensitiveJSONKey(key) {
+				typed[key] = "[REDACTED]"
+				continue
+			}
+			typed[key] = redactJSONValue(item)
+		}
+		return typed
+	case []any:
+		for i := range typed {
+			typed[i] = redactJSONValue(typed[i])
+		}
+		return typed
+	case string:
+		return Redact(typed)
+	default:
+		return value
+	}
+}
+
+func sensitiveJSONKey(key string) bool {
+	key = strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
+	switch key {
+	case "id", "uuid", "email", "name", "privatekey", "password", "token", "secret", "masterkey", "shortid", "shortids", "recoverycodes":
+		return true
+	default:
+		return false
+	}
 }

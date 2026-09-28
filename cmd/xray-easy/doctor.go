@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/supervisor"
@@ -31,11 +36,18 @@ type doctorCheck struct {
 	hint   string
 }
 
+var doctorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$`)
+
 type doctorSupervisor interface {
 	Health(context.Context) error
 	Status(context.Context) (supervisor.Status, error)
 	Validate(context.Context, string, string) error
 	ProbeTarget(context.Context, string, string) error
+}
+
+type doctorBundleSupervisor interface {
+	doctorSupervisor
+	Logs(context.Context) ([]string, error)
 }
 
 type doctorHandler interface {
@@ -46,25 +58,26 @@ type doctorStats interface {
 	Poll(context.Context) ([]xrayapi.UserStats, error)
 }
 
-// runDoctorCLI performs state-preserving checks for the control-plane
-// container and its Xray dependencies. It returns an error when any check
-// fails so scripts and the installer can detect an unhealthy installation.
+// runDoctorCLI dispatches state-preserving checks or explicitly requested
+// support-bundle generation for the control plane and its Xray dependencies.
+// It returns an error when any check fails so scripts can detect an unhealthy
+// installation even when a diagnostic bundle was successfully saved.
 func runDoctorCLI(ctx context.Context, args []string, dataDir, configDir string, out io.Writer) error {
-	if len(args) != 0 {
+	if len(args) > 1 || len(args) == 1 && args[0] != "bundle" {
 		return cliUsageError()
 	}
 	handler := xrayapi.NewHandlerClient(envOr("XRAY_API_LISTEN", "127.0.0.1:10085"))
 	defer handler.Close()
 	stats := xrayapi.NewStatsClient(envOr("XRAY_API_LISTEN", "127.0.0.1:10085"))
 	defer stats.Close()
-	return runDoctor(ctx, dataDir, configDir, out,
-		supervisor.Client{
-			BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
-			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
-		},
-		handler,
-		stats,
-	)
+	sup := supervisor.Client{
+		BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
+		TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
+	}
+	if len(args) == 1 {
+		return runDoctorBundle(ctx, dataDir, configDir, out, sup, handler, stats)
+	}
+	return runDoctor(ctx, dataDir, configDir, out, sup, handler, stats)
 }
 
 func runDoctor(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorSupervisor, handler doctorHandler, stats doctorStats) error {
@@ -73,7 +86,8 @@ func runDoctor(ctx context.Context, dataDir, configDir string, out io.Writer, su
 
 	checks := collectDoctorChecks(ctx, dataDir, configDir, sup, handler, stats)
 	failures, warnings := 0, 0
-	fmt.Fprintln(out, "Xray-easy doctor (no persistent changes)")
+	writeDoctorHeader(out)
+	fmt.Fprintln(out, "Checks (no persistent changes)")
 	for _, check := range checks {
 		fmt.Fprintf(out, "%-5s %s: %s\n", check.level, check.name, check.detail)
 		if check.hint != "" {
@@ -91,6 +105,111 @@ func runDoctor(ctx context.Context, dataDir, configDir string, out io.Writer, su
 		return fmt.Errorf("doctor found %d failing check(s)", failures)
 	}
 	fmt.Fprintf(out, "Result: PASS (%d warning(s))\n", warnings)
+	return nil
+}
+
+func writeDoctorHeader(out io.Writer) {
+	fmt.Fprintln(out, "Xray-easy doctor report")
+	fmt.Fprintln(out, "Versions from active Compose environment:")
+	fmt.Fprintf(out, "  Xray-easy build: %s (XRAY_EASY_VERSION)\n", safeDoctorVersion("XRAY_EASY_VERSION", "dev"))
+	fmt.Fprintf(out, "  Xray image: %s (XRAY_VERSION)\n", safeDoctorVersion("XRAY_VERSION", "unknown"))
+	fmt.Fprintln(out, "Host ports from active Compose environment:")
+	fmt.Fprintf(out, "  Xray public TCP: %s -> container TCP 8443\n", safeDoctorPort("XRAY_PUBLIC_PORT", "443"))
+	fmt.Fprintf(out, "  Web UI loopback: %s -> container TCP 8080\n", safeDoctorPort("XRAY_EASY_UI_PORT", "8080"))
+}
+
+func safeDoctorVersion(name, fallback string) string {
+	value := envOr(name, fallback)
+	if !doctorVersionPattern.MatchString(value) {
+		return "invalid"
+	}
+	return value
+}
+
+func safeDoctorPort(name, fallback string) string {
+	value := envOr(name, fallback)
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return "invalid"
+	}
+	return strconv.Itoa(port)
+}
+
+func runDoctorBundle(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorBundleSupervisor, handler doctorHandler, stats doctorStats) error {
+	var report bytes.Buffer
+	doctorErr := runDoctor(ctx, dataDir, configDir, &report, sup, handler, stats)
+	if _, err := io.Copy(out, &report); err != nil {
+		return fmt.Errorf("write doctor report: %w", err)
+	}
+
+	files := map[string][]byte{"doctor-report.txt": report.Bytes()}
+	var notes []string
+	extraCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	status, err := sup.Status(extraCtx)
+	if err != nil {
+		statusJSON, marshalErr := json.MarshalIndent(map[string]any{"available": false, "error": diagnostics.Redact(err.Error())}, "", "  ")
+		if marshalErr != nil {
+			return fmt.Errorf("encode unavailable Xray status: %w", marshalErr)
+		}
+		files["xray-status.json"] = append(statusJSON, '\n')
+		notes = append(notes, "Xray supervisor status could not be collected.")
+	} else {
+		status.LastError = diagnostics.Redact(status.LastError)
+		status.LastExit = diagnostics.Redact(status.LastExit)
+		statusJSON, marshalErr := json.MarshalIndent(status, "", "  ")
+		if marshalErr != nil {
+			return fmt.Errorf("encode Xray status: %w", marshalErr)
+		}
+		files["xray-status.json"] = append(statusJSON, '\n')
+	}
+	logs, logsErr := sup.Logs(extraCtx)
+	if logsErr != nil {
+		files["xray-errors.log"] = []byte("Could not collect Xray logs.\n")
+		notes = append(notes, "Recent Xray logs could not be collected.")
+	} else {
+		if len(logs) > 100 {
+			logs = logs[len(logs)-100:]
+		}
+		var safeLogs strings.Builder
+		for _, line := range logs {
+			if len(line) > 4096 {
+				line = line[:4096] + " [truncated]"
+			}
+			safeLogs.WriteString(diagnostics.Redact(line))
+			safeLogs.WriteByte('\n')
+		}
+		files["xray-errors.log"] = []byte(safeLogs.String())
+	}
+
+	activeConfig := filepath.Join(configDir, "active.json")
+	if info, statErr := os.Lstat(activeConfig); statErr == nil && info.Mode().IsRegular() && info.Size() <= 2<<20 {
+		config, readErr := os.ReadFile(activeConfig)
+		if readErr == nil {
+			if redacted, redactErr := diagnostics.RedactJSON(config); redactErr == nil {
+				files["active-config.redacted.json"] = append(redacted, '\n')
+			} else {
+				notes = append(notes, "Active Xray configuration was omitted because it is not valid JSON.")
+			}
+		} else {
+			notes = append(notes, "Active Xray configuration could not be read.")
+		}
+	} else if statErr != nil || !info.Mode().IsRegular() {
+		notes = append(notes, "Active Xray configuration was not available.")
+	} else {
+		notes = append(notes, "Active Xray configuration was omitted because it exceeds 2 MiB.")
+	}
+	if len(notes) > 0 {
+		files["bundle-notes.txt"] = []byte(strings.Join(notes, "\n") + "\n")
+	}
+	bundlePath, err := diagnostics.CreateBundle(dataDir, files, time.Now())
+	if err != nil {
+		return fmt.Errorf("create doctor bundle: %w", err)
+	}
+	fmt.Fprintf(out, "Bundle saved: %s\n", bundlePath)
+	if doctorErr != nil {
+		return fmt.Errorf("doctor checks failed; redacted report saved: %w", doctorErr)
+	}
 	return nil
 }
 

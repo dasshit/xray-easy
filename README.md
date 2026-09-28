@@ -36,7 +36,10 @@ Docker/Compose, asks for the public and panel ports, generates the master key
 and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
 mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
 services to become healthy, then runs the final `xray-easy doctor` check. A
-repeat run reuses the existing keys and Docker volumes.
+repeat run reuses the existing keys and Docker volumes. If Compose cannot make
+the services healthy, the installer displays `compose ps --all` and the latest
+100 lines from both service logs in the terminal. It leaves containers and
+configuration in place and prints recovery commands.
 
 The installer builds the application images locally from this checkout for the
 VPS architecture. Prebuilt images are not distributed.
@@ -108,6 +111,7 @@ docker compose logs -f xray
 docker compose down                         # stop, preserving named volumes
 docker compose up -d --build --wait          # start again
 docker compose exec -T xray-easy xray-easy doctor
+docker compose exec -T xray-easy xray-easy doctor bundle
 ```
 
 `./install.sh` runs the same doctor command after Compose reports both services
@@ -121,7 +125,28 @@ a one-off diagnostic container with:
 
 ```sh
 docker compose run --rm --no-deps xray-easy doctor
+docker compose run --rm --no-deps xray-easy doctor bundle
 ```
+
+`doctor bundle` prints the same checks and saves a `.tar.gz` archive under
+`/data/diagnostics` in the persistent app volume. Its first report lines show
+the Xray-easy build and configured Xray image versions, plus the public/UI
+ports from the active Compose environment. It contains that report, Xray
+supervisor status, up to 100 recent Xray log lines,
+and a redacted active config. It saves the archive even when a check fails, but
+still exits with a non-zero status in that case. It omits the database, master key, supervisor
+token, client UUIDs, names, REALITY private key, and short IDs. Review the
+archive before sharing it: non-secret server settings such as the REALITY
+target and SNI remain useful for troubleshooting. When the control-plane
+service is running, copy a generated file to the current directory with the
+path printed by the command:
+
+```sh
+docker compose cp xray-easy:/data/diagnostics ./doctor-reports
+```
+
+The command copies all generated bundles; share the specific archive printed by
+`doctor bundle`.
 
 To update the code, create a backup from the Security page or CLI, then run:
 

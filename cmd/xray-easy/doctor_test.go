@@ -1,10 +1,14 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,6 +29,8 @@ type doctorSupervisorStub struct {
 	validatePath string
 	validateCall int
 	probeCall    int
+	logs         []string
+	logsErr      error
 }
 
 func (s *doctorSupervisorStub) Health(context.Context) error { return s.healthErr }
@@ -42,6 +48,10 @@ func (s *doctorSupervisorStub) Validate(_ context.Context, path, _ string) error
 func (s *doctorSupervisorStub) ProbeTarget(context.Context, string, string) error {
 	s.probeCall++
 	return s.probeErr
+}
+
+func (s *doctorSupervisorStub) Logs(context.Context) ([]string, error) {
+	return s.logs, s.logsErr
 }
 
 type doctorHandlerStub struct {
@@ -67,6 +77,9 @@ func (s *doctorStatsStub) Poll(context.Context) ([]xrayapi.UserStats, error) {
 func TestDoctorPassesFreshInstallAndWarnsSetupPending(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, false)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("XRAY_EASY_VERSION", "0.4.1-abc123")
+	t.Setenv("XRAY_VERSION", "26.7.28")
+	t.Setenv("XRAY_EASY_UI_PORT", "8080")
 	tokenPath := writeDoctorToken(t, 0o400)
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", tokenPath)
 	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}}
@@ -80,6 +93,9 @@ func TestDoctorPassesFreshInstallAndWarnsSetupPending(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "WARN  Application setup: initial Web UI setup is still pending") || !strings.Contains(output.String(), "Result: PASS (") {
 		t.Fatalf("fresh installation output did not report pending setup as a warning: %s", output.String())
+	}
+	if !strings.Contains(output.String(), "Xray-easy build: 0.4.1-abc123 (XRAY_EASY_VERSION)") || !strings.Contains(output.String(), "Xray image: 26.7.28 (XRAY_VERSION)") || !strings.Contains(output.String(), "Xray public TCP: 443 -> container TCP 8443") || !strings.Contains(output.String(), "Web UI loopback: 8080 -> container TCP 8080") {
+		t.Fatalf("doctor header omitted active versions or ports: %s", output.String())
 	}
 	if handler.calls != 0 || stats.calls != 0 {
 		t.Fatalf("Xray profile APIs were called before setup: handler=%d stats=%d", handler.calls, stats.calls)
@@ -97,6 +113,96 @@ func TestDoctorPassesFreshInstallAndWarnsSetupPending(t *testing.T) {
 				t.Fatalf("doctor left a temporary probe file in %s", directory)
 			}
 		}
+	}
+}
+
+func TestDoctorHeaderRejectsInvalidEnvironmentText(t *testing.T) {
+	t.Setenv("XRAY_EASY_VERSION", "secret\nInjected output")
+	t.Setenv("XRAY_VERSION", "26.7.28")
+	t.Setenv("XRAY_PUBLIC_PORT", "443\nXRAY_EASY_MASTER_KEY=secret")
+	t.Setenv("XRAY_EASY_UI_PORT", "8080")
+	var output bytes.Buffer
+	writeDoctorHeader(&output)
+	if strings.Contains(output.String(), "Injected output") || strings.Contains(output.String(), "XRAY_EASY_MASTER_KEY=secret") || !strings.Contains(output.String(), "Xray-easy build: invalid") || !strings.Contains(output.String(), "Xray public TCP: invalid") {
+		t.Fatalf("doctor header included unsafe environment text: %s", output.String())
+	}
+}
+
+func TestDoctorBundleContainsRedactedReportStatusLogsAndConfig(t *testing.T) {
+	dataDir, configDir, key := prepareDoctorState(t, false)
+	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	t.Setenv("XRAY_EASY_VERSION", "v0.4.1-12-gabc123")
+	t.Setenv("XRAY_VERSION", "26.7.28")
+	t.Setenv("XRAY_PUBLIC_PORT", "4443")
+	t.Setenv("XRAY_EASY_UI_PORT", "9080")
+	activeConfig := `{"inbounds":[{"port":8443,"settings":{"clients":[{"id":"123e4567-e89b-12d3-a456-426614174000","email":"private-device-name","flow":"xtls-rprx-vision"}]},"streamSettings":{"realitySettings":{"privateKey":"raw-private-key","shortIds":["raw-short-id"]}}}]}`
+	if err := os.WriteFile(filepath.Join(configDir, "active.json"), []byte(activeConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sup := &doctorSupervisorStub{
+		status: supervisor.Status{State: "running", LastError: "privateKey=raw-status-secret", LastExit: "uuid=123e4567-e89b-12d3-a456-426614174000"},
+		logs:   []string{`level=error privateKey=raw-log-secret id=123e4567-e89b-12d3-a456-426614174000`},
+	}
+	var output bytes.Buffer
+	if err := runDoctorBundle(context.Background(), dataDir, configDir, &output, sup, &doctorHandlerStub{}, &doctorStatsStub{}); err != nil {
+		t.Fatalf("create doctor bundle: %v\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "Xray-easy build: v0.4.1-12-gabc123") || !strings.Contains(output.String(), "Xray public TCP: 4443") || !strings.Contains(output.String(), "Web UI loopback: 9080") {
+		t.Fatalf("bundle report omitted configured metadata: %s", output.String())
+	}
+	path := strings.TrimSpace(strings.Split(output.String(), "Bundle saved: ")[1])
+	if lineEnd := strings.IndexByte(path, '\n'); lineEnd >= 0 {
+		path = path[:lineEnd]
+	}
+	archive, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+	info, err := archive.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("bundle mode = %o, want 600", info.Mode().Perm())
+	}
+	gz, err := gzip.NewReader(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer gz.Close()
+	tarReader := tar.NewReader(gz)
+	entries := make(map[string]string)
+	for {
+		header, err := tarReader.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		contents, err := io.ReadAll(tarReader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entries[header.Name] = string(contents)
+	}
+	for _, name := range []string{"doctor-report.txt", "xray-status.json", "xray-errors.log", "active-config.redacted.json"} {
+		if _, ok := entries[name]; !ok {
+			t.Errorf("bundle is missing %s", name)
+		}
+	}
+	for _, rawSecret := range []string{"raw-private-key", "raw-short-id", "raw-status-secret", "raw-log-secret", "123e4567-e89b-12d3-a456-426614174000", "private-device-name"} {
+		for name, contents := range entries {
+			if strings.Contains(contents, rawSecret) {
+				t.Errorf("bundle file %s leaked %q", name, rawSecret)
+			}
+		}
+	}
+	var redactedConfig map[string]any
+	if err := json.Unmarshal([]byte(entries["active-config.redacted.json"]), &redactedConfig); err != nil {
+		t.Fatalf("redacted active config is invalid JSON: %v", err)
 	}
 }
 

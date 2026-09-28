@@ -561,7 +561,7 @@ func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, mast
 }
 
 func cliUsageError() error {
-	return errors.New("usage: xray-easy doctor | admin <logout-all|reset-password|reset-totp|recovery-codes> | backup <create|list> | restore <backup-name> RESTORE")
+	return errors.New("usage: xray-easy doctor [bundle] | admin <logout-all|reset-password|reset-totp|recovery-codes> | backup <create|list> | restore <backup-name> RESTORE")
 }
 
 func configuredPublicPort() (int, error) {

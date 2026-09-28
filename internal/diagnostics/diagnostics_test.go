@@ -1,6 +1,11 @@
 package diagnostics
 
 import (
+	"archive/tar"
+	"compress/gzip"
+	"io"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -16,6 +21,67 @@ func TestRedactMasksSecretsAndBearerValues(t *testing.T) {
 	}
 	if !strings.Contains(redacted, "[REDACTED]") || !strings.Contains(redacted, "[REDACTED-UUID]") {
 		t.Fatalf("redaction markers missing: %q", redacted)
+	}
+}
+
+func TestRedactJSONMasksCredentialsAndDeviceIdentifiers(t *testing.T) {
+	input := []byte(`{"inbounds":[{"settings":{"clients":[{"id":"123e4567-e89b-12d3-a456-426614174000","email":"phone","flow":"xtls-rprx-vision"}]},"realitySettings":{"privateKey":"private","shortIds":["secret-id"]}}]}`)
+	got, err := RedactJSON(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, secret := range []string{"123e4567-e89b-12d3-a456-426614174000", "phone", `"private"`, "secret-id"} {
+		if strings.Contains(string(got), secret) {
+			t.Errorf("redacted JSON leaked %q: %s", secret, got)
+		}
+	}
+	if !strings.Contains(string(got), "xtls-rprx-vision") || !strings.Contains(string(got), "[REDACTED]") {
+		t.Fatalf("config details or redaction markers are missing: %s", got)
+	}
+}
+
+func TestCreateBundleWritesPrivateTarGzipAndRejectsUnsafePaths(t *testing.T) {
+	dataDir := t.TempDir()
+	now := time.Date(2026, 9, 28, 10, 11, 12, 123, time.UTC)
+	path, err := CreateBundle(dataDir, map[string][]byte{"report.txt": []byte("safe report")}, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("bundle mode = %o, want 600", info.Mode().Perm())
+	}
+	directoryInfo, err := os.Stat(filepath.Dir(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directoryInfo.Mode().Perm() != 0o700 {
+		t.Fatalf("bundle directory mode = %o, want 700", directoryInfo.Mode().Perm())
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer file.Close()
+	reader, err := gzip.NewReader(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	archive := tar.NewReader(reader)
+	header, err := archive.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	contents, err := io.ReadAll(archive)
+	if err != nil || header.Name != "report.txt" || string(contents) != "safe report" {
+		t.Fatalf("unexpected bundle entry %q (%q), err=%v", header.Name, contents, err)
+	}
+	if _, err := CreateBundle(dataDir, map[string][]byte{"../outside": []byte("no")}, now.Add(time.Second)); err == nil {
+		t.Fatal("bundle accepted path traversal")
 	}
 }
 
