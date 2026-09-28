@@ -28,6 +28,7 @@ describe('connection settings', () => {
     await inputs[0].setValue('new.example.com')
     await inputs[1].setValue('target.example.com:443')
     await inputs[2].setValue('target.example.com')
+    await wrapper.get('.settings-card select').setValue('safari')
     await wrapper.get('.settings-card-danger input[type="checkbox"]').setValue(true)
     await wrapper.get('.section-actions button').trigger('click')
     await flushPromises()
@@ -36,7 +37,7 @@ describe('connection settings', () => {
       public_host: 'new.example.com',
       reality_target: 'target.example.com:443',
       reality_sni: 'target.example.com',
-      client_fingerprint: 'chrome',
+      client_fingerprint: 'safari',
       rotate_private_key: true,
     })
     const dialog = wrapper.get('[role="dialog"]')

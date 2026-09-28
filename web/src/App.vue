@@ -34,6 +34,8 @@ const loginNeedsTOTP = ref(false)
 const loginUsesRecovery = ref(false)
 const successMessage = ref('')
 let events: EventSource | null = null
+let reconnectTimer: number | null = null
+let disposed = false
 
 const text = {
   en: {
@@ -120,11 +122,27 @@ async function loadSettings() {
   settingsForm.value = { publicHost: settings.value.public_host, realityTarget: settings.value.reality_target, realitySNI: settings.value.reality_sni, clientFingerprint: settings.value.client_fingerprint, rotatePrivateKey: false }
 }
 function connectEvents() {
-  if (events || !admin.value) return
+  if (disposed || events || !admin.value) return
   events = new EventSource('/api/events')
   events.addEventListener('stats', () => { if (admin.value) void loadClients() })
   events.addEventListener('status', () => { if (admin.value) { void loadStatus(); void loadDiagnostics() } })
-  events.onerror = () => { events?.close(); events = null; if (admin.value) window.setTimeout(connectEvents, 3000) }
+  events.onerror = () => {
+    stopEvents()
+    if (admin.value && !disposed) {
+      reconnectTimer = window.setTimeout(() => {
+        reconnectTimer = null
+        connectEvents()
+      }, 3000)
+    }
+  }
+}
+function stopEvents() {
+  if (reconnectTimer !== null) {
+    window.clearTimeout(reconnectTimer)
+    reconnectTimer = null
+  }
+  events?.close()
+  events = null
 }
 
 async function initialize() {
@@ -147,8 +165,8 @@ async function loginRecovery() {
   try { admin.value = await request<Admin>('/api/auth/login/recovery', { method: 'POST', body: JSON.stringify({ username: loginForm.value.username, password: loginForm.value.password, recovery_code: loginForm.value.recoveryCode }) }); loginNeedsTOTP.value = false; await loadAuthenticated(); connectEvents() }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
-async function logout() { await request('/api/auth/logout', { method: 'POST' }); events?.close(); events = null; admin.value = null; totpStatus.value = null }
-async function logoutAll() { busy.value = true; error.value = ''; try { await request('/api/auth/logout-all', { method: 'POST' }); events?.close(); events = null; admin.value = null; totpStatus.value = null } catch (cause) { showError(cause) } finally { busy.value = false } }
+async function logout() { busy.value = true; error.value = ''; try { await request('/api/auth/logout', { method: 'POST' }); stopEvents(); admin.value = null; totpStatus.value = null } catch (cause) { showError(cause) } finally { busy.value = false } }
+async function logoutAll() { busy.value = true; error.value = ''; try { await request('/api/auth/logout-all', { method: 'POST' }); stopEvents(); admin.value = null; totpStatus.value = null } catch (cause) { showError(cause) } finally { busy.value = false } }
 
 function openCreateModal() { error.value = ''; newDevice.value = { name: '', fingerprint: '' }; createModalOpen.value = true }
 function closeCreateModal() { if (!busy.value) createModalOpen.value = false }
@@ -194,7 +212,7 @@ async function confirmTOTP() {
   try { await request('/api/auth/totp/enable', { method: 'POST', body: JSON.stringify({ setup_token: totpSetup.value.setup_token, code: totpConfirmCode.value }) }); totpSetup.value = null; totpConfirmCode.value = ''; await loadTOTPStatus() }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
-async function disableTOTP() { busy.value = true; error.value = ''; try { await request('/api/auth/totp/disable', { method: 'POST', body: JSON.stringify(disableTOTPForm.value) }); admin.value = null; totpStatus.value = null; disableTOTPForm.value = { password: '', code: '' }; events?.close(); events = null } catch (cause) { showError(cause) } finally { busy.value = false } }
+async function disableTOTP() { busy.value = true; error.value = ''; try { await request('/api/auth/totp/disable', { method: 'POST', body: JSON.stringify(disableTOTPForm.value) }); admin.value = null; totpStatus.value = null; disableTOTPForm.value = { password: '', code: '' }; stopEvents() } catch (cause) { showError(cause) } finally { busy.value = false } }
 
 function closeActiveModal() {
   if (busy.value) return
@@ -205,8 +223,8 @@ function closeActiveModal() {
 }
 function handleKeydown(event: KeyboardEvent) { if (event.key === 'Escape') closeActiveModal() }
 
-onMounted(() => { applyTheme(theme.value); window.addEventListener('keydown', handleKeydown); void load() })
-onBeforeUnmount(() => { events?.close(); window.removeEventListener('keydown', handleKeydown) })
+onMounted(() => { disposed = false; applyTheme(theme.value); window.addEventListener('keydown', handleKeydown); void load() })
+onBeforeUnmount(() => { disposed = true; stopEvents(); window.removeEventListener('keydown', handleKeydown) })
 function actionTitle(action?: ClientActionType) { if (action === 'enable') return t().enableConfirm; if (action === 'disable') return t().disableConfirm; return t().removeConfirm }
 function actionLabel(action?: ClientActionType) { if (action === 'enable') return t().enable; if (action === 'disable') return t().disable; return t().remove }
 </script>

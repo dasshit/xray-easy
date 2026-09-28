@@ -36,7 +36,7 @@ jobs:
         run: npm test
         working-directory: web
 
-      - name: Collect web coverage report
+      - name: Enforce web coverage thresholds
         run: npm run test:coverage
         working-directory: web
 
