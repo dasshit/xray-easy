@@ -47,7 +47,7 @@ func TestRenderServerConfigKeepsRealityShortIDsInSyncWithActiveClients(t *testin
 	if got := inbound.StreamSettings.RealitySettings.ShortIDs; len(got) != 1 || got[0] != "0123456789abcdef" {
 		t.Fatalf("unexpected REALITY shortIds: %v", got)
 	}
-	if got := inbound.StreamSettings.RealitySettings.MinClientVer; got != realityMinClientVersion {
-		t.Fatalf("unexpected REALITY minClientVer: %q", got)
+	if got := inbound.StreamSettings.RealitySettings.MinClientVer; got != "1.0.0" {
+		t.Fatalf("REALITY minClientVer contract changed: %q", got)
 	}
 }

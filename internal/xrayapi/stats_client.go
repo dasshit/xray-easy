@@ -23,7 +23,8 @@ type UserStats struct {
 }
 
 type StatsClient struct {
-	address string
+	address     string
+	dialOptions []grpc.DialOption
 
 	mu     sync.Mutex
 	conn   *grpc.ClientConn
@@ -79,7 +80,7 @@ func (c *StatsClient) service(ctx context.Context) (statscommand.StatsServiceCli
 	}
 	dialCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
-	conn, err := grpc.DialContext(dialCtx, c.address, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	conn, err := grpc.DialContext(dialCtx, c.address, append([]grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock()}, c.dialOptions...)...)
 	if err != nil {
 		return nil, fmt.Errorf("connect to Xray API %s: %w", c.address, err)
 	}
