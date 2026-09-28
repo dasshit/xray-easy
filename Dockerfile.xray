@@ -1,6 +1,6 @@
 # The Xray image is pinned by XRAY_VERSION. Before publishing an image, CI must
 # resolve the tag to an immutable digest and record the upstream checksum.
-ARG XRAY_VERSION=26.9.8
+ARG XRAY_VERSION=26.7.28
 
 FROM ghcr.io/xtls/xray-core:${XRAY_VERSION} AS xray
 

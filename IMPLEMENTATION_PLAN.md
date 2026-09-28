@@ -74,6 +74,11 @@ MVP поддерживает только один безопасный и хо�
 
 Зафиксированный пресет: **VLESS + REALITY + TCP/RAW + XTLS Vision**.
 
+Для MVP pinned runtime-версия Xray — **v26.7.28**: она совместима с текущим
+V2Rage при явном `realitySettings.minClientVer = "1.0.0"` и уже предоставляет
+используемые StatsService RPC. Xray v26.9.8 остаётся экспериментальной версией
+до появления подтверждённой поддержки `X25519MLKEM768` в V2Rage.
+
 Внутри pinned-версии Xray нужно явно зафиксировать точные имена полей: для текущего
 пресета используется `streamSettings.network = "tcp"` (транспорт RAW в новой
 терминологии Xray), `security = "reality"` и `flow = "xtls-rprx-vision"`.
