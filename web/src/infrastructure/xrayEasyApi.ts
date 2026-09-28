@@ -1,25 +1,42 @@
 import type { Admin, DiagnosticEntry, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
 import type { XrayEasyGateway } from '../application/ports/xrayEasyGateway'
 import type { Client, ClientActionType, Settings, SettingsChange } from '../domain/models'
-import { request } from './api'
+import { parseResponse, request } from './api'
 import { connectXrayEvents } from './events'
+import type { ZodType } from 'zod'
+import {
+  AdminDtoSchema,
+  BackupDtoSchema,
+  ClientDtoSchema,
+  DiagnosticEntriesDtoSchema,
+  NodeStatusDtoSchema,
+  ProfileDeliveryDtoSchema,
+  SettingsChangeDtoSchema,
+  SettingsDtoSchema,
+  SetupStatusDtoSchema,
+  TOTPSetupDtoSchema,
+  TOTPStatusDtoSchema,
+} from './api-contracts'
 import type {
   AdminDto,
+  BackupDto,
   ClientDto,
   DiagnosticEntryDto,
+  DiagnosticEntriesDto,
   NodeStatusDto,
-  ProfileDeliveryDto,
   SettingsChangeDto,
   SettingsDto,
-  SetupStatusDto,
   TOTPSetupDto,
-  TOTPStatusDto,
 } from './api-contracts'
 
-export type JsonRequester = <T>(url: string, options?: RequestInit) => Promise<T>
+export type JsonRequester = (url: string, options?: RequestInit) => Promise<unknown>
 
 function post(body?: unknown): RequestInit {
   return { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) }
+}
+
+async function sendDto<T>(send: JsonRequester, url: string, schema: ZodType<T>, options?: RequestInit): Promise<T> {
+  return parseResponse(await send(url, options), schema)
 }
 
 function mapAdmin(dto: AdminDto): Admin {
@@ -99,13 +116,13 @@ function mapDiagnostic(dto: DiagnosticEntryDto): DiagnosticEntry {
 
 export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGateway {
   const sendVoid = async (url: string, options?: RequestInit): Promise<void> => {
-    await send<unknown>(url, options)
+    await send(url, options)
   }
 
   return {
     setup: {
       status: async (): Promise<SetupStatus> => {
-        const dto = await send<SetupStatusDto>('/api/setup/status')
+        const dto = await sendDto(send, '/api/setup/status', SetupStatusDtoSchema)
         return {
           initialized: dto.initialized,
           ...(dto.public_port === undefined ? {} : { publicPort: dto.public_port }),
@@ -124,47 +141,47 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
       }),
     },
     auth: {
-      current: async (): Promise<Admin> => mapAdmin(await send<AdminDto>('/api/me')),
-      login: async (username: string, password: string): Promise<Admin> => mapAdmin(await send<AdminDto>('/api/auth/login', {
+      current: async (): Promise<Admin> => mapAdmin(await sendDto(send, '/api/me', AdminDtoSchema)),
+      login: async (username: string, password: string): Promise<Admin> => mapAdmin(await sendDto(send, '/api/auth/login', AdminDtoSchema, {
         method: 'POST', body: JSON.stringify({ username, password }),
       })),
-      loginWithTOTP: async (username: string, password: string, totpCode: string): Promise<Admin> => mapAdmin(await send<AdminDto>('/api/auth/login/totp', {
+      loginWithTOTP: async (username: string, password: string, totpCode: string): Promise<Admin> => mapAdmin(await sendDto(send, '/api/auth/login/totp', AdminDtoSchema, {
         method: 'POST', body: JSON.stringify({ username, password, totp_code: totpCode }),
       })),
-      loginWithRecoveryCode: async (username: string, password: string, recoveryCode: string): Promise<Admin> => mapAdmin(await send<AdminDto>('/api/auth/login/recovery', {
+      loginWithRecoveryCode: async (username: string, password: string, recoveryCode: string): Promise<Admin> => mapAdmin(await sendDto(send, '/api/auth/login/recovery', AdminDtoSchema, {
         method: 'POST', body: JSON.stringify({ username, password, recovery_code: recoveryCode }),
       })),
       logout: (): Promise<void> => sendVoid('/api/auth/logout', post()),
       logoutAll: (): Promise<void> => sendVoid('/api/auth/logout-all', post()),
       totpStatus: async (): Promise<TOTPStatus> => {
-        const dto = await send<TOTPStatusDto>('/api/auth/totp/status')
+        const dto = await sendDto(send, '/api/auth/totp/status', TOTPStatusDtoSchema)
         return { enabled: dto.enabled, recoveryCodesRemaining: dto.recovery_codes_remaining }
       },
-      beginTOTPSetup: async (): Promise<TOTPSetup> => mapTOTPSetup(await send<TOTPSetupDto>('/api/auth/totp/setup', post())),
+      beginTOTPSetup: async (): Promise<TOTPSetup> => mapTOTPSetup(await sendDto(send, '/api/auth/totp/setup', TOTPSetupDtoSchema, post())),
       enableTOTP: (setupToken: string, code: string): Promise<void> => sendVoid('/api/auth/totp/enable', post({ setup_token: setupToken, code })),
       disableTOTP: (password: string, code: string): Promise<void> => sendVoid('/api/auth/totp/disable', post({ password, code })),
     },
     clients: {
-      list: async (): Promise<Client[]> => (await send<ClientDto[]>('/api/clients')).map(mapClient),
-      create: async (name: string, fingerprint?: string): Promise<Client> => mapClient(await send<ClientDto>('/api/clients', {
+      list: async (): Promise<Client[]> => (await sendDto(send, '/api/clients', ClientDtoSchema.array())).map(mapClient),
+      create: async (name: string, fingerprint?: string): Promise<Client> => mapClient(await sendDto(send, '/api/clients', ClientDtoSchema, {
         method: 'POST', body: JSON.stringify({
           name,
           ...(fingerprint === undefined || fingerprint === '' ? {} : { fingerprint }),
         }),
       })),
       profile: async (clientId: string): Promise<ProfileDelivery> => {
-        const dto = await send<ProfileDeliveryDto>(`/api/clients/${encodeURIComponent(clientId)}/profile?format=uri`)
+        const dto = await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/profile?format=uri`, ProfileDeliveryDtoSchema)
         return { clientId: dto.client_id, uri: dto.uri, json: dto.json }
       },
       setAction: async (clientId: string, action: ClientActionType): Promise<Client> => mapClient(
-        await send<ClientDto>(`/api/clients/${encodeURIComponent(clientId)}/${action}`, post()),
+        await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/${action}`, ClientDtoSchema, post()),
       ),
       profileQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=qr`,
       profileJsonUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=json`,
     },
     settings: {
-      get: async (): Promise<Settings> => mapSettings(await send<SettingsDto>('/api/settings')),
-      preview: async (input: SettingsPreviewCommand): Promise<Omit<SettingsChange, 'confirmation'>> => mapSettingsChange(await send<SettingsChangeDto>('/api/settings', {
+      get: async (): Promise<Settings> => mapSettings(await sendDto(send, '/api/settings', SettingsDtoSchema)),
+      preview: async (input: SettingsPreviewCommand): Promise<Omit<SettingsChange, 'confirmation'>> => mapSettingsChange(await sendDto(send, '/api/settings', SettingsChangeDtoSchema, {
         method: 'PATCH',
         body: JSON.stringify({
           public_host: input.publicHost,
@@ -177,12 +194,15 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
       apply: (changeId: string, confirmation: string): Promise<void> => sendVoid('/api/settings/apply', post({ change_id: changeId, confirmation })),
     },
     backups: {
-      create: (): Promise<{ name: string }> => send('/api/backups', post()),
+      create: async (): Promise<{ name: string }> => {
+        const dto: BackupDto = await sendDto(send, '/api/backups', BackupDtoSchema, post())
+        return dto
+      },
     },
     diagnostics: {
-      status: async (): Promise<NodeStatus> => mapNodeStatus(await send<NodeStatusDto>('/api/status')),
+      status: async (): Promise<NodeStatus> => mapNodeStatus(await sendDto(send, '/api/status', NodeStatusDtoSchema)),
       logs: async (component: string, limit = 100): Promise<DiagnosticEntry[]> => {
-        const result = await send<{ entries: DiagnosticEntryDto[] }>(`/api/logs?component=${encodeURIComponent(component)}&limit=${limit}`)
+        const result: DiagnosticEntriesDto = await sendDto(send, `/api/logs?component=${encodeURIComponent(component)}&limit=${limit}`, DiagnosticEntriesDtoSchema)
         return result.entries.map(mapDiagnostic)
       },
     },

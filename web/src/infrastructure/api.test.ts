@@ -16,7 +16,7 @@ describe('request', () => {
     const fetchMock = vi.fn().mockResolvedValue(response({ ok: true, status: 200, body: { ready: true } }))
     vi.stubGlobal('fetch', fetchMock)
 
-    await expect(request<{ ready: boolean }>('/api/status')).resolves.toEqual({ ready: true })
+    await expect(request('/api/status')).resolves.toEqual({ ready: true })
     expect(fetchMock).toHaveBeenCalledWith('/api/status', { headers: { 'Content-Type': 'application/json' } })
   })
 

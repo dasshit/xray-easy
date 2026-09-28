@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createXrayEasyApi, type JsonRequester } from './xrayEasyApi'
+import { createXrayEasyApi } from './xrayEasyApi'
 
 function sequence(...values: unknown[]) {
   return { responses: [...values] }
@@ -7,14 +7,14 @@ function sequence(...values: unknown[]) {
 
 function requester(responses: Record<string, unknown>) {
   const calls: Array<{ url: string; options?: RequestInit }> = []
-  const send = vi.fn(<T>(url: string, options?: RequestInit): Promise<T> => {
+  const send = vi.fn((url: string, options?: RequestInit): Promise<unknown> => {
     calls.push({ url, ...(options === undefined ? {} : { options }) })
     const result = responses[url]
-    if (result !== undefined && result !== null && typeof result === 'object' && 'responses' in result) {
-      return Promise.resolve((result.responses as unknown[]).shift() as T)
+    if (result !== null && typeof result === 'object' && 'responses' in result && Array.isArray(result.responses)) {
+      return Promise.resolve(result.responses.shift())
     }
-    return Promise.resolve(result as T)
-  }) as unknown as JsonRequester
+    return Promise.resolve(result)
+  })
   return { send, calls }
 }
 
@@ -61,6 +61,17 @@ describe('Xray-easy API adapter', () => {
         method: 'POST',
         body: JSON.stringify({ username: 'admin', password: 'secret', public_host: 'vpn.example.test', public_port: 18443, reality_target: 'www.example.test:443', reality_sni: 'www.example.test' }),
       },
+    })
+  })
+
+  it('rejects a successful response that does not match its DTO schema', async () => {
+    const { send } = requester({ '/api/setup/status': { initialized: 'yes' } })
+    const api = createXrayEasyApi(send)
+
+    await expect(api.setup.status()).rejects.toMatchObject({
+      name: 'APIError',
+      message: 'The server returned an invalid response',
+      code: 'invalid_response',
     })
   })
 

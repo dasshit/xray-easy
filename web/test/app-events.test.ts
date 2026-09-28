@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { defaultHandler, FakeEventSource, flushPromises, itemAt, mountApp, sampleClient, type RequestRecord } from './appHarness'
+import { clientDto, defaultHandler, FakeEventSource, flushPromises, itemAt, mountApp, sampleClient, type RequestRecord } from './appHarness'
 
 describe('theme and language preferences in the interface', () => {
   it('toggles theme and persists it for the next visit', async () => {
@@ -32,7 +32,7 @@ describe('SSE updates and recovery', () => {
   it('refreshes profiles when a stats event arrives', async () => {
     let clients = [] as typeof sampleClient[]
     const { wrapper, eventSources, requests } = await mountApp(request => {
-      if (request.url === '/api/clients') return { body: clients }
+      if (request.url === '/api/clients') return { body: clients.map(clientDto) }
       return defaultHandler({ authenticated: true })(request)
     })
     clients = [sampleClient]

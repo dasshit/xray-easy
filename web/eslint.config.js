@@ -101,6 +101,13 @@ export default tseslint.config(
     },
   },
   {
+    files: ['src/**/*.{ts,vue}'],
+    ignores: ['src/**/*.test.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-type-assertion': 'error',
+    },
+  },
+  {
     files: ['src/**/*.test.ts', 'test/**/*.ts'],
     rules: {
       '@typescript-eslint/no-unsafe-argument': 'off',
