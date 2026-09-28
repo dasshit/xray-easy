@@ -24,6 +24,7 @@ import (
 	"xray-easy/internal/auth"
 	"xray-easy/internal/backup"
 	"xray-easy/internal/diagnostics"
+	"xray-easy/internal/domain"
 	"xray-easy/internal/maintenance"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/stats"
@@ -36,8 +37,6 @@ import (
 )
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
-var deviceNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
-var fingerprints = map[string]bool{"chrome": true, "firefox": true, "safari": true, "edge": true, "ios": true, "android": true, "random": true}
 
 type server struct {
 	store            *store.Store
@@ -122,7 +121,7 @@ type pendingSettingsChange struct {
 	AdminID              string
 	BaseFingerprint      string
 	ClientsFingerprint   string
-	Settings             store.Settings
+	Settings             domain.Settings
 	ExpectedConfirmation string
 	Diff                 []settingsDiff
 	Consequences         []string
@@ -132,8 +131,17 @@ type pendingSettingsChange struct {
 }
 
 type clientResponse struct {
-	store.Client
-	stats.ClientStats
+	ID                string     `json:"id"`
+	Name              string     `json:"name"`
+	ClientFingerprint string     `json:"fingerprint,omitempty"`
+	Enabled           bool       `json:"enabled"`
+	Revoked           bool       `json:"revoked"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+	Online            bool       `json:"online"`
+	LastSeen          *time.Time `json:"last_seen,omitempty"`
+	UploadBytes       int64      `json:"upload_bytes"`
+	DownloadBytes     int64      `json:"download_bytes"`
 }
 
 func main() {
@@ -519,13 +527,13 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "public_host is required"})
 		return
 	}
-	if err := xray.ValidatePublicHost(req.PublicHost); err != nil {
+	if err := domain.ValidatePublicHost(req.PublicHost); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
 	req.RealityTarget = strings.TrimSpace(req.RealityTarget)
 	req.RealitySNI = strings.TrimSpace(req.RealitySNI)
-	if err := xray.ValidateTarget(req.RealityTarget, req.RealitySNI); err != nil {
+	if err := domain.ValidateRealityTarget(req.RealityTarget, req.RealitySNI); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1130,15 +1138,15 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	if req.ClientFingerprint != nil {
 		candidate.ClientFingerprint = strings.TrimSpace(*req.ClientFingerprint)
 	}
-	if err := xray.ValidatePublicHost(candidate.PublicHost); err != nil {
+	if err := domain.ValidatePublicHost(candidate.PublicHost); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
 		return
 	}
-	if candidate.ClientFingerprint == "" || !fingerprints[candidate.ClientFingerprint] {
+	if candidate.ClientFingerprint == "" || !domain.SupportsFingerprint(candidate.ClientFingerprint) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "unsupported client fingerprint"})
 		return
 	}
-	if err := xray.ValidateTarget(candidate.RealityTarget, candidate.RealitySNI); err != nil {
+	if err := domain.ValidateRealityTarget(candidate.RealityTarget, candidate.RealitySNI); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
 		return
 	}
@@ -1331,12 +1339,12 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt candidate REALITY private key"})
 		return
 	}
-	newClients := append([]store.Client(nil), oldClients...)
-	states := make(map[string]store.ClientState, len(oldClients))
+	newClients := append([]domain.Client(nil), oldClients...)
+	states := make(map[string]domain.ClientState, len(oldClients))
 	if pending.ExpectedConfirmation != "" {
 		for i := range newClients {
 			newClients[i].Enabled, newClients[i].Revoked = false, true
-			states[newClients[i].ID] = store.ClientState{Enabled: false, Revoked: true}
+			states[newClients[i].ID] = domain.ClientState{Enabled: false, Revoked: true}
 		}
 	}
 	path, operationID, err := s.prepareCandidateLocked(r.Context(), pending.Settings, privateKey, newClients)
@@ -1395,22 +1403,22 @@ func (s *server) finishSettingsChange(id string, success bool) {
 	}
 }
 
-func clientStates(clients []store.Client) map[string]store.ClientState {
-	states := make(map[string]store.ClientState, len(clients))
+func clientStates(clients []domain.Client) map[string]domain.ClientState {
+	states := make(map[string]domain.ClientState, len(clients))
 	for _, client := range clients {
-		states[client.ID] = store.ClientState{Enabled: client.Enabled, Revoked: client.Revoked}
+		states[client.ID] = domain.ClientState{Enabled: client.Enabled, Revoked: client.Revoked}
 	}
 	return states
 }
 
-func settingsFingerprint(settings store.Settings) string {
+func settingsFingerprint(settings domain.Settings) string {
 	value := strings.Join([]string{settings.PublicHost, strconv.Itoa(settings.PublicPort), settings.XrayAPIListen, strconv.Itoa(settings.InternalInboundPort), settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint}, "\x00")
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
 }
 
-func clientsFingerprint(clients []store.Client) string {
-	ordered := append([]store.Client(nil), clients...)
+func clientsFingerprint(clients []domain.Client) string {
+	ordered := append([]domain.Client(nil), clients...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
 	var value strings.Builder
 	for _, client := range ordered {
@@ -1484,10 +1492,6 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := strings.TrimSpace(req.Name)
-	if !deviceNamePattern.MatchString(name) {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "name must contain ASCII letters, digits or '-' and be 1-64 characters"})
-		return
-	}
 	fingerprint := strings.TrimSpace(req.Fingerprint)
 	settings, err := s.store.GetSettings(r.Context())
 	if err != nil || settings.RealityPrivateKeyEnc == "" {
@@ -1495,7 +1499,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	settings.PublicPort = s.publicPort
-	if fingerprint != "" && !fingerprints[fingerprint] {
+	if fingerprint != "" && !domain.SupportsFingerprint(fingerprint) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported client fingerprint"})
 		return
 	}
@@ -1509,7 +1513,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusCreated, s.withStats([]store.Client{client})[0])
+	writeJSON(w, http.StatusCreated, s.withStats([]domain.Client{client})[0])
 }
 
 func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
@@ -1530,7 +1534,7 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 1 && r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, s.withStats([]store.Client{client})[0])
+		writeJSON(w, http.StatusOK, s.withStats([]domain.Client{client})[0])
 		return
 	}
 	if len(parts) == 2 && parts[1] == "profile" && r.Method == http.MethodGet {
@@ -1552,32 +1556,35 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
 }
 
-func (s *server) createClient(ctx context.Context, settings store.Settings, privateKey, name, fingerprint, actorID string) (store.Client, error) {
+func (s *server) createClient(ctx context.Context, settings domain.Settings, privateKey, name, fingerprint, actorID string) (domain.Client, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	clients, err := s.store.ListClients(ctx)
 	if err != nil {
-		return store.Client{}, fmt.Errorf("list clients: %w", err)
+		return domain.Client{}, fmt.Errorf("list clients: %w", err)
 	}
 	clientID, err := randomID()
 	if err != nil {
-		return store.Client{}, err
+		return domain.Client{}, err
 	}
 	uuid, err := xray.NewUUID()
 	if err != nil {
-		return store.Client{}, err
+		return domain.Client{}, err
 	}
 	shortID, err := xray.NewShortID()
 	if err != nil {
-		return store.Client{}, err
+		return domain.Client{}, err
 	}
 	if fingerprint == "" {
 		fingerprint = settings.ClientFingerprint
 	}
-	client := store.Client{ID: clientID, Name: name, ClientFingerprint: fingerprint, Enabled: true}
+	client, err := domain.NewClient(clientID, name, fingerprint)
+	if err != nil {
+		return domain.Client{}, err
+	}
 	clientEmail := "device-" + clientID + "@xray-easy"
 	if err := s.store.CreateClient(ctx, client, uuid, clientEmail, shortID); err != nil {
-		return store.Client{}, fmt.Errorf("create client: %w", err)
+		return domain.Client{}, fmt.Errorf("create client: %w", err)
 	}
 	client.UUID, client.Email, client.ShortID = uuid, clientEmail, shortID
 	clients = append(clients, client)
@@ -1586,12 +1593,12 @@ func (s *server) createClient(ctx context.Context, settings store.Settings, priv
 	// realitySettings.shortIds, so the complete candidate must be applied.
 	if err := s.applyClientsLiveLocked(ctx, settings, privateKey, clients, actorID, "client.create", clientID, nil, nil); err != nil {
 		_ = s.store.DeleteClient(ctx, clientID)
-		return store.Client{}, err
+		return domain.Client{}, err
 	}
 	return s.store.GetClient(ctx, clientID)
 }
 
-func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client store.Client, enabled, revoked bool, actorID string) {
+func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client domain.Client, enabled, revoked bool, actorID string) {
 	if client.Revoked && !revoked {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "revoked client cannot be enabled"})
 		return
@@ -1629,17 +1636,22 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 		return
 	}
 	updated, _ := s.store.GetClient(r.Context(), client.ID)
-	writeJSON(w, http.StatusOK, s.withStats([]store.Client{updated})[0])
+	writeJSON(w, http.StatusOK, s.withStats([]domain.Client{updated})[0])
 }
 
-func (s *server) withStats(clients []store.Client) []clientResponse {
+func (s *server) withStats(clients []domain.Client) []clientResponse {
 	snapshot := map[string]stats.ClientStats{}
 	if s.stats != nil {
 		snapshot = s.stats.Snapshot()
 	}
 	result := make([]clientResponse, 0, len(clients))
 	for _, client := range clients {
-		result = append(result, clientResponse{Client: client, ClientStats: snapshot[client.ID]})
+		current := snapshot[client.ID]
+		result = append(result, clientResponse{
+			ID: client.ID, Name: client.Name, ClientFingerprint: client.ClientFingerprint,
+			Enabled: client.Enabled, Revoked: client.Revoked, CreatedAt: client.CreatedAt, UpdatedAt: client.UpdatedAt,
+			Online: current.Online, LastSeen: current.LastSeen, UploadBytes: current.UploadBytes, DownloadBytes: current.DownloadBytes,
+		})
 	}
 	return result
 }
@@ -1692,7 +1704,7 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	active := make(map[string]store.Client)
+	active := make(map[string]domain.Client)
 	for _, client := range clients {
 		if client.Enabled && !client.Revoked {
 			active[client.Email] = client
@@ -1718,7 +1730,7 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 	return nil
 }
 
-func (s *server) applyClientsLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string) error {
+func (s *server) applyClientsLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, actorID, action, entityID string) error {
 	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
 	if err != nil {
 		return err
@@ -1743,7 +1755,7 @@ func (s *server) applyClientsLocked(ctx context.Context, settings store.Settings
 	return nil
 }
 
-func (s *server) applyClientsLiveLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client, actorID, action, entityID string, persist, rollbackPersist func() error) error {
+func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, actorID, action, entityID string, persist, rollbackPersist func() error) error {
 	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
 	if err != nil {
 		return err
@@ -1784,7 +1796,7 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings store.Sett
 	return nil
 }
 
-func (s *server) prepareCandidateLocked(ctx context.Context, settings store.Settings, privateKey string, clients []store.Client) (string, string, error) {
+func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client) (string, string, error) {
 	xrayClients := make([]xray.Client, 0, len(clients))
 	for _, client := range clients {
 		xrayClients = append(xrayClients, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
@@ -1825,7 +1837,7 @@ func (s *server) promoteCandidateLocked(ctx context.Context, path, operationID, 
 	return nil
 }
 
-func (s *server) profile(w http.ResponseWriter, r *http.Request, client store.Client) {
+func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.Client) {
 	settings, err := s.store.GetSettings(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "settings are incomplete"})
@@ -1920,7 +1932,7 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func publicSettings(settings store.Settings) map[string]any {
+func publicSettings(settings domain.Settings) map[string]any {
 	return map[string]any{"public_host": settings.PublicHost, "public_port": settings.PublicPort, "reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow}
 }
 

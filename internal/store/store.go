@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"xray-easy/internal/domain"
+
 	_ "modernc.org/sqlite"
 )
 
@@ -31,35 +33,11 @@ type SetupStatus struct {
 	Initialized bool `json:"initialized"`
 }
 
-type Settings struct {
-	PublicHost           string
-	PublicPort           int
-	XrayAPIListen        string
-	InternalInboundPort  int
-	RealityTarget        string
-	RealitySNI           string
-	RealityPrivateKeyEnc string
-	RealityPublicKey     string
-	ClientFingerprint    string
-}
-
-type Client struct {
-	ID                string    `json:"id"`
-	Name              string    `json:"name"`
-	UUID              string    `json:"-"`
-	Email             string    `json:"-"`
-	ShortID           string    `json:"-"`
-	ClientFingerprint string    `json:"fingerprint,omitempty"`
-	Enabled           bool      `json:"enabled"`
-	Revoked           bool      `json:"revoked"`
-	CreatedAt         time.Time `json:"created_at"`
-	UpdatedAt         time.Time `json:"updated_at"`
-}
-
-type ClientState struct {
-	Enabled bool
-	Revoked bool
-}
+// Deprecated: domain entities live in internal/domain. These aliases keep the
+// persistence package source-compatible for callers that only need storage.
+type Settings = domain.Settings
+type Client = domain.Client
+type ClientState = domain.ClientState
 
 // TrafficSnapshot is the durable checkpoint for the counters returned by
 // Xray's StatsService. Xray counters are process-local and can reset after a
@@ -136,16 +114,16 @@ func ValidateDatabase(path string) error {
 	return nil
 }
 
-func ReadSettingsFromDatabase(path string) (Settings, error) {
+func ReadSettingsFromDatabase(path string) (domain.Settings, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
 	if err != nil {
-		return Settings{}, err
+		return domain.Settings{}, err
 	}
 	defer db.Close()
-	var settings Settings
+	var settings domain.Settings
 	err = db.QueryRow(`SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Settings{}, errors.New("settings are not initialized")
+		return domain.Settings{}, errors.New("settings are not initialized")
 	}
 	return settings, err
 }
@@ -511,16 +489,16 @@ func (s *Store) ReplaceRecoveryCodes(ctx context.Context, adminID string, recove
 	return tx.Commit()
 }
 
-func (s *Store) GetSettings(ctx context.Context) (Settings, error) {
-	var settings Settings
+func (s *Store) GetSettings(ctx context.Context) (domain.Settings, error) {
+	var settings domain.Settings
 	err := s.db.QueryRowContext(ctx, `SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint)
 	if errors.Is(err, sql.ErrNoRows) {
-		return Settings{}, errors.New("settings are not initialized")
+		return domain.Settings{}, errors.New("settings are not initialized")
 	}
 	return settings, err
 }
 
-func (s *Store) UpdateSettings(ctx context.Context, settings Settings) error {
+func (s *Store) UpdateSettings(ctx context.Context, settings domain.Settings) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
 }
@@ -529,7 +507,7 @@ func (s *Store) UpdateSettings(ctx context.Context, settings Settings) error {
 // corresponding client state transitions as one SQLite transaction. It is
 // used by settings rotation so a failed apply cannot leave the database with
 // only half of the intended revocation.
-func (s *Store) UpdateSettingsAndClientStates(ctx context.Context, settings Settings, states map[string]ClientState) error {
+func (s *Store) UpdateSettingsAndClientStates(ctx context.Context, settings domain.Settings, states map[string]domain.ClientState) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -552,7 +530,7 @@ func (s *Store) UpdateSettingsAndClientStates(ctx context.Context, settings Sett
 	return tx.Commit()
 }
 
-func (s *Store) CreateClient(ctx context.Context, client Client, uuid, email, shortID string) error {
+func (s *Store) CreateClient(ctx context.Context, client domain.Client, uuid, email, shortID string) error {
 	if client.ID == "" {
 		return errors.New("client id is required")
 	}
@@ -561,13 +539,13 @@ func (s *Store) CreateClient(ctx context.Context, client Client, uuid, email, sh
 	return err
 }
 
-func (s *Store) ListClients(ctx context.Context) ([]Client, error) {
+func (s *Store) ListClients(ctx context.Context) ([]domain.Client, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at FROM clients ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var clients []Client
+	var clients []domain.Client
 	for rows.Next() {
 		client, err := scanClient(rows)
 		if err != nil {
@@ -578,7 +556,7 @@ func (s *Store) ListClients(ctx context.Context) ([]Client, error) {
 	return clients, rows.Err()
 }
 
-func (s *Store) GetClient(ctx context.Context, id string) (Client, error) {
+func (s *Store) GetClient(ctx context.Context, id string) (domain.Client, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at FROM clients WHERE id=?`, id)
 	return scanClient(row)
 }
@@ -660,17 +638,17 @@ func (s *Store) AddAudit(ctx context.Context, actorID, action, entity, entityID,
 
 type scanner interface{ Scan(...any) error }
 
-func scanClient(row scanner) (Client, error) {
-	var client Client
+func scanClient(row scanner) (domain.Client, error) {
+	var client domain.Client
 	var uuid, email, shortID string
 	var enabled, revoked int
 	var created, updated string
 	err := row.Scan(&client.ID, &client.Name, &uuid, &email, &shortID, &client.ClientFingerprint, &enabled, &revoked, &created, &updated)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return Client{}, errors.New("client not found")
+			return domain.Client{}, errors.New("client not found")
 		}
-		return Client{}, err
+		return domain.Client{}, err
 	}
 	client.UUID, client.Email, client.ShortID = uuid, email, shortID
 	client.Enabled, client.Revoked = enabled != 0, revoked != 0
