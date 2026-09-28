@@ -263,7 +263,7 @@ private key и поэтому защищается как секрет mode 0600
 ключ удаляется. Не писать private key, UUID, URI и QR в обычный application log.
 Потеря master key делает зашифрованный runtime state невосстановимым.
 
-`XRAY_EASY_MASTER_KEY` обязателен уже при первом запуске. Требуется base64-значение, кодирующее минимум 32 байта; документация предлагает создать его командой `openssl rand -base64 32`. Если переменная отсутствует или имеет неверный формат, control plane не переходит в ready-состояние и сообщает причину в logs и `doctor`; ключ автоматически не генерируется и в `/data` не сохраняется.
+`XRAY_EASY_MASTER_KEY` обязателен уже при первом запуске. Требуется base64-значение, кодирующее минимум 32 байта. `./install.sh` после подтверждения параметров генерирует его и сохраняет в `.env` с правами `0600`; ручная установка использует `openssl rand -base64 32`. Если переменная отсутствует или имеет неверный формат, control plane не переходит в ready-состояние и сообщает причину в logs; сам control plane ключ не генерирует и в `/data` не сохраняет.
 
 ### `clients`
 
@@ -441,7 +441,7 @@ GET    /api/audit?cursor=...
 
 ### 9.2. Compose
 
-Основной способ установки и документации MVP — готовые `compose.yaml` и `.env.example`. Пользователь создаёт каталог проекта, заранее создаёт supervisor secret командой `umask 077; mkdir -p secrets; openssl rand -base64 32 > secrets/xray_supervisor_token`, задаёт постоянный `XRAY_EASY_MASTER_KEY`, заполняет переменные и запускает `docker compose up -d`. Compose запускает одноразовые `init-volumes` и `init-supervisor-secret`: второй читает host secret с правами `0600` и копирует его в named volume с владельцем UID `10001` и mode `0400`, чтобы долгоживущие контейнеры оставались non-root. Файл secret не коммитится. Отдельный `docker run`-сценарий в MVP не поддерживается, чтобы не дублировать настройку контейнеров, volumes, secrets и сетей.
+Основной способ установки MVP — `./install.sh`: TUI собирается во временном Docker-контейнере без требования Go на VDS, проверяет Docker/Compose, принимает порты, после подтверждения генерирует постоянный master key и supervisor token, записывает `.env` и secret с правами `0600`, затем запускает единственный `compose.yaml`. Повторный запуск сохраняет прежние ключи и volumes. `.env.example` остаётся для ручной установки. Compose запускает одноразовые `init-volumes` и `init-supervisor-secret`: второй читает host secret с правами `0600` и копирует его в named volume с владельцем UID `10001` и mode `0400`, чтобы долгоживущие контейнеры оставались non-root. Файл secret не коммитится.
 
 Минимальная схема:
 
@@ -757,7 +757,7 @@ Compose-сеть `control` позволяет обращаться к серви
 52. **Client fingerprint default:** его можно изменить после setup без перезапуска Xray; новые и повторно выдаваемые профили используют новое значение, старые URI остаются действительными до revoke.
 53. **Fingerprint устройства:** override отдельного устройства можно изменить без отзыва UUID; новая выдача использует новое значение, старый URI продолжает работать до явного revoke.
 54. **Short ID устройства:** после создания short ID неизменяем; для нового значения устройство отзывается и создаётся новый профиль с новым UUID.
-55. **Master key format:** `XRAY_EASY_MASTER_KEY` — base64 минимум 32 байта, генерируется через `openssl rand -base64 32`; автоматическая генерация запрещена.
+55. **Master key format:** `XRAY_EASY_MASTER_KEY` — base64 минимум 32 байта; установщик генерирует ключ после явного подтверждения, а control plane требует готовое значение и никогда не заменяет его автоматически.
 56. **Ротация master key:** выполняется только отдельной CLI-командой через SSH, после backup и явного подтверждения; UI эту операцию не предлагает. Команда в maintenance mode пере-шифровывает все encrypted fields, проверяет расшифровку и только затем заменяет master-key metadata.
 57. **Docker runtime:** официальная матрица MVP рассчитана на обычный Docker Engine с Compose; rootless Docker не входит в поддержку первой версии.
 58. **Host OS:** официальная матрица MVP — Linux VDS на `amd64` и `arm64` с Docker Engine/Compose; конкретный дистрибутив не фиксируется, Docker Desktop не входит.
@@ -858,8 +858,8 @@ TypeScript/Nuxt backend остаётся только альтернативой
 
 - `cmd/xray-supervisor` — PID 1 supervisor с HMAC-authenticated API `v1`;
 - `Dockerfile.xray` — multi-stage образ с pinned Xray image tag и supervisor;
-- `compose.stage0.yaml` — внутренние control/egress сети и непубликуемые Xray API;
-- `prototype/config/active.json` — bootstrap-конфигурация без публичного inbound.
+- `compose.yaml` — внутренние control/egress сети и непубликуемые Xray API;
+- `prototype/config-stage1/active.json` — bootstrap-конфигурация без публичного inbound.
 
 Срез control plane и профилей:
 
@@ -875,7 +875,7 @@ TypeScript/Nuxt backend остаётся только альтернативой
   получает per-user counters без импорта всего `xray-core`;
 - `internal/stats` — SQLite checkpoints, delta accumulation после рестартов,
   online/last-seen расчёт и подписки для SSE;
-- `Dockerfile.control` и `compose.stage1.yaml` — control plane рядом с
+- `Dockerfile.control` и `compose.yaml` — control plane рядом с
   supervisor, UI bind-ится только на loopback VDS;
 - Vue dashboard — создание устройств, enable/disable/revoke, QR, VLESS URI и
   JSON download, online/last-seen и upload/download totals.

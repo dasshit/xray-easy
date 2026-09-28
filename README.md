@@ -1,121 +1,171 @@
 # Xray-easy
 
-Xray-easy is an administration panel for a single Xray node. The product plan
-is in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+Xray-easy is a private web panel for one Xray server. It runs Xray and the Go
+control plane in separate Docker containers and helps one administrator create
+VLESS + REALITY + TCP/RAW + XTLS Vision profiles for their devices. The panel
+is bound to the server's loopback address; open it through an SSH tunnel.
 
-The current Go test coverage and the backend test roadmap are in
+The current pinned Xray version is **26.7.28**. It was selected for compatibility
+with the current V2Rage client and supports the gRPC API used for live device
+changes and statistics. Manual release testing on macOS/iOS remains on the
+checklist. The complete product scope and remaining release work are in
+[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+
+## Quick start
+
+You need a Linux VPS with an `amd64` or `arm64` CPU, Docker Engine with the
+Compose v2 plugin, SSH access, and an available public TCP port (443 by
+default). Allow that port in the VPS firewall/security group. The VPS needs
+outbound access for Docker images and for Xray traffic. Go and Node.js are
+**not required** on the VPS.
+
+Run these commands **on the VPS**:
+
+```sh
+git clone https://github.com/dasshit/xray-easy.git
+cd xray-easy
+./install.sh
+```
+
+The repository is currently private, so GitHub access is required to clone it.
+The installer builds its terminal UI in a temporary Docker container, checks
+Docker/Compose, asks for the public and panel ports, generates the master key
+and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
+mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
+services to become healthy. A repeat run reuses the existing keys and Docker
+volumes.
+
+Example installer session (shortened):
+
+```text
+  [1/4] Checking Docker
+  ✓ Docker and Compose are available
+
+  [2/4] Configuration
+  Public Xray TCP port [443]:
+  Web UI port (VDS loopback only) [8080]:
+
+  [3/4] Review
+  Xray version     26.7.28
+  Public TCP port  443
+  Web UI           127.0.0.1:8080
+  Compose project  xray-easy
+  Build and start Xray-easy now? [Y/n]:
+
+  [4/4] Building and starting containers
+  ✓ Xray-easy is running.
+```
+
+On **your own computer**, start a tunnel to the VPS (replace the user and
+host):
+
+```sh
+ssh -N -L 8080:127.0.0.1:8080 user@your-vds
+```
+
+Open [http://127.0.0.1:8080](http://127.0.0.1:8080). If you chose another Web
+UI port in the installer, use it in both places in the command and URL. The
+panel is never published on the VPS public interface by `compose.yaml`.
+
+In the browser, create the administrator, enter the VPS public IPv4 address or
+DNS name, choose a REALITY target and SNI, and create the first device. Import
+its QR code, VLESS link or JSON profile into a client. The public port shown in
+the setup screen comes from `.env`; it is not edited in the panel. A working
+public inbound is created when the first device is applied.
+
+## What is available
+
+- Device creation, enable/disable/revoke, QR code, VLESS link and JSON export.
+  New devices are normally applied through Xray's gRPC API without restarting
+  the Xray process; the supervisor validates and applies full config changes.
+- Online and last-seen indicators, cumulative upload/download totals, and live
+  panel updates through SSE.
+- Node settings with a preview of changes, confirmation and an automatic
+  backup before changes that revoke existing profiles.
+- Password login, optional TOTP with recovery codes, three-hour sessions, and
+  a command to sign out all sessions.
+- Diagnostics showing supervisor state and recent redacted warnings/errors.
+- Manual and automatic backups in `/data/backups`; the last ten are retained.
+  Backups are plaintext, so protect the VPS and any copies you export.
+
+The Compose control network has IPv6 enabled. Xray's public TCP port is mapped
+to container port `8443`; the panel is mapped to `127.0.0.1` on the VPS. Xray
+and the control plane share a private supervisor token, and their persistent
+state lives in Docker named volumes.
+
+## Day-to-day commands
+
+Run commands from the repository directory on the VPS:
+
+```sh
+docker compose ps
+docker compose logs --tail=100 xray xray-easy
+docker compose logs -f xray
+docker compose down                         # stop, preserving named volumes
+docker compose up -d --build --wait          # start again
+```
+
+To update the code, create a backup from the Security page or CLI, then run:
+
+```sh
+git pull
+./install.sh
+```
+
+The installer keeps an existing `.env` and supervisor token. Keep the value of
+`XRAY_EASY_MASTER_KEY`: it decrypts the stored REALITY private key and verifies
+backups. Changing the public port in `.env` affects issued profiles and requires
+reviewing their replacement in the panel.
+
+Administrative commands run inside the control-plane container:
+
+```sh
+docker compose exec xray-easy xray-easy admin logout-all
+docker compose exec xray-easy xray-easy admin reset-totp
+docker compose exec xray-easy xray-easy admin recovery-codes
+docker compose exec xray-easy xray-easy backup create
+docker compose exec xray-easy xray-easy backup list
+docker compose exec xray-easy xray-easy restore BACKUP_NAME RESTORE
+```
+
+Use an actual name from `backup list` in place of `BACKUP_NAME`. Restore checks
+the backup and master key and creates a backup of the current state before
+applying it. Recovery-code reissue invalidates previous codes; TOTP reset
+revokes all sessions. To copy the unencrypted backup directories to the VPS
+filesystem before transferring them over SSH:
+
+```sh
+docker compose cp xray-easy:/data/backups ./backups
+```
+
+## Manual setup and existing installations
+
+For a manual first install, copy [.env.example](.env.example), fill in
+`XRAY_EASY_MASTER_KEY` with a persistent value from `openssl rand -base64 32`,
+create the token, then start Compose:
+
+```sh
+cp .env.example .env
+openssl rand -base64 32                    # paste into XRAY_EASY_MASTER_KEY in .env
+umask 077
+mkdir -p secrets
+openssl rand -base64 32 > secrets/xray_supervisor_token
+chmod 600 .env secrets/xray_supervisor_token
+docker compose up -d --build --wait
+```
+
+If you previously used `compose.stage1.yaml`, keep its `.env` and
+`prototype/secrets/xray_supervisor_token`, update the checkout and run
+`./install.sh`. The new Compose file defaults to the old project name for an
+existing `.env` without `XRAY_EASY_PROJECT_NAME`, so it reuses the existing
+volumes. Fresh installations use the project name `xray-easy` and store the
+token under `secrets/`. The old stage 0 prototype had no panel state to
+migrate.
+
+If startup fails, inspect `docker compose ps` and
+`docker compose logs --tail=100 xray xray-easy`. Installer failures retain
+`.env` and the token so you can correct the problem and rerun `./install.sh`.
+
+Backend test coverage and the test plan are documented in
 [docs/backend-test-plan.md](docs/backend-test-plan.md). Run
-`bash scripts/backend-coverage.sh` to refresh the coverage numbers.
-
-## Current implementation slice
-
-The current slice implements the usable device and administration flow:
-
-- `xray-supervisor` runs as PID 1 and starts the Xray child process;
-- candidate configs are checked with the pinned Xray binary before apply;
-- apply restarts Xray with a bounded graceful shutdown;
-- status, health, bounded redacted logs and a TLS target probe are available on
-  a private HMAC-authenticated API;
-- the Go control plane stores one-admin state in SQLite and encrypts the REALITY
-  private key with `XRAY_EASY_MASTER_KEY`;
-- the setup wizard validates and probes a REALITY target and generates the
-  X25519 key pair; the first device apply renders the pinned VLESS + REALITY +
-  TCP/Vision server config;
-- authenticated device CRUD supports enable, disable, revoke, VLESS URI, QR
-  and client JSON export;
-- Xray HandlerService CRUD, StatsService polling, reconciliation and an
-  authenticated SSE stream keep live users and traffic counters synchronized;
-- optional TOTP is available after the first password login. The encrypted
-  secret is stored in SQLite, recovery codes are shown once and only their
-  hashes are stored. Password + TOTP is required on subsequent logins;
-- the UI has logout-all-sessions, and the control-plane CLI supports
-  `admin logout-all`, `admin reset-totp` and `admin recovery-codes`;
-- plaintext backups are created from the UI or CLI inside `/data/backups` with a SHA-256 manifest
-  authenticated by `XRAY_EASY_MASTER_KEY`; the last 10 backups are retained;
-- restore is an SSH-only CLI operation with a maintenance lock, manifest
-  verification, master-key preflight and the literal `RESTORE` confirmation;
-- node settings can be reviewed in the UI before apply; changing the public
-  host, REALITY target/SNI or private key shows a diff, creates an automatic
-  backup, validates the candidate through the supervisor and revokes old
-  device profiles after exact `REVOKE`/`ROTATE` confirmation;
-- the authenticated dashboard shows the supervisor state, restart count and a
-  bounded tail of redacted Xray warnings/errors; `/api/events` streams stats
-  and status updates over SSE;
-- the Vue dashboard is served from static files packaged separately from the
-  Go control-plane binary in the control-plane image;
-- `compose.stage0.yaml` keeps the supervisor and Xray API off the host network.
-
-The next slice is the release E2E checklist for importing the generated VLESS
-profile into V2Rage on macOS/iOS.
-
-## Run the stage 0 container
-
-Requirements: Docker Compose v2 and an internet connection to pull the pinned
-Xray image.
-
-```sh
-cp .env.example .env
-mkdir -p prototype/secrets
-openssl rand -hex 32 > prototype/secrets/xray_supervisor_token
-chmod 600 prototype/secrets/xray_supervisor_token
-docker compose -f compose.stage0.yaml build
-docker compose -f compose.stage0.yaml up -d
-```
-
-The default public mapping is TCP `${XRAY_PUBLIC_PORT:-443}` to port `8443` in
-the Xray container. The stage 0 prototype config is deliberately a bootstrap
-config without a public inbound; use stage 1 for the control plane and setup
-wizard that generate the first public configuration.
-
-The Compose control network has IPv6 enabled. This is required by some Docker
-hosts for reliable dual-stack name resolution and keeps the control-plane
-network behaviour consistent with a host-installed Xray deployment.
-
-For the current control-plane slice, put a generated base64 master key in
-`.env` and use `compose.stage1.yaml`. Its UI port is published only on
-`127.0.0.1` for
-SSH local forwarding. `XRAY_PUBLIC_PORT` is the single source of truth for the
-host public port and is shown read-only in setup.
-
-```sh
-cp .env.example .env
-openssl rand -base64 32   # put the output in XRAY_EASY_MASTER_KEY
-umask 077; mkdir -p prototype/secrets
-openssl rand -base64 32 > prototype/secrets/xray_supervisor_token
-docker compose -f compose.stage1.yaml up -d --build
-ssh -N -L 8080:127.0.0.1:8080 user@vds
-```
-
-Open `http://127.0.0.1:8080`, finish setup, then create a device and import its
-QR/URI/JSON profile into V2Rage.
-
-Compose copies the host secret through a one-shot root init service into a
-Docker volume owned by UID `10001`; the host file can remain mode `0600` while
-the long-running containers stay non-root.
-
-Administrative recovery commands run inside the control-plane container:
-
-```sh
-docker compose -f compose.stage1.yaml exec xray-easy xray-easy admin logout-all
-docker compose -f compose.stage1.yaml exec xray-easy xray-easy admin reset-totp
-docker compose -f compose.stage1.yaml exec xray-easy xray-easy admin recovery-codes
-```
-
-`recovery-codes` prints a new one-time set and immediately invalidates the
-previous set. `reset-totp` disables TOTP and revokes all sessions.
-
-Create and inspect backups from SSH:
-
-```sh
-docker compose -f compose.stage1.yaml exec xray-easy xray-easy backup create
-docker compose -f compose.stage1.yaml exec xray-easy xray-easy backup list
-docker compose -f compose.stage1.yaml exec xray-easy xray-easy restore <backup-name> RESTORE
-```
-
-Backups are directories containing `state.db`, a redacted active configuration,
-metadata and `manifest.json`. They are not downloadable from the Web UI; copy
-them from the VDS with SSH/SCP when needed.
-
-The node settings panel also allows changing the public host, REALITY target/SNI
-and client fingerprint default. Private-key rotation generates a new key pair;
-all existing profiles are revoked and must be issued again after the apply.
+`bash scripts/backend-coverage.sh` to check coverage thresholds locally.
