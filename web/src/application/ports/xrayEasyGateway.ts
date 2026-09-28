@@ -12,9 +12,9 @@ import type {
 import type { Client, ClientActionType, Settings, SettingsChange } from '../../domain/models'
 
 export interface XrayEventCallbacks {
-  onStats(): void
-  onStatus(): void
-  onError(): void
+  onStats: () => void
+  onStatus: () => void
+  onError: () => void
 }
 
 export interface EventSubscription {

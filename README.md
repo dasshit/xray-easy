@@ -171,5 +171,5 @@ Backend test coverage and the test plan are documented in
 The planned web unit-test coverage is documented in
 [docs/web-test-plan.md](docs/web-test-plan.md).
 
-Run web checks from `web/` with `npm ci`, `npm test`,
+Run web checks from `web/` with `npm ci`, `npm run lint`, `npm test`,
 `npm run test:coverage`, `npm run typecheck`, and `npm run build`.

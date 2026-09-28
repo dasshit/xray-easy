@@ -109,15 +109,15 @@ export async function mountApp(handler: RequestHandler) {
   })
 
   const requests: RequestRecord[] = []
-  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
-    const url = typeof input === 'string' ? input : input.toString()
+  const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof Request ? input.url : input.toString()
     const method = (init?.method || 'GET').toUpperCase()
     let body: unknown
     if (typeof init?.body === 'string') body = JSON.parse(init.body)
     const request = { url, method, body }
     requests.push(request)
     const response = handler(request)
-    return jsonResponse(response.body ?? {}, response.status ?? 200)
+    return Promise.resolve(jsonResponse(response.body ?? {}, response.status ?? 200))
   })
   vi.stubGlobal('fetch', fetchMock)
   vi.stubGlobal('EventSource', FakeEventSource)

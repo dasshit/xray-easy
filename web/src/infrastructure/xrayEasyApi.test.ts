@@ -7,13 +7,13 @@ function sequence(...values: unknown[]) {
 
 function requester(responses: Record<string, unknown>) {
   const calls: Array<{ url: string; options?: RequestInit }> = []
-  const send = vi.fn(async <T>(url: string, options?: RequestInit): Promise<T> => {
+  const send = vi.fn(<T>(url: string, options?: RequestInit): Promise<T> => {
     calls.push({ url, options })
     const result = responses[url]
     if (result && typeof result === 'object' && 'responses' in result) {
-      return (result.responses as unknown[]).shift() as T
+      return Promise.resolve((result.responses as unknown[]).shift() as T)
     }
-    return result as T
+    return Promise.resolve(result as T)
   }) as unknown as JsonRequester
   return { send, calls }
 }

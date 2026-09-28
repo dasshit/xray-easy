@@ -56,6 +56,14 @@ describe('request', () => {
     await expect(request('/api/status')).rejects.toMatchObject({ message: 'HTTP 503' })
   })
 
+  it.each([
+    ['a non-object payload', null],
+    ['error fields with unexpected types', { error: { message: 'Invalid request' }, code: 42 }],
+  ])('uses the HTTP status for %s', async (_description, body) => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ ok: false, status: 400, body })))
+    await expect(request('/api/status')).rejects.toMatchObject({ message: 'HTTP 400' })
+  })
+
   it('treats a non-JSON error response as an HTTP error', async () => {
     vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response({ ok: false, status: 502 })))
     await expect(request('/api/status')).rejects.toBeInstanceOf(APIError)

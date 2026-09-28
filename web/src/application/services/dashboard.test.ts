@@ -40,9 +40,9 @@ describe('authenticated dashboard service', () => {
       settings: { get: vi.fn().mockResolvedValue({ publicHost: 'vpn.example.test' }) },
       diagnostics: {
         status: vi.fn().mockResolvedValue({ state: 'running', restartCount: 3 }),
-        logs: vi.fn().mockImplementation(async component => component === 'xray'
+        logs: vi.fn().mockImplementation(component => Promise.resolve(component === 'xray'
           ? [{ at: '2026-09-28T12:00:02Z', component, level: 'error', message: 'second' }]
-          : [{ at: '2026-09-28T12:00:01Z', component, level: 'warn', message: 'first' }]),
+          : [{ at: '2026-09-28T12:00:01Z', component, level: 'warn', message: 'first' }])),
       },
     })
 
@@ -62,10 +62,9 @@ describe('authenticated dashboard service', () => {
     const api = gateway({
       diagnostics: {
         status: vi.fn().mockRejectedValue(new Error('service unavailable')),
-        logs: vi.fn().mockImplementation(async component => {
-          if (component === 'app') throw new Error('log unavailable')
-          return [{ at: '2026-09-28T12:00:00Z', component, level: 'error', message: 'kept' }]
-        }),
+        logs: vi.fn().mockImplementation(component => component === 'app'
+          ? Promise.reject(new Error('log unavailable'))
+          : Promise.resolve([{ at: '2026-09-28T12:00:00Z', component, level: 'error', message: 'kept' }])),
       },
     })
 

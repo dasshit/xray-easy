@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   web:
-    name: Web unit tests, types, and build
+    name: Web lint, tests, types, and build
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -26,6 +26,10 @@ jobs:
 
       - name: Install web dependencies
         run: npm ci
+        working-directory: web
+
+      - name: Lint web app
+        run: npm run lint
         working-directory: web
 
       - name: Check web types
