@@ -16,6 +16,11 @@ const (
 	Network  = "tcp"
 	Security = "reality"
 	Flow     = "xtls-rprx-vision"
+	// Xray 26.7.11 and newer apply an implicit minClientVer of 26.3.27
+	// when the field is omitted. Third-party clients such as V2RAGE may
+	// report an older REALITY client version, so keep the compatibility
+	// floor explicit until clients can be verified against the newer gate.
+	realityMinClientVersion = "1.0.0"
 	// Xray requires at least one REALITY short ID even when there are no
 	// enabled clients. This reserved value has no matching UUID and therefore
 	// cannot authenticate a device.
@@ -102,12 +107,13 @@ type streamSettings struct {
 	RealitySettings realityServer `json:"realitySettings"`
 }
 type realityServer struct {
-	Show        bool     `json:"show"`
-	Target      string   `json:"target"`
-	XVer        int      `json:"xver"`
-	ServerNames []string `json:"serverNames"`
-	PrivateKey  string   `json:"privateKey"`
-	ShortIDs    []string `json:"shortIds"`
+	Show         bool     `json:"show"`
+	Target       string   `json:"target"`
+	XVer         int      `json:"xver"`
+	ServerNames  []string `json:"serverNames"`
+	PrivateKey   string   `json:"privateKey"`
+	MinClientVer string   `json:"minClientVer"`
+	ShortIDs     []string `json:"shortIds"`
 }
 type sniffing struct {
 	Enabled      bool     `json:"enabled"`
@@ -149,7 +155,7 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		Inbounds: []inbound{{
 			Listen: "0.0.0.0", Port: settings.InternalInboundPort, Protocol: Protocol, Tag: "vless-reality",
 			Settings:       inboundSettings{Clients: serverClients, Decryption: "none"},
-			StreamSettings: streamSettings{Network: Network, Security: Security, RealitySettings: realityServer{Show: false, Target: settings.RealityTarget, XVer: 0, ServerNames: []string{settings.RealitySNI}, PrivateKey: settings.RealityPrivateKey, ShortIDs: shortIDs}},
+			StreamSettings: streamSettings{Network: Network, Security: Security, RealitySettings: realityServer{Show: false, Target: settings.RealityTarget, XVer: 0, ServerNames: []string{settings.RealitySNI}, PrivateKey: settings.RealityPrivateKey, MinClientVer: realityMinClientVersion, ShortIDs: shortIDs}},
 			Sniffing:       sniffing{Enabled: true, DestOverride: []string{"http", "tls", "quic"}},
 		}},
 		Outbounds: []outbound{{Protocol: "freedom", Tag: "direct"}},

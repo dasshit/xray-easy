@@ -28,7 +28,8 @@ func TestRenderServerConfigKeepsRealityShortIDsInSyncWithActiveClients(t *testin
 			} `json:"settings"`
 			StreamSettings struct {
 				RealitySettings struct {
-					ShortIDs []string `json:"shortIds"`
+					MinClientVer string   `json:"minClientVer"`
+					ShortIDs     []string `json:"shortIds"`
 				} `json:"realitySettings"`
 			} `json:"streamSettings"`
 		} `json:"inbounds"`
@@ -45,5 +46,8 @@ func TestRenderServerConfigKeepsRealityShortIDsInSyncWithActiveClients(t *testin
 	}
 	if got := inbound.StreamSettings.RealitySettings.ShortIDs; len(got) != 1 || got[0] != "0123456789abcdef" {
 		t.Fatalf("unexpected REALITY shortIds: %v", got)
+	}
+	if got := inbound.StreamSettings.RealitySettings.MinClientVer; got != realityMinClientVersion {
+		t.Fatalf("unexpected REALITY minClientVer: %q", got)
 	}
 }
