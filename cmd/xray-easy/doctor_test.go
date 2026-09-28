@@ -26,9 +26,11 @@ type doctorSupervisorStub struct {
 	statusErr    error
 	validateErr  error
 	probeErr     error
+	ipv6Err      error
 	validatePath string
 	validateCall int
 	probeCall    int
+	ipv6Call     int
 	logs         []string
 	logsErr      error
 }
@@ -48,6 +50,11 @@ func (s *doctorSupervisorStub) Validate(_ context.Context, path, _ string) error
 func (s *doctorSupervisorStub) ProbeTarget(context.Context, string, string) error {
 	s.probeCall++
 	return s.probeErr
+}
+
+func (s *doctorSupervisorStub) ProbeIPv6(context.Context) error {
+	s.ipv6Call++
+	return s.ipv6Err
 }
 
 func (s *doctorSupervisorStub) Logs(context.Context) ([]string, error) {
@@ -231,6 +238,55 @@ func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "unknown method") {
 		t.Fatal("raw gRPC error was exposed in doctor output")
+	}
+}
+
+func TestDoctorReportsIPv6EgressFailureAsWarning(t *testing.T) {
+	dataDir, configDir, key := prepareDoctorState(t, true)
+	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	sup := &doctorSupervisorStub{
+		status:  supervisor.Status{State: "running"},
+		ipv6Err: errors.New("private network diagnostic detail"),
+	}
+	var output bytes.Buffer
+	err := runDoctor(context.Background(), dataDir, configDir, &output, sup, &doctorHandlerStub{}, &doctorStatsStub{})
+	if err != nil {
+		t.Fatalf("IPv6 egress failure must remain a warning: %v\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "WARN  IPv6 egress: outbound IPv6 TCP probe failed") || strings.Contains(output.String(), "private network diagnostic detail") {
+		t.Fatalf("IPv6 warning was missing or leaked details: %s", output.String())
+	}
+	if sup.ipv6Call != 1 {
+		t.Fatalf("IPv6 probe count = %d, want 1", sup.ipv6Call)
+	}
+}
+
+func TestDoctorReportsIPv6PublicHostType(t *testing.T) {
+	dataDir, configDir, key := prepareDoctorState(t, true)
+	db, err := store.Open(context.Background(), filepath.Join(dataDir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.PublicHost = "2001:db8::1"
+	if err := db.UpdateSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	var output bytes.Buffer
+	if err := runDoctor(context.Background(), dataDir, configDir, &output, &doctorSupervisorStub{status: supervisor.Status{State: "running"}}, &doctorHandlerStub{}, &doctorStatsStub{}); err != nil {
+		t.Fatalf("doctor failed: %v\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "PASS  Public host: IPv6 literal configured") {
+		t.Fatalf("doctor omitted the IPv6 public-host type: %s", output.String())
 	}
 }
 

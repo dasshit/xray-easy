@@ -91,6 +91,43 @@ func TestBuildProfileKeepsURIAndJSONCredentialsInSync(t *testing.T) {
 	}
 }
 
+func TestBuildProfileFormatsIPv6EndpointForURIAndJSON(t *testing.T) {
+	settings := validTestSettings()
+	settings.PublicHost = "2001:0db8:0:0:0:0:0:1"
+	client := Client{ID: "device", Name: "phone", UUID: "123e4567-e89b-42d3-a456-426614174000", ShortID: "0123456789abcdef"}
+	profile, err := BuildProfile(settings, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(profile.URI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Host != "[2001:db8::1]:443" || parsed.Hostname() != "2001:db8::1" || parsed.Port() != "443" {
+		t.Fatalf("IPv6 VLESS authority = %q (hostname %q, port %q)", parsed.Host, parsed.Hostname(), parsed.Port())
+	}
+	var config struct {
+		Outbounds []struct {
+			Settings struct {
+				VNext []struct {
+					Address string `json:"address"`
+					Port    int    `json:"port"`
+				} `json:"vnext"`
+			} `json:"settings"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(profile.JSON, &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Outbounds) != 1 || len(config.Outbounds[0].Settings.VNext) != 1 {
+		t.Fatalf("unexpected client JSON outbounds: %+v", config.Outbounds)
+	}
+	endpoint := config.Outbounds[0].Settings.VNext[0]
+	if endpoint.Address != "2001:db8::1" || endpoint.Port != 443 {
+		t.Fatalf("client JSON endpoint = %+v, want unbracketed IPv6 and port 443", endpoint)
+	}
+}
+
 func TestBuildProfileUsesPerClientFingerprintOverride(t *testing.T) {
 	settings := validTestSettings()
 	client := Client{ID: "device", Name: "phone", UUID: "uuid", ShortID: "sid", ClientFingerprint: "safari"}

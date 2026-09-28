@@ -196,7 +196,7 @@ func TestTerminalSessionRestoresSettingsAndMainRuns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(binDir, "stty"), []byte(stty), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	docker := "#!/bin/sh\nif [ \"$1\" = compose ] && [ \"$4\" = up ]; then echo 'Container xray-easy Started'; fi\n"
+	docker := "#!/bin/sh\nif [ \"$1\" = compose ] && [ \"$2\" = version ]; then echo v2.33.1; exit 0; fi\nif [ \"$1\" = info ]; then echo 28.0.0; exit 0; fi\nif [ \"$1\" = compose ] && [ \"$4\" = up ]; then echo 'Container xray-easy Started'; fi\n"
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(docker), 0o700); err != nil {
 		t.Fatal(err)
 	}

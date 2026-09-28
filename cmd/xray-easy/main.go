@@ -623,10 +623,12 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "public_host is required"})
 		return
 	}
-	if err := domain.ValidatePublicHost(req.PublicHost); err != nil {
+	publicHost, err := domain.NormalizePublicHost(req.PublicHost)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
+	req.PublicHost = publicHost
 	req.RealityTarget = strings.TrimSpace(req.RealityTarget)
 	req.RealitySNI = strings.TrimSpace(req.RealitySNI)
 	if err := domain.ValidateRealityTarget(req.RealityTarget, req.RealitySNI); err != nil {
@@ -652,7 +654,7 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encrypt REALITY private key"})
 		return
 	}
-	admin, err := s.store.Initialize(r.Context(), req.Username, hash, strings.TrimSpace(req.PublicHost), req.PublicPort)
+	admin, err := s.store.Initialize(r.Context(), req.Username, hash, req.PublicHost, req.PublicPort)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "already initialized") {
@@ -1274,10 +1276,12 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	if req.ClientFingerprint != nil {
 		candidate.ClientFingerprint = strings.TrimSpace(*req.ClientFingerprint)
 	}
-	if err := domain.ValidatePublicHost(candidate.PublicHost); err != nil {
+	publicHost, err := domain.NormalizePublicHost(candidate.PublicHost)
+	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
 		return
 	}
+	candidate.PublicHost = publicHost
 	if candidate.ClientFingerprint == "" || !domain.SupportsFingerprint(candidate.ClientFingerprint) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "unsupported client fingerprint"})
 		return

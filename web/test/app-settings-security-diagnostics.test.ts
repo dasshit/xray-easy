@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import type { VueWrapper } from '@vue/test-utils'
 import { defaultHandler, flushPromises, itemAt, mountApp, openTab, settings, sampleClient, type RequestRecord } from './appHarness'
 
 const preview = {
@@ -131,7 +132,7 @@ describe('backups and TOTP security', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Security')
-    await wrapper.get('.security-card button').trigger('click')
+    await securityCard(wrapper, 'Backups').get('button').trigger('click')
     await flushPromises()
     expect(requests.some(request => request.url === '/api/backups' && request.method === 'POST')).toBe(true)
     expect(wrapper.get('.backup-name').text()).toContain('xray-easy-20260928.tar')
@@ -144,7 +145,7 @@ describe('backups and TOTP security', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Security')
-    await wrapper.get('.security-card button').trigger('click')
+    await securityCard(wrapper, 'Backups').get('button').trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Backup disk is full')
   })
@@ -168,7 +169,7 @@ describe('backups and TOTP security', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Security')
-    await wrapper.get('.security-card .security-action-button').trigger('click')
+    await findButton(securityCard(wrapper, 'Two-factor authentication'), 'Enable TOTP').trigger('click')
     await flushPromises()
     expect(wrapper.get('.totp-qr').attributes('src')).toBe('data:image/png;base64,cXItcG5n')
     expect(wrapper.get('.recovery-codes').text()).toContain('AAAA-BBBB')
@@ -191,9 +192,9 @@ describe('backups and TOTP security', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Security')
-    await wrapper.get('.security-card .security-action-button').trigger('click')
+    await findButton(securityCard(wrapper, 'Two-factor authentication'), 'Enable TOTP').trigger('click')
     await flushPromises()
-    await wrapper.get('.security-card input[autocomplete="one-time-code"]').setValue('000000')
+    await securityCard(wrapper, 'Two-factor authentication').get('input[autocomplete="one-time-code"]').setValue('000000')
     await findButton(wrapper, 'Confirm TOTP').trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Invalid TOTP code')
@@ -208,8 +209,8 @@ describe('backups and TOTP security', () => {
       return defaultHandler({ authenticated: true, totpData: { enabled: true, recovery_codes_remaining: 3 } })(request)
     })
     await openTab(wrapper, 'Security')
-    await wrapper.get('.security-card input[autocomplete="current-password"]').setValue('correct-password')
-    await wrapper.get('.security-card input[autocomplete="one-time-code"]').setValue('654321')
+    await securityCard(wrapper, 'Two-factor authentication').get('input[autocomplete="current-password"]').setValue('correct-password')
+    await securityCard(wrapper, 'Two-factor authentication').get('input[autocomplete="one-time-code"]').setValue('654321')
     await findButton(wrapper, 'Disable TOTP').trigger('click')
     await flushPromises()
     expect(requests.find(request => request.url === '/api/auth/totp/disable')?.body).toEqual({ password: 'correct-password', code: '654321' })
@@ -223,8 +224,8 @@ describe('backups and TOTP security', () => {
       return defaultHandler({ authenticated: true, totpData: { enabled: true, recovery_codes_remaining: 3 } })(request)
     })
     await openTab(wrapper, 'Security')
-    await wrapper.get('.security-card input[autocomplete="current-password"]').setValue('correct-password')
-    await wrapper.get('.security-card input[autocomplete="one-time-code"]').setValue('000000')
+    await securityCard(wrapper, 'Two-factor authentication').get('input[autocomplete="current-password"]').setValue('correct-password')
+    await securityCard(wrapper, 'Two-factor authentication').get('input[autocomplete="one-time-code"]').setValue('000000')
     await findButton(wrapper, 'Disable TOTP').trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Invalid TOTP code')
@@ -318,4 +319,10 @@ function findButton(wrapper: { findAll(selector: string): Array<{ text(): string
   const button = wrapper.findAll('button').find(item => item.text().trim().includes(label))
   if (!button) throw new Error(`Button not found: ${label}`)
   return button
+}
+
+function securityCard(wrapper: VueWrapper, heading: string) {
+  const card = wrapper.findAll('.security-card').find(item => item.get('h3').text() === heading)
+  if (!card) throw new Error(`Security card not found: ${heading}`)
+  return card
 }

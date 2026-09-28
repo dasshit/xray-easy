@@ -13,8 +13,10 @@ import (
 )
 
 type fakeRunner struct {
-	calls  []string
-	failOn string
+	calls          []string
+	failOn         string
+	engineVersion  string
+	composeVersion string
 }
 
 func (r *fakeRunner) run(_ context.Context, _ string, _ bool, args ...string) error {
@@ -24,6 +26,28 @@ func (r *fakeRunner) run(_ context.Context, _ string, _ bool, args ...string) er
 		return errors.New("simulated Docker failure")
 	}
 	return nil
+}
+
+func (r *fakeRunner) capture(_ context.Context, _ string, args ...string) (string, error) {
+	call := strings.Join(args, " ")
+	r.calls = append(r.calls, call)
+	if strings.Contains(call, r.failOn) && r.failOn != "" {
+		return "", errors.New("simulated Docker failure")
+	}
+	switch call {
+	case "compose version --short":
+		if r.composeVersion != "" {
+			return r.composeVersion, nil
+		}
+		return "v2.33.1", nil
+	case "info --format {{.ServerVersion}}":
+		if r.engineVersion != "" {
+			return r.engineVersion, nil
+		}
+		return "28.0.0", nil
+	default:
+		return "", fmt.Errorf("unexpected output command: %s", call)
+	}
 }
 
 func TestInstallAndRetryPreserveSecrets(t *testing.T) {
@@ -280,6 +304,55 @@ func TestDockerFailureAndClosedInputStopBeforeWriting(t *testing.T) {
 	for _, input := range []string{"\n", "\n\n"} {
 		if err := run(context.Background(), root, strings.NewReader(input), &output, &fakeRunner{}); err == nil || !strings.Contains(err.Error(), "input ended") {
 			t.Fatalf("expected closed terminal error after %q, got %v", input, err)
+		}
+	}
+}
+
+func TestInstallerRequiresDockerVersionsWithIPv6GatewayPrioritySupport(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		engineVersion string
+		composeVer    string
+		wantError     string
+	}{
+		{name: "old engine", engineVersion: "27.5.1", composeVer: "v2.33.1", wantError: "Docker Engine 28.0.0 or newer"},
+		{name: "old compose", engineVersion: "28.0.0", composeVer: "v2.33.0", wantError: "Docker Compose 2.33.1 or newer"},
+		{name: "version suffix", engineVersion: "29.0.0", composeVer: "v5.5.1-desktop.1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			runner := &fakeRunner{engineVersion: test.engineVersion, composeVersion: test.composeVer}
+			var output bytes.Buffer
+			err := run(context.Background(), root, strings.NewReader(""), &output, runner)
+			if test.wantError == "" {
+				if err == nil || strings.Contains(err.Error(), "Docker Engine 28.0.0 or newer") || strings.Contains(err.Error(), "Docker Compose 2.33.1 or newer") {
+					t.Fatalf("expected versioned Docker installation to pass preflight, got %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("expected %q, got %v", test.wantError, err)
+			}
+			if _, statErr := os.Stat(filepath.Join(root, ".env")); !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("old Docker version created configuration: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestVersionAtLeast(t *testing.T) {
+	for _, test := range []struct {
+		version string
+		minimum string
+		want    bool
+	}{
+		{"v2.33.1", "2.33.1", true},
+		{"v5.5.1-desktop.1", "2.33.1", true},
+		{"27.10.0", "28.0.0", false},
+		{"invalid", "2.33.1", false},
+	} {
+		if got := versionAtLeast(test.version, test.minimum); got != test.want {
+			t.Errorf("versionAtLeast(%q, %q) = %t, want %t", test.version, test.minimum, got, test.want)
 		}
 	}
 }

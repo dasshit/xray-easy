@@ -41,6 +41,7 @@ type configuration struct {
 
 type commandRunner interface {
 	run(context.Context, string, bool, ...string) error
+	capture(context.Context, string, ...string) (string, error)
 }
 
 type dockerRunner struct{ output io.Writer }
@@ -64,6 +65,17 @@ func (r dockerRunner) run(ctx context.Context, dir string, visible bool, args ..
 		return fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(captured.String()))
 	}
 	return nil
+}
+
+func (r dockerRunner) capture(ctx context.Context, dir string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "docker", args...)
+	cmd.Dir = dir
+	cmd.Env = composeEnvironment()
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("docker %s: %w: %s", strings.Join(args, " "), err, strings.TrimSpace(string(output)))
+	}
+	return strings.TrimSpace(string(output)), nil
 }
 
 // Let Compose read these settings from the local .env, even when the shell has
@@ -138,13 +150,21 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		runner = docker
 	}
 	ui.step(1, "Checking Docker")
-	if err := runner.run(ctx, root, false, "compose", "version"); err != nil {
+	composeVersion, err := runner.capture(ctx, root, "compose", "version", "--short")
+	if err != nil {
 		return installResult{}, fmt.Errorf("Docker Compose v2 is required: %w", err)
 	}
-	if err := runner.run(ctx, root, false, "info", "--format", "{{.ServerVersion}}"); err != nil {
+	engineVersion, err := runner.capture(ctx, root, "info", "--format", "{{.ServerVersion}}")
+	if err != nil {
 		return installResult{}, fmt.Errorf("cannot reach the Docker daemon: %w", err)
 	}
-	ui.message("Docker and Compose are available")
+	if !versionAtLeast(engineVersion, "28.0.0") {
+		return installResult{}, fmt.Errorf("Docker Engine 28.0.0 or newer is required for IPv6 egress routing; found %q. Upgrade Docker Engine and rerun ./install.sh", engineVersion)
+	}
+	if !versionAtLeast(composeVersion, "2.33.1") {
+		return installResult{}, fmt.Errorf("Docker Compose 2.33.1 or newer is required for IPv6 egress routing; found %q. Upgrade the Compose plugin and rerun ./install.sh", composeVersion)
+	}
+	ui.message(fmt.Sprintf("Docker Engine %s and Compose %s are available; IPv6 egress routing is supported", engineVersion, composeVersion))
 
 	envPath := filepath.Join(root, ".env")
 	_, statErr := os.Stat(envPath)
@@ -154,7 +174,6 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	existing := statErr == nil
 	ui.step(2, "Configuration")
 	var cfg configuration
-	var err error
 	if existing {
 		cfg, err = loadConfiguration(root)
 		if err != nil {
@@ -239,6 +258,47 @@ func parsePort(value string) (int, error) {
 		return 0, errors.New("port must be between 1 and 65535")
 	}
 	return port, nil
+}
+
+func versionAtLeast(version, minimum string) bool {
+	parse := func(value string) ([3]int, bool) {
+		var result [3]int
+		value = strings.TrimSpace(strings.TrimLeft(value, "vV"))
+		parts := strings.Split(value, ".")
+		if len(parts) < len(result) {
+			return result, false
+		}
+		for i := range result {
+			end := 0
+			for end < len(parts[i]) && parts[i][end] >= '0' && parts[i][end] <= '9' {
+				end++
+			}
+			if end == 0 {
+				return result, false
+			}
+			component, err := strconv.Atoi(parts[i][:end])
+			if err != nil {
+				return result, false
+			}
+			result[i] = component
+		}
+		return result, true
+	}
+
+	got, ok := parse(version)
+	if !ok {
+		return false
+	}
+	want, ok := parse(minimum)
+	if !ok {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return got[i] > want[i]
+		}
+	}
+	return true
 }
 
 func createConfiguration(root string, cfg configuration) error {

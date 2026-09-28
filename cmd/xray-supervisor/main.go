@@ -319,6 +319,7 @@ func (s *supervisor) handler() http.Handler {
 	mux.HandleFunc("/validate", s.handleValidate)
 	mux.HandleFunc("/apply", s.handleApply)
 	mux.HandleFunc("/probe-target", s.handleProbe)
+	mux.HandleFunc("/probe-ipv6", s.handleIPv6Probe)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, err := readBody(r)
 		if err != nil {
@@ -459,6 +460,38 @@ func (s *supervisor) handleProbe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "target": req.Target, "protocol": protocolVersion})
+}
+
+func (s *supervisor) handleIPv6Probe(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
+	defer cancel()
+	if err := probeIPv6(ctx); err != nil {
+		writeError(w, http.StatusBadGateway, errors.New("outbound IPv6 TCP probe failed"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "protocol": protocolVersion})
+}
+
+const ipv6ProbeAddress = "[2606:4700:4700::1111]:443"
+
+func probeIPv6(ctx context.Context) error {
+	dialer := &net.Dialer{Timeout: 3 * time.Second}
+	return probeIPv6With(ctx, dialer.DialContext)
+}
+
+func probeIPv6With(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) error {
+	conn, err := dial(ctx, "tcp6", ipv6ProbeAddress)
+	if err != nil {
+		return fmt.Errorf("connect to IPv6 probe endpoint: %w", err)
+	}
+	if conn == nil {
+		return errors.New("IPv6 probe dialer returned no connection")
+	}
+	return conn.Close()
 }
 
 func probeTarget(target, sni string) error {

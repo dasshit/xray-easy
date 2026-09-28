@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+
+	"xray-easy/internal/domain"
 )
 
 const (
@@ -174,6 +176,11 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 	if err := validateSettings(settings); err != nil {
 		return Profile{}, err
 	}
+	publicHost, err := domain.NormalizePublicHost(settings.PublicHost)
+	if err != nil {
+		return Profile{}, err
+	}
+	settings.PublicHost = publicHost
 	if client.UUID == "" || client.ShortID == "" || client.Revoked {
 		return Profile{}, errors.New("client profile is unavailable")
 	}

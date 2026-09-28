@@ -58,6 +58,12 @@ func (c Client) ProbeTarget(ctx context.Context, target, sni string) error {
 	return err
 }
 
+// ProbeIPv6 checks outbound IPv6 connectivity from the Xray container.
+func (c Client) ProbeIPv6(ctx context.Context) error {
+	_, err := c.call(ctx, http.MethodGet, "/probe-ipv6", nil)
+	return err
+}
+
 func (c Client) Health(ctx context.Context) error {
 	_, err := c.call(ctx, http.MethodGet, "/health", nil)
 	return err

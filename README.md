@@ -14,10 +14,12 @@ Compose networking. The complete product scope and implementation notes are in
 
 ## Quick start
 
-You need a Linux VPS with an `amd64` or `arm64` CPU, Docker Engine with the
-Compose v2 plugin, SSH access, and an available public TCP port (443 by
-default). Allow that port in the VPS firewall/security group. The VPS needs
-outbound access for Docker images and for Xray traffic. Go and Node.js are
+You need a Linux VPS with an `amd64` or `arm64` CPU, Docker Engine **28.0.0 or
+newer**, Docker Compose plugin **2.33.1 or newer**, SSH access, and an available
+public TCP port (443 by default). These Docker versions are required to choose
+the correct IPv4/IPv6 egress gateway for Xray. Allow the public TCP port in the
+VPS firewall/security group for each address family you intend to use. The VPS
+needs outbound access for Docker images and Xray traffic. Go and Node.js are
 **not required** on the VPS.
 
 Run these commands **on the VPS**:
@@ -73,11 +75,14 @@ Open [http://127.0.0.1:8080](http://127.0.0.1:8080). If you chose another Web
 UI port in the installer, use it in both places in the command and URL. The
 panel is never published on the VPS public interface by `compose.yaml`.
 
-In the browser, create the administrator, enter the VPS public IPv4 address or
-DNS name, choose a REALITY target and SNI, and create the first device. Import
-its QR code, VLESS link or JSON profile into a client. The public port shown in
-the setup screen comes from `.env`; it is not edited in the panel. A working
-public inbound is created when the first device is applied.
+In the browser, create the administrator, enter the VPS public IPv4 address,
+IPv6 address, or DNS name, choose a REALITY target and SNI, and create the first
+device. Enter an IPv6 address without brackets or a port, for example
+`2001:db8::1`. Use a DNS name with both A and AAAA records to let clients choose
+their available address family. Import the QR code, VLESS link or JSON profile
+into a client. The public port shown in the setup screen comes from `.env`; it
+is not edited in the panel. A working public inbound is created when the first
+device is applied.
 
 ## What is available
 
@@ -95,10 +100,51 @@ public inbound is created when the first device is applied.
 - Manual and automatic backups in `/data/backups`; the last ten are retained.
   Backups are plaintext, so protect the VPS and any copies you export.
 
-The Compose control network has IPv6 enabled. Xray's public TCP port is mapped
-to container port `8443`; the panel is mapped to `127.0.0.1` on the VPS. Xray
-and the control plane share a private supervisor token, and their persistent
-state lives in Docker named volumes.
+The Compose control and Xray egress networks have IPv6 enabled. Xray's public
+TCP port is published on the VPS and mapped to container port `8443`; Docker
+publishes it on IPv4 and IPv6 host addresses when the host daemon supports
+dual-stack port publishing. The panel remains mapped only to `127.0.0.1` on the
+VPS. Xray and the control plane share a private supervisor token, and their
+persistent state lives in Docker named volumes. IPv6 handling in Compose,
+profiles and `doctor` is implemented; actual reachability still depends on the
+VPS IPv6 route, Docker daemon and firewall, so verify it with the checks below.
+
+## IPv6 checks
+
+Docker Desktop can check the Compose file and create an IPv6-enabled network,
+but it does not prove IPv6 routing on a Linux VPS. On the VPS, confirm it has a
+global IPv6 address and a default route:
+
+```sh
+ip -6 address show scope global
+ip -6 route show default
+```
+
+Allow inbound TCP on the configured Xray port in both the VPS firewall and the
+provider security group. Then, from a separate IPv6-capable device, test the
+VPS address and port before importing the profile:
+
+```sh
+nc -6 -vz 2001:db8::1 443
+```
+
+Replace the example address and port with the VPS values. A successful TCP test
+checks reachability only; finish by connecting with the client and opening a
+site. For DNS profiles, verify the hostname's AAAA record points to a working
+IPv6 endpoint before publishing it. Clients may try the AAAA record first, so a
+stale or unreachable IPv6 address can make an otherwise working profile appear
+unstable.
+
+`xray-easy doctor` also checks outbound IPv6 TCP connectivity from the Xray
+container by opening a short connection to Cloudflare's public IPv6 resolver at
+`[2606:4700:4700::1111]:443`, then closing it without sending application data.
+It reports a warning if that route is unavailable; IPv4 can still work. This
+probe cannot confirm inbound reachability, provider firewall rules, or
+application traffic to every IPv6 destination. Docker uses an IPv6-enabled
+bridge with NAT by default, so outbound connections should appear to remote
+sites from the VPS address. If the IPv6 Docker network cannot be created, check
+the [Docker daemon IPv6 setup](https://docs.docker.com/engine/daemon/ipv6/) and
+the host's kernel IPv6 support.
 
 ## Day-to-day commands
 
@@ -116,11 +162,11 @@ docker compose exec -T xray-easy xray-easy doctor bundle
 
 `./install.sh` runs the same doctor command after Compose reports both services
 healthy. `PASS` completes installation; warnings are shown for follow-up (for
-example, pending first-run setup, an unavailable optional stats RPC, or the VDS
-firewall, which cannot be checked from inside Compose). A `FAIL` leaves the
-containers and configuration in place and prints the command to rerun doctor
-after fixing the reported issue. Doctor checks the active config without
-applying it or restarting Xray. If the control-plane container is stopped, run
+example, pending first-run setup, an unavailable optional stats RPC, IPv6
+egress, or the VDS firewall, which cannot be checked from inside Compose). A
+`FAIL` leaves the containers and configuration in place and prints the command
+to rerun doctor after fixing the reported issue. Doctor checks the active
+config without applying it or restarting Xray. If the control-plane container is stopped, run
 a one-off diagnostic container with:
 
 ```sh

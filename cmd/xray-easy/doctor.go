@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"xray-easy/internal/diagnostics"
+	"xray-easy/internal/domain"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/supervisor"
@@ -43,6 +45,7 @@ type doctorSupervisor interface {
 	Status(context.Context) (supervisor.Status, error)
 	Validate(context.Context, string, string) error
 	ProbeTarget(context.Context, string, string) error
+	ProbeIPv6(context.Context) error
 }
 
 type doctorBundleSupervisor interface {
@@ -271,6 +274,11 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 			appendCheck(doctorWarn, "Application setup", "server settings are incomplete", "Complete the first-run setup in the Web UI.")
 		default:
 			settingsReady = true
+			if err := domain.ValidatePublicHost(settings.PublicHost); err != nil {
+				appendCheck(doctorFail, "Public host", "configured endpoint is invalid", "Enter an IPv4 address, IPv6 address without brackets, or DNS name in Settings.")
+			} else {
+				appendCheck(doctorPass, "Public host", publicHostKind(settings.PublicHost)+" configured", "")
+			}
 			if keyErr != nil {
 				appendCheck(doctorFail, "Encrypted REALITY key", "cannot verify encrypted settings without a valid master key", "Correct XRAY_EASY_MASTER_KEY before using the existing state.")
 			} else if _, err := secret.Open(masterKey, settings.RealityPrivateKeyEnc, "reality_private_key"); err != nil {
@@ -328,6 +336,14 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 		}
 	}
 
+	if !supervisorReady {
+		appendCheck(doctorWarn, "IPv6 egress", "probe skipped because Xray is unavailable", "Fix the supervisor and Xray status checks above.")
+	} else if err := sup.ProbeIPv6(ctx); err != nil {
+		appendCheck(doctorWarn, "IPv6 egress", "outbound IPv6 TCP probe failed", "Check IPv6 routing and firewall rules for the Docker host and egress network. IPv4 traffic can still work.")
+	} else {
+		appendCheck(doctorPass, "IPv6 egress", "outbound IPv6 TCP connection succeeded from the Xray container", "")
+	}
+
 	activeConfig := filepath.Join(configDir, "active.json")
 	if _, err := os.Stat(activeConfig); errors.Is(err, os.ErrNotExist) {
 		level := doctorFail
@@ -371,9 +387,20 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 			appendCheck(doctorPass, "Xray statistics API", "StatsService is responding", "")
 		}
 	}
-	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s on the VDS firewall and verify a client connection.", envOr("XRAY_PUBLIC_PORT", "443")))
+	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s for IPv4 and IPv6 in the VDS firewall/security group and verify a client connection.", envOr("XRAY_PUBLIC_PORT", "443")))
 
 	return checks
+}
+
+func publicHostKind(host string) string {
+	address, err := netip.ParseAddr(strings.TrimSpace(host))
+	if err == nil {
+		if address.Is6() {
+			return "IPv6 literal"
+		}
+		return "IPv4 literal"
+	}
+	return "DNS name"
 }
 
 func probeWritableDirectory(path string) error {

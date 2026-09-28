@@ -59,7 +59,8 @@ services:
     networks:
       control:
         ipv4_address: 172.31.241.2
-      egress: {}
+      egress:
+        gw_priority: 1
     depends_on:
       init-volumes:
         condition: service_completed_successfully
@@ -130,5 +131,6 @@ networks:
     ipam:
       config:
         - subnet: 172.31.241.0/24
-  egress: {}
+  egress:
+    enable_ipv6: true
   ui: {}

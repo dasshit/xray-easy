@@ -48,9 +48,8 @@ func ValidateTarget(target, sni string) error {
 	return domain.ValidateRealityTarget(target, sni)
 }
 
-// ValidatePublicHost accepts the MVP profile endpoint formats: a DNS hostname
-// or IPv4 address. IPv6 is deliberately deferred so Compose publishing and
-// client import use the same well-defined host format.
+// ValidatePublicHost accepts a DNS hostname, IPv4 address, or global IPv6
+// literal as a public profile endpoint.
 func ValidatePublicHost(host string) error {
 	return domain.ValidatePublicHost(host)
 }

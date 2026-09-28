@@ -120,6 +120,23 @@ func TestSettingsReadValidationAndFingerprintApply(t *testing.T) {
 	}
 }
 
+func TestSettingsPreviewCanonicalizesIPv6BeforeComparing(t *testing.T) {
+	app := newTestApp(t, true)
+	settings, err := app.server.store.GetSettings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.PublicHost = "2001:db8::1"
+	if err := app.server.store.UpdateSettings(t.Context(), settings); err != nil {
+		t.Fatal(err)
+	}
+	expanded := "2001:0db8:0000:0000:0000:0000:0000:0001"
+	response := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{PublicHost: &expanded}, true)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"changed":false`) {
+		t.Fatalf("equivalent IPv6 settings preview = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestSettingsRotationBacksUpAppliesAndRevokesProfiles(t *testing.T) {
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "macbook")

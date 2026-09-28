@@ -3,6 +3,7 @@ package domain
 import (
 	"errors"
 	"net"
+	"net/netip"
 	"regexp"
 	"strconv"
 	"strings"
@@ -46,34 +47,47 @@ func ValidateRealityTarget(target, sni string) error {
 	return nil
 }
 
-// ValidatePublicHost accepts a DNS hostname or IPv4 address for MVP profile
-// endpoints. IPv6 remains a deployment-level future feature.
-func ValidatePublicHost(host string) error {
+// NormalizePublicHost validates and canonicalizes a DNS hostname or IP literal
+// used as the public endpoint in generated device profiles.
+func NormalizePublicHost(host string) (string, error) {
 	host = strings.TrimSpace(host)
-	if host == "" || len(host) > 253 || strings.ContainsAny(host, "/?#\t\r\n :") {
-		return errors.New("public host must be a DNS name or IPv4 address")
+	if host == "" {
+		return "", errors.New("public host must be a DNS name, IPv4, or global IPv6 address")
 	}
-	if ip := net.ParseIP(host); ip != nil {
-		if ip.To4() == nil {
-			return errors.New("public host must be a DNS name or IPv4 address")
+	if address, err := netip.ParseAddr(host); err == nil {
+		if address.Is4In6() {
+			return "", errors.New("public host must use a native IPv4 or IPv6 address")
 		}
-		return nil
+		if address.Is6() && (address.Zone() != "" || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.IsUnspecified() || address.IsMulticast()) {
+			return "", errors.New("IPv6 public host must be a global unicast address without a zone identifier")
+		}
+		return address.String(), nil
+	}
+	if len(host) > 253 || strings.ContainsAny(host, "/?#\t\r\n :%[]") {
+		return "", errors.New("public host must be a DNS name, IPv4, or global IPv6 address")
 	}
 	name := strings.TrimSuffix(host, ".")
 	if name == "" {
-		return errors.New("public host must be a DNS name or IPv4 address")
+		return "", errors.New("public host must be a DNS name, IPv4, or global IPv6 address")
 	}
 	for _, label := range strings.Split(name, ".") {
 		if len(label) == 0 || len(label) > 63 || label[0] == '-' || label[len(label)-1] == '-' {
-			return errors.New("public host must be a DNS name or IPv4 address")
+			return "", errors.New("public host must be a DNS name, IPv4, or global IPv6 address")
 		}
 		for _, char := range label {
 			if !((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-') {
-				return errors.New("public host must be a DNS name or IPv4 address")
+				return "", errors.New("public host must be a DNS name, IPv4, or global IPv6 address")
 			}
 		}
 	}
-	return nil
+	return host, nil
+}
+
+// ValidatePublicHost accepts a DNS hostname, IPv4 address, or global IPv6
+// address for a public device-profile endpoint.
+func ValidatePublicHost(host string) error {
+	_, err := NormalizePublicHost(host)
+	return err
 }
 
 func (s Settings) ValidateConnection() error {

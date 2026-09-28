@@ -273,6 +273,41 @@ func TestSupervisorReadBodyAndAuthenticationBoundaryErrors(t *testing.T) {
 	}
 }
 
+func TestProbeIPv6UsesTCP6AndClosesTheConnection(t *testing.T) {
+	local, peer := net.Pipe()
+	defer peer.Close()
+	dialCalls := 0
+	err := probeIPv6With(context.Background(), func(_ context.Context, network, address string) (net.Conn, error) {
+		dialCalls++
+		if network != "tcp6" || address != ipv6ProbeAddress {
+			t.Fatalf("IPv6 probe dial = %s %s", network, address)
+		}
+		return local, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dialCalls != 1 {
+		t.Fatalf("IPv6 probe dial count = %d, want 1", dialCalls)
+	}
+	if _, err := local.Write([]byte("closed")); err == nil {
+		t.Fatal("IPv6 probe kept the connection open")
+	}
+}
+
+func TestProbeIPv6ReportsConnectionFailure(t *testing.T) {
+	wantErr := errors.New("no IPv6 route")
+	err := probeIPv6With(context.Background(), func(_ context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp6" || address != ipv6ProbeAddress {
+			t.Fatalf("IPv6 probe dial = %s %s", network, address)
+		}
+		return nil, wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("IPv6 probe error = %v, want wrapped %v", err, wantErr)
+	}
+}
+
 func TestProbeTargetWithInjectedResolverAndDialer(t *testing.T) {
 	publicIP := net.ParseIP("93.184.216.34")
 	var lookedUp, dialed string

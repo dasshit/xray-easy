@@ -6,14 +6,34 @@ import (
 )
 
 func TestValidatePublicHost(t *testing.T) {
-	for _, host := range []string{"vpn.example.com", "89.169.13.234", "sub-domain.example.", "localhost"} {
+	for _, host := range []string{"vpn.example.com", "89.169.13.234", "sub-domain.example.", "localhost", "2001:db8::1", "2001:0db8:0:0::1"} {
 		if err := ValidatePublicHost(host); err != nil {
 			t.Errorf("ValidatePublicHost(%q): %v", host, err)
 		}
 	}
-	for _, host := range []string{"", "::1", "host/path", "bad..name", "-bad.example"} {
+	for _, host := range []string{"", "::1", "[2001:db8::1]", "[2001:db8::1]:443", "fe80::1%eth0", "fd12::1", "::", "ff02::1", "::ffff:192.0.2.1", "host/path", "bad..name", "-bad.example"} {
 		if err := ValidatePublicHost(host); err == nil {
 			t.Errorf("ValidatePublicHost(%q) unexpectedly succeeded", host)
+		}
+	}
+}
+
+func TestNormalizePublicHost(t *testing.T) {
+	for _, test := range []struct {
+		input string
+		want  string
+	}{
+		{input: "  2001:0db8:0:0:0:0:0:1  ", want: "2001:db8::1"},
+		{input: "89.169.13.234", want: "89.169.13.234"},
+		{input: "vpn.example.com", want: "vpn.example.com"},
+	} {
+		got, err := NormalizePublicHost(test.input)
+		if err != nil {
+			t.Errorf("NormalizePublicHost(%q): %v", test.input, err)
+			continue
+		}
+		if got != test.want {
+			t.Errorf("NormalizePublicHost(%q) = %q, want %q", test.input, got, test.want)
 		}
 	}
 }
@@ -90,7 +110,7 @@ func TestValidatePublicHostBoundaryCases(t *testing.T) {
 	}
 	for _, host := range []string{
 		strings.Repeat("a", 254), "example..com", "example-.com", "-example.com",
-		"a" + strings.Repeat("b", 63) + ".example", "2001:db8::1", "https://example.com",
+		"a" + strings.Repeat("b", 63) + ".example", "[2001:db8::1]", "https://example.com",
 	} {
 		if err := ValidatePublicHost(host); err == nil {
 			t.Errorf("invalid public host %q accepted", host)

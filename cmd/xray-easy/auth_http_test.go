@@ -62,6 +62,23 @@ func TestSetupInitializeValidatesInputsAndPersistsFirstAdmin(t *testing.T) {
 	}
 }
 
+func TestSetupInitializeCanonicalizesIPv6PublicHost(t *testing.T) {
+	app := newTestApp(t, false)
+	request := initializeRequest{
+		Username: "admin", Password: "correct horse battery",
+		PublicHost:    "2001:0db8:0000:0000:0000:0000:0000:0001",
+		RealityTarget: "www.example.com:443", RealitySNI: "www.example.com",
+	}
+	response := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("IPv6 setup response = %d %s", response.Code, response.Body.String())
+	}
+	settings, err := app.server.store.GetSettings(t.Context())
+	if err != nil || settings.PublicHost != "2001:db8::1" {
+		t.Fatalf("persisted IPv6 public host = %q, %v", settings.PublicHost, err)
+	}
+}
+
 func TestLoginSessionCookieLogoutAndProtectedRoutes(t *testing.T) {
 	app := newTestApp(t, true)
 	if got := requestJSON(t, app, http.MethodGet, "/api/me", nil, false).Code; got != http.StatusUnauthorized {

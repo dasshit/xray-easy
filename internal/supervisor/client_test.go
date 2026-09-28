@@ -69,6 +69,9 @@ func TestClientMethodsSignRequestsAndDecodeResponses(t *testing.T) {
 	if err := client.ProbeTarget(ctx, "example.com:443", "example.com"); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.ProbeIPv6(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if err := client.Health(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -80,10 +83,10 @@ func TestClientMethodsSignRequestsAndDecodeResponses(t *testing.T) {
 	if err != nil || len(logs) != 2 || logs[0] != "one" || logs[1] != "two" {
 		t.Fatalf("Logs() = %v, %v", logs, err)
 	}
-	if len(requests) != 6 {
-		t.Fatalf("requests = %d, want 6", len(requests))
+	if len(requests) != 7 {
+		t.Fatalf("requests = %d, want 7", len(requests))
 	}
-	wantPaths := []string{"/validate", "/apply", "/probe-target", "/health", "/status", "/logs"}
+	wantPaths := []string{"/validate", "/apply", "/probe-target", "/probe-ipv6", "/health", "/status", "/logs"}
 	for i, request := range requests {
 		if request.URL.Path != wantPaths[i] || request.Header.Get("X-Xray-Operation") != "control-plane" || request.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("request %d headers/path = %s %+v", i, request.URL.Path, request.Header)
