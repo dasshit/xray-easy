@@ -28,6 +28,7 @@ export const settings: SettingsDto = {
   reality_target: 'www.example.com:443',
   reality_sni: 'www.example.com',
   client_fingerprint: 'chrome',
+  log_level: 'warning',
   protocol: 'vless',
   network: 'tcp',
   security: 'reality',

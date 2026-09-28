@@ -17,6 +17,9 @@ export type Client = {
   downloadBytes: number
 }
 
+/** Log verbosity supported by Xray's server log configuration. */
+export type XrayLogLevel = 'debug' | 'info' | 'warning' | 'error' | 'none'
+
 /** Active public endpoint and VLESS + REALITY connection preset. */
 export type Settings = {
   publicHost: string
@@ -24,6 +27,7 @@ export type Settings = {
   realityTarget: string
   realitySni: string
   clientFingerprint: string
+  logLevel: XrayLogLevel
   protocol: string
   network: string
   security: string

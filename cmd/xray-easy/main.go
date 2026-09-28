@@ -122,6 +122,7 @@ type settingsPatchRequest struct {
 	RealityTarget     *string `json:"reality_target"`
 	RealitySNI        *string `json:"reality_sni"`
 	ClientFingerprint *string `json:"client_fingerprint"`
+	LogLevel          *string `json:"log_level"`
 	RotatePrivateKey  bool    `json:"rotate_private_key"`
 }
 
@@ -143,6 +144,7 @@ type pendingSettingsChange struct {
 	ClientsFingerprint   string
 	Settings             domain.Settings
 	ExpectedConfirmation string
+	RequiresXrayApply    bool
 	Diff                 []settingsDiff
 	Consequences         []string
 	RevokedClients       int
@@ -1276,6 +1278,9 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	if req.ClientFingerprint != nil {
 		candidate.ClientFingerprint = strings.TrimSpace(*req.ClientFingerprint)
 	}
+	if req.LogLevel != nil {
+		candidate.LogLevel = strings.TrimSpace(*req.LogLevel)
+	}
 	publicHost, err := domain.NormalizePublicHost(candidate.PublicHost)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
@@ -1286,6 +1291,10 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "unsupported client fingerprint"})
 		return
 	}
+	if !domain.SupportsXrayLogLevel(candidate.LogLevel) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "unsupported Xray log level"})
+		return
+	}
 	if err := domain.ValidateRealityTarget(candidate.RealityTarget, candidate.RealitySNI); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
 		return
@@ -1294,8 +1303,9 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	targetChanged := candidate.RealityTarget != current.RealityTarget
 	sniChanged := candidate.RealitySNI != current.RealitySNI
 	privateKeyChanged := req.RotatePrivateKey
+	logLevelChanged := candidate.LogLevel != current.LogLevel
 	dangerous := hostChanged || targetChanged || sniChanged || privateKeyChanged
-	if !dangerous && candidate.ClientFingerprint == current.ClientFingerprint {
+	if !dangerous && candidate.ClientFingerprint == current.ClientFingerprint && !logLevelChanged {
 		writeJSON(w, http.StatusOK, map[string]any{"changed": false, "settings": publicSettings(current)})
 		return
 	}
@@ -1329,7 +1339,7 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	diff := make([]settingsDiff, 0, 5)
+	diff := make([]settingsDiff, 0, 6)
 	if hostChanged {
 		diff = append(diff, settingsDiff{Field: "public_host", From: current.PublicHost, To: candidate.PublicHost})
 	}
@@ -1346,6 +1356,9 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	if candidate.ClientFingerprint != current.ClientFingerprint {
 		diff = append(diff, settingsDiff{Field: "client_fingerprint", From: current.ClientFingerprint, To: candidate.ClientFingerprint})
 	}
+	if logLevelChanged {
+		diff = append(diff, settingsDiff{Field: "log_level", From: current.LogLevel, To: candidate.LogLevel})
+	}
 	expectedConfirmation := ""
 	consequences := []string{}
 	if dangerous {
@@ -1359,9 +1372,18 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 			"Xray will be validated and reloaded after an automatic backup",
 		)
 	} else {
-		consequences = append(consequences, "existing profiles remain valid; new profiles use the updated default fingerprint")
+		if candidate.ClientFingerprint != current.ClientFingerprint {
+			consequences = append(consequences, "existing profiles remain valid; new profiles use the updated default fingerprint")
+		}
+		if logLevelChanged {
+			consequences = append(consequences, "Xray will restart and active connections will be briefly interrupted; existing profiles remain valid")
+		}
 	}
-	pending := pendingSettingsChange{ID: changeID, AdminID: admin.ID, BaseFingerprint: settingsFingerprint(current), ClientsFingerprint: clientsFingerprint(clients), Settings: candidate, ExpectedConfirmation: expectedConfirmation, Diff: diff, Consequences: consequences, RevokedClients: len(clients), ExpiresAt: time.Now().UTC().Add(10 * time.Minute)}
+	revokedClients := 0
+	if dangerous {
+		revokedClients = len(clients)
+	}
+	pending := pendingSettingsChange{ID: changeID, AdminID: admin.ID, BaseFingerprint: settingsFingerprint(current), ClientsFingerprint: clientsFingerprint(clients), Settings: candidate, ExpectedConfirmation: expectedConfirmation, RequiresXrayApply: logLevelChanged, Diff: diff, Consequences: consequences, RevokedClients: revokedClients, ExpiresAt: time.Now().UTC().Add(10 * time.Minute)}
 	s.settingsMu.Lock()
 	for id, item := range s.pendingSettings {
 		if item.AdminID == admin.ID {
@@ -1378,7 +1400,7 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 		"requires_confirmation": expectedConfirmation != "",
 		"diff":                  diff,
 		"consequences":          consequences,
-		"revoked_clients":       len(clients),
+		"revoked_clients":       revokedClients,
 		"settings":              publicSettings(candidate),
 	})
 }
@@ -1435,7 +1457,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"code": "conflict", "error": "settings changed; prepare the rotation again"})
 		return
 	}
-	if pending.ExpectedConfirmation == "" {
+	if pending.ExpectedConfirmation == "" && !pending.RequiresXrayApply {
 		if err := s.store.UpdateSettings(r.Context(), pending.Settings); err != nil {
 			s.finishSettingsChange(req.ChangeID, false)
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "persist settings: " + err.Error()})
@@ -1465,13 +1487,17 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"code": "conflict", "error": "device list or states changed; review the rotation again"})
 		return
 	}
-	manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
-	backupInfo, err := manager.Create("settings-rotation")
-	if err != nil {
-		s.recordDiagnostic("error", "automatic settings backup failed: "+err.Error())
-		s.finishSettingsChange(req.ChangeID, false)
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "backup_failed", "error": "could not create automatic backup", "detail": err.Error()})
-		return
+	backupName := ""
+	if pending.ExpectedConfirmation != "" {
+		manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
+		backupInfo, backupErr := manager.Create("settings-rotation")
+		if backupErr != nil {
+			s.recordDiagnostic("error", "automatic settings backup failed: "+backupErr.Error())
+			s.finishSettingsChange(req.ChangeID, false)
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "backup_failed", "error": "could not create automatic backup", "detail": backupErr.Error()})
+			return
+		}
+		backupName = backupInfo.Name
 	}
 	privateKey, err := secret.Open(s.masterKey, pending.Settings.RealityPrivateKeyEnc, "reality_private_key")
 	if err != nil {
@@ -1525,9 +1551,19 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.UpdateApplyOperation(r.Context(), operationID, "committed", "")
-	_ = s.store.AddAudit(r.Context(), admin.ID, "settings.rotation", "settings", "node", fmt.Sprintf("settings rotated; %d profiles revoked; backup=%s", len(states), backupInfo.Name))
+	auditAction := "settings.update"
+	auditDetail := fmt.Sprintf("Xray log level changed from %s to %s", current.LogLevel, pending.Settings.LogLevel)
+	if pending.ExpectedConfirmation != "" {
+		auditAction = "settings.rotation"
+		auditDetail = fmt.Sprintf("settings rotated; %d profiles revoked; backup=%s", len(states), backupName)
+	}
+	_ = s.store.AddAudit(r.Context(), admin.ID, auditAction, "settings", "node", auditDetail)
 	s.finishSettingsChange(req.ChangeID, true)
-	writeJSON(w, http.StatusOK, map[string]any{"applied": true, "settings": publicSettings(pending.Settings), "revoked_clients": len(states), "backup": backupInfo.Name})
+	response := map[string]any{"applied": true, "settings": publicSettings(pending.Settings), "revoked_clients": len(states)}
+	if backupName != "" {
+		response["backup"] = backupName
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *server) finishSettingsChange(id string, success bool) {
@@ -1552,7 +1588,7 @@ func clientStates(clients []domain.Client) map[string]domain.ClientState {
 }
 
 func settingsFingerprint(settings domain.Settings) string {
-	value := strings.Join([]string{settings.PublicHost, strconv.Itoa(settings.PublicPort), settings.XrayAPIListen, strconv.Itoa(settings.InternalInboundPort), settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint}, "\x00")
+	value := strings.Join([]string{settings.PublicHost, strconv.Itoa(settings.PublicPort), settings.XrayAPIListen, strconv.Itoa(settings.InternalInboundPort), settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel}, "\x00")
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
 }
@@ -2075,7 +2111,7 @@ func fatal(err error) {
 }
 
 func publicSettings(settings domain.Settings) map[string]any {
-	return map[string]any{"public_host": settings.PublicHost, "public_port": settings.PublicPort, "reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow}
+	return map[string]any{"public_host": settings.PublicHost, "public_port": settings.PublicPort, "reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint, "log_level": settings.LogLevel, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow}
 }
 
 func randomID() (string, error) {

@@ -25,6 +25,17 @@ type Settings struct {
 	RealityPrivateKeyEnc string
 	RealityPublicKey     string
 	ClientFingerprint    string
+	LogLevel             string
+}
+
+// SupportsXrayLogLevel reports whether level is accepted by Xray.
+func SupportsXrayLogLevel(level string) bool {
+	switch level {
+	case "debug", "info", "warning", "error", "none":
+		return true
+	default:
+		return false
+	}
 }
 
 func ValidateRealityTarget(target, sni string) error {

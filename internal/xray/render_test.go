@@ -51,3 +51,27 @@ func TestRenderServerConfigKeepsRealityShortIDsInSyncWithActiveClients(t *testin
 		t.Fatalf("REALITY minClientVer contract changed: %q", got)
 	}
 }
+
+func TestRenderServerConfigUsesConfiguredLogLevel(t *testing.T) {
+	settings := validTestSettings()
+	settings.LogLevel = "debug"
+	config, err := RenderServerConfig(settings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Log struct {
+			Level string `json:"loglevel"`
+		} `json:"log"`
+	}
+	if err := json.Unmarshal(config, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Log.Level != "debug" {
+		t.Fatalf("rendered log level = %q, want debug", decoded.Log.Level)
+	}
+	settings.LogLevel = "trace"
+	if _, err := RenderServerConfig(settings, nil); err == nil {
+		t.Fatal("unsupported Xray log level was accepted")
+	}
+}

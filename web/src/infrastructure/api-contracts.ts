@@ -75,6 +75,7 @@ export const SettingsDtoSchema = z.object({
   reality_target: z.string(),
   reality_sni: z.string(),
   client_fingerprint: z.string(),
+  log_level: z.enum(['debug', 'info', 'warning', 'error', 'none']),
   protocol: z.string(),
   network: z.string(),
   security: z.string(),

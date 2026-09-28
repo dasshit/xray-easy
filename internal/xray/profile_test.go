@@ -13,6 +13,7 @@ func validTestSettings() Settings {
 		RealityTarget: "target.example.com:443", RealitySNI: "target.example.com",
 		RealityPrivateKey: "private-key", RealityPublicKey: "public-key",
 		ClientFingerprint: "chrome",
+		LogLevel:          "warning",
 	}
 }
 

@@ -11,7 +11,7 @@ func SettingsFromDomain(value domain.Settings, privateKey string) Settings {
 		XrayAPIListen: value.XrayAPIListen, InternalInboundPort: value.InternalInboundPort,
 		RealityTarget: value.RealityTarget, RealitySNI: value.RealitySNI,
 		RealityPrivateKey: privateKey, RealityPublicKey: value.RealityPublicKey,
-		ClientFingerprint: value.ClientFingerprint,
+		ClientFingerprint: value.ClientFingerprint, LogLevel: value.LogLevel,
 	}
 }
 

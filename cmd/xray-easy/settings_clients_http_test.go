@@ -120,6 +120,45 @@ func TestSettingsReadValidationAndFingerprintApply(t *testing.T) {
 	}
 }
 
+func TestSettingsLogLevelApplyRestartsXrayWithoutRevokingProfiles(t *testing.T) {
+	app := newTestApp(t, true)
+	client := seedTestClient(t, app, "family-phone")
+	invalid := "trace"
+	if response := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{LogLevel: &invalid}, true); response.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported log level response = %d %s", response.Code, response.Body.String())
+	}
+	level := "debug"
+	prepared := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{LogLevel: &level}, true)
+	if prepared.Code != http.StatusOK || !strings.Contains(prepared.Body.String(), `"requires_confirmation":false`) || !strings.Contains(prepared.Body.String(), `"revoked_clients":0`) || !strings.Contains(prepared.Body.String(), "briefly interrupted") {
+		t.Fatalf("prepare log-level change = %d %s", prepared.Code, prepared.Body.String())
+	}
+	change := decodeResponse[struct {
+		ChangeID string `json:"change_id"`
+	}](t, prepared)
+	applied := requestJSON(t, app, http.MethodPost, "/api/settings/apply", settingsApplyRequest{ChangeID: change.ChangeID}, true)
+	if applied.Code != http.StatusOK || strings.Contains(applied.Body.String(), `"backup"`) {
+		t.Fatalf("apply log-level change = %d %s", applied.Code, applied.Body.String())
+	}
+	settings, err := app.server.store.GetSettings(t.Context())
+	if err != nil || settings.LogLevel != "debug" {
+		t.Fatalf("stored log level = %q, %v; want debug", settings.LogLevel, err)
+	}
+	clientAfter, err := app.server.store.GetClient(t.Context(), client.ID)
+	if err != nil || !clientAfter.Enabled || clientAfter.Revoked {
+		t.Fatalf("profile state after log-level apply = %+v, %v", clientAfter, err)
+	}
+	activeConfig, err := os.ReadFile(filepath.Join(app.server.configDir, "active.json"))
+	if err != nil || !strings.Contains(string(activeConfig), `"loglevel": "debug"`) || !strings.Contains(string(activeConfig), client.UUID) {
+		t.Fatalf("active config did not update log level while retaining profile: %v %s", err, activeConfig)
+	}
+	if len(app.sup.applyCalls) != 1 {
+		t.Fatalf("supervisor apply count = %d, want one Xray apply", len(app.sup.applyCalls))
+	}
+	if entries, err := os.ReadDir(filepath.Join(app.server.dataDir, "backups")); (err == nil && len(entries) != 0) || (err != nil && !os.IsNotExist(err)) {
+		t.Fatalf("non-destructive log-level update created backups: %d, %v", len(entries), err)
+	}
+}
+
 func TestSettingsPreviewCanonicalizesIPv6BeforeComparing(t *testing.T) {
 	app := newTestApp(t, true)
 	settings, err := app.server.store.GetSettings(t.Context())

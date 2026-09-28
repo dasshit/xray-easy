@@ -125,11 +125,74 @@ func ReadSettingsFromDatabase(path string) (domain.Settings, error) {
 	}
 	defer db.Close()
 	var settings domain.Settings
-	err = db.QueryRow(`SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint)
+	if hasSettingsLogLevel(db) {
+		err = db.QueryRow(`SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint, log_level FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint, &settings.LogLevel)
+	} else {
+		err = db.QueryRow(`SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint)
+		settings.LogLevel = "warning"
+	}
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Settings{}, ErrSettingsNotInitialized
 	}
 	return settings, err
+}
+
+func hasSettingsLogLevel(db *sql.DB) bool {
+	rows, err := db.Query(`PRAGMA table_info(settings)`)
+	if err != nil {
+		return false
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey) == nil && name == "log_level" {
+			return true
+		}
+	}
+	return false
+}
+
+func restoreSettings(tx *sql.Tx) error {
+	hasLogLevel := false
+	rows, err := tx.Query(`PRAGMA restore_source.table_info(settings)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "log_level" {
+			hasLogLevel = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	logLevel := `'warning'`
+	if hasLogLevel {
+		logLevel = `log_level`
+	}
+	_, err = tx.Exec(`INSERT INTO main.settings (
+		id, schema_version, public_host, public_port, xray_api_listen,
+		internal_inbound_port, reality_target, reality_sni,
+		reality_private_key_enc, reality_public_key, client_fingerprint,
+		log_level, created_at, updated_at
+	) SELECT id, schema_version, public_host, public_port, xray_api_listen,
+		internal_inbound_port, reality_target, reality_sni,
+		reality_private_key_enc, reality_public_key, client_fingerprint,
+		` + logLevel + `, created_at, updated_at FROM restore_source.settings`)
+	return err
 }
 
 func (s *Store) RestoreFrom(path string) error {
@@ -160,9 +223,15 @@ func (s *Store) RestoreFrom(path string) error {
 		}
 	}
 	for _, table := range databaseTables {
-		if _, err := tx.Exec(`INSERT INTO main.` + table + ` SELECT * FROM restore_source.` + table); err != nil {
+		var restoreErr error
+		if table == "settings" {
+			restoreErr = restoreSettings(tx)
+		} else {
+			_, restoreErr = tx.Exec(`INSERT INTO main.` + table + ` SELECT * FROM restore_source.` + table)
+		}
+		if restoreErr != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("restore table %s: %w", table, err)
+			return fmt.Errorf("restore table %s: %w", table, restoreErr)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -202,6 +271,7 @@ CREATE TABLE IF NOT EXISTS settings (
   reality_private_key_enc TEXT NOT NULL DEFAULT '',
   reality_public_key TEXT NOT NULL DEFAULT '',
   client_fingerprint TEXT NOT NULL DEFAULT 'chrome',
+  log_level TEXT NOT NULL DEFAULT 'warning',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -290,6 +360,7 @@ CREATE TABLE IF NOT EXISTS traffic_snapshots (
 		`ALTER TABLE settings ADD COLUMN reality_private_key_enc TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE settings ADD COLUMN reality_public_key TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE settings ADD COLUMN client_fingerprint TEXT NOT NULL DEFAULT 'chrome'`,
+		`ALTER TABLE settings ADD COLUMN log_level TEXT NOT NULL DEFAULT 'warning'`,
 	} {
 		if _, err := s.db.ExecContext(ctx, column); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 			return fmt.Errorf("migrate settings: %w", err)
@@ -522,7 +593,7 @@ func (s *Store) ReplaceRecoveryCodes(ctx context.Context, adminID string, recove
 
 func (s *Store) GetSettings(ctx context.Context) (domain.Settings, error) {
 	var settings domain.Settings
-	err := s.db.QueryRowContext(ctx, `SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint)
+	err := s.db.QueryRowContext(ctx, `SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint, log_level FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint, &settings.LogLevel)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Settings{}, ErrSettingsNotInitialized
 	}
@@ -530,7 +601,7 @@ func (s *Store) GetSettings(ctx context.Context) (domain.Settings, error) {
 }
 
 func (s *Store) UpdateSettings(ctx context.Context, settings domain.Settings) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, time.Now().UTC().Format(time.RFC3339Nano))
+	_, err := s.db.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, log_level=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
 }
 
@@ -544,7 +615,7 @@ func (s *Store) UpdateSettingsAndClientStates(ctx context.Context, settings doma
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, log_level=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
 		return err
 	}
 	for id, state := range states {

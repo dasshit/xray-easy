@@ -171,8 +171,8 @@ export interface XrayEasyGateway {
      */
     get(): Promise<Settings>
     /**
-     * Preview settings changes and their effect on existing profiles.
-     * @param input - The proposed endpoint, REALITY target, fingerprint, and key-rotation choice.
+     * Preview settings changes and their effect on existing profiles and Xray runtime.
+     * @param input - The proposed endpoint, REALITY target, fingerprint, log level, and key-rotation choice.
      * @returns The proposed settings, diff, consequences, and confirmation details.
      * @rejects {Error} When the proposed settings are invalid.
      */

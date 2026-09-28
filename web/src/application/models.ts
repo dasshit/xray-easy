@@ -1,3 +1,5 @@
+import type { XrayLogLevel } from '../domain/models'
+
 /** First-run state returned by the setup endpoint. */
 export type SetupStatus = {
   initialized: boolean
@@ -59,6 +61,7 @@ export type SettingsPreviewCommand = {
   realityTarget: string
   realitySni: string
   clientFingerprint: string
+  logLevel: XrayLogLevel
   /** Whether to generate a new REALITY key pair, which invalidates existing profiles. */
   rotatePrivateKey: boolean
 }

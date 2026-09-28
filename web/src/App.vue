@@ -3,7 +3,7 @@ import { inject, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
 import { APIError } from './application/errors'
 import type { EventSubscription, XrayEasyGateway } from './application/ports/xrayEasyGateway'
 import { clientActionFor } from './domain/models'
-import type { Client, ClientAction, ClientActionType, Settings, SettingsChange } from './domain/models'
+import type { Client, ClientAction, ClientActionType, Settings, SettingsChange, XrayLogLevel } from './domain/models'
 import type { Admin, DiagnosticEntry, NodeStatus, ProfileDelivery, SetupStatus, TOTPSetup, TOTPStatus } from './application/models'
 import { loadAuthenticatedDashboard, loadDiagnosticsSnapshot, loadNodeStatusSnapshot } from './application/services/dashboard'
 import { formatBytes, formatTimestamp } from './presentation/format'
@@ -36,7 +36,7 @@ const disableTOTPForm = ref({ password: '', code: '' })
 const changePasswordForm = ref({ currentPassword: '', newPassword: '', confirmation: '' })
 const lastBackup = ref('')
 const settings = ref<Settings | null>(null)
-const settingsForm = ref({ publicHost: '', realityTarget: '', realitySNI: '', clientFingerprint: 'chrome', rotatePrivateKey: false })
+const settingsForm = ref<{ publicHost: string; realityTarget: string; realitySNI: string; clientFingerprint: string; logLevel: XrayLogLevel; rotatePrivateKey: boolean }>({ publicHost: '', realityTarget: '', realitySNI: '', clientFingerprint: 'chrome', logLevel: 'warning', rotatePrivateKey: false })
 const pendingSettings = ref<SettingsChange | null>(null)
 const nodeStatus = ref<NodeStatus | null>(null)
 const diagnostics = ref<DiagnosticEntry[]>([])
@@ -157,6 +157,7 @@ async function loadAuthenticated() {
     realityTarget: dashboard.settings.realityTarget,
     realitySNI: dashboard.settings.realitySni,
     clientFingerprint: dashboard.settings.clientFingerprint,
+    logLevel: dashboard.settings.logLevel,
     rotatePrivateKey: false,
   }
   nodeStatus.value = dashboard.nodeStatus
@@ -188,7 +189,7 @@ async function loadDiagnostics() { diagnostics.value = await loadDiagnosticsSnap
  */
 async function loadSettings() {
   settings.value = await api.settings.get()
-  settingsForm.value = { publicHost: settings.value.publicHost, realityTarget: settings.value.realityTarget, realitySNI: settings.value.realitySni, clientFingerprint: settings.value.clientFingerprint, rotatePrivateKey: false }
+  settingsForm.value = { publicHost: settings.value.publicHost, realityTarget: settings.value.realityTarget, realitySNI: settings.value.realitySni, clientFingerprint: settings.value.clientFingerprint, logLevel: settings.value.logLevel, rotatePrivateKey: false }
 }
 /**
  * Open the authenticated server event stream once and refresh UI data as events arrive.
@@ -355,7 +356,7 @@ async function createBackup() { busy.value = true; error.value = ''; try { const
  */
 async function reviewSettings() {
   busy.value = true; error.value = ''; pendingSettings.value = null
-  try { const result = await api.settings.preview({ publicHost: settingsForm.value.publicHost, realityTarget: settingsForm.value.realityTarget, realitySni: settingsForm.value.realitySNI, clientFingerprint: settingsForm.value.clientFingerprint, rotatePrivateKey: settingsForm.value.rotatePrivateKey }); pendingSettings.value = { ...result, confirmation: '' } }
+  try { const result = await api.settings.preview({ publicHost: settingsForm.value.publicHost, realityTarget: settingsForm.value.realityTarget, realitySni: settingsForm.value.realitySNI, clientFingerprint: settingsForm.value.clientFingerprint, logLevel: settingsForm.value.logLevel, rotatePrivateKey: settingsForm.value.rotatePrivateKey }); pendingSettings.value = { ...result, confirmation: '' } }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 /**
@@ -462,6 +463,10 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
             <div class="card-heading"><div><h3>{{ t().profileDefaults }}</h3><p class="hint">{{ t().profileDefaultsHelp }}</p></div><span class="settings-icon" aria-hidden="true">✦</span></div>
             <label>{{ t().fingerprint }}<select v-model="settingsForm.clientFingerprint"><option value="chrome">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option><option value="android">android</option><option value="random">random</option></select></label>
           </article>
+          <article class="settings-card">
+            <div class="card-heading"><div><h3>{{ t().xrayLogging }}</h3><p class="hint">{{ t().xrayLoggingHelp }}</p></div><span class="settings-icon" aria-hidden="true">≋</span></div>
+            <label>{{ t().logLevel }}<select v-model="settingsForm.logLevel"><option value="debug">{{ t().logLevelDebug }}</option><option value="info">{{ t().logLevelInfo }}</option><option value="warning">{{ t().logLevelWarning }}</option><option value="error">{{ t().logLevelError }}</option><option value="none">{{ t().logLevelNone }}</option></select></label>
+          </article>
           <article class="settings-card settings-card-danger">
             <div class="card-heading"><div><h3>{{ t().dangerousSettings }}</h3><p class="hint">{{ t().rotationHelp }}</p></div><span class="settings-icon" aria-hidden="true">!</span></div>
             <label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label>
@@ -510,7 +515,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       <div v-if="createModalOpen" class="modal-backdrop" role="presentation" @click.self="closeCreateModal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-profile-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="create-profile-title">{{ t().createProfile }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeCreateModal">×</button></div><form @submit.prevent="createDevice"><label>{{ t().newDevice }}<input ref="newDeviceNameInput" v-model="newDevice.name" class="device-name-input" :placeholder="t().newDevice" required maxlength="64" /></label><label>{{ t().fingerprint }}<select v-model="newDevice.fingerprint"><option value="">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option></select></label><div class="modal-actions"><button type="button" class="secondary" @click="closeCreateModal">{{ t().cancel }}</button><button type="submit" :disabled="busy || !newDevice.name.trim()">{{ t().createDevice }}</button></div></form></div></div>
       <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
       <div v-if="selectedProfile" class="modal-backdrop" role="presentation" @click.self="closeProfile"><div class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-delivery-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="profile-delivery-title">{{ t().profileFor }} {{ selectedClient()?.name || '' }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeProfile">×</button></div><p class="hint profile-hint">{{ t().scanHint }}</p><div class="profile-delivery"><div class="qr-panel"><span class="qr-label">{{ t().qr }}</span><img class="qr" :src="api.clients.profileQrUrl(selectedProfile.clientId)" :alt="t().qr" /></div><div class="profile-link-panel"><label>{{ t().copyUri }}<textarea readonly :value="selectedProfile.uri"></textarea></label><button class="secondary copy-button" @click="copyProfileUri"><span aria-hidden="true">⧉</span>{{ copiedProfile ? t().copied : t().copy }}</button><a class="download-link" :href="api.clients.profileJsonUrl(selectedProfile.clientId)"><span aria-hidden="true">↓</span>{{ t().jsonFile }}</a></div></div></div></div>
-      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
+      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
     </section>
   </main>
 </template>

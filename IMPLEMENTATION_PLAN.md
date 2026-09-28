@@ -243,6 +243,7 @@ operation ID и состояниями `pending -> validated -> applying -> appl
 ### 4.3. Применение изменений
 
 - Создание, включение, отключение и отзыв устройства: перед удалением прочитать и сохранить последний StatsService counter, затем использовать `AlterInbound`/HandlerService через адаптер pinned-версии. После успешного вызова control plane обновляет производный `desired.json`.
+- Уровень логирования Xray (`debug`, `info`, `warning`, `error`, `none`) задаётся из Web UI и хранится в `settings`; изменение проходит preview/apply, сохраняет устройства и перезапускает Xray с коротким разрывом активных соединений. Старые базы и backup без поля получают `warning`.
 - Изменение target, выбранного SNI, ключей REALITY, transport или routing: control plane записывает candidate, supervisor выполняет `validate` и `apply`, затем останавливает дочерний Xray с grace period и запускает его заново. Поскольку оба процесса используют один порт `8443`, краткий разрыв соединений при node-level apply допустим и явно показывается в UI. Supervisor не записывает volume. Смена `XRAY_PUBLIC_PORT` или public host меняет публикацию Compose/клиентские профили, но не внутренний Xray inbound `8443`; здесь нужен подтверждённый profile rotation и health check после пересоздания Compose, а не обязательный restart дочернего Xray.
 - Supervisor предоставляет versioned protocol `v1` с операциями `validate`, `apply`, `probe-target`, `status`, `health` и ограниченным `logs` endpoint; запросы содержат operation ID, nonce и HMAC. Endpoint доступен только по Compose control network. Xray gRPC API и supervisor bind-ятся только на IP интерфейса `control`, определяемый при старте, а не на `0.0.0.0` обеих сетей; порты не публикуются на host.
 - При недоступности Xray API или supervisor UI показывает `apply pending/failed` и оставляет последнюю рабочую конфигурацию.
@@ -256,7 +257,7 @@ operation ID и состояниями `pending -> validated -> applying -> appl
 ### `settings`
 
 - `id`, `schema_version`, `public_host`, `public_port` (effective value from `XRAY_PUBLIC_PORT`, read-only in UI);
-- `protocol`, `network`, `security`, `flow`, `client_fingerprint_default`;
+- `protocol`, `network`, `security`, `flow`, `client_fingerprint_default`, `log_level`;
 - `reality_target` (normalized host:port), `reality_sni`, `reality_catalog_version`, `reality_private_key`;
 - параметры генерации short ID;
 - `api_listen`, `xray_version`, `active_revision`, `created_at`, `updated_at`.

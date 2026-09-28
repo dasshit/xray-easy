@@ -10,7 +10,7 @@ const preview = {
   diff: [{ field: 'public_host', from: 'old.example.com', to: 'new.example.com' }],
   consequences: ['All profiles will be revoked'],
   revoked_clients: 2,
-  settings: { ...settings, public_host: 'new.example.com' },
+    settings: { ...settings, public_host: 'new.example.com', log_level: 'debug' },
 }
 
 describe('connection settings', () => {
@@ -30,6 +30,7 @@ describe('connection settings', () => {
     await itemAt(inputs, 1).setValue('target.example.com:443')
     await itemAt(inputs, 2).setValue('target.example.com')
     await wrapper.get('.settings-card select').setValue('safari')
+    await wrapper.findAll('.settings-card select')[1]!.setValue('debug')
     await wrapper.get('.settings-card-danger input[type="checkbox"]').setValue(true)
     await wrapper.get('.section-actions button').trigger('click')
     await flushPromises()
@@ -39,6 +40,7 @@ describe('connection settings', () => {
       reality_target: 'target.example.com:443',
       reality_sni: 'target.example.com',
       client_fingerprint: 'safari',
+      log_level: 'debug',
       rotate_private_key: true,
     })
     const dialog = wrapper.get('[role="dialog"]')
@@ -60,7 +62,15 @@ describe('connection settings', () => {
 
   it('skips typed confirmation when the server says it is not required', async () => {
     const requests: RequestRecord[] = []
-    const noConfirmation = { ...preview, requires_confirmation: false, revoked_clients: 0 }
+    const noConfirmation = {
+      ...preview,
+      expected_confirmation: '',
+      requires_confirmation: false,
+      revoked_clients: 0,
+      diff: [{ field: 'log_level', from: 'warning', to: 'debug' }],
+      consequences: ['Xray will restart and active connections will be briefly interrupted; existing profiles remain valid'],
+      settings: { ...settings, log_level: 'debug' },
+    }
     const { wrapper } = await mountApp(request => {
       requests.push(request)
       if (request.method === 'PATCH' && request.url === '/api/settings') return { body: noConfirmation }
@@ -68,9 +78,13 @@ describe('connection settings', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Settings')
+    await wrapper.findAll('.settings-card select')[1]!.setValue('debug')
     await wrapper.get('.section-actions button').trigger('click')
     await flushPromises()
     expect(wrapper.findAll('[role="dialog"] input')).toHaveLength(0)
+    expect(wrapper.get('[role="dialog"]').text()).toContain('Log level: warning → debug')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('active connections will be briefly interrupted')
+    expect(wrapper.get('[role="dialog"]').text()).not.toContain('Profiles to revoke')
     await wrapper.findAll('[role="dialog"] button').find(button => button.text() === 'Apply settings')!.trigger('click')
     await flushPromises()
     expect(requests.find(request => request.url === '/api/settings/apply')?.body).toEqual({ change_id: 'change-123', confirmation: '' })

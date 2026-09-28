@@ -86,18 +86,71 @@ func TestMigrationSetupAndSettingsLifecycle(t *testing.T) {
 	if settings.PublicHost != "vpn.example.com" || settings.PublicPort != 443 || settings.XrayAPIListen != "127.0.0.1:10085" || settings.InternalInboundPort != 8443 {
 		t.Fatalf("unexpected initial settings: %+v", settings)
 	}
+	if settings.LogLevel != "warning" {
+		t.Fatalf("initial Xray log level = %q, want warning", settings.LogLevel)
+	}
 	settings.PublicHost = "new.example.com"
 	settings.RealityTarget = "target.example.com:443"
 	settings.RealitySNI = "target.example.com"
 	settings.RealityPrivateKeyEnc = "encrypted-private-key"
 	settings.RealityPublicKey = "public-key"
 	settings.ClientFingerprint = "safari"
+	settings.LogLevel = "debug"
 	if err := db.UpdateSettings(ctx, settings); err != nil {
 		t.Fatal(err)
 	}
 	got, err := db.GetSettings(ctx)
 	if err != nil || got != settings {
 		t.Fatalf("settings round trip = %+v, %v; want %+v", got, err, settings)
+	}
+}
+
+func TestLegacyBackupWithoutLogLevelRestoresWithWarningDefault(t *testing.T) {
+	ctx := context.Background()
+	legacyPath := filepath.Join(t.TempDir(), "legacy.db")
+	legacy, err := Open(ctx, legacyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer legacy.Close()
+	initTestAdmin(t, legacy, ctx)
+	if _, err := legacy.db.Exec(`ALTER TABLE settings DROP COLUMN log_level`); err != nil {
+		t.Fatalf("create pre-log-level database: %v", err)
+	}
+	backupPath := filepath.Join(t.TempDir(), "legacy-backup.db")
+	if err := legacy.BackupTo(backupPath); err != nil {
+		t.Fatal(err)
+	}
+	read, err := ReadSettingsFromDatabase(backupPath)
+	if err != nil || read.LogLevel != "warning" {
+		t.Fatalf("read legacy settings log level = %q, %v; want warning", read.LogLevel, err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upgraded, err := Open(ctx, legacyPath)
+	if err != nil {
+		t.Fatalf("open pre-log-level database for migration: %v", err)
+	}
+	upgradedSettings, err := upgraded.GetSettings(ctx)
+	if err != nil || upgradedSettings.LogLevel != "warning" {
+		_ = upgraded.Close()
+		t.Fatalf("migrated legacy settings log level = %q, %v; want warning", upgradedSettings.LogLevel, err)
+	}
+	if err := upgraded.Close(); err != nil {
+		t.Fatal(err)
+	}
+	destination, err := Open(ctx, filepath.Join(t.TempDir(), "destination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	if err := destination.RestoreFrom(backupPath); err != nil {
+		t.Fatalf("restore legacy backup: %v", err)
+	}
+	settings, err := destination.GetSettings(ctx)
+	if err != nil || settings.LogLevel != "warning" {
+		t.Fatalf("restored legacy settings log level = %q, %v; want warning", settings.LogLevel, err)
 	}
 }
 

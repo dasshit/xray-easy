@@ -38,6 +38,7 @@ type Settings struct {
 	RealityPrivateKey   string
 	RealityPublicKey    string
 	ClientFingerprint   string
+	LogLevel            string
 	InternalInboundPort int
 }
 
@@ -127,6 +128,9 @@ type outbound struct {
 }
 
 func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
+	if settings.LogLevel == "" {
+		settings.LogLevel = "warning"
+	}
 	if err := validateSettings(settings); err != nil {
 		return nil, err
 	}
@@ -150,7 +154,7 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		shortIDs = []string{emptyShortID}
 	}
 	config := serverConfig{
-		Log:    logConfig{LogLevel: "warning"},
+		Log:    logConfig{LogLevel: settings.LogLevel},
 		API:    apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "StatsService", "LoggerService"}},
 		Stats:  map[string]any{},
 		Policy: policyConfig{Levels: map[string]policyLevel{"0": {StatsUserUplink: true, StatsUserDownlink: true, StatsUserOnline: true}}},
@@ -244,6 +248,9 @@ func buildClientJSON(settings Settings, client Client, fingerprint string) ([]by
 }
 
 func validateSettings(settings Settings) error {
+	if settings.LogLevel != "" && !domain.SupportsXrayLogLevel(settings.LogLevel) {
+		return errors.New("unsupported Xray log level")
+	}
 	if err := ValidatePublicHost(settings.PublicHost); err != nil {
 		return err
 	}

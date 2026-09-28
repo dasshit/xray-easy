@@ -92,7 +92,11 @@ device is applied.
 - Online and last-seen indicators, cumulative upload/download totals, and live
   panel updates through SSE.
 - Node settings with a preview of changes, confirmation and an automatic
-  backup before changes that revoke existing profiles.
+  backup before changes that revoke existing profiles. The Settings page also
+  controls Xray log verbosity (`debug`, `info`, `warning`, `error`, `none`);
+  changing it restarts Xray and briefly interrupts active connections without
+  revoking device profiles. Debug logging is verbose, so return to `warning`
+  after troubleshooting.
 - Password login, optional TOTP with recovery codes, three-hour sessions, and
   a command to sign out all sessions. The Security page can change the
   administrator password; the change ends every active session.

@@ -104,7 +104,7 @@ describe('Xray-easy API adapter', () => {
   it('maps settings preview, serializes apply, and preserves TOTP wire contracts', async () => {
     const settingsDto = {
       public_host: 'vpn.example.test', public_port: 443, reality_target: 'target.example.test:443', reality_sni: 'target.example.test',
-      client_fingerprint: 'chrome', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
+      client_fingerprint: 'chrome', log_level: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
     }
     const previewDto = {
       change_id: 'change-1', expires_in: 300, expected_confirmation: 'REVOKE', requires_confirmation: true,
@@ -126,13 +126,13 @@ describe('Xray-easy API adapter', () => {
     const api = createXrayEasyApi(send)
     const settings = {
       publicHost: 'vpn.example.test', publicPort: 443, realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
-      clientFingerprint: 'chrome', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
+      clientFingerprint: 'chrome', logLevel: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
     }
 
     await expect(api.settings.get()).resolves.toEqual(settings)
     const preview = await api.settings.preview({
       publicHost: 'vpn.example.test', realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
-      clientFingerprint: 'safari', rotatePrivateKey: true,
+      clientFingerprint: 'safari', logLevel: 'error', rotatePrivateKey: true,
     })
     expect(preview).toMatchObject({
       changeId: 'change-1', expectedConfirmation: 'REVOKE', revokedClients: 3,
@@ -141,7 +141,7 @@ describe('Xray-easy API adapter', () => {
     expect('confirmation' in preview).toBe(false)
     expect(calls[1]?.options?.body).toBe(JSON.stringify({
       public_host: 'vpn.example.test', reality_target: 'target.example.test:443', reality_sni: 'target.example.test',
-      client_fingerprint: 'safari', rotate_private_key: true,
+      client_fingerprint: 'safari', log_level: 'error', rotate_private_key: true,
     }))
     await api.settings.apply('change-1', 'REVOKE')
     await expect(api.auth.totpStatus()).resolves.toEqual({ enabled: true, recoveryCodesRemaining: 2 })

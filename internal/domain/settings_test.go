@@ -82,6 +82,19 @@ func TestValidateConnection(t *testing.T) {
 	}
 }
 
+func TestSupportsXrayLogLevel(t *testing.T) {
+	for _, level := range []string{"debug", "info", "warning", "error", "none"} {
+		if !SupportsXrayLogLevel(level) {
+			t.Errorf("Xray log level %q was rejected", level)
+		}
+	}
+	for _, level := range []string{"", "trace", "WARN", "DEBUG"} {
+		if SupportsXrayLogLevel(level) {
+			t.Errorf("unsupported Xray log level %q was accepted", level)
+		}
+	}
+}
+
 func TestValidateRealityTargetRejectsLocalAddressesAndInvalidSNI(t *testing.T) {
 	for _, target := range []string{
 		"127.0.0.1:443", "10.0.0.1:443", "169.254.1.1:443", "0.0.0.0:443",
