@@ -108,6 +108,69 @@ func TestLiveClientApplyRollsBackPersistedStateWhenPromotionFails(t *testing.T) 
 	}
 }
 
+func TestLiveClientApplyRestoresXrayWhenPersistenceFails(t *testing.T) {
+	app := newTestApp(t, true)
+	client := seedTestClient(t, app, "phone")
+	settings, err := app.server.store.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey, err := secret.Open(app.server.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rollbackCalled := false
+	err = app.server.applyClientsLiveLocked(context.Background(), settings, privateKey, []domain.Client{client}, app.admin.ID, "client.state", client.ID, func() error {
+		return errors.New("injected persistence failure")
+	}, func() error {
+		rollbackCalled = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "persist client change") || rollbackCalled || len(app.sup.applyCalls) != 2 || !strings.HasSuffix(app.sup.applyCalls[1][1], "-rollback") {
+		t.Fatalf("persistence failure recovery err=%v rollbackCalled=%v applyCalls=%v", err, rollbackCalled, app.sup.applyCalls)
+	}
+}
+
+func TestApplyClientsLockedReportsMaintenanceApplyAndPromotionFailures(t *testing.T) {
+	app := newTestApp(t, true)
+	client := seedTestClient(t, app, "tablet")
+	settings, err := app.server.store.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateKey, err := secret.Open(app.server.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	lock, err := maintenance.Acquire(context.Background(), app.server.maintenancePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lockCtx, cancelLock := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	lockErr := app.server.applyClientsLocked(lockCtx, settings, privateKey, []domain.Client{client}, app.admin.ID, "test.apply", client.ID)
+	cancelLock()
+	if lockErr == nil {
+		t.Fatal("apply ignored held maintenance lock")
+	}
+	if err := lock.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	app.sup.applyErrors = []error{errors.New("supervisor apply failed")}
+	if err := app.server.applyClientsLocked(context.Background(), settings, privateKey, []domain.Client{client}, app.admin.ID, "test.apply", client.ID); err == nil || !strings.Contains(err.Error(), "supervisor apply failed") {
+		t.Fatalf("supervisor apply failure = %v", err)
+	}
+
+	if err := os.Mkdir(filepath.Join(app.server.configDir, "active.json"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	err = app.server.applyClientsLocked(context.Background(), settings, privateKey, []domain.Client{client}, app.admin.ID, "test.apply", client.ID)
+	if err == nil || !strings.Contains(err.Error(), "promote Xray config") || len(app.sup.applyCalls) != 3 || !strings.HasSuffix(app.sup.applyCalls[2][1], "-rollback") {
+		t.Fatalf("promotion rollback err=%v calls=%v", err, app.sup.applyCalls)
+	}
+}
+
 func TestSettingsApplyConflictExpiredAndLockGuardPaths(t *testing.T) {
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "tablet")
@@ -343,5 +406,34 @@ func TestApplyRestoredStateReportsValidationAndPromotionFailures(t *testing.T) {
 	}
 	if err := applyRestoredStateWithSupervisor(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, &fakeSupervisor{}); err == nil {
 		t.Fatal("restored-state promotion failure ignored")
+	}
+}
+
+func TestStartReconcilerPerformsInitialSyncAndHonorsCancellation(t *testing.T) {
+	app := newTestApp(t, true)
+	client := seedTestClient(t, app, "initial-sync")
+	app.handler.users = []string{"stale@xray-easy"}
+	ctx, cancel := context.WithCancel(context.Background())
+	app.server.startReconciler(ctx)
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		app.handler.mu.Lock()
+		calls := app.handler.usersCalls
+		users := append([]string(nil), app.handler.users...)
+		app.handler.mu.Unlock()
+		if calls > 0 && len(users) == 1 && users[0] == client.Email {
+			cancel()
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	t.Fatal("reconciler did not perform its initial sync")
+}
+
+func TestApplyRestoredStateWrapperReturnsStorageErrorsBeforeNetwork(t *testing.T) {
+	app := newTestApp(t, false)
+	if err := applyRestoredState(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443); err == nil || !strings.Contains(err.Error(), "settings are not initialized") {
+		t.Fatalf("applyRestoredState missing settings error = %v", err)
 	}
 }

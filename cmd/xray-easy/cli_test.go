@@ -10,10 +10,12 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xray-easy/internal/auth"
 	"xray-easy/internal/backup"
 	"xray-easy/internal/domain"
+	"xray-easy/internal/maintenance"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/totp"
@@ -174,6 +176,100 @@ func TestRunBackupCLIAndApplyRestoredStateValidation(t *testing.T) {
 	missing := newTestApp(t, false)
 	if err := applyRestoredStateWithSupervisor(context.Background(), missing.server.store, missing.server.masterKey, missing.server.configDir, 443, missing.sup); err == nil || !strings.Contains(err.Error(), "settings are not initialized") {
 		t.Fatalf("uninitialized restored state error = %v", err)
+	}
+}
+
+func TestMainDispatchesValidCLICommand(t *testing.T) {
+	app := newTestApp(t, true)
+	configureCLIEnv(t, app, app.server.masterKey)
+	previousArgs := os.Args
+	os.Args = []string{"xray-easy", "backup", "list"}
+	t.Cleanup(func() { os.Args = previousArgs })
+	main()
+}
+
+func TestAdminAndBackupCLIPropagateStorageAndLockFailures(t *testing.T) {
+	t.Run("admin lookup", func(t *testing.T) {
+		dataDir := t.TempDir()
+		if err := runAdminCLI(context.Background(), dataDir, []string{"logout-all"}); err == nil || !strings.Contains(err.Error(), "admin not found") {
+			t.Fatalf("missing admin error = %v", err)
+		}
+	})
+
+	t.Run("logout-all storage error", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		execSQLiteTestMutation(t, app, "session delete", `CREATE TRIGGER reject_session_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'injected session delete failure'); END`)
+		if err := runCLI(context.Background(), []string{"admin", "logout-all"}); err == nil || !strings.Contains(err.Error(), "logout all sessions") {
+			t.Fatalf("logout-all CLI error = %v", err)
+		}
+	})
+
+	t.Run("backup lock unavailable", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		lock, err := maintenance.Acquire(context.Background(), app.server.maintenancePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		defer cancel()
+		if err := runBackupCLI(ctx, app.server.dataDir, app.server.configDir, []string{"create"}); err == nil || !strings.Contains(err.Error(), "maintenance lock") {
+			t.Fatalf("backup lock error = %v", err)
+		}
+	})
+
+	t.Run("backup manager create error", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		if err := os.WriteFile(filepath.Join(app.server.configDir, "active.json"), []byte("invalid json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := runBackupCLI(context.Background(), app.server.dataDir, app.server.configDir, []string{"create"}); err == nil || !strings.Contains(err.Error(), "parse active config") {
+			t.Fatalf("backup config error = %v", err)
+		}
+	})
+
+	t.Run("backup manager list error", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		if err := os.WriteFile(filepath.Join(app.server.dataDir, "backups"), []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := runBackupCLI(context.Background(), app.server.dataDir, app.server.configDir, []string{"list"}); err == nil {
+			t.Fatal("backup list error was ignored")
+		}
+	})
+}
+
+func TestRestoreCLIRejectsInvalidConfiguredPortAfterDryRunRestore(t *testing.T) {
+	app := newTestApp(t, true)
+	configureCLIEnv(t, app, app.server.masterKey)
+	target, err := backup.NewManager(app.server.store, app.server.dataDir, app.server.configDir, app.server.masterKey).Create("restore-target")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := app.server.store.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.PublicHost = "changed.example.test"
+	if err := app.server.store.UpdateSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_PUBLIC_PORT", "not-a-port")
+	called := false
+	err = runRestoreCLIWithApplier(context.Background(), app.server.dataDir, app.server.configDir, []string{target.Name, "RESTORE"}, func(context.Context, *store.Store, []byte, string, int) error {
+		called = true
+		return nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "XRAY_PUBLIC_PORT") || called {
+		t.Fatalf("invalid restore port error=%v applierCalled=%v", err, called)
+	}
+	settings, err = app.server.store.GetSettings(context.Background())
+	if err != nil || settings.PublicHost != "vpn.example.test" {
+		t.Fatalf("restore dry run did not load target state before rejecting port: %+v, %v", settings, err)
 	}
 }
 

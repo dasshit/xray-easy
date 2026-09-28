@@ -1704,6 +1704,10 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 }
 
 func (s *server) startReconciler(ctx context.Context) {
+	s.startReconcilerWithInterval(ctx, 30*time.Second)
+}
+
+func (s *server) startReconcilerWithInterval(ctx context.Context, interval time.Duration) {
 	go func() {
 		reconcileCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		if err := s.reconcileRunning(reconcileCtx); err != nil {
@@ -1711,7 +1715,7 @@ func (s *server) startReconciler(ctx context.Context) {
 			fmt.Fprintf(os.Stderr, "xray handler reconciliation skipped: %v\n", err)
 		}
 		cancel()
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
 			select {

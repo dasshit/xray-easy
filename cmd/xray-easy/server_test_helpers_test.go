@@ -83,16 +83,22 @@ func (f *fakeSupervisor) Logs(context.Context) ([]string, error) {
 }
 
 type fakeXrayHandler struct {
-	mu      sync.Mutex
-	users   []string
-	addErr  error
-	remove  map[string]bool
-	addCall [][3]string
+	mu         sync.Mutex
+	users      []string
+	usersCalls int
+	usersErr   error
+	addErr     error
+	remove     map[string]bool
+	addCall    [][3]string
 }
 
 func (f *fakeXrayHandler) Users(context.Context) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.usersCalls++
+	if f.usersErr != nil {
+		return nil, f.usersErr
+	}
 	return append([]string(nil), f.users...), nil
 }
 

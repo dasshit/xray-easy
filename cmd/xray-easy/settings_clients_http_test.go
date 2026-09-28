@@ -12,7 +12,6 @@ import (
 	"testing"
 
 	"xray-easy/internal/domain"
-	"xray-easy/internal/store"
 	"xray-easy/internal/xray"
 )
 
@@ -62,6 +61,33 @@ func TestSettingsReadValidationAndFingerprintApply(t *testing.T) {
 	}
 	if got := requestJSON(t, app, http.MethodGet, "/api/settings/validate", nil, true).Code; got != http.StatusMethodNotAllowed {
 		t.Fatalf("GET settings validate status = %d", got)
+	}
+	if got := requestJSON(t, app, http.MethodPatch, "/api/settings", nil, true).Code; got != http.StatusBadRequest {
+		t.Fatalf("malformed settings patch status = %d", got)
+	}
+	if got := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{}, true); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"changed":false`) {
+		t.Fatalf("empty settings patch = %d %s", got.Code, got.Body.String())
+	}
+	badHost := "bad/host"
+	if got := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{PublicHost: &badHost}, true).Code; got != http.StatusBadRequest {
+		t.Fatalf("invalid public host settings status = %d", got)
+	}
+	badTarget := "localhost"
+	if got := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{RealityTarget: &badTarget}, true).Code; got != http.StatusBadRequest {
+		t.Fatalf("invalid target settings status = %d", got)
+	}
+	target, sni := "alt.example.com:443", "alt.example.com"
+	app.sup.probeErr = errors.New("probe failed")
+	if got := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{RealityTarget: &target, RealitySNI: &sni}, true).Code; got != http.StatusBadGateway {
+		t.Fatalf("target probe failure status = %d", got)
+	}
+	app.sup.probeErr = nil
+	rotateOnly := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{RotatePrivateKey: true}, true)
+	if rotateOnly.Code != http.StatusOK || !strings.Contains(rotateOnly.Body.String(), `"expected_confirmation":"ROTATE"`) {
+		t.Fatalf("private-key-only confirmation = %d %s", rotateOnly.Code, rotateOnly.Body.String())
+	}
+	if got := requestJSON(t, app, http.MethodPost, "/api/settings/apply", settingsApplyRequest{ChangeID: "missing", Confirmation: "ROTATE"}, true).Code; got != http.StatusConflict {
+		t.Fatalf("missing settings confirmation status = %d", got)
 	}
 	badFingerprint := "unsupported"
 	if got := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{ClientFingerprint: &badFingerprint}, true).Code; got != http.StatusBadRequest {
@@ -176,6 +202,9 @@ func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
 	if got := requestJSON(t, app, http.MethodDelete, "/api/clients", nil, true).Code; got != http.StatusMethodNotAllowed {
 		t.Fatalf("DELETE clients status = %d", got)
 	}
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients", nil, true).Code; got != http.StatusBadRequest {
+		t.Fatalf("malformed create client body status = %d", got)
+	}
 	if got := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "phone", Fingerprint: "bad"}, true).Code; got != http.StatusBadRequest {
 		t.Fatalf("unsupported fingerprint client status = %d", got)
 	}
@@ -189,6 +218,21 @@ func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
 	}
 	if len(app.sup.applyCalls) != 1 || len(app.sup.validatedPath) != 1 {
 		t.Fatalf("client creation did not validate/apply candidate: %+v", app.sup.applyCalls)
+	}
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "invalid name"}, true).Code; got != http.StatusBadGateway {
+		t.Fatalf("invalid device name response = %d", got)
+	}
+	app.sup.validateErr = errors.New("candidate validation failed")
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "validation-failure"}, true).Code; got != http.StatusBadGateway {
+		t.Fatalf("candidate validation failure status = %d", got)
+	}
+	app.sup.validateErr = nil
+	app.sup.applyErrors = []error{errors.New("candidate apply failed")}
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "apply-failure"}, true).Code; got != http.StatusBadGateway {
+		t.Fatalf("candidate apply failure status = %d", got)
+	}
+	if got := requestJSON(t, app, http.MethodGet, "/api/clients/", nil, true).Code; got != http.StatusNotFound {
+		t.Fatalf("empty client route status = %d", got)
 	}
 	profile := requestJSON(t, app, http.MethodGet, "/api/clients/"+client.ID+"/profile", nil, true)
 	if profile.Code != http.StatusOK || profile.Header().Get("Cache-Control") != "no-store" || !strings.Contains(profile.Body.String(), "vless://") || !strings.Contains(profile.Body.String(), client.ID) {
@@ -214,6 +258,27 @@ func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
 	}
 	if got := requestJSON(t, app, http.MethodGet, "/api/clients/"+client.ID+"/unknown", nil, true).Code; got != http.StatusNotFound {
 		t.Fatalf("unknown client action status = %d", got)
+	}
+	if got := requestJSON(t, app, http.MethodGet, "/api/clients/"+client.ID, nil, true).Code; got != http.StatusOK {
+		t.Fatalf("client detail status = %d", got)
+	}
+	activePath := filepath.Join(app.server.configDir, "active.json")
+	if err := os.Remove(activePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(activePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rollback := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/disable", nil, true)
+	if rollback.Code != http.StatusBadGateway {
+		t.Fatalf("failed profile promotion status = %d %s", rollback.Code, rollback.Body.String())
+	}
+	unchanged, err := app.server.store.GetClient(t.Context(), client.ID)
+	if err != nil || !unchanged.Enabled || unchanged.Revoked {
+		t.Fatalf("client state wasn't rolled back after promotion failure: %+v %v", unchanged, err)
+	}
+	if err := os.Remove(activePath); err != nil {
+		t.Fatal(err)
 	}
 	if got := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/disable", nil, true).Code; got != http.StatusOK {
 		t.Fatalf("disable client status = %d", got)
@@ -263,5 +328,26 @@ func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
 	if level := diagnosticLevel("panic while loading"); level != "error" || diagnosticLevel("warning: disk") != "warn" || diagnosticLevel("connected") != "info" {
 		t.Fatalf("diagnostic levels = panic:%s warning:%s info:%s", level, diagnosticLevel("warning: disk"), diagnosticLevel("connected"))
 	}
-	_ = store.ApplyOperation{} // compile-time reference keeps persistence DTO visible to these integration tests.
+}
+
+func TestClientCreationRejectsIncompleteOrUndecryptableSettings(t *testing.T) {
+	app := newTestApp(t, true)
+	settings, err := app.server.store.GetSettings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.RealityPrivateKeyEnc = ""
+	if err := app.server.store.UpdateSettings(t.Context(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "phone"}, true).Code; got != http.StatusConflict {
+		t.Fatalf("incomplete settings create status = %d", got)
+	}
+	settings.RealityPrivateKeyEnc = "broken-envelope"
+	if err := app.server.store.UpdateSettings(t.Context(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "phone"}, true).Code; got != http.StatusInternalServerError {
+		t.Fatalf("invalid encrypted key create status = %d", got)
+	}
 }

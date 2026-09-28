@@ -216,6 +216,63 @@ func TestSupervisorHTTPTokenUnavailableAndHandlerValidation(t *testing.T) {
 	}
 }
 
+func TestSupervisorHTTPApplyStartsChildAndReportsRunningStatus(t *testing.T) {
+	s, configDir := newProcessTestSupervisor(t)
+	if err := s.startInitial(); err != nil {
+		t.Fatal(err)
+	}
+	candidate := writeTestConfig(t, configDir, "candidates/http-apply.json", "valid")
+	body, err := json.Marshal(applyRequest{Path: candidate, OperationID: "http-apply-operation"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	response := performSupervisorRequest(s.handler(), http.MethodPost, "/apply", body)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "http-apply-operation") {
+		t.Fatalf("HTTP apply response = %d %s", response.Code, response.Body.String())
+	}
+	waitForSupervisorState(t, s, "running")
+	status := httptest.NewRecorder()
+	request := signedRequest(http.MethodGet, "/status", "control-plane", nextNonce(), nil, supervisorTestToken)
+	s.handler().ServeHTTP(status, request)
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"pid":`) || !strings.Contains(status.Body.String(), canonicalTestPath(t, candidate)) {
+		t.Fatalf("running status response = %d %s", status.Code, status.Body.String())
+	}
+	s.stopChild()
+	waitForSupervisorState(t, s, "stopped")
+}
+
+type failedRequestBody struct{}
+
+func (failedRequestBody) Read([]byte) (int, error) { return 0, errors.New("request read failed") }
+func (failedRequestBody) Close() error             { return nil }
+
+func TestSupervisorReadBodyAndAuthenticationBoundaryErrors(t *testing.T) {
+	s, _ := newProcessTestSupervisor(t)
+	request := httptest.NewRequest(http.MethodPost, "/health", nil)
+	request.Body = failedRequestBody{}
+	if _, err := readBody(request); err == nil || !strings.Contains(err.Error(), "request read failed") {
+		t.Fatalf("readBody error = %v", err)
+	}
+	tooLong := strings.Repeat("a", 129)
+	request = signedRequest(http.MethodGet, "/health", "control-plane", tooLong, nil, supervisorTestToken)
+	if err := s.authenticate(request, nil); err == nil || !strings.Contains(err.Error(), "invalid request nonce") {
+		t.Fatalf("long nonce error = %v", err)
+	}
+	if err := os.Remove(s.cfg.tokenFile); err != nil {
+		t.Fatal(err)
+	}
+	request = signedRequest(http.MethodGet, "/health", "control-plane", nextNonce(), nil, supervisorTestToken)
+	if err := s.authenticate(request, nil); err == nil || !strings.Contains(err.Error(), "token is unavailable") {
+		t.Fatalf("missing token file error = %v", err)
+	}
+	if err := probeTarget("not-a-host-port", ""); err == nil || !strings.Contains(err.Error(), "host:port") {
+		t.Fatalf("invalid direct probe target = %v", err)
+	}
+	if err := probeTarget("127.0.0.1:443", "localhost"); err == nil || !strings.Contains(err.Error(), "private or local") {
+		t.Fatalf("private direct probe target = %v", err)
+	}
+}
+
 func TestProbeTargetWithInjectedResolverAndDialer(t *testing.T) {
 	publicIP := net.ParseIP("93.184.216.34")
 	var lookedUp, dialed string
@@ -299,6 +356,40 @@ func TestProbeTargetWithRejectsUnsafeAndUnresolvableTargets(t *testing.T) {
 	}
 }
 
+func TestProbeTargetWithRetriesAddressesAndReturnsFinalDialError(t *testing.T) {
+	addresses := []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("1.1.1.1")}
+	calls := 0
+	err := probeTargetWith("multi.example.test:443", "front.example.test", func(context.Context, string, string) ([]net.IP, error) {
+		return addresses, nil
+	}, func(address string, _ *tls.Config) (net.Conn, error) {
+		calls++
+		if calls == 1 {
+			if address != "93.184.216.34:443" {
+				t.Fatalf("first candidate address = %q", address)
+			}
+			return nil, errors.New("first address timed out")
+		}
+		if address != "1.1.1.1:443" {
+			t.Fatalf("second candidate address = %q", address)
+		}
+		left, right := net.Pipe()
+		_ = right.Close()
+		return left, nil
+	})
+	if err != nil || calls != 2 {
+		t.Fatalf("probe did not retry the next public address: calls=%d err=%v", calls, err)
+	}
+
+	err = probeTargetWith("multi.example.test:443", "", func(context.Context, string, string) ([]net.IP, error) {
+		return addresses, nil
+	}, func(string, *tls.Config) (net.Conn, error) {
+		return nil, errors.New("all addresses timed out")
+	})
+	if err == nil || !strings.Contains(err.Error(), "all addresses timed out") {
+		t.Fatalf("final probe dial error = %v", err)
+	}
+}
+
 func TestForbiddenProbeIP(t *testing.T) {
 	for _, test := range []struct {
 		name string
@@ -366,5 +457,12 @@ func TestRunHealthcheckSignsRequestAndReportsFailures(t *testing.T) {
 	client.Transport = healthRoundTripFunc(func(*http.Request) (*http.Response, error) { return nil, errors.New("connection refused") })
 	if err := runHealthcheckWithClient("http://supervisor.local/health", tokenFile, client); err == nil || !strings.Contains(err.Error(), "connection refused") {
 		t.Fatalf("transport error = %v", err)
+	}
+}
+
+func TestRunHealthcheckBuildsDefaultHTTPClient(t *testing.T) {
+	err := runHealthcheck("http://127.0.0.1:10086/health", filepath.Join(t.TempDir(), "missing-token"))
+	if err == nil || !strings.Contains(err.Error(), "read token") {
+		t.Fatalf("healthcheck missing-token error = %v", err)
 	}
 }

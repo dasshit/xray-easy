@@ -2,6 +2,20 @@
 set -euo pipefail
 
 profile="${1:-coverage.out}"
+overall_min="${BACKEND_COVERAGE_MIN:-90}"
+package_min="${BACKEND_PACKAGE_COVERAGE_MIN:-80}"
+
+validate_threshold() {
+	local name="$1"
+	local value="$2"
+	if ! [[ "$value" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v value="$value" 'BEGIN { exit !(value >= 0 && value <= 100) }'; then
+		printf '%s must be a number between 0 and 100; got %q\n' "$name" "$value" >&2
+		exit 2
+	fi
+}
+
+validate_threshold BACKEND_COVERAGE_MIN "$overall_min"
+validate_threshold BACKEND_PACKAGE_COVERAGE_MIN "$package_min"
 
 go test -count=1 -covermode=atomic -coverprofile="$profile" ./...
 
@@ -43,6 +57,42 @@ awk '
     printf "All Go:       %d/%d = %.1f%%\n", allCovered, all, 100 * allCovered / all
     printf "Handwritten:  %d/%d = %.1f%%\n", handwrittenCovered, handwritten, 100 * handwrittenCovered / handwritten
     printf "Generated:    %d statements excluded from the handwritten metric\n", generated
+  }
+' "$profile"
+
+printf '\nCoverage gates (handwritten code): overall >= %s%%; each package >= %s%%\n' "$overall_min" "$package_min"
+awk -v overall_min="$overall_min" -v package_min="$package_min" '
+  NR == 1 { next }
+  {
+    file = $1
+    sub(/:.*/, "", file)
+    if (file ~ /\.pb\.go$/) next
+    package = file
+    sub(/\/[^\/]+$/, "", package)
+    sub(/^xray-easy\//, "", package)
+    total[package] += $2
+    handwritten += $2
+    if ($3 > 0) {
+      covered[package] += $2
+      handwrittenCovered += $2
+    }
+  }
+  END {
+    failed = 0
+    for (package in total) {
+      percent = 100 * covered[package] / total[package]
+      if (percent + 0.000001 < package_min) {
+        printf "FAIL %-35s %.1f%% is below %.1f%%\n", package, percent, package_min > "/dev/stderr"
+        failed = 1
+      }
+    }
+    overall = 100 * handwrittenCovered / handwritten
+    if (overall + 0.000001 < overall_min) {
+      printf "FAIL handwritten overall %.1f%% is below %.1f%%\n", overall, overall_min > "/dev/stderr"
+      failed = 1
+    }
+    if (failed) exit 1
+    printf "PASS handwritten overall %.1f%%; all handwritten packages meet %.1f%%\n", overall, package_min
   }
 ' "$profile"
 
