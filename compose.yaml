@@ -1,4 +1,5 @@
-name: xray-easy-stage1
+# Existing installations without XRAY_EASY_PROJECT_NAME keep their named volumes.
+name: ${XRAY_EASY_PROJECT_NAME:-xray-easy-stage1}
 
 services:
   init-volumes:
@@ -112,7 +113,7 @@ services:
 
 secrets:
   xray_supervisor_token:
-    file: ./prototype/secrets/xray_supervisor_token
+    file: ${XRAY_SUPERVISOR_TOKEN_SOURCE:-./prototype/secrets/xray_supervisor_token}
 
 volumes:
   app_data:
