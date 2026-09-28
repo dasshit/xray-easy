@@ -54,6 +54,7 @@ button { min-height: 42px; border: 0; border-radius: 9px; padding: 10px 16px; ba
 button:hover:not(:disabled) { background: var(--primary-hover); }
 button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { opacity: .55; cursor: wait; }
+button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }
 .shell { max-width: 1120px; margin: 0 auto; padding: 30px 24px 56px; }
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 30px; }
 .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
@@ -70,6 +71,8 @@ button:disabled { opacity: .55; cursor: wait; }
 .auth-card { max-width: 620px; margin: 0 auto; }
 .error-card { margin-bottom: 16px; border-color: var(--error-border); background: var(--error-surface); }
 .error { margin: 0; color: var(--error); }
+.success-card { margin-bottom: 16px; border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
+.success-card p { margin: 0; color: var(--success); }
 h1, h2, h3, p { margin-top: 0; }
 h1 { margin-bottom: 0; font-size: 1.55rem; }
 h2 { margin-bottom: 7px; font-size: 1.2rem; }

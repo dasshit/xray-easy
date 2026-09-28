@@ -1,6 +1,9 @@
 import type { Theme } from '../domain/models'
 
 const themeStorageKey = 'xray-easy-theme'
+const languageStorageKey = 'xray-easy-language'
+
+export type UILanguage = 'en' | 'ru'
 
 export function readTheme(): Theme {
   if (typeof window === 'undefined') return 'light'
@@ -12,6 +15,17 @@ export function readTheme(): Theme {
 export function persistTheme(theme: Theme): void {
   document.documentElement.dataset.theme = theme
   window.localStorage.setItem(themeStorageKey, theme)
+}
+
+export function readLanguage(): UILanguage {
+  if (typeof window === 'undefined') return 'en'
+  const stored = window.localStorage.getItem(languageStorageKey)
+  if (stored === 'en' || stored === 'ru') return stored
+  return window.navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en'
+}
+
+export function persistLanguage(language: UILanguage): void {
+  window.localStorage.setItem(languageStorageKey, language)
 }
 
 export function formatBytes(value: number): string {

@@ -3,7 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { APIError, request } from './infrastructure/api'
 import { clientActionFor } from './domain/models'
 import type { Admin, Client, ClientAction, DiagnosticEntry, NodeStatus, Section, Settings, SettingsChange, SetupStatus, Theme, TOTPSetup, TOTPStatus } from './domain/models'
-import { formatBytes, formatTimestamp, persistTheme, readTheme } from './application/ui'
+import { formatBytes, formatTimestamp, persistLanguage, persistTheme, readLanguage, readTheme } from './application/ui'
 
 const setup = ref<SetupStatus | null>(null)
 const admin = ref<Admin | null>(null)
@@ -13,7 +13,7 @@ const selectedProfile = ref<{ client_id: string; uri: string; json: unknown } | 
 const copiedProfile = ref(false)
 const error = ref('')
 const busy = ref(false)
-const language = ref<'en' | 'ru'>(navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en')
+const language = ref<'en' | 'ru'>(readLanguage())
 const theme = ref<Theme>(readTheme())
 const activeSection = ref<Section>('profiles')
 const createModalOpen = ref(false)
@@ -32,6 +32,7 @@ const nodeStatus = ref<NodeStatus | null>(null)
 const diagnostics = ref<DiagnosticEntry[]>([])
 const loginNeedsTOTP = ref(false)
 const loginUsesRecovery = ref(false)
+const successMessage = ref('')
 let events: EventSource | null = null
 
 const text = {
@@ -41,7 +42,7 @@ const text = {
     qr: 'QR code', download: 'Download JSON', copyUri: 'VLESS URI', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', remove: 'Delete profile', close: 'Close', cancel: 'Cancel', confirm: 'Confirm', action: 'Confirm action', enableConfirm: 'Enable this profile?', disableConfirm: 'Disable this profile? The device will stop connecting until it is enabled again.', removeConfirm: 'Delete this profile? Its credentials will be revoked permanently.', noUndo: 'Revocation cannot be undone.',
     logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', settings: 'Settings', saveSettings: 'Review changes', applySettings: 'Apply settings', rotateKey: 'Generate a new REALITY key', confirmation: 'Confirmation', settingsWarning: 'Existing device profiles may stop working and will be revoked.', expected: 'Type exactly', settingsDiff: 'Changes', consequences: 'Consequences', revokedClients: 'Profiles to revoke',
     diagnostics: 'Diagnostics', xrayState: 'Xray state', restarts: 'Restarts', refreshDiagnostics: 'Refresh diagnostics', noDiagnostics: 'No warnings or errors', running: 'Running', unavailable: 'Unavailable', starting: 'Starting', stopped: 'Stopped', unknown: 'Unknown', healthy: 'Healthy', attention: 'Needs attention', warnings: 'warnings', errors: 'errors', recentEvents: 'Recent events', useLightTheme: 'Light theme', useDarkTheme: 'Dark theme',
-    connectionSettings: 'Connection', connectionHelp: 'These values are used to create new profiles and update the Xray inbound.', profileDefaults: 'Profile defaults', profileDefaultsHelp: 'The fingerprint is used when a new profile does not specify one.', dangerousSettings: 'Dangerous operation', rotationHelp: 'Rotating the REALITY key revokes every existing profile. New profiles will be required.',
+    connectionSettings: 'Connection', connectionHelp: 'These values are used to create new profiles and update the Xray inbound.', profileDefaults: 'Profile defaults', profileDefaultsHelp: 'The fingerprint is used when a new profile does not specify one.', dangerousSettings: 'Dangerous operation', rotationHelp: 'Rotating the REALITY key revokes every existing profile. New profiles will be required.', saved: 'Changes saved', profileCopied: 'Profile link copied', backupReady: 'Backup is ready',
     security: 'Security', backupTitle: 'Backups', backupHelp: 'Create a plaintext backup before maintenance or an update. Backups stay on the VDS.', backup: 'Create backup', backupCreated: 'Backup created', totpTitle: 'Two-factor authentication', totpHelp: 'Add a second factor to protect the administrator login.', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
   },
   ru: {
@@ -50,7 +51,7 @@ const text = {
     qr: 'QR-код', download: 'Скачать JSON', copyUri: 'VLESS URI', enabled: 'включён', disabled: 'выключен', revoked: 'отозван', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', remove: 'Удалить профиль', close: 'Закрыть', cancel: 'Отмена', confirm: 'Подтвердить', action: 'Подтверждение действия', enableConfirm: 'Включить профиль?', disableConfirm: 'Выключить профиль? Устройство перестанет подключаться, пока профиль не будет включён снова.', removeConfirm: 'Удалить профиль? Его учётные данные будут отозваны навсегда.', noUndo: 'Отзыв нельзя отменить.',
     logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', settings: 'Настройки', saveSettings: 'Проверить изменения', applySettings: 'Применить настройки', rotateKey: 'Сгенерировать новый REALITY-ключ', confirmation: 'Подтверждение', settingsWarning: 'Старые профили могут перестать работать и будут отозваны.', expected: 'Введите точно', settingsDiff: 'Изменения', consequences: 'Последствия', revokedClients: 'Профилей будет отозвано',
     diagnostics: 'Диагностика', xrayState: 'Состояние Xray', restarts: 'Перезапуски', refreshDiagnostics: 'Обновить диагностику', noDiagnostics: 'Предупреждений и ошибок нет', running: 'Работает', unavailable: 'Недоступен', starting: 'Запускается', stopped: 'Остановлен', unknown: 'Неизвестно', healthy: 'Работает штатно', attention: 'Требует внимания', warnings: 'предупреждений', errors: 'ошибок', recentEvents: 'Последние события', useLightTheme: 'Светлая тема', useDarkTheme: 'Тёмная тема',
-    connectionSettings: 'Подключение', connectionHelp: 'Эти значения используются для новых профилей и обновления inbound Xray.', profileDefaults: 'Параметры профилей', profileDefaultsHelp: 'Fingerprint используется для новых профилей, если он не задан отдельно.', dangerousSettings: 'Опасное действие', rotationHelp: 'Ротация REALITY-ключа отзовёт все существующие профили. После этого нужно будет создать новые.',
+    connectionSettings: 'Подключение', connectionHelp: 'Эти значения используются для новых профилей и обновления inbound Xray.', profileDefaults: 'Параметры профилей', profileDefaultsHelp: 'Fingerprint используется для новых профилей, если он не задан отдельно.', dangerousSettings: 'Опасное действие', rotationHelp: 'Ротация REALITY-ключа отзовёт все существующие профили. После этого нужно будет создать новые.', saved: 'Изменения сохранены', profileCopied: 'Ссылка профиля скопирована', backupReady: 'Backup создан',
     security: 'Безопасность', backupTitle: 'Резервные копии', backupHelp: 'Создайте plaintext backup перед обслуживанием или обновлением. Backup хранится на VDS.', backup: 'Создать backup', backupCreated: 'Backup создан', totpTitle: 'Двухфакторная аутентификация', totpHelp: 'Добавьте второй фактор для защиты входа администратора.', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
   },
 }
@@ -86,7 +87,10 @@ function diagnosticTone(level: string) {
   return 'neutral'
 }
 
-function showError(cause: unknown) { error.value = cause instanceof Error ? cause.message : 'Request failed' }
+function showError(cause: unknown) { successMessage.value = ''; error.value = cause instanceof Error ? cause.message : 'Request failed' }
+function showSuccess(message: string) { error.value = ''; successMessage.value = message; window.setTimeout(() => { successMessage.value = '' }, 3500) }
+function changeLanguage(next: 'en' | 'ru') { language.value = next; persistLanguage(next) }
+function toggleLanguage() { changeLanguage(language.value === 'en' ? 'ru' : 'en') }
 
 async function load() {
   error.value = ''
@@ -154,7 +158,7 @@ function closeProfile() { if (!busy.value) { selectedProfile.value = null; copie
 function selectedClient() { return clients.value.find(client => client.id === selectedProfile.value?.client_id) }
 async function copyProfileUri() {
   if (!selectedProfile.value) return
-  try { await navigator.clipboard.writeText(selectedProfile.value.uri); copiedProfile.value = true; window.setTimeout(() => { copiedProfile.value = false }, 2200) }
+  try { await navigator.clipboard.writeText(selectedProfile.value.uri); copiedProfile.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedProfile.value = false }, 2200) }
   catch (cause) { showError(cause) }
 }
 function openClientAction(client: Client, action: 'enable' | 'disable' | 'revoke') { error.value = ''; clientAction.value = { client, action } }
@@ -167,7 +171,7 @@ async function confirmClientAction() {
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 
-async function createBackup() { busy.value = true; error.value = ''; try { const result = await request<{ name: string }>('/api/backups', { method: 'POST' }); lastBackup.value = result.name } catch (cause) { showError(cause) } finally { busy.value = false } }
+async function createBackup() { busy.value = true; error.value = ''; try { const result = await request<{ name: string }>('/api/backups', { method: 'POST' }); lastBackup.value = result.name; showSuccess(t().backupReady) } catch (cause) { showError(cause) } finally { busy.value = false } }
 async function reviewSettings() {
   busy.value = true; error.value = ''; pendingSettings.value = null
   try { const result = await request<Omit<SettingsChange, 'confirmation'>>('/api/settings', { method: 'PATCH', body: JSON.stringify({ public_host: settingsForm.value.publicHost, reality_target: settingsForm.value.realityTarget, reality_sni: settingsForm.value.realitySNI, client_fingerprint: settingsForm.value.clientFingerprint, rotate_private_key: settingsForm.value.rotatePrivateKey }) }); pendingSettings.value = { ...result, confirmation: '' } }
@@ -176,7 +180,7 @@ async function reviewSettings() {
 async function applySettings() {
   if (!pendingSettings.value) return
   busy.value = true; error.value = ''
-  try { await request('/api/settings/apply', { method: 'POST', body: JSON.stringify({ change_id: pendingSettings.value.change_id, confirmation: pendingSettings.value.confirmation }) }); pendingSettings.value = null; await loadSettings(); await loadClients() }
+  try { await request('/api/settings/apply', { method: 'POST', body: JSON.stringify({ change_id: pendingSettings.value.change_id, confirmation: pendingSettings.value.confirmation }) }); pendingSettings.value = null; await loadSettings(); await loadClients(); showSuccess(t().saved) }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 async function startTOTPSetup() { busy.value = true; error.value = ''; try { totpSetup.value = await request<TOTPSetup>('/api/auth/totp/setup', { method: 'POST' }) } catch (cause) { showError(cause) } finally { busy.value = false } }
@@ -188,32 +192,42 @@ async function confirmTOTP() {
 }
 async function disableTOTP() { busy.value = true; error.value = ''; try { await request('/api/auth/totp/disable', { method: 'POST', body: JSON.stringify(disableTOTPForm.value) }); admin.value = null; totpStatus.value = null; disableTOTPForm.value = { password: '', code: '' }; events?.close(); events = null } catch (cause) { showError(cause) } finally { busy.value = false } }
 
-onMounted(() => { applyTheme(theme.value); void load() })
-onBeforeUnmount(() => events?.close())
+function closeActiveModal() {
+  if (busy.value) return
+  if (pendingSettings.value) { pendingSettings.value = null; return }
+  if (selectedProfile.value) { closeProfile(); return }
+  if (clientAction.value) { closeClientAction(); return }
+  if (createModalOpen.value) closeCreateModal()
+}
+function handleKeydown(event: KeyboardEvent) { if (event.key === 'Escape') closeActiveModal() }
+
+onMounted(() => { applyTheme(theme.value); window.addEventListener('keydown', handleKeydown); void load() })
+onBeforeUnmount(() => { events?.close(); window.removeEventListener('keydown', handleKeydown) })
 function actionTitle(action?: ClientAction['action']) { if (action === 'enable') return t().enableConfirm; if (action === 'disable') return t().disableConfirm; return t().removeConfirm }
 function actionLabel(action?: ClientAction['action']) { if (action === 'enable') return t().enable; if (action === 'disable') return t().disable; return t().remove }
 </script>
 
 <template>
-  <main class="shell">
+  <main class="shell" :aria-busy="busy">
     <header class="topbar">
       <div class="brand"><span class="brand-mark" aria-hidden="true">×</span><div class="brand-copy"><strong>{{ t().title }}</strong><span>{{ t().panelSubtitle }}</span></div></div>
       <div class="topbar-actions">
         <span v-if="admin" class="node-pill" :class="`node-pill-${statusTone(nodeStatus?.state)}`"><span class="status-dot" :class="{ online: nodeStatus?.state === 'running' }"></span>{{ statusLabel(nodeStatus?.state) }}</span>
         <button class="theme-toggle" :aria-label="theme === 'dark' ? t().useLightTheme : t().useDarkTheme" @click="toggleTheme"><span class="theme-icon" aria-hidden="true">{{ theme === 'dark' ? '☀' : '☾' }}</span><span>{{ theme === 'dark' ? t().useLightTheme : t().useDarkTheme }}</span></button>
-        <button class="language" @click="language = language === 'en' ? 'ru' : 'en'">{{ t().language }}</button>
+        <button class="language" @click="toggleLanguage">{{ t().language }}</button>
       </div>
     </header>
-    <section class="card error-card" v-if="error"><p class="error">{{ error }}</p></section>
-    <section class="card auth-card" v-if="!setup?.initialized">
-      <h1>{{ t().setup }}</h1><label>{{ t().username }}<input v-model="setupForm.username" autocomplete="username" /></label><label>{{ t().password }}<input v-model="setupForm.password" type="password" autocomplete="new-password" /></label><label>{{ t().host }}<input v-model="setupForm.publicHost" placeholder="vpn.example.com" /></label><label>{{ t().port }}<input v-model.number="setupForm.publicPort" type="number" readonly /></label><label>{{ t().target }}<input v-model="setupForm.realityTarget" placeholder="www.cloudflare.com:443" /></label><label>{{ t().sni }}<input v-model="setupForm.realitySNI" placeholder="www.cloudflare.com" /></label><button :disabled="busy" @click="initialize">{{ t().create }}</button>
-    </section>
-    <section class="card auth-card" v-else-if="!admin">
-      <h1>{{ t().login }}</h1><label>{{ t().username }}<input v-model="loginForm.username" autocomplete="username" /></label><label>{{ t().password }}<input v-model="loginForm.password" type="password" autocomplete="current-password" /></label><template v-if="loginNeedsTOTP"><label v-if="!loginUsesRecovery">{{ t().loginCode }}<input v-model="loginForm.totpCode" inputmode="numeric" autocomplete="one-time-code" /></label><label v-else>{{ t().recoveryCode }}<input v-model="loginForm.recoveryCode" autocomplete="one-time-code" /></label><button :disabled="busy" @click="loginUsesRecovery ? loginRecovery() : loginTOTP()">{{ t().signIn }}</button><button class="secondary" @click="loginUsesRecovery = !loginUsesRecovery">{{ loginUsesRecovery ? t().useTOTP : t().useRecovery }}</button></template><button v-else :disabled="busy" @click="login">{{ t().signIn }}</button>
-    </section>
+    <section class="card error-card" v-if="error" role="alert" aria-live="assertive"><p class="error">{{ error }}</p></section>
+    <section class="card success-card" v-if="successMessage" role="status" aria-live="polite"><p>{{ successMessage }}</p></section>
+    <form class="card auth-card" v-if="!setup?.initialized" @submit.prevent="initialize">
+      <h1>{{ t().setup }}</h1><label>{{ t().username }}<input v-model="setupForm.username" autocomplete="username" required /></label><label>{{ t().password }}<input v-model="setupForm.password" type="password" autocomplete="new-password" required /></label><label>{{ t().host }}<input v-model="setupForm.publicHost" placeholder="vpn.example.com" required /></label><label>{{ t().port }}<input v-model.number="setupForm.publicPort" type="number" readonly /></label><label>{{ t().target }}<input v-model="setupForm.realityTarget" placeholder="www.cloudflare.com:443" required /></label><label>{{ t().sni }}<input v-model="setupForm.realitySNI" placeholder="www.cloudflare.com" required /></label><button type="submit" :disabled="busy">{{ t().create }}</button>
+    </form>
+    <form class="card auth-card" v-else-if="!admin" @submit.prevent="loginNeedsTOTP ? (loginUsesRecovery ? loginRecovery() : loginTOTP()) : login()">
+      <h1>{{ t().login }}</h1><label>{{ t().username }}<input v-model="loginForm.username" autocomplete="username" required /></label><label>{{ t().password }}<input v-model="loginForm.password" type="password" autocomplete="current-password" required /></label><template v-if="loginNeedsTOTP"><label v-if="!loginUsesRecovery">{{ t().loginCode }}<input v-model="loginForm.totpCode" inputmode="numeric" autocomplete="one-time-code" required /></label><label v-else>{{ t().recoveryCode }}<input v-model="loginForm.recoveryCode" autocomplete="one-time-code" required /></label><button type="submit" :disabled="busy">{{ t().signIn }}</button><button type="button" class="secondary" @click="loginUsesRecovery = !loginUsesRecovery">{{ loginUsesRecovery ? t().useTOTP : t().useRecovery }}</button></template><button v-else type="submit" :disabled="busy">{{ t().signIn }}</button>
+    </form>
     <section class="card dashboard" v-else>
       <div class="dashboard-header"><div><p class="eyebrow">{{ t().title }}</p><h1>{{ t().profiles }}</h1></div><div class="header-actions"><button class="secondary" @click="logoutAll">{{ t().logoutAll }}</button><button class="secondary" @click="logout">{{ t().logout }}</button></div></div>
-      <nav class="tabs" :aria-label="t().title"><button :class="{ active: activeSection === 'profiles' }" @click="activeSection = 'profiles'">{{ t().profiles }}</button><button :class="{ active: activeSection === 'settings' }" @click="activeSection = 'settings'">{{ t().settings }}</button><button :class="{ active: activeSection === 'diagnostics' }" @click="activeSection = 'diagnostics'">{{ t().diagnostics }}</button><button :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">{{ t().security }}</button></nav>
+      <nav class="tabs" role="tablist" :aria-label="t().title"><button role="tab" :aria-selected="activeSection === 'profiles'" :class="{ active: activeSection === 'profiles' }" @click="activeSection = 'profiles'">{{ t().profiles }}</button><button role="tab" :aria-selected="activeSection === 'settings'" :class="{ active: activeSection === 'settings' }" @click="activeSection = 'settings'">{{ t().settings }}</button><button role="tab" :aria-selected="activeSection === 'diagnostics'" :class="{ active: activeSection === 'diagnostics' }" @click="activeSection = 'diagnostics'">{{ t().diagnostics }}</button><button role="tab" :aria-selected="activeSection === 'security'" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">{{ t().security }}</button></nav>
       <section v-if="activeSection === 'profiles'" class="section-panel">
         <div class="section-heading"><div><p class="eyebrow">{{ t().profiles }}</p><h2>{{ clients.length }} {{ t().profileCount }}</h2><p class="muted">{{ t().traffic }} · {{ clients.filter(client => client.online).length }} {{ t().online }}</p></div><button @click="openCreateModal"><span class="button-icon" aria-hidden="true">+</span>{{ t().createProfile }}</button></div>
         <div v-if="!clients.length" class="empty-state"><span class="empty-icon" aria-hidden="true">⌁</span><strong>{{ t().emptyProfiles }}</strong><button @click="openCreateModal">{{ t().createProfile }}</button></div>
@@ -273,10 +287,10 @@ function actionLabel(action?: ClientAction['action']) { if (action === 'enable')
         </div>
       </section>
 
-      <div v-if="createModalOpen" class="modal-backdrop" @click.self="closeCreateModal"><div class="modal" role="dialog" aria-modal="true"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2>{{ t().createProfile }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeCreateModal">×</button></div><form @submit.prevent="createDevice"><label>{{ t().newDevice }}<input v-model="newDevice.name" class="device-name-input" :placeholder="t().newDevice" autofocus required maxlength="64" /></label><label>{{ t().fingerprint }}<select v-model="newDevice.fingerprint"><option value="">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option></select></label><div class="modal-actions"><button type="button" class="secondary" @click="closeCreateModal">{{ t().cancel }}</button><button type="submit" :disabled="busy || !newDevice.name.trim()">{{ t().createDevice }}</button></div></form></div></div>
-      <div v-if="clientAction" class="modal-backdrop" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2>{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
-      <div v-if="selectedProfile" class="modal-backdrop" @click.self="closeProfile"><div class="modal profile-modal" role="dialog" aria-modal="true"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2>{{ t().profileFor }} {{ selectedClient()?.name || '' }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeProfile">×</button></div><p class="hint profile-hint">{{ t().scanHint }}</p><div class="profile-delivery"><div class="qr-panel"><span class="qr-label">{{ t().qr }}</span><img class="qr" :src="`/api/clients/${selectedProfile.client_id}/profile?format=qr`" :alt="t().qr" /></div><div class="profile-link-panel"><label>{{ t().copyUri }}<textarea readonly :value="selectedProfile.uri"></textarea></label><button class="secondary copy-button" @click="copyProfileUri"><span aria-hidden="true">⧉</span>{{ copiedProfile ? t().copied : t().copy }}</button><a class="download-link" :href="`/api/clients/${selectedProfile.client_id}/profile?format=json`"><span aria-hidden="true">↓</span>{{ t().jsonFile }}</a></div></div></div></div>
-      <div v-if="pendingSettings" class="modal-backdrop" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2>{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revoked_clients">{{ t().revokedClients }}: {{ pendingSettings.revoked_clients }}</p><label v-if="pendingSettings.requires_confirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expected_confirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requires_confirmation && pendingSettings.confirmation !== pendingSettings.expected_confirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
+      <div v-if="createModalOpen" class="modal-backdrop" @click.self="closeCreateModal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-profile-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="create-profile-title">{{ t().createProfile }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeCreateModal">×</button></div><form @submit.prevent="createDevice"><label>{{ t().newDevice }}<input v-model="newDevice.name" class="device-name-input" :placeholder="t().newDevice" autofocus required maxlength="64" /></label><label>{{ t().fingerprint }}<select v-model="newDevice.fingerprint"><option value="">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option></select></label><div class="modal-actions"><button type="button" class="secondary" @click="closeCreateModal">{{ t().cancel }}</button><button type="submit" :disabled="busy || !newDevice.name.trim()">{{ t().createDevice }}</button></div></form></div></div>
+      <div v-if="clientAction" class="modal-backdrop" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
+      <div v-if="selectedProfile" class="modal-backdrop" @click.self="closeProfile"><div class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-delivery-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="profile-delivery-title">{{ t().profileFor }} {{ selectedClient()?.name || '' }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeProfile">×</button></div><p class="hint profile-hint">{{ t().scanHint }}</p><div class="profile-delivery"><div class="qr-panel"><span class="qr-label">{{ t().qr }}</span><img class="qr" :src="`/api/clients/${selectedProfile.client_id}/profile?format=qr`" :alt="t().qr" /></div><div class="profile-link-panel"><label>{{ t().copyUri }}<textarea readonly :value="selectedProfile.uri"></textarea></label><button class="secondary copy-button" @click="copyProfileUri"><span aria-hidden="true">⧉</span>{{ copiedProfile ? t().copied : t().copy }}</button><a class="download-link" :href="`/api/clients/${selectedProfile.client_id}/profile?format=json`"><span aria-hidden="true">↓</span>{{ t().jsonFile }}</a></div></div></div></div>
+      <div v-if="pendingSettings" class="modal-backdrop" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revoked_clients">{{ t().revokedClients }}: {{ pendingSettings.revoked_clients }}</p><label v-if="pendingSettings.requires_confirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expected_confirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requires_confirmation && pendingSettings.confirmation !== pendingSettings.expected_confirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
     </section>
   </main>
 </template>
