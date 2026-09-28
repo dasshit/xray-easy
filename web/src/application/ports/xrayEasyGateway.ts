@@ -11,6 +11,7 @@ import type {
 } from '../models'
 import type { Client, ClientActionType, Settings, SettingsChange } from '../../domain/models'
 
+/** Callbacks invoked by the live server event stream. */
 export interface XrayEventCallbacks {
   /** Called when device traffic statistics change. */
   onStats: () => void
@@ -20,11 +21,13 @@ export interface XrayEventCallbacks {
   onError: () => void
 }
 
+/** Handle used to stop receiving live server events. */
 export interface EventSubscription {
   /** Close the event subscription and stop receiving server updates. */
   close(): void
 }
 
+/** Application-facing operations implemented by the HTTP and SSE adapters. */
 export interface XrayEasyGateway {
   setup: {
     /**

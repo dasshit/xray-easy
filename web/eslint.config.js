@@ -106,6 +106,37 @@ export default tseslint.config(
     },
   },
   {
+    // Public model aliases are application contracts, so their purpose must be discoverable at the declaration.
+    files: ['src/domain/models.ts', 'src/application/models.ts'],
+    rules: {
+      'jsdoc/require-jsdoc': ['error', {
+        require: {
+          FunctionDeclaration: true,
+          MethodDefinition: true,
+        },
+        contexts: ['TSTypeAliasDeclaration'],
+      }],
+    },
+  },
+  {
+    // Keep runtime API validators and their inferred wire types documented together.
+    files: ['src/infrastructure/api-contracts.ts'],
+    rules: {
+      'jsdoc/require-jsdoc': ['error', {
+        contexts: ['TSTypeAliasDeclaration', 'ExportNamedDeclaration[declaration.declarations.0.id.name=/Schema$/]'],
+      }],
+    },
+  },
+  {
+    // Interface-level descriptions explain the application port as a whole; method docs remain required globally.
+    files: ['src/application/ports/xrayEasyGateway.ts'],
+    rules: {
+      'jsdoc/require-jsdoc': ['error', {
+        contexts: ['TSInterfaceDeclaration', 'TSMethodSignature'],
+      }],
+    },
+  },
+  {
     files: ['src/domain/**/*.ts'],
     rules: {
       'no-restricted-imports': restrictLayerImports(['application', 'infrastructure', 'presentation'], 'domain'),
