@@ -1,21 +1,24 @@
 package ui
 
 import (
-	"embed"
 	"io/fs"
 	"net/http"
+	"os"
 	"strings"
 )
 
-// Files contains the production UI. Docker builds replace this directory with
-// the freshly compiled Vite bundle; keeping the bundle in the repository also
-// makes a native `go build` serve the same shell.
-//
-//go:embed dist/*
-var Files embed.FS
+const defaultUIDir = "/usr/share/xray-easy/ui"
 
+// Handler serves the static UI shipped separately from the Go binary.
 func Handler() http.Handler {
-	root, _ := fs.Sub(Files, "dist")
+	uiDir := os.Getenv("XRAY_EASY_UI_DIR")
+	if uiDir == "" {
+		uiDir = defaultUIDir
+	}
+	return HandlerFromFS(os.DirFS(uiDir))
+}
+
+func HandlerFromFS(root fs.FS) http.Handler {
 	files := http.FileServer(http.FS(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") {

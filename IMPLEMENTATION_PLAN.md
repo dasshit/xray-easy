@@ -649,7 +649,8 @@ Compose-сеть `control` позволяет обращаться к серви
 
 ### Этап 1 — каркас и контейнер
 
-- Go control plane + TypeScript/Vue/Vite UI, собранный и встроенный через `go:embed`;
+- Go control plane + TypeScript/Vue/Vite UI; UI собирается отдельно и
+  поставляется статическими файлами в runtime image;
 - SQLite migrations, structured logging, health/readiness;
 - отдельный `xray-supervisor` image на базе pinned official Xray binary;
 - reproducible native images и отдельный buildx workflow для amd64/arm64 с compose control/egress networks;
@@ -794,7 +795,9 @@ Compose-сеть `control` позволяет обращаться к серви
 - Go даёт один статический backend-бинарник, простой multi-arch build и небольшой runtime image.
 - Управление дочерним Xray-процессом в supervisor, сигналами и backoff, а также таймерами статистики в control plane проще сделать без Node event-loop edge cases.
 - `CGO_ENABLED=0` позволяет избежать зависимости от системного компилятора в runtime и упростить arm64/amd64 images.
-- `embed` позволяет упаковать собранный UI в тот же бинарник; отдельный Node runtime в production-контейнере не требуется.
+- Go binary не зависит от UI bundle: изменения фронтенда не инвалидируют его
+  Docker build cache; собранные статические файлы копируются в runtime image
+  отдельно, без Node runtime.
 
 Предлагаемый Go stack:
 
@@ -807,7 +810,7 @@ Compose-сеть `control` позволяет обращаться к серви
 
 ### Почему TypeScript/Vue остаётся в UI
 
-UI проекта — это сложная прикладная часть: wizard, таблица устройств, QR modal, clipboard, optimistic updates, логи и responsive layout. Vue 3 + TypeScript + Vite дают быстрый цикл разработки и привычную компонентную модель. Сборка отдаёт статические assets, которые Go сервер обслуживает через `go:embed`.
+UI проекта — это сложная прикладная часть: wizard, таблица устройств, QR modal, clipboard, optimistic updates, логи и responsive layout. Vue 3 + TypeScript + Vite дают быстрый цикл разработки и привычную компонентную модель. Сборка отдаёт статические assets, которые Go сервер обслуживает с файловой системы runtime image.
 
 Рекомендуемый UI stack:
 
@@ -839,7 +842,9 @@ UI проекта — это сложная прикладная часть: wiz
 - Go — backend, управление Xray, gRPC, SQLite, auth, config renderer и supervisor;
 - TypeScript/Vue — Web UI;
 - Vite — сборка UI;
-- собранный UI встраивается в Go binary через `go:embed`;
+- собранный UI поставляется отдельными статическими файлами в control-plane
+  image; Go binary обслуживает их с `/usr/share/xray-easy/ui` (путь можно
+  переопределить через `XRAY_EASY_UI_DIR`);
 - Xray запускается официальным pinned binary как дочерний процесс.
 
 TypeScript/Nuxt backend остаётся только альтернативой для отдельного прототипа и не является целевым стеком проекта.

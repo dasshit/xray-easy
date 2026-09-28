@@ -1,3 +1,12 @@
+FROM golang:1.24-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY third_party ./third_party
+RUN for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
+COPY cmd ./cmd
+COPY internal ./internal
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
+
 FROM node:24-alpine AS web-build
 WORKDIR /web
 COPY web/package.json ./
@@ -6,20 +15,11 @@ RUN npm ci --no-audit --no-fund
 COPY web ./
 RUN npm run build
 
-FROM golang:1.24-alpine AS build
-WORKDIR /src
-COPY go.mod go.sum ./
-COPY third_party ./third_party
-RUN for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
-COPY cmd ./cmd
-COPY internal ./internal
-COPY --from=web-build /web/dist ./internal/ui/dist
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
-
 FROM alpine:3.22
 RUN addgroup -S -g 10001 xray && adduser -S -D -H -u 10001 -G xray xray \
     && apk add --no-cache ca-certificates
 COPY --from=build /out/xray-easy /usr/local/bin/xray-easy
+COPY --from=web-build /web/dist /usr/share/xray-easy/ui
 RUN mkdir -p /data /etc/xray \
     && chown -R xray:xray /data /etc/xray /usr/local/bin/xray-easy
 USER 10001:10001

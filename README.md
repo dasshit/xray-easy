@@ -37,7 +37,8 @@ The current slice implements the usable device and administration flow:
 - the authenticated dashboard shows the supervisor state, restart count and a
   bounded tail of redacted Xray warnings/errors; `/api/events` streams stats
   and status updates over SSE;
-- the Vue dashboard is embedded into the control-plane image;
+- the Vue dashboard is served from static files packaged separately from the
+  Go control-plane binary in the control-plane image;
 - `compose.stage0.yaml` keeps the supervisor and Xray API off the host network.
 
 The next slice is the release E2E checklist for importing the generated VLESS
