@@ -17,6 +17,14 @@ var (
 
 var ErrClientRevoked = errors.New("revoked client cannot be enabled")
 
+type ClientAction string
+
+const (
+	ActionEnable  ClientAction = "enable"
+	ActionDisable ClientAction = "disable"
+	ActionRevoke  ClientAction = "revoke"
+)
+
 // Client is an Xray device profile and its credentials. It contains secrets
 // used by the control plane, so transport responses must map it explicitly.
 type Client struct {
@@ -76,4 +84,17 @@ func (c Client) Revoke() Client {
 	c.Enabled = false
 	c.Revoked = true
 	return c
+}
+
+func (c Client) Transition(action ClientAction) (Client, error) {
+	switch action {
+	case ActionEnable:
+		return c.Enable()
+	case ActionDisable:
+		return c.Disable(), nil
+	case ActionRevoke:
+		return c.Revoke(), nil
+	default:
+		return Client{}, errors.New("unsupported client action")
+	}
 }

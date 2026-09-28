@@ -25,6 +25,9 @@ func TestClientLifecycle(t *testing.T) {
 	if _, err := revoked.Enable(); !errors.Is(err, ErrClientRevoked) {
 		t.Fatalf("enabling revoked profile error = %v", err)
 	}
+	if transitioned, err := client.Transition(ActionRevoke); err != nil || !transitioned.Revoked {
+		t.Fatalf("revoke transition = %+v, %v", transitioned, err)
+	}
 }
 
 func TestNewClientValidation(t *testing.T) {

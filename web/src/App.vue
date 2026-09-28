@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from 'vue'
 import { APIError, request } from './infrastructure/api'
 import { clientActionFor } from './domain/models'
 import type { Admin, Client, ClientAction, DiagnosticEntry, NodeStatus, Section, Settings, SettingsChange, SetupStatus, Theme, TOTPSetup, TOTPStatus } from './domain/models'
+import { formatBytes, formatTimestamp, persistTheme, readTheme } from './application/ui'
 
 const setup = ref<SetupStatus | null>(null)
 const admin = ref<Admin | null>(null)
@@ -12,7 +13,7 @@ const selectedProfile = ref<{ client_id: string; uri: string; json: unknown } | 
 const error = ref('')
 const busy = ref(false)
 const language = ref<'en' | 'ru'>(navigator.language.toLowerCase().startsWith('ru') ? 'ru' : 'en')
-const theme = ref<Theme>(initialTheme())
+const theme = ref<Theme>(readTheme())
 const activeSection = ref<Section>('profiles')
 const createModalOpen = ref(false)
 const clientAction = ref<ClientAction>(null)
@@ -53,27 +54,13 @@ const text = {
 
 const t = () => text[language.value]
 
-function initialTheme(): Theme {
-  if (typeof window === 'undefined') return 'light'
-  const stored = window.localStorage.getItem('xray-easy-theme')
-  if (stored === 'light' || stored === 'dark') return stored
-  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-}
-
 function applyTheme(next: Theme) {
   theme.value = next
-  document.documentElement.dataset.theme = next
-  window.localStorage.setItem('xray-easy-theme', next)
+  persistTheme(next)
 }
 
 function toggleTheme() { applyTheme(theme.value === 'dark' ? 'light' : 'dark') }
 
-async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...options })
-  const payload = await response.json().catch(() => ({}))
-  if (!response.ok) throw new APIError(payload.error || `HTTP ${response.status}`, payload.code)
-  return payload as T
-}
 function showError(cause: unknown) { error.value = cause instanceof Error ? cause.message : 'Request failed' }
 
 async function load() {
@@ -172,8 +159,6 @@ async function disableTOTP() { busy.value = true; error.value = ''; try { await 
 
 onMounted(() => { applyTheme(theme.value); void load() })
 onBeforeUnmount(() => events?.close())
-function formatBytes(value: number) { if (!value) return '0 B'; const units = ['B', 'KB', 'MB', 'GB', 'TB']; let amount = value; let unit = 0; while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit += 1 }; return `${amount.toFixed(amount >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}` }
-function formatLastSeen(value?: string) { if (!value) return ''; return new Date(value).toLocaleString(language.value === 'ru' ? 'ru-RU' : 'en-US') }
 function actionTitle(action?: ClientAction['action']) { if (action === 'enable') return t().enableConfirm; if (action === 'disable') return t().disableConfirm; return t().removeConfirm }
 function actionLabel(action?: ClientAction['action']) { if (action === 'enable') return t().enable; if (action === 'disable') return t().disable; return t().remove }
 </script>
@@ -191,9 +176,9 @@ function actionLabel(action?: ClientAction['action']) { if (action === 'enable')
     <section class="card dashboard" v-else>
       <div class="dashboard-header"><div><p class="eyebrow">{{ t().title }}</p><h1>{{ t().profiles }}</h1></div><div class="header-actions"><button class="secondary" @click="logoutAll">{{ t().logoutAll }}</button><button class="secondary" @click="logout">{{ t().logout }}</button></div></div>
       <nav class="tabs" :aria-label="t().title"><button :class="{ active: activeSection === 'profiles' }" @click="activeSection = 'profiles'">{{ t().profiles }}</button><button :class="{ active: activeSection === 'settings' }" @click="activeSection = 'settings'">{{ t().settings }}</button><button :class="{ active: activeSection === 'diagnostics' }" @click="activeSection = 'diagnostics'">{{ t().diagnostics }}</button><button :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">{{ t().security }}</button></nav>
-      <section v-if="activeSection === 'profiles'" class="section-panel"><div class="section-heading"><div><h2>{{ t().profiles }}</h2><p class="muted">{{ t().traffic }} · {{ clients.length }}</p></div><button @click="openCreateModal">{{ t().createProfile }}</button></div><p v-if="!clients.length" class="empty-state">{{ t().emptyProfiles }}</p><ul v-else class="devices"><li v-for="client in clients" :key="client.id" class="device-row"><div class="device-main"><strong>{{ client.name }}</strong><span class="device-meta"><span class="status-dot" :class="{ online: client.online }"></span>{{ client.revoked ? t().revoked : client.enabled ? t().enabled : t().disabled }} · {{ client.online ? t().online : t().offline }} · {{ t().traffic }} ↑{{ formatBytes(client.upload_bytes) }} ↓{{ formatBytes(client.download_bytes) }}<template v-if="client.last_seen"> · {{ formatLastSeen(client.last_seen) }}</template></span></div><div class="device-actions"><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked" class="secondary" @click="openClientAction(client, clientActionFor(client))">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ t().remove }}</button></div></li></ul></section>
+      <section v-if="activeSection === 'profiles'" class="section-panel"><div class="section-heading"><div><h2>{{ t().profiles }}</h2><p class="muted">{{ t().traffic }} · {{ clients.length }}</p></div><button @click="openCreateModal">{{ t().createProfile }}</button></div><p v-if="!clients.length" class="empty-state">{{ t().emptyProfiles }}</p><ul v-else class="devices"><li v-for="client in clients" :key="client.id" class="device-row"><div class="device-main"><strong>{{ client.name }}</strong><span class="device-meta"><span class="status-dot" :class="{ online: client.online }"></span>{{ client.revoked ? t().revoked : client.enabled ? t().enabled : t().disabled }} · {{ client.online ? t().online : t().offline }} · {{ t().traffic }} ↑{{ formatBytes(client.upload_bytes) }} ↓{{ formatBytes(client.download_bytes) }}<template v-if="client.last_seen"> · {{ formatTimestamp(client.last_seen, language) }}</template></span></div><div class="device-actions"><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked" class="secondary" @click="openClientAction(client, clientActionFor(client))">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ t().remove }}</button></div></li></ul></section>
       <section v-if="activeSection === 'settings' && settings" class="section-panel"><div class="section-heading"><div><h2>{{ t().settings }}</h2><p class="muted">{{ settings.protocol.toUpperCase() }} · {{ settings.security.toUpperCase() }} · {{ settings.flow }}</p></div></div><label>{{ t().host }}<input v-model="settingsForm.publicHost" /></label><label>{{ t().target }}<input v-model="settingsForm.realityTarget" /></label><label>{{ t().sni }}<input v-model="settingsForm.realitySNI" /></label><label>{{ t().fingerprint }}<select v-model="settingsForm.clientFingerprint"><option value="chrome">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option><option value="android">android</option><option value="random">random</option></select></label><label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label><p class="hint">{{ t().settingsWarning }}</p><button :disabled="busy" @click="reviewSettings">{{ t().saveSettings }}</button></section>
-      <section v-if="activeSection === 'diagnostics'" class="section-panel"><div class="section-heading"><div><h2>{{ t().diagnostics }}</h2><p class="muted">{{ t().xrayState }}: <strong>{{ nodeStatus?.state || 'unknown' }}</strong> · {{ t().restarts }}: {{ nodeStatus?.restart_count || 0 }}</p></div><button class="secondary" :disabled="busy" @click="loadStatus(); loadDiagnostics()">{{ t().refreshDiagnostics }}</button></div><p v-if="nodeStatus?.last_error" class="error">{{ nodeStatus.last_error }}</p><p v-if="nodeStatus?.stats_last_error" class="error">{{ nodeStatus.stats_last_error }}</p><ul v-if="diagnostics.length" class="diagnostics-list"><li v-for="entry in diagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`"><small>{{ formatLastSeen(entry.at) }} · {{ entry.component }} · {{ entry.level }}</small><span>{{ entry.message }}</span></li></ul><p v-else class="hint">{{ t().noDiagnostics }}</p></section>
+      <section v-if="activeSection === 'diagnostics'" class="section-panel"><div class="section-heading"><div><h2>{{ t().diagnostics }}</h2><p class="muted">{{ t().xrayState }}: <strong>{{ nodeStatus?.state || 'unknown' }}</strong> · {{ t().restarts }}: {{ nodeStatus?.restart_count || 0 }}</p></div><button class="secondary" :disabled="busy" @click="loadStatus(); loadDiagnostics()">{{ t().refreshDiagnostics }}</button></div><p v-if="nodeStatus?.last_error" class="error">{{ nodeStatus.last_error }}</p><p v-if="nodeStatus?.stats_last_error" class="error">{{ nodeStatus.stats_last_error }}</p><ul v-if="diagnostics.length" class="diagnostics-list"><li v-for="entry in diagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`"><small>{{ formatTimestamp(entry.at, language) }} · {{ entry.component }} · {{ entry.level }}</small><span>{{ entry.message }}</span></li></ul><p v-else class="hint">{{ t().noDiagnostics }}</p></section>
       <section v-if="activeSection === 'security'" class="section-panel security-panel"><div class="section-heading"><div><h2>{{ t().security }}</h2><p class="muted">{{ t().totp }}: <strong>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</strong></p></div><button class="secondary" :disabled="busy" @click="createBackup">{{ t().backup }}</button></div><p v-if="lastBackup" class="backup-name">{{ t().backupCreated }}: {{ lastBackup }}</p><template v-if="!totpStatus?.enabled && !totpSetup"><button :disabled="busy" @click="startTOTPSetup">{{ t().enableTOTP }}</button></template><template v-if="totpSetup"><p>{{ t().setupTOTP }}</p><label>{{ t().secret }}<input readonly :value="totpSetup.secret" /></label><label>otpauth URI<textarea readonly :value="totpSetup.otpauth_uri"></textarea></label><p><strong>{{ t().recovery }}</strong></p><pre class="recovery-codes">{{ totpSetup.recovery_codes.join('\n') }}</pre><label>{{ t().loginCode }}<input v-model="totpConfirmCode" inputmode="numeric" autocomplete="one-time-code" /></label><button :disabled="busy || !totpConfirmCode" @click="confirmTOTP">{{ t().confirmTOTP }}</button></template><template v-if="totpStatus?.enabled"><p>{{ totpStatus.recovery_codes_remaining }} {{ t().recoveryLeft }}</p><p>{{ t().disableTOTPHint }}</p><label>{{ t().password }}<input v-model="disableTOTPForm.password" type="password" autocomplete="current-password" /></label><label>{{ t().loginCode }}<input v-model="disableTOTPForm.code" inputmode="numeric" autocomplete="one-time-code" /></label><button class="danger" :disabled="busy" @click="disableTOTP">{{ t().disableTOTP }}</button></template></section>
 
       <div v-if="createModalOpen" class="modal-backdrop" @click.self="closeCreateModal"><div class="modal" role="dialog" aria-modal="true"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2>{{ t().createProfile }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeCreateModal">×</button></div><form @submit.prevent="createDevice"><label>{{ t().newDevice }}<input v-model="newDevice.name" class="device-name-input" :placeholder="t().newDevice" autofocus required maxlength="64" /></label><label>{{ t().fingerprint }}<select v-model="newDevice.fingerprint"><option value="">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option></select></label><div class="modal-actions"><button type="button" class="secondary" @click="closeCreateModal">{{ t().cancel }}</button><button type="submit" :disabled="busy || !newDevice.name.trim()">{{ t().createDevice }}</button></div></form></div></div>

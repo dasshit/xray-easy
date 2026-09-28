@@ -431,11 +431,8 @@ func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, 
 	if err != nil {
 		return err
 	}
-	xrayClients := make([]xray.Client, 0, len(clients))
-	for _, client := range clients {
-		xrayClients = append(xrayClients, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
-	}
-	rendered, err := xray.RenderServerConfig(xray.Settings{PublicHost: settings.PublicHost, PublicPort: settings.PublicPort, XrayAPIListen: settings.XrayAPIListen, RealityTarget: settings.RealityTarget, RealitySNI: settings.RealitySNI, RealityPrivateKey: privateKey, RealityPublicKey: settings.RealityPublicKey, ClientFingerprint: settings.ClientFingerprint, InternalInboundPort: settings.InternalInboundPort}, xrayClients)
+	xrayClients := xray.ClientsFromDomain(clients)
+	rendered, err := xray.RenderServerConfig(xray.SettingsFromDomain(settings, privateKey), xrayClients)
 	if err != nil {
 		return err
 	}
@@ -1542,15 +1539,15 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 2 && parts[1] == "enable" && r.Method == http.MethodPost {
-		s.changeClientState(w, r, client, true, false, admin.ID)
+		s.changeClientState(w, r, client, domain.ActionEnable, admin.ID)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "disable" && r.Method == http.MethodPost {
-		s.changeClientState(w, r, client, false, false, admin.ID)
+		s.changeClientState(w, r, client, domain.ActionDisable, admin.ID)
 		return
 	}
 	if len(parts) == 2 && parts[1] == "revoke" && r.Method == http.MethodPost {
-		s.changeClientState(w, r, client, false, true, admin.ID)
+		s.changeClientState(w, r, client, domain.ActionRevoke, admin.ID)
 		return
 	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
@@ -1598,9 +1595,10 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 	return s.store.GetClient(ctx, clientID)
 }
 
-func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client domain.Client, enabled, revoked bool, actorID string) {
-	if client.Revoked && !revoked {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "revoked client cannot be enabled"})
+func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client domain.Client, action domain.ClientAction, actorID string) {
+	next, err := client.Transition(action)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
 	settings, err := s.store.GetSettings(r.Context())
@@ -1623,11 +1621,11 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 	}
 	for i := range clients {
 		if clients[i].ID == client.ID {
-			clients[i].Enabled, clients[i].Revoked = enabled, revoked
+			clients[i] = next
 		}
 	}
 	oldEnabled, oldRevoked := client.Enabled, client.Revoked
-	persist := func() error { return s.store.SetClientState(r.Context(), client.ID, enabled, revoked) }
+	persist := func() error { return s.store.SetClientState(r.Context(), client.ID, next.Enabled, next.Revoked) }
 	rollbackPersist := func() error { return s.store.SetClientState(r.Context(), client.ID, oldEnabled, oldRevoked) }
 	// Enabling, disabling and revoking also change REALITY shortIds. Apply the
 	// full candidate through supervisor instead of only mutating HandlerService.
@@ -1797,11 +1795,8 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Set
 }
 
 func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client) (string, string, error) {
-	xrayClients := make([]xray.Client, 0, len(clients))
-	for _, client := range clients {
-		xrayClients = append(xrayClients, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
-	}
-	rendered, err := xray.RenderServerConfig(xray.Settings{PublicHost: settings.PublicHost, PublicPort: settings.PublicPort, XrayAPIListen: settings.XrayAPIListen, RealityTarget: settings.RealityTarget, RealitySNI: settings.RealitySNI, RealityPrivateKey: privateKey, RealityPublicKey: settings.RealityPublicKey, ClientFingerprint: settings.ClientFingerprint, InternalInboundPort: settings.InternalInboundPort}, xrayClients)
+	xrayClients := xray.ClientsFromDomain(clients)
+	rendered, err := xray.RenderServerConfig(xray.SettingsFromDomain(settings, privateKey), xrayClients)
 	if err != nil {
 		return "", "", fmt.Errorf("render Xray config: %w", err)
 	}
@@ -1850,7 +1845,7 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		return
 	}
 	_ = privateKey
-	profile, err := xray.BuildProfile(xray.Settings{PublicHost: settings.PublicHost, PublicPort: settings.PublicPort, XrayAPIListen: settings.XrayAPIListen, RealityTarget: settings.RealityTarget, RealitySNI: settings.RealitySNI, RealityPrivateKey: "server-secret-not-exported", RealityPublicKey: settings.RealityPublicKey, ClientFingerprint: settings.ClientFingerprint, InternalInboundPort: settings.InternalInboundPort}, xray.Client{ID: client.ID, Name: client.Name, UUID: client.UUID, Email: client.Email, ShortID: client.ShortID, ClientFingerprint: client.ClientFingerprint, Enabled: client.Enabled, Revoked: client.Revoked})
+	profile, err := xray.BuildProfile(xray.SettingsFromDomain(settings, "server-secret-not-exported"), xray.ClientFromDomain(client))
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
