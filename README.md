@@ -3,6 +3,10 @@
 Xray-easy is an administration panel for a single Xray node. The product plan
 is in [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
+The current Go test coverage and the backend test roadmap are in
+[docs/backend-test-plan.md](docs/backend-test-plan.md). Run
+`bash scripts/backend-coverage.sh` to refresh the coverage numbers.
+
 ## Current implementation slice
 
 The current slice implements the usable device and administration flow:
