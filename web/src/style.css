@@ -58,7 +58,7 @@ button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-
 .shell { max-width: 1120px; margin: 0 auto; padding: 30px 24px 56px; }
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 30px; }
 .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
-.brand-mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 11px; background: var(--primary); color: var(--page-bg); font-size: 1.8rem; font-weight: 800; line-height: 1; box-shadow: 0 5px 16px var(--focus); }
+.brand-mark { display: block; width: 34px; height: 34px; flex: 0 0 auto; object-fit: contain; }
 .brand-copy { display: grid; gap: 2px; min-width: 0; }
 .brand-copy strong { font-size: 1.05rem; letter-spacing: -.01em; }
 .brand-copy span { color: var(--muted); font-size: .76rem; }

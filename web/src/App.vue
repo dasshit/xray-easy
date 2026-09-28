@@ -210,7 +210,7 @@ function actionLabel(action?: ClientAction['action']) { if (action === 'enable')
 <template>
   <main class="shell" :aria-busy="busy">
     <header class="topbar">
-      <div class="brand"><span class="brand-mark" aria-hidden="true">×</span><div class="brand-copy"><strong>{{ t().title }}</strong><span>{{ t().panelSubtitle }}</span></div></div>
+      <div class="brand"><img class="brand-mark" :src="theme === 'dark' ? '/favicon-dark.svg' : '/favicon-light.svg'" alt="" aria-hidden="true" /><div class="brand-copy"><strong>{{ t().title }}</strong><span>{{ t().panelSubtitle }}</span></div></div>
       <div class="topbar-actions">
         <span v-if="admin" class="node-pill" :class="`node-pill-${statusTone(nodeStatus?.state)}`"><span class="status-dot" :class="{ online: nodeStatus?.state === 'running' }"></span>{{ statusLabel(nodeStatus?.state) }}</span>
         <button class="theme-toggle" :aria-label="theme === 'dark' ? t().useLightTheme : t().useDarkTheme" @click="toggleTheme"><span class="theme-icon" aria-hidden="true">{{ theme === 'dark' ? '☀' : '☾' }}</span><span>{{ theme === 'dark' ? t().useLightTheme : t().useDarkTheme }}</span></button>
