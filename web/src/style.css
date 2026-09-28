@@ -128,11 +128,47 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .device-stat-wide { grid-column: span 2; }
 .device-id { color: var(--muted); font: .72rem ui-monospace, monospace; overflow-wrap: anywhere; }
 .device-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 14px; }
+.settings-grid, .security-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.settings-card, .security-card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.settings-card-danger { border-color: color-mix(in srgb, var(--error) 35%, var(--border)); background: color-mix(in srgb, var(--error-surface) 35%, var(--surface)); }
+.card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
+.card-heading h3 { margin: 0 0 7px; }
+.card-heading .hint { margin: 0; line-height: 1.45; }
+.settings-icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 10px; background: var(--surface-muted); color: var(--primary); font-size: 1.1rem; font-weight: 800; }
+.settings-card-danger .settings-icon { background: var(--error-surface); color: var(--error); }
+.section-actions { display: flex; justify-content: flex-end; margin-top: 18px; }
 .diagnostics-list { list-style: none; padding: 0; margin: 20px 0 0; border-top: 1px solid var(--border); }
 .diagnostics-list li { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .diagnostics-list small { color: var(--muted); font: 11px ui-monospace, monospace; }
+.diagnostics-overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 14px; align-items: stretch; }
+.diagnostic-status-card { display: flex; align-items: center; gap: 12px; padding: 17px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-muted); }
+.diagnostic-status-card.diagnostic-positive { border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
+.diagnostic-status-card.diagnostic-negative { border-color: color-mix(in srgb, var(--error) 35%, var(--border)); background: var(--error-surface); }
+.status-icon { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 50%; background: var(--surface); color: var(--primary); font-weight: 800; }
+.diagnostic-positive .status-icon { color: var(--success); }
+.diagnostic-negative .status-icon { color: var(--error); }
+.diagnostic-status-card div { display: grid; gap: 4px; }
+.stat-label { color: var(--muted); font-size: .75rem; }
+.diagnostic-summary { display: flex; align-items: center; justify-content: space-around; gap: 12px; padding: 17px; border: 1px solid var(--border); border-radius: 14px; color: var(--muted); font-size: .86rem; }
+.diagnostic-summary strong { color: var(--text); }
+.diagnostic-counter { padding: 7px 10px; border-radius: 999px; background: var(--surface-muted); font-weight: 650; white-space: nowrap; }
+.diagnostic-warning { color: #b26b00; background: color-mix(in srgb, #f0a000 14%, var(--surface)); }
+.diagnostic-negative { color: var(--error); background: var(--error-surface); }
+.diagnostic-alerts { display: grid; gap: 8px; margin-top: 18px; padding: 14px 16px; border: 1px solid var(--error-border); border-radius: 12px; background: var(--error-surface); }
+.diagnostic-alerts .error { overflow-wrap: anywhere; }
+.diagnostics-feed { margin-top: 24px; }
+.feed-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.feed-heading h3 { margin: 0; }
+.diagnostic-event { gap: 8px !important; }
+.diagnostic-event-meta { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; }
+.diagnostic-level { padding: 3px 7px; border-radius: 999px; background: var(--surface-muted); color: var(--muted); font-size: .7rem; font-weight: 750; text-transform: uppercase; }
+.diagnostic-level-negative { background: var(--error-surface); color: var(--error); }
+.diagnostic-level-warning { color: #b26b00; background: color-mix(in srgb, #f0a000 14%, var(--surface)); }
+.compact-empty { margin: 16px 0 0; padding: 28px 18px; }
 .security-panel .section-heading { align-items: center; }
-.security-panel { max-width: 720px; }
+.security-panel { max-width: none; }
+.security-status { display: inline-flex; align-items: center; gap: 2px; margin: 3px 0 12px; color: var(--muted); font-size: .86rem; }
+.security-status.enabled { color: var(--success); }
 .checkbox { display: flex; flex-direction: row; align-items: center; gap: 8px; }
 .checkbox input { width: auto; }
 .recovery-codes { white-space: pre-wrap; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface-muted); font: 13px ui-monospace, monospace; }
@@ -173,6 +209,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .device-card-footer { align-items: flex-start; flex-direction: column; }
   .device-actions { width: 100%; flex-wrap: wrap; gap: 12px 18px; }
   .header-actions { gap: 12px; }
+  .settings-grid, .security-grid, .diagnostics-overview { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {
   .topbar { align-items: center; }
@@ -183,6 +220,8 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .section-heading { flex-direction: column; }
   .section-heading > button { width: 100%; }
   .header-actions { width: 100%; justify-content: space-between; }
+  .diagnostic-summary { align-items: stretch; flex-direction: column; }
+  .diagnostic-counter { text-align: center; }
   .profile-delivery { grid-template-columns: 1fr; }
   .qr-panel { max-width: 340px; width: 100%; justify-self: center; }
   .modal-actions { flex-direction: column-reverse; }
