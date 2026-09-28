@@ -115,6 +115,9 @@ export function defaultHandler({ initialized = true, authenticated = false, clie
     if (method === 'GET' && url === '/api/setup/status') return { body: { initialized, public_port: 8443 } }
     if (method === 'GET' && url === '/api/me') return authenticated ? { body: admin } : { status: 401, body: { error: 'Unauthorized' } }
     if (method === 'GET' && url === '/api/clients') return { body: clients }
+    if (method === 'POST' && url === '/api/clients') return { status: 201, body: { ...sampleClient, name: 'new-device' } }
+    const profilePath = url.match(/^\/api\/clients\/([^/]+)\/profile\?format=uri$/)
+    if (method === 'GET' && profilePath) return { body: { client_id: profilePath[1], uri: `vless://${profilePath[1]}@vpn.example.com:443?security=reality#phone`, json: { id: profilePath[1] } } }
     if (method === 'GET' && url === '/api/auth/totp/status') return { body: totpStatus }
     if (method === 'GET' && url === '/api/settings') return { body: settingsData }
     if (method === 'GET' && url === '/api/status') return { body: nodeStatus }
