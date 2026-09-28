@@ -73,26 +73,26 @@ type keyPress struct {
 }
 
 type wizard struct {
-	out       io.Writer
-	inputFile *os.File
-	bytes     chan byte
-	done      chan struct{}
-	resize    chan os.Signal
+	out        io.Writer
+	inputFile  *os.File
+	bytes      chan byte
+	done       chan struct{}
+	resize     chan os.Signal
 	resizeDone chan struct{}
-	mu        sync.Mutex
-	width     int
-	height    int
-	stepNo    int
-	title     string
-	notice    string
-	fields    [2]string
-	focus     int
-	choice    bool
-	choiceRaw string
-	config    configuration
-	logs      []string
-	partial   string
-	noColor   bool
+	mu         sync.Mutex
+	width      int
+	height     int
+	stepNo     int
+	title      string
+	notice     string
+	fields     [2]string
+	focus      int
+	choice     bool
+	choiceRaw  string
+	config     configuration
+	logs       []string
+	partial    string
+	noColor    bool
 }
 
 func newWizard(input io.Reader, output io.Writer) *wizard {
@@ -490,13 +490,25 @@ func (w *wizard) renderLocked() {
 			for i, log := range logs {
 				put(10+i, panelLine("  "+log, panelWidth), "dim")
 			}
-			put(height-4, "  Waiting for services to become healthy...", "accent")
+			progress := "Waiting for services to become healthy..."
+			switch w.title {
+			case "Verifying the installation":
+				progress = "Running final doctor checks..."
+			case "Doctor checks completed":
+				progress = "Doctor checks completed."
+			case "Doctor checks failed":
+				progress = "Doctor found failures; installation is preserved."
+			}
+			put(height-4, "  "+progress, "accent")
 		}
 	}
 	put(height-3, "  "+strings.Repeat("─", max(0, width-4)), "dim")
 	keys := "  ↑↓ / Tab  Move     Enter  Continue     Backspace  Edit     Esc  Cancel     Ctrl+C  Exit"
 	if w.stepNo == 4 {
-		keys = "  Docker is running. Ctrl+C stops the installer; rerun ./install.sh to retry."
+		keys = "  Docker is running. Ctrl+C exits the installer; services remain running."
+		if w.title == "Doctor checks failed" {
+			keys = "  Services kept running; see doctor details above."
+		}
 	}
 	put(height-2, keys, "dim")
 	if w.notice != "" {

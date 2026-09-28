@@ -33,8 +33,11 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 	if err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 4 || !strings.Contains(runner.calls[3], "up -d --build --wait") {
+	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --wait") || !strings.Contains(runner.calls[4], "exec -T xray-easy xray-easy doctor") {
 		t.Fatalf("unexpected Docker calls: %v", runner.calls)
+	}
+	if !strings.Contains(output.String(), "Doctor completed. Review any warnings above") {
+		t.Fatal("installer did not show the completed doctor stage")
 	}
 	envPath := filepath.Join(root, ".env")
 	tokenPath := filepath.Join(root, "secrets", "xray_supervisor_token")
@@ -168,6 +171,28 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 	}
 	if got := readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token")); got != firstToken {
 		t.Fatal("retry after Compose failure replaced the token")
+	}
+}
+
+func TestDoctorFailurePreservesStartedStackAndShowsRetryCommand(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{failOn: "exec -T xray-easy xray-easy doctor"}
+	var output bytes.Buffer
+	err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner)
+	if err == nil || !strings.Contains(err.Error(), "docker compose -f compose.yaml exec -T xray-easy xray-easy doctor") {
+		t.Fatalf("expected doctor failure with retry command, got %v", err)
+	}
+	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --wait") || !strings.Contains(runner.calls[4], "doctor") {
+		t.Fatalf("doctor was not the final install step: %v", runner.calls)
+	}
+	if strings.Contains(strings.Join(runner.calls, "\n"), " down") {
+		t.Fatalf("doctor failure unexpectedly stopped the stack: %v", runner.calls)
+	}
+	if _, statErr := os.Stat(filepath.Join(root, ".env")); statErr != nil {
+		t.Fatalf("doctor failure removed the generated configuration: %v", statErr)
+	}
+	if !strings.Contains(output.String(), "services and configuration are preserved") {
+		t.Fatalf("doctor failure message did not describe preserved state: %s", output.String())
 	}
 }
 

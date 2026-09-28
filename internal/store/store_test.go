@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
@@ -369,7 +368,7 @@ func TestDatabaseBackupValidationSettingsReadAndRestore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer empty.Close()
-	if _, err := ReadSettingsFromDatabase(emptyPath); !errors.Is(err, sql.ErrNoRows) && (err == nil || !strings.Contains(err.Error(), "not initialized")) {
+	if _, err := ReadSettingsFromDatabase(emptyPath); !errors.Is(err, ErrSettingsNotInitialized) {
 		t.Fatalf("missing settings error = %v", err)
 	}
 	if _, err := empty.db.Exec(`DROP TABLE traffic_snapshots`); err != nil {

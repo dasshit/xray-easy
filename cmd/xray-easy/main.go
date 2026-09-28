@@ -291,6 +291,8 @@ func runCLI(ctx context.Context, args []string) error {
 	dataDir := envOr("XRAY_EASY_DATA_DIR", "/data")
 	configDir := envOr("XRAY_EASY_CONFIG_DIR", "/etc/xray")
 	switch args[0] {
+	case "doctor":
+		return runDoctorCLI(ctx, args[1:], dataDir, configDir, os.Stdout)
 	case "admin":
 		return runAdminCLI(ctx, dataDir, args[1:])
 	case "backup":
@@ -559,7 +561,7 @@ func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, mast
 }
 
 func cliUsageError() error {
-	return errors.New("usage: xray-easy admin <logout-all|reset-password|reset-totp|recovery-codes> | backup <create|list> | restore <backup-name> RESTORE")
+	return errors.New("usage: xray-easy doctor | admin <logout-all|reset-password|reset-totp|recovery-codes> | backup <create|list> | restore <backup-name> RESTORE")
 }
 
 func configuredPublicPort() (int, error) {

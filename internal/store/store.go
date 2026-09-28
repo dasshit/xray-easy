@@ -21,6 +21,10 @@ type Store struct {
 	db *sql.DB
 }
 
+// ErrSettingsNotInitialized indicates that first-run server settings have not
+// been saved yet.
+var ErrSettingsNotInitialized = errors.New("settings are not initialized")
+
 type Admin struct {
 	ID            string
 	Username      string
@@ -123,7 +127,7 @@ func ReadSettingsFromDatabase(path string) (domain.Settings, error) {
 	var settings domain.Settings
 	err = db.QueryRow(`SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint)
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.Settings{}, errors.New("settings are not initialized")
+		return domain.Settings{}, ErrSettingsNotInitialized
 	}
 	return settings, err
 }
@@ -520,7 +524,7 @@ func (s *Store) GetSettings(ctx context.Context) (domain.Settings, error) {
 	var settings domain.Settings
 	err := s.db.QueryRowContext(ctx, `SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint)
 	if errors.Is(err, sql.ErrNoRows) {
-		return domain.Settings{}, errors.New("settings are not initialized")
+		return domain.Settings{}, ErrSettingsNotInitialized
 	}
 	return settings, err
 }

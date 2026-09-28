@@ -135,6 +135,24 @@ func TestDockerOutputIsBoundedAndCannotControlTerminal(t *testing.T) {
 	}
 }
 
+func TestInstallerShowsDoctorProgressAfterComposeHealth(t *testing.T) {
+	var output bytes.Buffer
+	w := newWizard(strings.NewReader(""), &output)
+	defer w.close()
+	w.step(4, "Verifying the installation")
+	if !strings.Contains(output.String(), "Running final doctor checks...") {
+		t.Fatal("verification step still shows the Compose health wait status")
+	}
+	w.step(4, "Doctor checks completed")
+	if !strings.Contains(output.String(), "Doctor checks completed.") {
+		t.Fatal("completed doctor step was not shown in the installer")
+	}
+	w.step(4, "Doctor checks failed")
+	if !strings.Contains(output.String(), "Doctor found failures; installation is preserved.") || !strings.Contains(output.String(), "Services kept running; see doctor details above.") {
+		t.Fatal("failed doctor step did not show that installation state is preserved")
+	}
+}
+
 func TestTerminalRenderingHandlesSmallScreenAndStyles(t *testing.T) {
 	var output bytes.Buffer
 	w := newWizard(strings.NewReader(""), &output)

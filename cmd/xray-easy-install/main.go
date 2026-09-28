@@ -192,7 +192,14 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"); err != nil {
 		return installResult{}, fmt.Errorf("Compose could not start; configuration was kept for a retry: %w%s", err, ui.logTail(8))
 	}
-	ui.message("Xray-easy is running")
+	ui.step(4, "Verifying the installation")
+	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "exec", "-T", "xray-easy", "xray-easy", "doctor"); err != nil {
+		ui.step(4, "Doctor checks failed")
+		ui.message("Doctor found failures. The services and configuration are preserved for troubleshooting.")
+		return installResult{}, fmt.Errorf("post-install doctor failed: %w; rerun after fixing with: docker compose -f compose.yaml exec -T xray-easy xray-easy doctor", err)
+	}
+	ui.step(4, "Doctor checks completed")
+	ui.message("Doctor completed. Review any warnings above; Xray-easy is running.")
 	return installResult{config: cfg, started: true}, nil
 }
 

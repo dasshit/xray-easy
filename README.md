@@ -35,8 +35,8 @@ fields, **Enter** to continue, **Esc** to cancel, and **Ctrl+C** to stop. It che
 Docker/Compose, asks for the public and panel ports, generates the master key
 and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
 mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
-services to become healthy. A repeat run reuses the existing keys and Docker
-volumes.
+services to become healthy, then runs the final `xray-easy doctor` check. A
+repeat run reuses the existing keys and Docker volumes.
 
 The installer builds the application images locally from this checkout for the
 VPS architecture. Prebuilt images are not distributed.
@@ -107,6 +107,20 @@ docker compose logs --tail=100 xray xray-easy
 docker compose logs -f xray
 docker compose down                         # stop, preserving named volumes
 docker compose up -d --build --wait          # start again
+docker compose exec -T xray-easy xray-easy doctor
+```
+
+`./install.sh` runs the same doctor command after Compose reports both services
+healthy. `PASS` completes installation; warnings are shown for follow-up (for
+example, pending first-run setup, an unavailable optional stats RPC, or the VDS
+firewall, which cannot be checked from inside Compose). A `FAIL` leaves the
+containers and configuration in place and prints the command to rerun doctor
+after fixing the reported issue. Doctor checks the active config without
+applying it or restarting Xray. If the control-plane container is stopped, run
+a one-off diagnostic container with:
+
+```sh
+docker compose run --rm --no-deps xray-easy doctor
 ```
 
 To update the code, create a backup from the Security page or CLI, then run:
@@ -159,6 +173,7 @@ mkdir -p secrets
 openssl rand -base64 32 > secrets/xray_supervisor_token
 chmod 600 .env secrets/xray_supervisor_token
 docker compose up -d --build --wait
+docker compose exec -T xray-easy xray-easy doctor
 ```
 
 If you previously used `compose.stage1.yaml`, keep its `.env` and
