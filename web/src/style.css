@@ -48,15 +48,25 @@
 
 * { box-sizing: border-box; }
 html { background: var(--page-bg); }
-body { margin: 0; min-width: 320px; background: var(--page-bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+body { margin: 0; min-width: 320px; background: radial-gradient(circle at 50% -20%, var(--surface-muted), transparent 42rem), var(--page-bg); color: var(--text); font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
 button, input, select, textarea { font: inherit; }
-button { border: 0; border-radius: 8px; padding: 11px 16px; background: var(--primary); color: var(--page-bg); cursor: pointer; transition: background .15s ease, color .15s ease, opacity .15s ease; }
+button { min-height: 42px; border: 0; border-radius: 9px; padding: 10px 16px; background: var(--primary); color: var(--page-bg); cursor: pointer; font-weight: 650; transition: background .15s ease, color .15s ease, box-shadow .15s ease, opacity .15s ease, transform .15s ease; }
 button:hover:not(:disabled) { background: var(--primary-hover); }
+button:active:not(:disabled) { transform: translateY(1px); }
 button:disabled { opacity: .55; cursor: wait; }
-.shell { max-width: 940px; margin: 0 auto; padding: 28px 18px 48px; }
-.topbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 28px; font-size: 1.15rem; }
-.topbar-actions { display: flex; align-items: center; gap: 18px; }
-.card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; padding: 28px; box-shadow: 0 8px 24px var(--shadow); }
+.shell { max-width: 1120px; margin: 0 auto; padding: 30px 24px 56px; }
+.topbar { display: flex; justify-content: space-between; align-items: center; gap: 24px; margin-bottom: 30px; }
+.brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.brand-mark { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 11px; background: var(--primary); color: var(--page-bg); font-size: 1.8rem; font-weight: 800; line-height: 1; box-shadow: 0 5px 16px var(--focus); }
+.brand-copy { display: grid; gap: 2px; min-width: 0; }
+.brand-copy strong { font-size: 1.05rem; letter-spacing: -.01em; }
+.brand-copy span { color: var(--muted); font-size: .76rem; }
+.topbar-actions { display: flex; align-items: center; gap: 16px; }
+.node-pill { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 999px; color: var(--label); background: var(--surface); font-size: .78rem; font-weight: 650; white-space: nowrap; }
+.node-pill-positive { border-color: color-mix(in srgb, var(--success) 35%, var(--border)); color: var(--success); }
+.node-pill-negative { border-color: color-mix(in srgb, var(--error) 35%, var(--border)); color: var(--error); }
+.node-pill-neutral { color: var(--muted); }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 30px; box-shadow: 0 14px 34px var(--shadow); }
 .auth-card { max-width: 620px; margin: 0 auto; }
 .error-card { margin-bottom: 16px; border-color: var(--error-border); background: var(--error-surface); }
 .error { margin: 0; color: var(--error); }
@@ -65,17 +75,18 @@ h1 { margin-bottom: 0; font-size: 1.55rem; }
 h2 { margin-bottom: 7px; font-size: 1.2rem; }
 h3 { margin: 20px 0 10px; font-size: 1rem; }
 label { display: grid; gap: 7px; margin: 16px 0; font-size: .9rem; color: var(--label); }
-input, select, textarea { width: 100%; min-width: 0; border: 1px solid var(--border-strong); border-radius: 8px; padding: 11px 12px; color: var(--text); background: var(--surface); }
+input, select, textarea { width: 100%; min-width: 0; min-height: 44px; border: 1px solid var(--border-strong); border-radius: 9px; padding: 10px 12px; color: var(--text); background: var(--surface); }
 input:focus, select:focus, textarea:focus { outline: 3px solid var(--focus); border-color: var(--primary); }
 input[readonly] { background: var(--surface-muted); }
 textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospace; overflow-wrap: anywhere; }
 .language, .theme-toggle, .secondary { background: transparent; color: var(--primary); padding: 6px 0; }
 .language, .theme-toggle { font-size: .9rem; }
+.theme-icon { font-size: 1rem; line-height: 1; }
 .theme-toggle { display: inline-flex; align-items: center; gap: 6px; }
 .danger { background: transparent; color: var(--error); padding: 6px 0; }
 .danger-fill { background: var(--error); color: var(--surface); }
 .danger-fill:hover:not(:disabled) { background: var(--danger-hover); color: var(--page-bg); }
-.dashboard { padding: 0; overflow: hidden; }
+.dashboard { padding: 0; overflow: hidden; box-shadow: 0 18px 48px var(--shadow); }
 .dashboard-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 28px 30px 22px; }
 .header-actions { display: flex; align-items: center; gap: 18px; white-space: nowrap; }
 .eyebrow { margin-bottom: 5px; color: var(--muted); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
@@ -121,8 +132,12 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .review-list { margin: 8px 0 18px; padding-left: 20px; }
 .review-list li { margin: 6px 0; overflow-wrap: anywhere; }
 @media (max-width: 700px) {
-  .shell { padding: 18px 10px 34px; }
+  .shell { padding: 18px 12px 34px; }
   .card { border-radius: 12px; padding: 20px; }
+  .topbar { align-items: flex-start; margin-bottom: 22px; }
+  .brand-copy span { display: none; }
+  .topbar-actions { gap: 10px; }
+  .node-pill { padding: 5px 8px; }
   .dashboard { padding: 0; }
   .dashboard-header { padding: 22px 20px 18px; }
   .tabs { padding: 0 14px; }
@@ -132,8 +147,10 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .header-actions { gap: 12px; }
 }
 @media (max-width: 480px) {
+  .topbar { align-items: center; }
   .topbar-actions { gap: 10px; }
   .theme-toggle span { display: none; }
+  .node-pill { display: none; }
   .dashboard-header { flex-direction: column; }
   .section-heading { flex-direction: column; }
   .section-heading > button { width: 100%; }

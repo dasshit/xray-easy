@@ -35,19 +35,19 @@ let events: EventSource | null = null
 
 const text = {
   en: {
-    title: 'Xray-easy', setup: 'Initial setup', login: 'Administrator login', username: 'Username', password: 'Password', host: 'Public host or IPv4', port: 'Public port (from Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Create administrator', signIn: 'Sign in',
+    title: 'Xray-easy', panelSubtitle: 'Private Xray control panel', setup: 'Initial setup', login: 'Administrator login', username: 'Username', password: 'Password', host: 'Public host or IPv4', port: 'Public port (from Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Create administrator', signIn: 'Sign in',
     profiles: 'Profiles', profile: 'Profile', createProfile: 'Create profile', newDevice: 'Device name', fingerprint: 'Fingerprint', createDevice: 'Create profile', emptyProfiles: 'No profiles yet. Create the first profile for a device.',
     qr: 'QR code', download: 'Download JSON', copyUri: 'VLESS URI', enabled: 'enabled', disabled: 'disabled', revoked: 'revoked', online: 'online', offline: 'offline', traffic: 'traffic', enable: 'Enable', disable: 'Disable', remove: 'Delete profile', close: 'Close', cancel: 'Cancel', confirm: 'Confirm', action: 'Confirm action', enableConfirm: 'Enable this profile?', disableConfirm: 'Disable this profile? The device will stop connecting until it is enabled again.', removeConfirm: 'Delete this profile? Its credentials will be revoked permanently.', noUndo: 'Revocation cannot be undone.',
     logout: 'Sign out', logoutAll: 'Sign out all sessions', language: 'Русский', settings: 'Settings', saveSettings: 'Review changes', applySettings: 'Apply settings', rotateKey: 'Generate a new REALITY key', confirmation: 'Confirmation', settingsWarning: 'Existing device profiles may stop working and will be revoked.', expected: 'Type exactly', settingsDiff: 'Changes', consequences: 'Consequences', revokedClients: 'Profiles to revoke',
-    diagnostics: 'Diagnostics', xrayState: 'Xray state', restarts: 'Restarts', refreshDiagnostics: 'Refresh diagnostics', noDiagnostics: 'No warnings or errors', useLightTheme: 'Light theme', useDarkTheme: 'Dark theme',
+    diagnostics: 'Diagnostics', xrayState: 'Xray state', restarts: 'Restarts', refreshDiagnostics: 'Refresh diagnostics', noDiagnostics: 'No warnings or errors', running: 'Running', unavailable: 'Unavailable', starting: 'Starting', stopped: 'Stopped', unknown: 'Unknown', useLightTheme: 'Light theme', useDarkTheme: 'Dark theme',
     security: 'Security', backup: 'Create backup', backupCreated: 'Backup created', totp: 'Two-factor authentication (TOTP)', totpEnabled: 'TOTP is enabled', totpDisabled: 'TOTP is not enabled', enableTOTP: 'Enable TOTP', setupTOTP: 'Scan this URI or enter the secret in your authenticator, then enter a code', secret: 'Secret', confirmTOTP: 'Confirm TOTP', recovery: 'Save these recovery codes. Each can be used once.', recoveryLeft: 'recovery codes remaining', disableTOTP: 'Disable TOTP', disableTOTPHint: 'Enter your password and a current TOTP code', loginCode: 'TOTP code', recoveryCode: 'Recovery code', useRecovery: 'Use a recovery code', useTOTP: 'Use a TOTP code',
   },
   ru: {
-    title: 'Xray-easy', setup: 'Первичная настройка', login: 'Вход администратора', username: 'Имя пользователя', password: 'Пароль', host: 'Публичный адрес или IPv4', port: 'Публичный порт (из Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Создать администратора', signIn: 'Войти',
+    title: 'Xray-easy', panelSubtitle: 'Приватная панель управления Xray', setup: 'Первичная настройка', login: 'Вход администратора', username: 'Имя пользователя', password: 'Пароль', host: 'Публичный адрес или IPv4', port: 'Публичный порт (из Compose)', target: 'REALITY target', sni: 'REALITY SNI', create: 'Создать администратора', signIn: 'Войти',
     profiles: 'Профили', profile: 'Профиль', createProfile: 'Создать профиль', newDevice: 'Имя устройства', fingerprint: 'Fingerprint', createDevice: 'Создать профиль', emptyProfiles: 'Профилей пока нет. Создайте первый профиль для устройства.',
     qr: 'QR-код', download: 'Скачать JSON', copyUri: 'VLESS URI', enabled: 'включён', disabled: 'выключен', revoked: 'отозван', online: 'онлайн', offline: 'не в сети', traffic: 'трафик', enable: 'Включить', disable: 'Выключить', remove: 'Удалить профиль', close: 'Закрыть', cancel: 'Отмена', confirm: 'Подтвердить', action: 'Подтверждение действия', enableConfirm: 'Включить профиль?', disableConfirm: 'Выключить профиль? Устройство перестанет подключаться, пока профиль не будет включён снова.', removeConfirm: 'Удалить профиль? Его учётные данные будут отозваны навсегда.', noUndo: 'Отзыв нельзя отменить.',
     logout: 'Выйти', logoutAll: 'Выйти со всех сессий', language: 'English', settings: 'Настройки', saveSettings: 'Проверить изменения', applySettings: 'Применить настройки', rotateKey: 'Сгенерировать новый REALITY-ключ', confirmation: 'Подтверждение', settingsWarning: 'Старые профили могут перестать работать и будут отозваны.', expected: 'Введите точно', settingsDiff: 'Изменения', consequences: 'Последствия', revokedClients: 'Профилей будет отозвано',
-    diagnostics: 'Диагностика', xrayState: 'Состояние Xray', restarts: 'Перезапуски', refreshDiagnostics: 'Обновить диагностику', noDiagnostics: 'Предупреждений и ошибок нет', useLightTheme: 'Светлая тема', useDarkTheme: 'Тёмная тема',
+    diagnostics: 'Диагностика', xrayState: 'Состояние Xray', restarts: 'Перезапуски', refreshDiagnostics: 'Обновить диагностику', noDiagnostics: 'Предупреждений и ошибок нет', running: 'Работает', unavailable: 'Недоступен', starting: 'Запускается', stopped: 'Остановлен', unknown: 'Неизвестно', useLightTheme: 'Светлая тема', useDarkTheme: 'Тёмная тема',
     security: 'Безопасность', backup: 'Создать backup', backupCreated: 'Backup создан', totp: 'Двухфакторная аутентификация (TOTP)', totpEnabled: 'TOTP включён', totpDisabled: 'TOTP не включён', enableTOTP: 'Включить TOTP', setupTOTP: 'Отсканируйте URI или введите секрет в приложении-аутентификаторе, затем введите код', secret: 'Секрет', confirmTOTP: 'Подтвердить TOTP', recovery: 'Сохраните recovery-коды. Каждый используется один раз.', recoveryLeft: 'recovery-кодов осталось', disableTOTP: 'Отключить TOTP', disableTOTPHint: 'Введите пароль и текущий код TOTP', loginCode: 'Код TOTP', recoveryCode: 'Recovery-код', useRecovery: 'Использовать recovery-код', useTOTP: 'Использовать код TOTP',
   },
 }
@@ -60,6 +60,17 @@ function applyTheme(next: Theme) {
 }
 
 function toggleTheme() { applyTheme(theme.value === 'dark' ? 'light' : 'dark') }
+
+function statusLabel(state?: string) {
+  const labels: Record<string, string> = { running: t().running, unavailable: t().unavailable, starting: t().starting, stopped: t().stopped }
+  return labels[state || ''] || t().unknown
+}
+
+function statusTone(state?: string) {
+  if (state === 'running') return 'positive'
+  if (state === 'unavailable' || state === 'stopped') return 'negative'
+  return 'neutral'
+}
 
 function showError(cause: unknown) { error.value = cause instanceof Error ? cause.message : 'Request failed' }
 
@@ -165,7 +176,14 @@ function actionLabel(action?: ClientAction['action']) { if (action === 'enable')
 
 <template>
   <main class="shell">
-    <header class="topbar"><strong>{{ t().title }}</strong><div class="topbar-actions"><button class="theme-toggle" :aria-label="theme === 'dark' ? t().useLightTheme : t().useDarkTheme" @click="toggleTheme">{{ theme === 'dark' ? '☀' : '☾' }}<span>{{ theme === 'dark' ? t().useLightTheme : t().useDarkTheme }}</span></button><button class="language" @click="language = language === 'en' ? 'ru' : 'en'">{{ t().language }}</button></div></header>
+    <header class="topbar">
+      <div class="brand"><span class="brand-mark" aria-hidden="true">×</span><div class="brand-copy"><strong>{{ t().title }}</strong><span>{{ t().panelSubtitle }}</span></div></div>
+      <div class="topbar-actions">
+        <span v-if="admin" class="node-pill" :class="`node-pill-${statusTone(nodeStatus?.state)}`"><span class="status-dot" :class="{ online: nodeStatus?.state === 'running' }"></span>{{ statusLabel(nodeStatus?.state) }}</span>
+        <button class="theme-toggle" :aria-label="theme === 'dark' ? t().useLightTheme : t().useDarkTheme" @click="toggleTheme"><span class="theme-icon" aria-hidden="true">{{ theme === 'dark' ? '☀' : '☾' }}</span><span>{{ theme === 'dark' ? t().useLightTheme : t().useDarkTheme }}</span></button>
+        <button class="language" @click="language = language === 'en' ? 'ru' : 'en'">{{ t().language }}</button>
+      </div>
+    </header>
     <section class="card error-card" v-if="error"><p class="error">{{ error }}</p></section>
     <section class="card auth-card" v-if="!setup?.initialized">
       <h1>{{ t().setup }}</h1><label>{{ t().username }}<input v-model="setupForm.username" autocomplete="username" /></label><label>{{ t().password }}<input v-model="setupForm.password" type="password" autocomplete="new-password" /></label><label>{{ t().host }}<input v-model="setupForm.publicHost" placeholder="vpn.example.com" /></label><label>{{ t().port }}<input v-model.number="setupForm.publicPort" type="number" readonly /></label><label>{{ t().target }}<input v-model="setupForm.realityTarget" placeholder="www.cloudflare.com:443" /></label><label>{{ t().sni }}<input v-model="setupForm.realitySNI" placeholder="www.cloudflare.com" /></label><button :disabled="busy" @click="initialize">{{ t().create }}</button>
