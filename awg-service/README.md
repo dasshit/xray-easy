@@ -13,9 +13,13 @@ Xray-easy backend, Web UI, installer, backup flow and doctor do not manage it.
 - The public service is UDP only. gRPC binds to the private control-network
   address configured by `AWG_GRPC_LISTEN`; Compose does not publish it to the
   host.
-- The container runs as UID/GID `10001`, with only `NET_ADMIN` added, a
-  read-only root filesystem, and `no-new-privileges` enabled. It needs
-  `/dev/net/tun` and a Linux Docker host.
+- The service runs as UID `0`, GID `10001` inside the container because the
+  Linux TUN `TUNSETIFF` ioctl needs effective `CAP_NET_ADMIN`. Compose drops all
+  capabilities and adds back only `NET_ADMIN`; the root filesystem is
+  read-only and `no-new-privileges` is enabled. The data volume is owned by
+  this UID/GID, and no host root filesystem paths are mounted. It needs
+  `/dev/net/tun` and a Linux Docker host. Rootless Docker or a host/container
+  policy that blocks TUN ioctls may still prevent interface creation.
 - Separate IPv4 and IPv6 routes are discovered at startup. Each address family
   uses its own egress interface for forwarding and masquerading. Both routes
   are required because client profiles route all IPv4 and IPv6 traffic through

@@ -22,7 +22,7 @@ type KernelFactory struct {
 func (f KernelFactory) Open(name string, mtu int) (Device, error) {
 	tunDevice, err := tun.CreateTUN(name, mtu)
 	if err != nil {
-		return nil, fmt.Errorf("create /dev/net/tun interface: %w", err)
+		return nil, fmt.Errorf("create /dev/net/tun interface (requires device access and effective NET_ADMIN; rootless or restricted Docker may block TUN ioctls): %w", err)
 	}
 	actualName, err := tunDevice.Name()
 	if err != nil {

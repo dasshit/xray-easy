@@ -11,11 +11,11 @@ FROM alpine:3.22
 RUN addgroup -S -g 10001 xray-easy \
     && apk add --no-cache ca-certificates iproute2 iptables \
     && mkdir -p /data \
-    && chown 10001:10001 /data \
+    && chown 0:10001 /data \
     && chmod 0750 /data
 COPY --from=build /out/awg-service /usr/local/bin/awg-service
 COPY THIRD_PARTY_NOTICES.md /usr/share/licenses/xray-easy/THIRD_PARTY_NOTICES.md
 COPY third_party/licenses/AMNEZIAWG-GO-MIT-LICENSE /usr/share/licenses/xray-easy/AMNEZIAWG-GO-MIT-LICENSE
-USER 10001:10001
+USER 0:10001
 EXPOSE 51820/udp
 ENTRYPOINT ["/usr/local/bin/awg-service"]

@@ -161,7 +161,7 @@ services:
       - -ec
       - |
         mkdir -p /data
-        chown -R 10001:10001 /data
+        chown -R 0:10001 /data
         chmod 0750 /data
     volumes:
       - awg_data:/data
@@ -172,7 +172,7 @@ services:
       context: .
       dockerfile: Dockerfile.awg
     restart: unless-stopped
-    user: "10001:10001"
+    user: "0:10001"
     read_only: true
     init: true
     security_opt:
