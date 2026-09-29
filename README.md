@@ -362,7 +362,8 @@ To enable it during initial setup or later, run `./install.sh`, choose
 **Enable for AmneziaWG clients**, and enter the public IP address or DNS name
 that clients will use. The installer stores `COMPOSE_PROFILES=awg`,
 `AWG_PUBLIC_HOST`, and `AWG_PUBLIC_PORT` in `.env` and starts the service.
-The public UDP port defaults to `51820`; the installer rejects a collision
+The public UDP port defaults to `1234` (mapped to UDP `51820` inside the
+container); the installer rejects a collision
 with the Xray UDP port. Allow inbound UDP `AWG_PUBLIC_PORT` for IPv4 and IPv6
 in the VDS firewall and provider security group.
 

@@ -793,12 +793,12 @@ func (w *wizard) renderLocked() {
 				put(11, panelLine("  "+optionText("Off", w.tlsSelection == 0), panelWidth), fieldStyle(w.tlsSelection == 0))
 				put(12, panelLine("  "+optionText("Enable for AmneziaWG clients", w.tlsSelection == 1), panelWidth), fieldStyle(w.tlsSelection == 1))
 				put(14, panelLine("  Requires Linux TUN, forwarding, and public IPv4/IPv6 egress.", panelWidth), "dim")
-				put(15, panelLine("  Public UDP defaults to 51820.", panelWidth), "dim")
+				put(15, panelLine("  Public UDP defaults to 1234.", panelWidth), "dim")
 			case "awg-host":
 				put(10, panelLine("  Public IP address or DNS name clients will use", panelWidth), "normal")
 				put(11, panelLine("  "+fieldText(w.hysteriaFields[0], "IPv4, IPv6 or vpn.example.com", true), panelWidth), "selected")
-				put(14, panelLine("  The public UDP port defaults to 51820.", panelWidth), "dim")
-				put(15, panelLine("  Allow UDP 51820 in the VDS firewall/security group.", panelWidth), "dim")
+				put(14, panelLine("  The public UDP port defaults to 1234.", panelWidth), "dim")
+				put(15, panelLine("  Allow UDP 1234 in the VDS firewall/security group.", panelWidth), "dim")
 			default:
 				put(10, panelLine("  Public Xray TCP / UDP port", panelWidth), "normal")
 				put(11, panelLine("  "+fieldText(w.fields[0], "443", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))

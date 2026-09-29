@@ -150,7 +150,7 @@ func writeDoctorHeader(out io.Writer) {
 	fmt.Fprintf(out, "  VMess TCP: %s -> container TCP 8444\n", safeDoctorPort("XRAY_VMESS_PORT", "9443"))
 	fmt.Fprintf(out, "  Web UI loopback: %s -> container TCP 8080\n", safeDoctorPort("XRAY_EASY_UI_PORT", "8080"))
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
-		fmt.Fprintf(out, "  AmneziaWG public UDP: %s -> container UDP 51820\n", safeDoctorPort("AWG_PUBLIC_PORT", "51820"))
+		fmt.Fprintf(out, "  AmneziaWG public UDP: %s -> container UDP 51820\n", safeDoctorPort("AWG_PUBLIC_PORT", "1234"))
 	}
 }
 
@@ -474,7 +474,7 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
 		if _, hostErr := domain.NormalizePublicHost(os.Getenv("AWG_PUBLIC_HOST")); hostErr != nil {
 			appendCheck(doctorFail, "AmneziaWG public endpoint", "AWG_PUBLIC_HOST is invalid", "Set AWG_PUBLIC_HOST to the public IP address or DNS name in .env, then rerun the installer.")
-		} else if _, portErr := doctorConfiguredPort("AWG_PUBLIC_PORT", "51820"); portErr != nil {
+		} else if _, portErr := doctorConfiguredPort("AWG_PUBLIC_PORT", "1234"); portErr != nil {
 			appendCheck(doctorFail, "AmneziaWG public endpoint", "AWG_PUBLIC_PORT is invalid", "Set AWG_PUBLIC_PORT to a UDP port from 1 to 65535 in .env, then rerun the installer.")
 		} else if awgErr != nil {
 			appendCheck(doctorFail, "AmneziaWG control API", "configured service cannot be reached", "Check the awg container, AWG control token volume, and its private control address.")
@@ -495,7 +495,7 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 				}
 			}
 		}
-		appendCheck(doctorWarn, "AmneziaWG UDP firewall", "public UDP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6 in the VDS firewall/security group, then verify an AmneziaWG client connection.", safeDoctorPort("AWG_PUBLIC_PORT", "51820")))
+		appendCheck(doctorWarn, "AmneziaWG UDP firewall", "public UDP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6 in the VDS firewall/security group, then verify an AmneziaWG client connection.", safeDoctorPort("AWG_PUBLIC_PORT", "1234")))
 	}
 
 	return checks

@@ -25,7 +25,7 @@ import (
 
 const (
 	defaultDataDir     = "/data"
-	defaultPublicPort  = 51820
+	defaultPublicPort  = 1234
 	defaultListenPort  = 51820
 	defaultControlAddr = "172.31.241.4:10087"
 	defaultTokenPath   = "/data/control.token"

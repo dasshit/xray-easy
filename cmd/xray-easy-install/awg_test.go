@@ -89,14 +89,14 @@ func TestUpdateAWGConfigurationDisablesProfileAndRejectsDuplicateKeys(t *testing
 	if err := os.WriteFile(path, []byte("COMPOSE_PROFILES=awg\nAWG_PUBLIC_HOST=vpn.example.com\nAWG_PUBLIC_PORT=51820\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := updateAWGConfiguration(root, configuration{awgPublicPort: defaultAWGPort}); err != nil {
+	if err := updateAWGConfiguration(root, configuration{}); err != nil {
 		t.Fatal(err)
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "COMPOSE_PROFILES=awg") || !strings.Contains(string(data), "COMPOSE_PROFILES=\n") || !strings.Contains(string(data), "AWG_PUBLIC_HOST=\n") {
+	if strings.Contains(string(data), "COMPOSE_PROFILES=awg") || !strings.Contains(string(data), "COMPOSE_PROFILES=\n") || !strings.Contains(string(data), "AWG_PUBLIC_HOST=\n") || !strings.Contains(string(data), "AWG_PUBLIC_PORT=1234\n") {
 		t.Fatalf("AmneziaWG profile was not disabled:\n%s", data)
 	}
 

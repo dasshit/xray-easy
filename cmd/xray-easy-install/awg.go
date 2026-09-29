@@ -11,7 +11,7 @@ import (
 	"xray-easy/internal/domain"
 )
 
-const defaultAWGPort = 51820
+const defaultAWGPort = 1234
 
 func awgConfigurationChanged(before, after configuration) bool {
 	return before.awgEnabled != after.awgEnabled ||
