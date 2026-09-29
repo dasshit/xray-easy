@@ -216,9 +216,10 @@ func TestDoctorBundleContainsRedactedReportStatusLogsAndConfig(t *testing.T) {
 func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("XRAY_VERSION", "26.7.28")
 	tokenPath := writeDoctorToken(t, 0o400)
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", tokenPath)
-	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}}
+	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running", XrayVersion: "Xray 26.7.28"}}
 	handler := &doctorHandlerStub{}
 	stats := &doctorStatsStub{err: errors.New("unknown method GetUsersStats")}
 	var output bytes.Buffer
@@ -238,6 +239,17 @@ func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
 	}
 	if strings.Contains(output.String(), "unknown method") {
 		t.Fatal("raw gRPC error was exposed in doctor output")
+	}
+}
+
+func TestXrayVersionVerifiedRequiresConfiguredAndRunningBinary(t *testing.T) {
+	if !xrayVersionVerified("Xray 26.7.28 (Xray, Penetrates Everything.)", "26.7.28") {
+		t.Fatal("verified runtime and configured version were marked experimental")
+	}
+	for _, versions := range [][2]string{{"Xray 26.7.28", "26.9.8"}, {"Xray 26.9.8", "26.7.28"}, {"unknown", "26.7.28"}} {
+		if xrayVersionVerified(versions[0], versions[1]) {
+			t.Errorf("runtime=%q configured=%q were marked verified", versions[0], versions[1])
+		}
 	}
 }
 

@@ -5,11 +5,15 @@ control plane in separate Docker containers and helps one administrator create
 VLESS + REALITY + TCP/RAW + XTLS Vision profiles for their devices. The panel
 is bound to the server's loopback address; open it through an SSH tunnel.
 
-The current pinned Xray version is **26.7.28**. It was selected for compatibility
-with V2Rage and supports the gRPC API used for live device changes and
-statistics. Connection and profile behavior on a real VPS were checked manually
-during development. Recheck V2Rage when changing Xray, profile generation or
-Compose networking. The complete product scope and implementation notes are in
+The pinned and verified Xray version is **26.7.28**. The panel reports both
+`XRAY_VERSION` from Compose and the version reported by the running binary, and
+marks unverified versions as experimental. `doctor` checks the HandlerService
+and StatsService endpoints and warns when versions differ or the binary is
+outside the verified matrix. See [the version record](versions/xray-compatibility.json).
+Before changing `XRAY_VERSION`, create a backup from Security or with
+`docker compose exec xray-easy xray-easy backup create`. Recheck V2Rage when
+changing Xray, profile generation or Compose networking. The
+complete product scope and implementation notes are in
 [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
 
 ## Quick start
@@ -100,7 +104,8 @@ device is applied.
 - Password login, optional TOTP with recovery codes, three-hour sessions, and
   a command to sign out all sessions. The Security page can change the
   administrator password; the change ends every active session.
-- Diagnostics showing supervisor state and recent redacted warnings/errors.
+- Diagnostics showing supervisor state, configured and running Xray versions,
+  and recent redacted warnings/errors.
 - Manual and automatic backups in `/data/backups`; the last ten are retained.
   Backups are plaintext, so protect the VPS and any copies you export.
 
@@ -204,6 +209,10 @@ To update the code, create a backup from the Security page or CLI, then run:
 git pull
 ./install.sh
 ```
+
+Changing `XRAY_VERSION` is a separate manual change. Create a backup before
+editing `.env`, rebuild the Xray image, and run `doctor` before relying on an
+unverified version.
 
 The installer keeps an existing `.env` and supervisor token. Keep the value of
 `XRAY_EASY_MASTER_KEY`: it decrypts the stored REALITY private key and verifies

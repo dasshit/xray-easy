@@ -156,6 +156,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .diagnostic-summary strong { color: var(--text); }
 .diagnostic-counter { padding: 7px 10px; border-radius: 999px; background: var(--surface-muted); font-weight: 650; white-space: nowrap; }
 .diagnostic-warning { color: #b26b00; background: color-mix(in srgb, #f0a000 14%, var(--surface)); }
+.diagnostic-version-warning { margin: 12px 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, #f0a000 42%, var(--border)); border-radius: 12px; color: #b26b00; background: color-mix(in srgb, #f0a000 14%, var(--surface)); }
 .diagnostic-negative { color: var(--error); background: var(--error-surface); }
 .diagnostic-alerts { display: grid; gap: 8px; margin-top: 18px; padding: 14px 16px; border: 1px solid var(--error-border); border-radius: 12px; background: var(--error-surface); }
 .diagnostic-alerts .error { overflow-wrap: anywhere; }

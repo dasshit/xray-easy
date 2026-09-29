@@ -147,6 +147,9 @@ function mapTOTPSetup(dto: TOTPSetupDto): TOTPSetup {
 function mapNodeStatus(dto: NodeStatusDto): NodeStatus {
   return {
     state: dto.state,
+    ...(dto.xray_version === undefined ? {} : { xrayVersion: dto.xray_version }),
+    ...(dto.configured_xray_version === undefined ? {} : { configuredXrayVersion: dto.configured_xray_version }),
+    ...(dto.xray_version_verified === undefined ? {} : { xrayVersionVerified: dto.xray_version_verified }),
     restartCount: dto.restart_count,
     ...(dto.last_error === undefined ? {} : { lastError: dto.last_error }),
     ...(dto.last_exit === undefined ? {} : { lastExit: dto.last_exit }),

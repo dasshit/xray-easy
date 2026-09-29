@@ -70,6 +70,12 @@ export type SettingsPreviewCommand = {
 export type NodeStatus = {
   /** Supervisor state, including `unavailable` when status cannot be read. */
   state: string
+  /** Exact Xray binary version reported by the running container. */
+  xrayVersion?: string
+  /** Xray version selected for the local Compose build. */
+  configuredXrayVersion?: string
+  /** True only when configured and running Xray both match the verified version. */
+  xrayVersionVerified?: boolean
   /** Number of Xray process restarts reported by the supervisor. */
   restartCount: number
   lastError?: string

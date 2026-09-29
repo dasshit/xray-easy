@@ -76,8 +76,9 @@ func (b *logBuffer) all() []string {
 }
 
 type supervisor struct {
-	cfg *config
-	log *logBuffer
+	cfg         *config
+	log         *logBuffer
+	xrayVersion string
 
 	applyMu      sync.Mutex
 	mu           sync.Mutex
@@ -94,11 +95,19 @@ type supervisor struct {
 }
 
 func newSupervisor(cfg *config) *supervisor {
+	version := "unknown"
+	if output, err := exec.Command(cfg.xrayBinary, "version").Output(); err == nil {
+		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+		if len(lines) > 0 && strings.TrimSpace(lines[0]) != "" {
+			version = strings.TrimSpace(lines[0])
+		}
+	}
 	return &supervisor{
-		cfg:        cfg,
-		log:        newLogBuffer(cfg.logSize),
-		state:      "starting",
-		usedNonces: make(map[string]time.Time),
+		cfg:         cfg,
+		log:         newLogBuffer(cfg.logSize),
+		xrayVersion: version,
+		state:       "starting",
+		usedNonces:  make(map[string]time.Time),
 	}
 }
 
@@ -405,6 +414,7 @@ func (s *supervisor) handleStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"protocol":      protocolVersion,
+		"xray_version":  s.xrayVersion,
 		"state":         s.state,
 		"pid":           pid,
 		"config_path":   s.configPath,

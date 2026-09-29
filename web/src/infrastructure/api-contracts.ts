@@ -103,6 +103,9 @@ export type SettingsChangeDto = z.infer<typeof SettingsChangeDtoSchema>
 /** Runtime validator for Xray process health and recent errors. */
 export const NodeStatusDtoSchema = z.object({
   state: z.string(),
+  xray_version: z.string().optional(),
+  configured_xray_version: z.string().optional(),
+  xray_version_verified: z.boolean().optional(),
   restart_count: z.number(),
   last_error: z.string().optional(),
   last_exit: z.string().optional(),

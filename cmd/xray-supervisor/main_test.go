@@ -21,6 +21,10 @@ func newProcessTestSupervisor(t *testing.T) (*supervisor, string) {
 	}
 	binary := filepath.Join(root, "fake-xray")
 	script := `#!/bin/sh
+if [ "$1" = "version" ]; then
+  echo 'Xray 26.7.28 (test build)'
+  exit 0
+fi
 if [ "$2" = "-test" ]; then
   if grep -q VALIDATION_FAIL "$4"; then
     echo 'validation password="bad-secret"'
@@ -122,6 +126,9 @@ func TestLogBufferBoundsCopiesAndRedactsEntries(t *testing.T) {
 
 func TestStartInitialAndStopChild(t *testing.T) {
 	s, configDir := newProcessTestSupervisor(t)
+	if s.xrayVersion != "Xray 26.7.28 (test build)" {
+		t.Fatalf("supervisor Xray version = %q", s.xrayVersion)
+	}
 	if err := s.startInitial(); err != nil {
 		t.Fatal(err)
 	}

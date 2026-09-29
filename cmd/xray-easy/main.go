@@ -865,13 +865,16 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	status, err := s.supervisor.Status(r.Context())
 	response := map[string]any{
-		"state":            status.State,
-		"pid":              status.PID,
-		"restart_count":    status.RestartCount,
-		"started_at":       status.StartedAt,
-		"last_error":       diagnostics.Redact(status.LastError),
-		"last_exit":        diagnostics.Redact(status.LastExit),
-		"stats_last_error": "",
+		"state":                   status.State,
+		"xray_version":            status.XrayVersion,
+		"configured_xray_version": envOr("XRAY_VERSION", "unknown"),
+		"xray_version_verified":   xrayVersionVerified(status.XrayVersion, envOr("XRAY_VERSION", "unknown")),
+		"pid":                     status.PID,
+		"restart_count":           status.RestartCount,
+		"started_at":              status.StartedAt,
+		"last_error":              diagnostics.Redact(status.LastError),
+		"last_exit":               diagnostics.Redact(status.LastExit),
+		"stats_last_error":        "",
 	}
 	if s.stats != nil {
 		response["stats_last_error"] = diagnostics.Redact(s.stats.LastError())
@@ -881,6 +884,10 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 		response["supervisor_error"] = diagnostics.Redact(err.Error())
 	}
 	writeJSON(w, http.StatusOK, response)
+}
+
+func xrayVersionVerified(runtimeVersion, configuredVersion string) bool {
+	return safeRuntimeXrayVersion(runtimeVersion) == xray.VerifiedCoreVersion && safeRuntimeXrayVersion(configuredVersion) == xray.VerifiedCoreVersion
 }
 
 func (s *server) logs(w http.ResponseWriter, r *http.Request) {
@@ -1168,7 +1175,8 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 			return err
 		}
 		status, err := s.supervisor.Status(r.Context())
-		payload := map[string]any{"type": "status", "at": time.Now().UTC(), "state": status.State, "restart_count": status.RestartCount, "last_error": diagnostics.Redact(status.LastError), "stats_last_error": ""}
+		configuredVersion := envOr("XRAY_VERSION", "unknown")
+		payload := map[string]any{"type": "status", "at": time.Now().UTC(), "state": status.State, "xray_version": status.XrayVersion, "configured_xray_version": configuredVersion, "xray_version_verified": xrayVersionVerified(status.XrayVersion, configuredVersion), "restart_count": status.RestartCount, "last_error": diagnostics.Redact(status.LastError), "stats_last_error": ""}
 		if s.stats != nil {
 			payload["stats_last_error"] = diagnostics.Redact(s.stats.LastError())
 		}

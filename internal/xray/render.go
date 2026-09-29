@@ -27,6 +27,7 @@ const (
 	// enabled clients. This reserved value has no matching UUID and therefore
 	// cannot authenticate a device.
 	emptyShortID = "0000000000000000"
+	VerifiedCoreVersion = "26.7.28"
 )
 
 type Settings struct {

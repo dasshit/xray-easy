@@ -35,6 +35,7 @@ type probeRequest struct {
 
 type Status struct {
 	Protocol     string    `json:"protocol"`
+	XrayVersion  string    `json:"xray_version"`
 	State        string    `json:"state"`
 	PID          int       `json:"pid"`
 	LastError    string    `json:"last_error"`

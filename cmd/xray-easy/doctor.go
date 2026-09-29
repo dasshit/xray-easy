@@ -20,6 +20,7 @@ import (
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/supervisor"
+	"xray-easy/internal/xray"
 	"xray-easy/internal/xrayapi"
 )
 
@@ -39,6 +40,7 @@ type doctorCheck struct {
 }
 
 var doctorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$`)
+var xrayReleasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
 type doctorSupervisor interface {
 	Health(context.Context) error
@@ -90,6 +92,11 @@ func runDoctor(ctx context.Context, dataDir, configDir string, out io.Writer, su
 	checks := collectDoctorChecks(ctx, dataDir, configDir, sup, handler, stats)
 	failures, warnings := 0, 0
 	writeDoctorHeader(out)
+	if status, err := sup.Status(ctx); err == nil {
+		fmt.Fprintf(out, "  Running Xray binary: %s\n", safeRuntimeXrayVersion(status.XrayVersion))
+	} else {
+		fmt.Fprintln(out, "  Running Xray binary: unavailable")
+	}
 	fmt.Fprintln(out, "Checks (no persistent changes)")
 	for _, check := range checks {
 		fmt.Fprintf(out, "%-5s %s: %s\n", check.level, check.name, check.detail)
@@ -119,6 +126,14 @@ func writeDoctorHeader(out io.Writer) {
 	fmt.Fprintln(out, "Host ports from active Compose environment:")
 	fmt.Fprintf(out, "  Xray public TCP: %s -> container TCP 8443\n", safeDoctorPort("XRAY_PUBLIC_PORT", "443"))
 	fmt.Fprintf(out, "  Web UI loopback: %s -> container TCP 8080\n", safeDoctorPort("XRAY_EASY_UI_PORT", "8080"))
+}
+
+func safeRuntimeXrayVersion(value string) string {
+	match := xrayReleasePattern.FindString(value)
+	if match == "" {
+		return "unknown"
+	}
+	return match
 }
 
 func safeDoctorVersion(name, fallback string) string {
@@ -332,6 +347,18 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 				appendCheck(doctorWarn, "Supervisor status", "Xray is waiting for its first active configuration", "Complete the first-run setup in the Web UI.")
 			default:
 				appendCheck(doctorFail, "Supervisor status", "Xray process is not running", "Inspect xray container logs and the active Xray configuration.")
+			}
+			runtimeVersion := safeRuntimeXrayVersion(supervisorStatus.XrayVersion)
+			configuredVersion := safeRuntimeXrayVersion(envOr("XRAY_VERSION", ""))
+			switch {
+			case runtimeVersion == "unknown":
+				appendCheck(doctorWarn, "Xray compatibility", "supervisor could not identify the running Xray binary version", "Rebuild and recreate the Xray container, then rerun doctor.")
+			case configuredVersion != "unknown" && configuredVersion != runtimeVersion:
+				appendCheck(doctorWarn, "Xray compatibility", fmt.Sprintf("Compose selects %s but the running binary is %s", configuredVersion, runtimeVersion), "Rebuild and recreate the Xray container so its binary matches XRAY_VERSION.")
+			case runtimeVersion != xray.VerifiedCoreVersion:
+				appendCheck(doctorWarn, "Xray compatibility", fmt.Sprintf("Xray %s is outside the project's verified compatibility matrix", runtimeVersion), fmt.Sprintf("Use the verified XRAY_VERSION=%s or verify this exact Xray and V2RAGE combination before relying on it.", xray.VerifiedCoreVersion))
+			default:
+				appendCheck(doctorPass, "Xray compatibility", fmt.Sprintf("runtime binary matches the verified Xray %s compatibility entry", xray.VerifiedCoreVersion), "")
 			}
 		}
 	}
