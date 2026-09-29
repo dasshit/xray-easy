@@ -219,7 +219,7 @@ func certificateInfo(cert *x509.Certificate) CertificateInfo {
 		addresses = append(addresses, address.String())
 	}
 	fingerprint := sha256.Sum256(cert.Raw)
-	return CertificateInfo{Subject: cert.Subject.String(), Issuer: cert.Issuer.String(), DNSNames: append([]string(nil), cert.DNSNames...), IPAddresses: addresses, NotBefore: cert.NotBefore.UTC(), NotAfter: cert.NotAfter.UTC(), Fingerprint: strings.ToUpper(hex.EncodeToString(fingerprint[:]))}
+	return CertificateInfo{Subject: cert.Subject.String(), Issuer: cert.Issuer.String(), DNSNames: append([]string{}, cert.DNSNames...), IPAddresses: addresses, NotBefore: cert.NotBefore.UTC(), NotAfter: cert.NotAfter.UTC(), Fingerprint: strings.ToUpper(hex.EncodeToString(fingerprint[:]))}
 }
 
 func writeVersion(root, id string, cert, key []byte) error {

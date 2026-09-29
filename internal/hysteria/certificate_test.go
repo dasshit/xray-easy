@@ -5,6 +5,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
 	"os"
@@ -86,5 +87,23 @@ func TestCertificateVersionIsAtomicAndRejectsTraversal(t *testing.T) {
 	}
 	if _, err := Inspect(root, "../secret", "vpn.example.com", false); err == nil {
 		t.Fatal("path traversal certificate ID accepted")
+	}
+}
+
+func TestCertificateInfoEncodesMissingDNSNamesAsEmptyArray(t *testing.T) {
+	info := certificateInfo(&x509.Certificate{Raw: []byte("certificate without DNS SANs")})
+	if info.DNSNames == nil {
+		t.Fatal("DNS names should be an empty array, not nil")
+	}
+	encoded, err := json.Marshal(info)
+	if err != nil {
+		t.Fatalf("marshal certificate metadata: %v", err)
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatalf("decode certificate metadata: %v", err)
+	}
+	if got := string(payload["dns_names"]); got != "[]" {
+		t.Fatalf("dns_names = %s, want []", got)
 	}
 }
