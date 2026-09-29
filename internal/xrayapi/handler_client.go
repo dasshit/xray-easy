@@ -43,20 +43,39 @@ func (c *HandlerClient) AddUser(ctx context.Context, email, uuid, flow string) e
 		account = protowire.AppendString(account, flow)
 	}
 	operation := &handlercommand.AddUserOperation{User: &protocol.User{Email: email, Account: &serial.TypedMessage{Type: "xray.proxy.vless.Account", Value: account}}}
-	return c.alter(ctx, &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
+	return c.alter(ctx, inboundTag, &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
+}
+
+// AddHysteriaUser adds a per-device Hysteria 2 credential to the dedicated inbound.
+func (c *HandlerClient) AddHysteriaUser(ctx context.Context, email, auth string) error {
+	account := protowire.AppendTag(nil, 1, protowire.BytesType)
+	account = protowire.AppendString(account, auth)
+	operation := &handlercommand.AddUserOperation{User: &protocol.User{Email: email, Account: &serial.TypedMessage{Type: "xray.proxy.hysteria.Account", Value: account}}}
+	return c.alter(ctx, "hysteria2", &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
 }
 
 func (c *HandlerClient) RemoveUser(ctx context.Context, email string) error {
 	operation := &handlercommand.RemoveUserOperation{Email: email}
-	return c.alter(ctx, &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
+	return c.alter(ctx, inboundTag, &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
+}
+
+// RemoveHysteriaUser revokes the device credential from the Hysteria 2 inbound.
+func (c *HandlerClient) RemoveHysteriaUser(ctx context.Context, email string) error {
+	operation := &handlercommand.RemoveUserOperation{Email: email}
+	return c.alter(ctx, "hysteria2", &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
 }
 
 func (c *HandlerClient) Users(ctx context.Context) ([]string, error) {
+	return c.UsersInInbound(ctx, inboundTag)
+}
+
+// UsersInInbound lists currently loaded account emails for one tagged inbound.
+func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) ([]string, error) {
 	client, err := c.service(ctx)
 	if err != nil {
 		return nil, err
 	}
-	tag, err := c.resolveInboundTag(ctx, client)
+	tag, err := c.resolveInboundTag(ctx, client, inboundTag)
 	if err != nil {
 		return nil, err
 	}
@@ -74,12 +93,12 @@ func (c *HandlerClient) Users(ctx context.Context) ([]string, error) {
 	return users, nil
 }
 
-func (c *HandlerClient) alter(ctx context.Context, operation *serial.TypedMessage) error {
+func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation *serial.TypedMessage) error {
 	client, err := c.service(ctx)
 	if err != nil {
 		return err
 	}
-	tag, err := c.resolveInboundTag(ctx, client)
+	tag, err := c.resolveInboundTag(ctx, client, inboundTag)
 	if err != nil {
 		return err
 	}
@@ -90,7 +109,7 @@ func (c *HandlerClient) alter(ctx context.Context, operation *serial.TypedMessag
 	return nil
 }
 
-func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercommand.HandlerServiceClient) (string, error) {
+func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercommand.HandlerServiceClient, preferredTag string) (string, error) {
 	tags, err := client.ListInbounds(ctx, &handlercommand.ListInboundsRequest{IsOnlyTags: true})
 	if err != nil {
 		c.reset()
@@ -101,8 +120,8 @@ func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercom
 		if inbound == nil || inbound.GetTag() == "" {
 			continue
 		}
-		if inbound.GetTag() == inboundTag {
-			return inboundTag, nil
+		if inbound.GetTag() == preferredTag {
+			return preferredTag, nil
 		}
 		if fallback == "" {
 			fallback = inbound.GetTag()
@@ -111,10 +130,10 @@ func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercom
 			break
 		}
 	}
-	if fallback != "" {
+	if preferredTag == inboundTag && fallback != "" {
 		return fallback, nil
 	}
-	return "", fmt.Errorf("Xray inbound %q was not found", inboundTag)
+	return "", fmt.Errorf("Xray inbound %q was not found", preferredTag)
 }
 
 func (c *HandlerClient) service(ctx context.Context) (handlercommand.HandlerServiceClient, error) {

@@ -236,12 +236,13 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
       })),
       profile: async (clientId: string): Promise<ProfileDelivery> => {
         const dto = await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/profile?format=uri`, ProfileDeliveryDtoSchema)
-        return { clientId: dto.client_id, uri: dto.uri, json: dto.json }
+        return { clientId: dto.client_id, uri: dto.uri, ...(dto.hysteria_uri === undefined ? {} : { hysteriaUri: dto.hysteria_uri }), json: dto.json }
       },
       setAction: async (clientId: string, action: ClientActionType): Promise<Client> => mapClient(
         await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/${action}`, ClientDtoSchema, post()),
       ),
       profileQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=qr`,
+      profileHysteriaQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=hysteria-qr`,
       profileJsonUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=json`,
     },
     settings: {

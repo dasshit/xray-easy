@@ -51,6 +51,8 @@ export type TOTPSetup = {
 export type ProfileDelivery = {
   clientId: string
   uri: string
+  /** Hysteria 2 share URI; only present when its optional inbound is enabled. */
+  hysteriaUri?: string
   /** JSON configuration payload; validated as JSON but intentionally not narrowed to a client-specific schema. */
   json: unknown
 }

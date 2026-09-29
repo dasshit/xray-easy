@@ -123,6 +123,7 @@ func writeDoctorHeader(out io.Writer) {
 	fmt.Fprintln(out, "Versions from active Compose environment:")
 	fmt.Fprintf(out, "  Xray-easy build: %s (XRAY_EASY_VERSION)\n", safeDoctorVersion("XRAY_EASY_VERSION", "dev"))
 	fmt.Fprintf(out, "  Xray image: %s (XRAY_VERSION)\n", safeDoctorVersion("XRAY_VERSION", "unknown"))
+	fmt.Fprintf(out, "  Xray UDP public port: %s -> container UDP 8443\n", safeDoctorPort("XRAY_PUBLIC_PORT", "443"))
 	fmt.Fprintln(out, "Host ports from active Compose environment:")
 	fmt.Fprintf(out, "  Xray public TCP: %s -> container TCP 8443\n", safeDoctorPort("XRAY_PUBLIC_PORT", "443"))
 	fmt.Fprintf(out, "  Web UI loopback: %s -> container TCP 8080\n", safeDoctorPort("XRAY_EASY_UI_PORT", "8080"))
@@ -414,7 +415,10 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 			appendCheck(doctorPass, "Xray statistics API", "StatsService is responding", "")
 		}
 	}
-	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s for IPv4 and IPv6 in the VDS firewall/security group and verify a client connection.", envOr("XRAY_PUBLIC_PORT", "443")))
+	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s for IPv4 and IPv6 in the VDS firewall/security group and verify a VLESS client connection.", envOr("XRAY_PUBLIC_PORT", "443")))
+	if hysteria2Enabled() {
+		appendCheck(doctorWarn, "Hysteria 2 UDP firewall", "public UDP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6, and install a valid certificate for XRAY_PUBLIC_HOST in secrets/hysteria.", envOr("XRAY_PUBLIC_PORT", "443")))
+	}
 
 	return checks
 }

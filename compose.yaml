@@ -34,6 +34,31 @@ services:
       - source: xray_supervisor_token
         target: /source/xray_supervisor_token
 
+  init-hysteria-tls:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    environment:
+      XRAY_HYSTERIA2_ENABLED: ${XRAY_HYSTERIA2_ENABLED:-false}
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /target
+        if [ "$(printf '%s' "$$XRAY_HYSTERIA2_ENABLED" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
+          test -s /source/fullchain.pem || { echo "missing secrets/hysteria/fullchain.pem" >&2; exit 1; }
+          test -s /source/privkey.pem || { echo "missing secrets/hysteria/privkey.pem" >&2; exit 1; }
+          staging=$(mktemp -d /target/.hysteria-tls.XXXXXX)
+          trap 'rm -rf "$$staging"' EXIT
+          install -m 0444 -o 10001 -g 10001 /source/fullchain.pem "$$staging/fullchain.pem"
+          install -m 0400 -o 10001 -g 10001 /source/privkey.pem "$$staging/privkey.pem"
+          mv "$$staging/fullchain.pem" /target/fullchain.pem
+          mv "$$staging/privkey.pem" /target/privkey.pem
+        fi
+    volumes:
+      - ./secrets/hysteria:/source:ro
+      - hysteria_tls_data:/target
+
   xray:
     build:
       context: .
@@ -55,9 +80,11 @@ services:
       - 172.31.241.2:10086
     ports:
       - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
+      - "${XRAY_PUBLIC_PORT:-443}:8443/udp"
     volumes:
       - xray_config:/etc/xray:ro
       - xray_supervisor_token_data:/run/secrets:ro
+      - hysteria_tls_data:/etc/xray/hysteria-tls:ro
     networks:
       control:
         ipv4_address: 172.31.241.2
@@ -67,6 +94,8 @@ services:
       init-volumes:
         condition: service_completed_successfully
       init-supervisor-secret:
+        condition: service_completed_successfully
+      init-hysteria-tls:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -94,6 +123,7 @@ services:
       XRAY_EASY_MASTER_KEY: ${XRAY_EASY_MASTER_KEY:?set XRAY_EASY_MASTER_KEY in .env}
       XRAY_PUBLIC_PORT: ${XRAY_PUBLIC_PORT:-443}
       XRAY_VERSION: ${XRAY_VERSION:-26.7.28}
+      XRAY_HYSTERIA2_ENABLED: ${XRAY_HYSTERIA2_ENABLED:-false}
       XRAY_EASY_UI_PORT: ${XRAY_EASY_UI_PORT:-8080}
       XRAY_SUPERVISOR_URL: http://172.31.241.2:10086
       XRAY_API_LISTEN: 172.31.241.2:10085
@@ -125,6 +155,7 @@ volumes:
   app_data:
   xray_config:
   xray_supervisor_token_data:
+  hysteria_tls_data:
 
 networks:
   control:

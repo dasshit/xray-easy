@@ -29,6 +29,9 @@ const (
 	emptyShortID         = "0000000000000000"
 	ReservedShortIDCount = 5
 	VerifiedCoreVersion  = "26.7.28"
+	HysteriaInboundTag   = "hysteria2"
+	HysteriaTLSCertPath  = "/etc/xray/hysteria-tls/fullchain.pem"
+	HysteriaTLSKeyPath   = "/etc/xray/hysteria-tls/privkey.pem"
 )
 
 type Settings struct {
@@ -43,6 +46,7 @@ type Settings struct {
 	LogLevel            string
 	InternalInboundPort int
 	ReservedShortIDs    []string
+	Hysteria2Enabled    bool
 }
 
 type Client struct {
@@ -57,11 +61,12 @@ type Client struct {
 }
 
 type Profile struct {
-	URI     string
-	JSON    []byte
-	Name    string
-	UUID    string
-	ShortID string
+	URI         string
+	HysteriaURI string
+	JSON        []byte
+	Name        string
+	UUID        string
+	ShortID     string
 }
 
 type serverConfig struct {
@@ -129,6 +134,39 @@ type outbound struct {
 	Protocol string `json:"protocol"`
 	Tag      string `json:"tag"`
 }
+type hysteriaInbound struct {
+	Listen         string                  `json:"listen"`
+	Port           int                     `json:"port"`
+	Protocol       string                  `json:"protocol"`
+	Tag            string                  `json:"tag"`
+	Settings       hysteriaInboundSettings `json:"settings"`
+	StreamSettings hysteriaStreamSettings  `json:"streamSettings"`
+}
+type hysteriaInboundSettings struct {
+	Version int            `json:"version"`
+	Users   []hysteriaUser `json:"users"`
+}
+type hysteriaUser struct {
+	Auth  string `json:"auth"`
+	Level int    `json:"level"`
+	Email string `json:"email"`
+}
+type hysteriaStreamSettings struct {
+	Network          string                    `json:"network"`
+	Security         string                    `json:"security"`
+	TLSSettings      hysteriaTLSSettings       `json:"tlsSettings"`
+	HysteriaSettings hysteriaTransportSettings `json:"hysteriaSettings"`
+}
+type hysteriaTLSSettings struct {
+	Certificates []hysteriaCertificate `json:"certificates"`
+}
+type hysteriaCertificate struct {
+	CertificateFile string `json:"certificateFile"`
+	KeyFile         string `json:"keyFile"`
+}
+type hysteriaTransportSettings struct {
+	Version int `json:"version"`
+}
 
 func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	if settings.LogLevel == "" {
@@ -183,6 +221,21 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		StreamSettings: streamSettings{Network: Network, Security: Security, RealitySettings: realityServer{Show: false, Target: settings.RealityTarget, XVer: 0, ServerNames: []string{settings.RealitySNI}, PrivateKey: settings.RealityPrivateKey, MinClientVer: realityMinClientVersion, ShortIDs: shortIDs}},
 		Sniffing:       sniffing{Enabled: true, DestOverride: []string{"http", "tls", "quic"}},
 	}}
+	if settings.Hysteria2Enabled {
+		hysteriaUsers := make([]hysteriaUser, 0, len(active))
+		for _, client := range active {
+			hysteriaUsers = append(hysteriaUsers, hysteriaUser{Auth: client.UUID, Email: client.Email})
+		}
+		inbounds = append(inbounds, hysteriaInbound{
+			Listen: "0.0.0.0", Port: settings.InternalInboundPort, Protocol: "hysteria", Tag: HysteriaInboundTag,
+			Settings: hysteriaInboundSettings{Version: 2, Users: hysteriaUsers},
+			StreamSettings: hysteriaStreamSettings{
+				Network: "hysteria", Security: "tls",
+				TLSSettings:      hysteriaTLSSettings{Certificates: []hysteriaCertificate{{CertificateFile: HysteriaTLSCertPath, KeyFile: HysteriaTLSKeyPath}}},
+				HysteriaSettings: hysteriaTransportSettings{Version: 2},
+			},
+		})
+	}
 	config := serverConfig{
 		Log:       logConfig{LogLevel: settings.LogLevel},
 		API:       apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "StatsService", "LoggerService"}},
@@ -221,11 +274,23 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 		return Profile{}, errors.New("client fingerprint is required")
 	}
 	uri := BuildVLESSURI(settings, client, fingerprint)
+	hysteriaURI := ""
+	if settings.Hysteria2Enabled {
+		hysteriaURI = BuildHysteriaURI(settings, client)
+	}
 	clientJSON, err := buildClientJSON(settings, client, fingerprint)
 	if err != nil {
 		return Profile{}, err
 	}
-	return Profile{URI: uri, JSON: clientJSON, Name: client.Name, UUID: client.UUID, ShortID: client.ShortID}, nil
+	return Profile{URI: uri, HysteriaURI: hysteriaURI, JSON: clientJSON, Name: client.Name, UUID: client.UUID, ShortID: client.ShortID}, nil
+}
+
+// BuildHysteriaURI creates the V2RAGE-compatible Hysteria 2 URI for one device.
+func BuildHysteriaURI(settings Settings, client Client) string {
+	query := url.Values{}
+	query.Set("sni", settings.PublicHost)
+	u := &url.URL{Scheme: "hysteria2", User: url.User(client.UUID), Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.PublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
+	return u.String()
 }
 
 func BuildVLESSURI(settings Settings, client Client, fingerprint string) string {

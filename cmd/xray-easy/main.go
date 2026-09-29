@@ -74,6 +74,12 @@ type xrayHandlerAPI interface {
 	Users(context.Context) ([]string, error)
 }
 
+type hysteriaHandlerAPI interface {
+	AddHysteriaUser(context.Context, string, string) error
+	RemoveHysteriaUser(context.Context, string) error
+	UsersInInbound(context.Context, string) ([]string, error)
+}
+
 type inboundReplacer interface {
 	ReplaceInbound(context.Context, string, string, string, string) error
 }
@@ -1800,7 +1806,7 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	activePath := filepath.Join(s.configDir, "active.json")
 	usedReplace := replaceInbound
-	fullApply, vlessReplaced, vlessAdded := false, false, false
+	fullApply, vlessReplaced, vlessAdded, hysteriaAdded := false, false, false, false
 	rollbackRuntime := func() {
 		if fullApply {
 			_ = s.supervisor.Apply(ctx, activePath, operationID+"-rollback")
@@ -1809,6 +1815,11 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 		if vlessReplaced {
 			if replacer, ok := s.supervisor.(inboundReplacer); ok {
 				_ = replacer.ReplaceInbound(ctx, activePath, path, "vless-reality", operationID+"-rollback")
+			}
+		}
+		if hysteriaAdded {
+			if hysteria, ok := s.handler.(hysteriaHandlerAPI); ok {
+				_ = hysteria.RemoveHysteriaUser(ctx, client.Email)
 			}
 		}
 		if vlessAdded {
@@ -1822,8 +1833,10 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 		_ = s.store.DeleteClient(ctx, clientID)
 		return domain.Client{}, cause
 	}
-	if !hasInboundTag(activePath, "vless-reality") {
+	if !hasInboundTag(activePath, "vless-reality") || (hysteria2Enabled() && !hasInboundTag(activePath, xray.HysteriaInboundTag)) {
 		usedReplace = false
+		// First enablement of an optional inbound changes the process-level
+		// topology, so use the normal validated supervisor apply once.
 		if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
 			return failCreate(err)
 		}
@@ -1856,6 +1869,16 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 		} else {
 			vlessAdded = true
 		}
+	}
+	if hysteria2Enabled() && !fullApply {
+		hysteria, ok := s.handler.(hysteriaHandlerAPI)
+		if !ok {
+			return failCreate(errors.New("Hysteria 2 API is unavailable"))
+		}
+		if err := hysteria.AddHysteriaUser(ctx, client.Email, client.UUID); err != nil {
+			return failCreate(err)
+		}
+		hysteriaAdded = true
 	}
 	if err := os.Rename(path, activePath); err != nil {
 		return failCreate(fmt.Errorf("promote Xray config: %w", err))
@@ -2012,6 +2035,33 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 			return err
 		}
 	}
+	if hysteria2Enabled() {
+		hysteria, ok := s.handler.(hysteriaHandlerAPI)
+		if !ok {
+			return errors.New("Hysteria 2 HandlerService is unavailable")
+		}
+		hysteriaUsers, err := hysteria.UsersInInbound(ctx, xray.HysteriaInboundTag)
+		if err != nil {
+			return err
+		}
+		runningHysteria := make(map[string]struct{}, len(hysteriaUsers))
+		for _, email := range hysteriaUsers {
+			runningHysteria[email] = struct{}{}
+			if _, ok := active[email]; !ok {
+				if err := hysteria.RemoveHysteriaUser(ctx, email); err != nil {
+					return err
+				}
+			}
+		}
+		for email, client := range active {
+			if _, ok := runningHysteria[email]; ok {
+				continue
+			}
+			if err := hysteria.AddHysteriaUser(ctx, email, client.UUID); err != nil {
+				return err
+			}
+		}
+	}
 	if err := s.reconcilePersistedClientConfigLocked(ctx, clients); err != nil {
 		return fmt.Errorf("persist reconciled client state: %w", err)
 	}
@@ -2020,7 +2070,7 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 
 func (s *server) reconcilePersistedClientConfigLocked(ctx context.Context, clients []domain.Client) error {
 	activePath := filepath.Join(s.configDir, "active.json")
-	if activeConfigUsersMatch(activePath, clients) {
+	if activeConfigUsersMatch(activePath, clients, hysteria2Enabled()) {
 		return nil
 	}
 	settings, err := s.store.GetSettings(ctx)
@@ -2051,7 +2101,7 @@ func (s *server) reconcilePersistedClientConfigLocked(ctx context.Context, clien
 	return nil
 }
 
-func activeConfigUsersMatch(path string, clients []domain.Client) bool {
+func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteria bool) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return false
@@ -2064,6 +2114,10 @@ func activeConfigUsersMatch(path string, clients []domain.Client) bool {
 					ID    string `json:"id"`
 					Email string `json:"email"`
 				} `json:"clients"`
+				Users []struct {
+					Auth  string `json:"auth"`
+					Email string `json:"email"`
+				} `json:"users"`
 			} `json:"settings"`
 		} `json:"inbounds"`
 	}
@@ -2076,16 +2130,28 @@ func activeConfigUsersMatch(path string, clients []domain.Client) bool {
 			want[client.Email+"\x00"+client.UUID] = struct{}{}
 		}
 	}
-	var vless []string
+	var vless, hysteria []string
+	foundHysteria := false
 	for _, inbound := range config.Inbounds {
 		if inbound.Tag == "vless-reality" {
 			for _, client := range inbound.Settings.Clients {
 				vless = append(vless, client.Email+"\x00"+client.ID)
 			}
 		}
+		if inbound.Tag == xray.HysteriaInboundTag {
+			foundHysteria = true
+			for _, user := range inbound.Settings.Users {
+				hysteria = append(hysteria, user.Email+"\x00"+user.Auth)
+			}
+		}
 	}
 	if !stringSliceMatchesSet(vless, want) {
 		return false
+	}
+	if includeHysteria {
+		if !foundHysteria || !stringSliceMatchesSet(hysteria, want) {
+			return false
+		}
 	}
 	return true
 }
@@ -2147,6 +2213,9 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 		}
 	}
 	needApply := !sameStringSet(currentSet, expectedSet)
+	if hasInboundTag(activePath, xray.HysteriaInboundTag) != hysteria2Enabled() {
+		needApply = true
+	}
 	if !needApply {
 		return nil
 	}
@@ -2156,7 +2225,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	}
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	fullApply := false
-	if !hasInboundTag(activePath, "vless-reality") {
+	if !hasInboundTag(activePath, "vless-reality") || hasInboundTag(activePath, xray.HysteriaInboundTag) != hysteria2Enabled() {
 		fullApply = true
 		err = s.supervisor.Apply(ctx, path, operationID)
 	} else if replacer, ok := s.supervisor.(inboundReplacer); ok {
@@ -2331,7 +2400,13 @@ func (s *server) prepareCandidateWithReservedLocked(ctx context.Context, setting
 }
 
 func rendererSettings(settings domain.Settings, privateKey string) xray.Settings {
-	return xray.SettingsFromDomain(settings, privateKey)
+	result := xray.SettingsFromDomain(settings, privateKey)
+	result.Hysteria2Enabled = hysteria2Enabled()
+	return result
+}
+
+func hysteria2Enabled() bool {
+	return strings.EqualFold(strings.TrimSpace(envOr("XRAY_HYSTERIA2_ENABLED", "false")), "true")
 }
 
 func hasInboundTag(path, tag string) bool {
@@ -2378,7 +2453,7 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		return
 	}
 	_ = privateKey
-	profile, err := xray.BuildProfile(xray.SettingsFromDomain(settings, "server-secret-not-exported"), xray.ClientFromDomain(client))
+	profile, err := xray.BuildProfile(rendererSettings(settings, "server-secret-not-exported"), xray.ClientFromDomain(client))
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
@@ -2399,8 +2474,24 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		}
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(png)
+	case "hysteria-qr":
+		if profile.HysteriaURI == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "Hysteria 2 is not enabled"})
+			return
+		}
+		png, err := qrcode.Encode(profile.HysteriaURI, qrcode.Medium, 512)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encode Hysteria QR"})
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(png)
 	default:
-		writeJSON(w, http.StatusOK, map[string]any{"client_id": client.ID, "uri": profile.URI, "name": profile.Name, "json": json.RawMessage(profile.JSON)})
+		response := map[string]any{"client_id": client.ID, "uri": profile.URI, "name": profile.Name, "json": json.RawMessage(profile.JSON)}
+		if profile.HysteriaURI != "" {
+			response["hysteria_uri"] = profile.HysteriaURI
+		}
+		writeJSON(w, http.StatusOK, response)
 	}
 }
 

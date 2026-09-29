@@ -2,8 +2,9 @@
 
 Xray-easy is a private web panel for one Xray server. It runs Xray and the Go
 control plane in separate Docker containers and helps one administrator create
-VLESS + REALITY + TCP/RAW + XTLS Vision profiles for their devices. The panel
-is bound to the server's loopback address; open it through an SSH tunnel.
+VLESS + REALITY + TCP/RAW + XTLS Vision profiles. An optional Hysteria 2 inbound
+can use UDP on the same public port and the same Xray process. The panel is
+bound to the server's loopback address; open it through an SSH tunnel.
 
 The pinned and verified Xray version is **26.7.28**. The panel reports both
 `XRAY_VERSION` from Compose and the version reported by the running binary, and
@@ -20,8 +21,8 @@ complete product scope and implementation notes are in
 
 You need a Linux VPS with an `amd64` or `arm64` CPU, Docker Engine **28.0.0 or
 newer**, Docker Compose plugin **2.33.1 or newer**, SSH access, and an available
-public TCP port (443 by default). These Docker versions are required to choose
-the correct IPv4/IPv6 egress gateway for Xray. Allow the public TCP port in the
+public TCP port (443 by default). Hysteria 2 also requires UDP on that port.
+These Docker versions are required to choose the correct IPv4/IPv6 egress gateway for Xray. Allow the public TCP port in the
 VPS firewall/security group for each address family you intend to use. The VPS
 needs outbound access for Docker images and Xray traffic. Go and Node.js are
 **not required** on the VPS.
@@ -97,6 +98,29 @@ device is applied.
   gRPC API replaces only the VLESS inbound; its active connections may briefly
   reconnect. The control plane validates candidate configs and reconciles
   SQLite, `active.json` and runtime state after interruptions.
+- Optional Hysteria 2 URI and QR for V2Rage. It runs as a second inbound in the
+  same Xray container and does not require a second VPS. Enable it by setting
+  `XRAY_HYSTERIA2_ENABLED=true` in `.env`. Install a valid TLS certificate for
+  the configured public host before starting it:
+
+  ```sh
+  install -m 0644 /path/to/fullchain.pem secrets/hysteria/fullchain.pem
+  install -m 0600 /path/to/privkey.pem secrets/hysteria/privkey.pem
+  # Set XRAY_HYSTERIA2_ENABLED=true in .env, then:
+  docker compose up -d --build --wait
+  ```
+
+  The init service copies the certificate and key into a dedicated Docker
+  volume. The key is readable by Xray and stays inaccessible to the panel. The
+  certificate must cover the public host used in the profile. The URI keeps
+  TLS verification enabled. After renewal, refresh the volume and restart Xray:
+
+  ```sh
+  docker compose run --rm init-hysteria-tls
+  docker compose restart xray
+  ```
+
+  The UDP firewall rule must allow `XRAY_PUBLIC_PORT` for Hysteria 2 traffic.
 - Online and last-seen indicators, cumulative upload/download totals, and live
   panel updates through SSE.
 - Node settings with a preview of changes, confirmation and an automatic

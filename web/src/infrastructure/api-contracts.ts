@@ -63,6 +63,7 @@ export type TOTPSetupDto = z.infer<typeof TOTPSetupDtoSchema>
 export const ProfileDeliveryDtoSchema = z.object({
   client_id: z.string(),
   uri: z.string(),
+  hysteria_uri: z.string().optional(),
   json: z.json(),
 })
 /** Wire-format type inferred from {@link ProfileDeliveryDtoSchema}. */

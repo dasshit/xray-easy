@@ -319,6 +319,9 @@ func createConfiguration(root string, cfg configuration) error {
 	} else if err := validateToken(secretPath); err != nil {
 		return err
 	}
+	if err := os.MkdirAll(filepath.Join(root, "secrets", "hysteria"), 0o700); err != nil {
+		return fmt.Errorf("create Hysteria TLS directory: %w", err)
+	}
 	masterKey, err := randomBase64(32)
 	if err != nil {
 		return err

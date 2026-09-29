@@ -20,6 +20,11 @@ web/coverage/
 .env.*
 !.env.example
 secrets/
+!secrets/
+secrets/*
+!secrets/hysteria/
+secrets/hysteria/*
+!secrets/hysteria/.gitkeep
 !prototype/secrets/
 prototype/secrets/*
 !prototype/secrets/.gitkeep

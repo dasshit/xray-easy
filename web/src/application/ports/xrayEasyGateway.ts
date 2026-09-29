@@ -156,6 +156,8 @@ export interface XrayEasyGateway {
      * @returns The API URL that serves the QR code image.
      */
     profileQrUrl(clientId: string): string
+    /** Build the authenticated URL for a Hysteria 2 share URI QR code. */
+    profileHysteriaQrUrl?(clientId: string): string
     /**
      * Build the authenticated URL for a device’s JSON profile.
      * @param clientId - The internal ID of the device.

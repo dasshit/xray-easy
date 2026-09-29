@@ -18,6 +18,7 @@ const clients = ref<Client[]>([])
 const newDevice = ref({ name: '', fingerprint: '' })
 const selectedProfile = ref<ProfileDelivery | null>(null)
 const copiedProfile = ref(false)
+const copiedHysteria = ref(false)
 const error = ref('')
 const busy = ref(false)
 const { language, t, toggleLanguage } = useI18n()
@@ -308,22 +309,36 @@ async function createDevice() {
  * Load and display the connection profile for a device.
  * @param client - The device whose profile should be displayed.
  */
-async function showProfile(client: Client) { try { copiedProfile.value = false; selectedProfile.value = await api.clients.profile(client.id) } catch (cause) { showError(cause) } }
+async function showProfile(client: Client) { try { copiedProfile.value = false; copiedHysteria.value = false; selectedProfile.value = await api.clients.profile(client.id) } catch (cause) { showError(cause) } }
 /**
  * Close the profile dialog when no operation is in progress.
  */
-function closeProfile() { if (!busy.value) { selectedProfile.value = null; copiedProfile.value = false } }
+function closeProfile() { if (!busy.value) { selectedProfile.value = null; copiedProfile.value = false; copiedHysteria.value = false } }
 /**
  * Find the device associated with the currently displayed profile.
  * @returns The matching device, or undefined if it is no longer in the list.
  */
 function selectedClient() { return clients.value.find(client => client.id === selectedProfile.value?.clientId) }
+/** Return the QR URL for the Hysteria 2 profile currently shown.
+ * @returns The profile QR endpoint, or an empty string when no profile is selected.
+ */
+function selectedHysteriaQrUrl() {
+  const clientId = selectedProfile.value?.clientId
+  return clientId !== undefined && clientId !== '' ? api.clients.profileHysteriaQrUrl?.(clientId) ?? '' : ''
+}
 /**
  * Copy the selected VLESS URI to the clipboard and report the result.
  */
 async function copyProfileUri() {
   if (!selectedProfile.value) return
   try { await navigator.clipboard.writeText(selectedProfile.value.uri); copiedProfile.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedProfile.value = false }, 2200) }
+  catch (cause) { showError(cause) }
+}
+/** Copy the Hysteria 2 URI and report the result. */
+async function copyHysteriaUri() {
+  const uri = selectedProfile.value?.hysteriaUri
+  if (uri === undefined || uri === '') return
+  try { await navigator.clipboard.writeText(uri); copiedHysteria.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedHysteria.value = false }, 2200) }
   catch (cause) { showError(cause) }
 }
 /**
@@ -525,8 +540,12 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
             <template v-else><strong>{{ t().connectionPending }}</strong><p>{{ t().connectionPendingHelp }}</p></template>
           </div>
           <div class="profile-delivery">
-            <div class="qr-panel"><span class="qr-label">{{ t().qr }}</span><img class="qr" :src="api.clients.profileQrUrl(selectedProfile.clientId)" :alt="t().qr" /></div>
+            <div class="qr-panel"><span class="qr-label">VLESS</span><img class="qr" :src="api.clients.profileQrUrl(selectedProfile.clientId)" :alt="t().qr" /></div>
             <div class="profile-link-panel"><label>{{ t().copyUri }}<textarea readonly :value="selectedProfile.uri"></textarea></label><button class="secondary copy-button" @click="copyProfileUri"><span aria-hidden="true">⧉</span>{{ copiedProfile ? t().copied : t().copy }}</button><a class="download-link" :href="api.clients.profileJsonUrl(selectedProfile.clientId)"><span aria-hidden="true">↓</span>{{ t().jsonFile }}</a></div>
+          </div>
+          <div v-if="selectedProfile.hysteriaUri" class="profile-delivery hysteria-delivery">
+            <div class="qr-panel"><span class="qr-label">{{ t().hysteria2Profile }}</span><img class="qr" :src="selectedHysteriaQrUrl()" :alt="t().hysteria2Profile" /></div>
+            <div class="profile-link-panel"><label>{{ t().hysteria2Uri }}<textarea readonly :value="selectedProfile.hysteriaUri"></textarea></label><button class="secondary copy-button" @click="copyHysteriaUri"><span aria-hidden="true">⧉</span>{{ copiedHysteria ? t().copied : t().copyHysteria2 }}</button><p class="hint">{{ t().hysteria2Help }}</p></div>
           </div>
         </div>
       </div>

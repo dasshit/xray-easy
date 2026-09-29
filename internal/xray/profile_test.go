@@ -92,6 +92,75 @@ func TestBuildProfileKeepsURIAndJSONCredentialsInSync(t *testing.T) {
 	}
 }
 
+func TestHysteria2InboundAndProfileUseDedicatedTLSUDPSettings(t *testing.T) {
+	settings := validTestSettings()
+	settings.Hysteria2Enabled = true
+	client := Client{ID: "device", Name: "iPhone 15", UUID: "123e4567-e89b-42d3-a456-426614174000", Email: "device@example.test", ShortID: "0123456789abcdef", Enabled: true}
+	profile, err := BuildProfile(settings, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(profile.HysteriaURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Scheme != "hysteria2" || parsed.User.Username() != client.UUID || parsed.Host != "vpn.example.com:443" || parsed.Query().Get("sni") != settings.PublicHost || parsed.Query().Has("insecure") {
+		t.Fatalf("unexpected Hysteria 2 URI: %s", profile.HysteriaURI)
+	}
+	if parsed.Fragment != client.Name {
+		t.Fatalf("Hysteria 2 URI name = %q, want %q", parsed.Fragment, client.Name)
+	}
+
+	config, err := RenderServerConfig(settings, []Client{client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Inbounds []struct {
+			Tag      string `json:"tag"`
+			Protocol string `json:"protocol"`
+			Port     int    `json:"port"`
+			Settings struct {
+				Version int `json:"version"`
+				Users   []struct {
+					Auth  string `json:"auth"`
+					Email string `json:"email"`
+				} `json:"users"`
+			} `json:"settings"`
+			StreamSettings struct {
+				Network          string `json:"network"`
+				Security         string `json:"security"`
+				HysteriaSettings struct {
+					Version int `json:"version"`
+				} `json:"hysteriaSettings"`
+				TLSSettings struct {
+					Certificates []struct {
+						CertificateFile string `json:"certificateFile"`
+						KeyFile         string `json:"keyFile"`
+					} `json:"certificates"`
+				} `json:"tlsSettings"`
+			} `json:"streamSettings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(config, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Inbounds) != 2 {
+		t.Fatalf("Hysteria 2 enabled config has %d inbounds, want 2", len(decoded.Inbounds))
+	}
+	inbound := decoded.Inbounds[1]
+	if inbound.Tag != HysteriaInboundTag || inbound.Protocol != "hysteria" || inbound.Port != settings.InternalInboundPort || inbound.Settings.Version != 2 || len(inbound.Settings.Users) != 1 || inbound.Settings.Users[0].Auth != client.UUID || inbound.Settings.Users[0].Email != client.Email {
+		t.Fatalf("unexpected Hysteria inbound: %+v", inbound)
+	}
+	if inbound.StreamSettings.Network != "hysteria" || inbound.StreamSettings.Security != "tls" || inbound.StreamSettings.HysteriaSettings.Version != 2 {
+		t.Fatalf("unexpected Hysteria transport: %+v", inbound.StreamSettings)
+	}
+	certificates := inbound.StreamSettings.TLSSettings.Certificates
+	if len(certificates) != 1 || certificates[0].CertificateFile != HysteriaTLSCertPath || certificates[0].KeyFile != HysteriaTLSKeyPath {
+		t.Fatalf("unexpected Hysteria TLS files: %+v", certificates)
+	}
+}
+
 func TestBuildProfileFormatsIPv6EndpointForURIAndJSON(t *testing.T) {
 	settings := validTestSettings()
 	settings.PublicHost = "2001:0db8:0:0:0:0:0:1"
