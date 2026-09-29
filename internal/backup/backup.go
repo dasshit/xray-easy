@@ -1,6 +1,7 @@
 package backup
 
 import (
+	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
@@ -38,9 +39,10 @@ type Info struct {
 }
 
 type metadata struct {
-	FormatVersion int       `json:"format_version"`
-	CreatedAt     time.Time `json:"created_at"`
-	ConfigPresent bool      `json:"config_present"`
+	FormatVersion          int       `json:"format_version"`
+	CreatedAt              time.Time `json:"created_at"`
+	ConfigPresent          bool      `json:"config_present"`
+	TLSCertificatesPresent bool      `json:"tls_certificates_present,omitempty"`
 }
 
 type manifest struct {
@@ -101,15 +103,30 @@ func (m *Manager) create(label string, preserve map[string]struct{}) (Info, erro
 	if err != nil {
 		return Info{}, err
 	}
+	tlsPresent, err := copyTLSDirectory(filepath.Join(m.DataDir, "hysteria-tls"), filepath.Join(tmp, "hysteria-tls"))
+	if err != nil {
+		return Info{}, fmt.Errorf("backup Hysteria 2 TLS certificates: %w", err)
+	}
+	if !tlsPresent {
+		_ = os.RemoveAll(filepath.Join(tmp, "hysteria-tls"))
+	}
 	createdAt := time.Now().UTC()
-	metaBytes, err := json.Marshal(metadata{FormatVersion: formatVersion, CreatedAt: createdAt, ConfigPresent: configPresent})
+	metaBytes, err := json.Marshal(metadata{FormatVersion: formatVersion, CreatedAt: createdAt, ConfigPresent: configPresent, TLSCertificatesPresent: tlsPresent})
 	if err != nil {
 		return Info{}, err
 	}
 	if err := writeFile(filepath.Join(tmp, "metadata.json"), metaBytes, 0o600); err != nil {
 		return Info{}, err
 	}
-	files, err := hashFiles(tmp, []string{"state.db", "config.redacted.json", "metadata.json"})
+	fileNames := []string{"state.db", "config.redacted.json", "metadata.json"}
+	if tlsPresent {
+		tlsFiles, listErr := listRelativeFiles(tmp, "hysteria-tls")
+		if listErr != nil {
+			return Info{}, listErr
+		}
+		fileNames = append(fileNames, tlsFiles...)
+	}
+	files, err := hashFiles(tmp, fileNames)
 	if err != nil {
 		return Info{}, err
 	}
@@ -180,7 +197,63 @@ func (m *Manager) RestoreState(info Info) error {
 	if m.Store == nil {
 		return errors.New("backup manager is not initialized")
 	}
-	return m.Store.RestoreFrom(info.StatePath)
+	stageRoot, err := os.MkdirTemp(m.DataDir, ".hysteria-restore-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(stageRoot)
+	stageTLS := filepath.Join(stageRoot, "hysteria-tls")
+	backupTLS := filepath.Join(info.Path, "hysteria-tls")
+	tlsPresent := false
+	if _, err := os.Stat(backupTLS); err == nil {
+		var copyErr error
+		tlsPresent, copyErr = copyTLSDirectory(backupTLS, stageTLS)
+		if copyErr != nil {
+			return fmt.Errorf("prepare Hysteria 2 TLS restore: %w", copyErr)
+		}
+		if !tlsPresent {
+			_ = os.RemoveAll(stageTLS)
+		}
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	targetTLS := filepath.Join(m.DataDir, "hysteria-tls")
+	oldTLS := filepath.Join(stageRoot, "previous-hysteria-tls")
+	hadOldTLS := false
+	if tlsPresent {
+		if _, err := os.Stat(targetTLS); err == nil {
+			if err := os.Rename(targetTLS, oldTLS); err != nil {
+				return fmt.Errorf("stage current Hysteria 2 TLS files: %w", err)
+			}
+			hadOldTLS = true
+		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.Rename(stageTLS, targetTLS); err != nil {
+			if hadOldTLS {
+				_ = os.Rename(oldTLS, targetTLS)
+			}
+			return fmt.Errorf("install restored Hysteria 2 TLS files: %w", err)
+		}
+	}
+	if err := m.Store.RestoreFrom(info.StatePath); err != nil {
+		if tlsPresent {
+			_ = os.RemoveAll(targetTLS)
+			if hadOldTLS {
+				_ = os.Rename(oldTLS, targetTLS)
+			}
+		}
+		return err
+	}
+	if !tlsPresent {
+		settings, getErr := m.Store.GetHysteriaSettings(context.Background())
+		if getErr == nil {
+			settings.Enabled = false
+			settings.CertificateID = ""
+			_ = m.Store.UpdateHysteriaSettings(context.Background(), settings)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) inspect(name string) (Info, error) {
@@ -284,12 +357,12 @@ func verifyManifest(root string, key []byte) error {
 		return errors.New("backup manifest HMAC verification failed")
 	}
 	for _, file := range full.Files {
-		if filepath.Base(file.Path) != file.Path || file.Path == "" {
+		if !validManifestPath(file.Path) {
 			return errors.New("invalid backup manifest path")
 		}
 		path := filepath.Join(root, file.Path)
-		stat, err := os.Stat(path)
-		if err != nil || stat.Size() != file.Size {
+		stat, err := os.Lstat(path)
+		if err != nil || !stat.Mode().IsRegular() || stat.Size() != file.Size {
 			return fmt.Errorf("backup file %s is missing or has wrong size", file.Path)
 		}
 		actual, err := hashFiles(root, []string{file.Path})
@@ -298,6 +371,106 @@ func verifyManifest(root string, key []byte) error {
 		}
 	}
 	return nil
+}
+
+func validManifestPath(path string) bool {
+	clean := filepath.Clean(path)
+	return path != "" && clean == path && clean != "." && !filepath.IsAbs(clean) && clean != ".." && !strings.HasPrefix(clean, ".."+string(os.PathSeparator))
+}
+
+func copyTLSDirectory(source, destination string) (bool, error) {
+	stat, err := os.Lstat(source)
+	if os.IsNotExist(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !stat.IsDir() || stat.Mode()&os.ModeSymlink != 0 {
+		return false, errors.New("Hysteria 2 TLS path must be a directory")
+	}
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		return false, err
+	}
+	fileCount := 0
+	err = filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == source {
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to copy symlink in Hysteria TLS directory: %s", entry.Name())
+		}
+		relative, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(destination, relative)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o700)
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("unsupported file in Hysteria TLS directory: %s", entry.Name())
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		mode := os.FileMode(0o444)
+		if strings.Contains(strings.ToLower(entry.Name()), "privkey") {
+			mode = 0o400
+		}
+		output, err := os.OpenFile(target, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+		if err != nil {
+			_ = input.Close()
+			return err
+		}
+		_, copyErr := io.Copy(output, input)
+		inputErr := input.Close()
+		outputErr := output.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if inputErr != nil {
+			return inputErr
+		}
+		if outputErr != nil {
+			return outputErr
+		}
+		fileCount++
+		return nil
+	})
+	if err != nil {
+		return false, err
+	}
+	return fileCount > 0, nil
+}
+
+func listRelativeFiles(root, directory string) ([]string, error) {
+	result := []string{}
+	err := filepath.WalkDir(filepath.Join(root, directory), func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			return errors.New("backup contains a symlink")
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return errors.New("backup contains a non-regular file")
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		result = append(result, filepath.ToSlash(relative))
+		return nil
+	})
+	return result, err
 }
 
 func (m *Manager) prune(preserve map[string]struct{}) error {

@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
+	"database/sql"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -26,6 +27,7 @@ import (
 	"xray-easy/internal/backup"
 	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/domain"
+	"xray-easy/internal/hysteria"
 	"xray-easy/internal/maintenance"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/stats"
@@ -53,6 +55,8 @@ type server struct {
 	applyMu          sync.Mutex
 	settingsMu       sync.Mutex
 	pendingSettings  map[string]pendingSettingsChange
+	hysteriaMu       sync.Mutex
+	pendingHysteria  map[string]pendingHysteriaChange
 	eventsMu         sync.Mutex
 	eventSubs        map[chan struct{}]struct{}
 	diagnosticBuffer *diagnostics.Buffer
@@ -125,6 +129,53 @@ type pendingTOTP struct {
 type clientRequest struct {
 	Name        string `json:"name"`
 	Fingerprint string `json:"fingerprint"`
+}
+
+type hysteriaSettingsRequest struct {
+	Enabled          bool   `json:"enabled"`
+	Host             string `json:"host"`
+	TLSMode          string `json:"tls_mode"`
+	TLSCertIP        string `json:"tls_cert_ip"`
+	TLSServerName    string `json:"tls_server_name"`
+	CertificateID    string `json:"certificate_id"`
+	UDPIdleTimeout   int    `json:"udp_idle_timeout"`
+	MasqueradeType   string `json:"masquerade_type"`
+	MasqueradeString string `json:"masquerade_string"`
+}
+
+type hysteriaApplyRequest struct {
+	ChangeID     string `json:"change_id"`
+	Confirmation string `json:"confirmation"`
+}
+
+type pendingHysteriaChange struct {
+	ID                   string
+	AdminID              string
+	Base                 domain.HysteriaSettings
+	Candidate            domain.HysteriaSettings
+	ExpectedConfirmation string
+	Diff                 []settingsDiff
+	Consequences         []string
+	ExpiresAt            time.Time
+	Applying             bool
+}
+
+type hysteriaSettingsResponse struct {
+	Enabled          bool                      `json:"enabled"`
+	State            string                    `json:"state"`
+	Host             string                    `json:"host"`
+	UDPPort          int                       `json:"udp_port"`
+	TLSMode          string                    `json:"tls_mode"`
+	TLSServerName    string                    `json:"tls_server_name"`
+	TLSCertIP        string                    `json:"tls_cert_ip,omitempty"`
+	CertificateID    string                    `json:"certificate_id,omitempty"`
+	Certificate      *hysteria.CertificateInfo `json:"certificate,omitempty"`
+	CertificateError string                    `json:"certificate_error,omitempty"`
+	RuntimeError     string                    `json:"runtime_error,omitempty"`
+	UDPIdleTimeout   int                       `json:"udp_idle_timeout"`
+	MasqueradeType   string                    `json:"masquerade_type"`
+	MasqueradeString string                    `json:"masquerade_string,omitempty"`
+	InsecureURI      bool                      `json:"insecure_uri"`
 }
 
 type settingsPatchRequest struct {
@@ -212,6 +263,10 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := db.InitializeHysteriaSettings(ctx, hysteriaSettingsFromEnvironment()); err != nil {
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("initialize Hysteria 2 settings: %w", err)
+	}
 	configDir := envOr("XRAY_EASY_CONFIG_DIR", "/etc/xray")
 	if err := os.MkdirAll(filepath.Join(configDir, "candidates"), 0o700); err != nil {
 		_ = db.Close()
@@ -241,6 +296,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		},
 		handler:          handlerClient,
 		pendingSettings:  make(map[string]pendingSettingsChange),
+		pendingHysteria:  make(map[string]pendingHysteriaChange),
 		eventSubs:        make(map[chan struct{}]struct{}),
 		diagnosticBuffer: diagnostics.NewBuffer(200),
 		pendingTOTP:      make(map[string]pendingTOTP),
@@ -276,6 +332,11 @@ func newMux(s *server) *http.ServeMux {
 	mux.HandleFunc("/api/settings", s.settings)
 	mux.HandleFunc("/api/settings/validate", s.settingsValidate)
 	mux.HandleFunc("/api/settings/apply", s.settingsApply)
+	mux.HandleFunc("/api/transports/hysteria2", s.hysteriaSettingsRoute)
+	mux.HandleFunc("/api/transports/hysteria2/certificate", s.hysteriaCertificateUpload)
+	mux.HandleFunc("/api/transports/hysteria2/certificate/mkcert", s.hysteriaCertificateGenerate)
+	mux.HandleFunc("/api/transports/hysteria2/preview", s.hysteriaSettingsPreview)
+	mux.HandleFunc("/api/transports/hysteria2/apply", s.hysteriaSettingsApply)
 	mux.HandleFunc("/api/backups", s.backups)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/clients", s.clients)
@@ -553,7 +614,11 @@ func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, mast
 	if err != nil {
 		return err
 	}
-	renderSettings := rendererSettings(settings, privateKey)
+	hysteriaSettings, err := loadHysteriaSettings(ctx, db)
+	if err != nil {
+		return err
+	}
+	renderSettings := rendererSettingsWithHysteria(settings, privateKey, hysteriaSettings)
 	renderSettings.ReservedShortIDs = reservedShortIDs
 	rendered, err := xray.RenderServerConfig(renderSettings, xrayClients)
 	if err != nil {
@@ -615,9 +680,9 @@ func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	response := map[string]any{"initialized": status.Initialized, "public_port": s.publicPort}
-	if !status.Initialized && hysteria2Enabled() && envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy) == xray.HysteriaTLSSelfSigned {
-		if ip := strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_CERT_IP")); ip != "" {
-			response["suggested_public_host"] = ip
+	if !status.Initialized {
+		if hysteriaSettings, err := loadHysteriaSettings(r.Context(), s.store); err == nil && hysteriaSettings.Enabled && hysteriaSettings.TLSMode == domain.HysteriaTLSSelfSigned && hysteriaSettings.TLSCertIP != "" {
+			response["suggested_public_host"] = hysteriaSettings.TLSCertIP
 		}
 	}
 	writeJSON(w, http.StatusOK, response)
@@ -658,7 +723,7 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.PublicHost = publicHost
-	if err := validateHysteriaPublicHost(req.PublicHost); err != nil {
+	if err := s.validateHysteriaHost(r.Context(), req.PublicHost); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
@@ -1326,7 +1391,7 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	candidate.PublicHost = publicHost
-	if err := validateHysteriaPublicHost(candidate.PublicHost); err != nil {
+	if err := s.validateHysteriaHost(r.Context(), candidate.PublicHost); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
 		return
 	}
@@ -1849,7 +1914,7 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 		_ = s.store.DeleteClient(ctx, clientID)
 		return domain.Client{}, cause
 	}
-	if !hasInboundTag(activePath, "vless-reality") || (hysteria2Enabled() && !hasInboundTag(activePath, xray.HysteriaInboundTag)) {
+	if !hasInboundTag(activePath, "vless-reality") || (s.hysteriaEnabled(ctx) && !hasInboundTag(activePath, xray.HysteriaInboundTag)) {
 		usedReplace = false
 		// First enablement of an optional inbound changes the process-level
 		// topology, so use the normal validated supervisor apply once.
@@ -1886,7 +1951,7 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 			vlessAdded = true
 		}
 	}
-	if hysteria2Enabled() && !fullApply {
+	if s.hysteriaEnabled(ctx) && !fullApply {
 		hysteria, ok := s.handler.(hysteriaHandlerAPI)
 		if !ok {
 			return failCreate(errors.New("Hysteria 2 API is unavailable"))
@@ -2051,7 +2116,7 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 			return err
 		}
 	}
-	if hysteria2Enabled() {
+	if s.hysteriaEnabled(ctx) {
 		hysteria, ok := s.handler.(hysteriaHandlerAPI)
 		if !ok {
 			return errors.New("Hysteria 2 HandlerService is unavailable")
@@ -2086,7 +2151,7 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 
 func (s *server) reconcilePersistedClientConfigLocked(ctx context.Context, clients []domain.Client) error {
 	activePath := filepath.Join(s.configDir, "active.json")
-	if activeConfigUsersMatch(activePath, clients, hysteria2Enabled()) {
+	if activeConfigUsersMatch(activePath, clients, s.hysteriaEnabled(ctx)) {
 		return nil
 	}
 	settings, err := s.store.GetSettings(ctx)
@@ -2229,7 +2294,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 		}
 	}
 	needApply := !sameStringSet(currentSet, expectedSet)
-	if hasInboundTag(activePath, xray.HysteriaInboundTag) != hysteria2Enabled() {
+	if hasInboundTag(activePath, xray.HysteriaInboundTag) != s.hysteriaEnabled(ctx) {
 		needApply = true
 	}
 	if !needApply {
@@ -2241,7 +2306,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	}
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	fullApply := false
-	if !hasInboundTag(activePath, "vless-reality") || hasInboundTag(activePath, xray.HysteriaInboundTag) != hysteria2Enabled() {
+	if !hasInboundTag(activePath, "vless-reality") || hasInboundTag(activePath, xray.HysteriaInboundTag) != s.hysteriaEnabled(ctx) {
 		fullApply = true
 		err = s.supervisor.Apply(ctx, path, operationID)
 	} else if replacer, ok := s.supervisor.(inboundReplacer); ok {
@@ -2386,8 +2451,16 @@ func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Set
 }
 
 func (s *server) prepareCandidateWithReservedLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, reserved []string) (string, string, error) {
+	hysteriaSettings, err := loadHysteriaSettings(ctx, s.store)
+	if err != nil {
+		return "", "", err
+	}
+	return s.prepareCandidateWithHysteriaLocked(ctx, settings, privateKey, clients, reserved, hysteriaSettings)
+}
+
+func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, reserved []string, hysteriaSettings domain.HysteriaSettings) (string, string, error) {
 	xrayClients := xray.ClientsFromDomain(clients)
-	renderSettings := rendererSettings(settings, privateKey)
+	renderSettings := rendererSettingsWithHysteria(settings, privateKey, hysteriaSettings)
 	renderSettings.ReservedShortIDs = append([]string(nil), reserved...)
 	rendered, err := xray.RenderServerConfig(renderSettings, xrayClients)
 	if err != nil {
@@ -2416,11 +2489,12 @@ func (s *server) prepareCandidateWithReservedLocked(ctx context.Context, setting
 }
 
 func rendererSettings(settings domain.Settings, privateKey string) xray.Settings {
+	return rendererSettingsWithHysteria(settings, privateKey, hysteriaSettingsFromEnvironment())
+}
+
+func rendererSettingsWithHysteria(settings domain.Settings, privateKey string, hysteriaSettings domain.HysteriaSettings) xray.Settings {
 	result := xray.SettingsFromDomain(settings, privateKey)
-	result.Hysteria2Enabled = hysteria2Enabled()
-	result.HysteriaTLSMode = envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy)
-	result.HysteriaTLSCertIP = strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_CERT_IP"))
-	result.HysteriaTLSServerName = strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_TLS_SERVER_NAME"))
+	xray.ApplyHysteriaSettings(&result, hysteriaSettings)
 	return result
 }
 
@@ -2428,8 +2502,54 @@ func hysteria2Enabled() bool {
 	return strings.EqualFold(strings.TrimSpace(envOr("XRAY_HYSTERIA2_ENABLED", "false")), "true")
 }
 
+func hysteriaSettingsFromEnvironment() domain.HysteriaSettings {
+	return domain.HysteriaSettings{
+		Enabled:        hysteria2Enabled(),
+		TLSMode:        envOr("XRAY_HYSTERIA2_TLS_MODE", domain.HysteriaTLSLegacy),
+		TLSCertIP:      strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_CERT_IP")),
+		TLSServerName:  strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_TLS_SERVER_NAME")),
+		UDPIdleTimeout: 60,
+		MasqueradeType: domain.HysteriaMasqueradeOff,
+	}
+}
+
+func loadHysteriaSettings(ctx context.Context, db *store.Store) (domain.HysteriaSettings, error) {
+	settings, err := db.GetHysteriaSettings(ctx)
+	if err == nil {
+		return settings, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return domain.HysteriaSettings{}, err
+	}
+	defaults := hysteriaSettingsFromEnvironment()
+	if err := db.InitializeHysteriaSettings(ctx, defaults); err != nil {
+		return domain.HysteriaSettings{}, err
+	}
+	return db.GetHysteriaSettings(ctx)
+}
+
+func (s *server) hysteriaEnabled(ctx context.Context) bool {
+	settings, err := loadHysteriaSettings(ctx, s.store)
+	if err != nil {
+		return hysteria2Enabled()
+	}
+	return settings.Enabled
+}
+
+func (s *server) validateHysteriaHost(ctx context.Context, host string) error {
+	settings, err := loadHysteriaSettings(ctx, s.store)
+	if err != nil {
+		return err
+	}
+	if settings.Enabled && settings.Host == "" && settings.TLSMode == domain.HysteriaTLSSelfSigned && host != settings.TLSCertIP {
+		return errors.New("public_host must match XRAY_HYSTERIA2_CERT_IP used by the Hysteria 2 self-signed certificate")
+	}
+	return nil
+}
+
 func validateHysteriaPublicHost(host string) error {
-	if hysteria2Enabled() && envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy) == xray.HysteriaTLSSelfSigned && host != strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_CERT_IP")) {
+	settings := hysteriaSettingsFromEnvironment()
+	if settings.Enabled && settings.TLSMode == domain.HysteriaTLSSelfSigned && host != settings.TLSCertIP {
 		return errors.New("public_host must match XRAY_HYSTERIA2_CERT_IP for the mkcert Hysteria 2 certificate")
 	}
 	return nil
@@ -2479,7 +2599,12 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		return
 	}
 	_ = privateKey
-	profile, err := xray.BuildProfile(rendererSettings(settings, "server-secret-not-exported"), xray.ClientFromDomain(client))
+	hysteriaSettings, err := loadHysteriaSettings(r.Context(), s.store)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read Hysteria 2 settings"})
+		return
+	}
+	profile, err := xray.BuildProfile(rendererSettingsWithHysteria(settings, "server-secret-not-exported", hysteriaSettings), xray.ClientFromDomain(client))
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return

@@ -94,6 +94,29 @@ func TestReplaceInboundRestoresPreviousInboundAfterAddFailure(t *testing.T) {
 	}
 }
 
+func TestReplaceInboundAddsAndRemovesOptionalInbound(t *testing.T) {
+	s, _, previous, logPath := newReplaceTestSupervisor(t)
+	withoutHysteria := writeTestConfig(t, s.cfg.configDir, "candidates/no-hysteria.json", `{"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)
+	withHysteria := writeTestConfig(t, s.cfg.configDir, "candidates/with-hysteria.json", `{"inbounds":[{"tag":"vless-reality","protocol":"vless"},{"tag":"hysteria2","protocol":"hysteria"}]}`)
+	if err := s.replaceInbound(replaceInboundRequest{CandidatePath: withHysteria, PreviousPath: previous, Tag: "hysteria2", OperationID: "enable"}); err != nil {
+		t.Fatalf("add optional inbound: %v", err)
+	}
+	calls, err := os.ReadFile(logPath)
+	if err != nil || string(calls) != "adi\n" {
+		t.Fatalf("AddInbound calls = %q, %v", calls, err)
+	}
+	if err := os.WriteFile(logPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.replaceInbound(replaceInboundRequest{CandidatePath: withoutHysteria, PreviousPath: withHysteria, Tag: "hysteria2", OperationID: "disable"}); err != nil {
+		t.Fatalf("remove optional inbound: %v", err)
+	}
+	calls, err = os.ReadFile(logPath)
+	if err != nil || string(calls) != "rmi\n" {
+		t.Fatalf("RemoveInbound calls = %q, %v", calls, err)
+	}
+}
+
 func TestReplaceInboundReportsRemovalFailureAndSuccessfulRollback(t *testing.T) {
 	s, candidate, previous, logPath := newReplaceTestSupervisor(t)
 	request := replaceInboundRequest{CandidatePath: candidate, PreviousPath: previous, Tag: "vless-reality", OperationID: "op-rollback"}
@@ -133,8 +156,10 @@ func TestReplaceInboundRejectsInvalidStateAndInput(t *testing.T) {
 		{"missing API address", func() { s.cfg.xrayAPI = "" }},
 		{"invalid tag", func() { request.Tag = "bad/tag" }},
 		{"candidate outside config directory", func() { request.CandidatePath = filepath.Join(t.TempDir(), "other.json") }},
-		{"previous inbound missing", func() {
-			request.PreviousPath = writeTestConfig(t, s.cfg.configDir, "candidates/no-vless.json", `{"inbounds":[{"tag":"other"}]}`)
+		{"inbound missing in both configs", func() {
+			request.Tag = "hysteria2"
+			request.CandidatePath = writeTestConfig(t, s.cfg.configDir, "candidates/no-hysteria.json", `{"inbounds":[{"tag":"other"}]}`)
+			request.PreviousPath = writeTestConfig(t, s.cfg.configDir, "candidates/no-hysteria-active.json", `{"inbounds":[{"tag":"other"}]}`)
 		}},
 	} {
 		t.Run(testcase.name, func(t *testing.T) {

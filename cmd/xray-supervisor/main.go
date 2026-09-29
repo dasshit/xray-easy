@@ -397,34 +397,50 @@ func (s *supervisor) replaceInbound(req replaceInboundRequest) error {
 	if err != nil {
 		return err
 	}
-	candidateInbound, err := inboundOnlyFile(candidatePath, req.Tag)
+	candidateInbound, candidateFound, err := optionalInboundFile(candidatePath, req.Tag)
 	if err != nil {
 		return fmt.Errorf("read candidate inbound: %w", err)
 	}
-	defer os.Remove(candidateInbound)
-	previousInbound, err := inboundOnlyFile(previousPath, req.Tag)
+	if candidateFound {
+		defer os.Remove(candidateInbound)
+	}
+	previousInbound, previousFound, err := optionalInboundFile(previousPath, req.Tag)
 	if err != nil {
 		return fmt.Errorf("read previous inbound for rollback: %w", err)
 	}
-	defer os.Remove(previousInbound)
+	if previousFound {
+		defer os.Remove(previousInbound)
+	}
+	if !candidateFound && !previousFound {
+		return errors.New("inbound is absent from both candidate and active configurations")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := s.runXrayAPI(ctx, "rmi", "--server="+s.cfg.xrayAPI, "--timeout=20", req.Tag); err != nil {
-		return errors.New("Xray rejected RemoveInbound")
-	}
-	if err := s.runXrayAPI(ctx, "adi", "--server="+s.cfg.xrayAPI, "--timeout=20", candidateInbound); err != nil {
-		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		rollbackErr := s.runXrayAPI(rollbackCtx, "adi", "--server="+s.cfg.xrayAPI, "--timeout=20", previousInbound)
-		rollbackCancel()
-		if rollbackErr != nil {
-			s.logf("inbound replacement failed; rollback also failed for tag %s", req.Tag)
-			return errors.New("Xray rejected AddInbound and the previous inbound could not be restored")
+	if previousFound {
+		if err := s.runXrayAPI(ctx, "rmi", "--server="+s.cfg.xrayAPI, "--timeout=20", req.Tag); err != nil {
+			return errors.New("Xray rejected RemoveInbound")
 		}
-		s.logf("inbound replacement failed; restored tag %s", req.Tag)
-		return errors.New("Xray rejected AddInbound; previous inbound restored")
 	}
-	s.logf("replaced inbound %s without restarting the Xray process", req.Tag)
+	if candidateFound {
+		if err := s.runXrayAPI(ctx, "adi", "--server="+s.cfg.xrayAPI, "--timeout=20", candidateInbound); err != nil {
+			if !previousFound {
+				return errors.New("Xray rejected AddInbound")
+			}
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			rollbackErr := s.runXrayAPI(rollbackCtx, "adi", "--server="+s.cfg.xrayAPI, "--timeout=20", previousInbound)
+			rollbackCancel()
+			if rollbackErr != nil {
+				s.logf("inbound replacement failed; rollback also failed for tag %s", req.Tag)
+				return errors.New("Xray rejected AddInbound and the previous inbound could not be restored")
+			}
+			s.logf("inbound replacement failed; restored tag %s", req.Tag)
+			return errors.New("Xray rejected AddInbound; previous inbound restored")
+		}
+		s.logf("replaced inbound %s without restarting the Xray process", req.Tag)
+		return nil
+	}
+	s.logf("removed inbound %s without restarting the Xray process", req.Tag)
 	return nil
 }
 
@@ -440,52 +456,63 @@ func (s *supervisor) runXrayAPI(ctx context.Context, args ...string) error {
 }
 
 func inboundOnlyFile(configPath, tag string) (string, error) {
-	data, err := os.ReadFile(configPath)
+	path, found, err := optionalInboundFile(configPath, tag)
 	if err != nil {
 		return "", err
+	}
+	if !found {
+		return "", fmt.Errorf("inbound %q was not found", tag)
+	}
+	return path, nil
+}
+
+func optionalInboundFile(configPath, tag string) (string, bool, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", false, err
 	}
 	var config struct {
 		Inbounds []json.RawMessage `json:"inbounds"`
 	}
 	if err := json.Unmarshal(data, &config); err != nil {
-		return "", errors.New("invalid Xray config")
+		return "", false, errors.New("invalid Xray config")
 	}
 	for _, raw := range config.Inbounds {
 		var inbound struct {
 			Tag string `json:"tag"`
 		}
 		if err := json.Unmarshal(raw, &inbound); err != nil {
-			return "", errors.New("invalid Xray inbound")
+			return "", false, errors.New("invalid Xray inbound")
 		}
 		if inbound.Tag == tag {
 			content, err := json.Marshal(struct {
 				Inbounds []json.RawMessage `json:"inbounds"`
 			}{Inbounds: []json.RawMessage{raw}})
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			file, err := os.CreateTemp("", "xray-inbound-*.json")
 			if err != nil {
-				return "", err
+				return "", false, err
 			}
 			if _, err := file.Write(content); err != nil {
 				_ = file.Close()
 				_ = os.Remove(file.Name())
-				return "", err
+				return "", false, err
 			}
 			if err := file.Chmod(0o600); err != nil {
 				_ = file.Close()
 				_ = os.Remove(file.Name())
-				return "", err
+				return "", false, err
 			}
 			if err := file.Close(); err != nil {
 				_ = os.Remove(file.Name())
-				return "", err
+				return "", false, err
 			}
-			return file.Name(), nil
+			return file.Name(), true, nil
 		}
 	}
-	return "", fmt.Errorf("inbound %q was not found", tag)
+	return "", false, nil
 }
 
 func readBody(r *http.Request) ([]byte, error) {

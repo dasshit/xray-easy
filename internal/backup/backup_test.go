@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"xray-easy/internal/domain"
 	"xray-easy/internal/store"
 )
 
@@ -121,6 +122,50 @@ func TestCreateListVerifyAndRestoreBackup(t *testing.T) {
 	restored, err := db.GetSettings(context.Background())
 	if err != nil || restored.PublicHost != "before.example.com" {
 		t.Fatalf("restored public host = %q, %v", restored.PublicHost, err)
+	}
+}
+
+func TestBackupIncludesAndRestoresHysteriaTLSVersions(t *testing.T) {
+	manager, db := newTestManager(t)
+	root := filepath.Join(manager.DataDir, "hysteria-tls")
+	id := "0123456789abcdef0123456789abcdef"
+	certificateDir := filepath.Join(root, id)
+	if err := os.MkdirAll(certificateDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{"fullchain.pem": "certificate-before", "privkey.pem": "private-key-before"} {
+		if err := os.WriteFile(filepath.Join(certificateDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	settings := domain.HysteriaSettings{Enabled: true, TLSMode: domain.HysteriaTLSCustom, CertificateID: id, UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff}
+	if err := db.InitializeHysteriaSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	info, err := manager.Create("hysteria")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.Verify(info.Name); err != nil {
+		t.Fatalf("verify backup with nested TLS files: %v", err)
+	}
+	for name, content := range map[string]string{"fullchain.pem": "certificate-after", "privkey.pem": "private-key-after"} {
+		if err := os.WriteFile(filepath.Join(certificateDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.RestoreState(info); err != nil {
+		t.Fatalf("restore backup with TLS versions: %v", err)
+	}
+	for name, expected := range map[string]string{"fullchain.pem": "certificate-before", "privkey.pem": "private-key-before"} {
+		got, err := os.ReadFile(filepath.Join(certificateDir, name))
+		if err != nil || string(got) != expected {
+			t.Fatalf("restored %s = %q, %v; want %q", name, got, err, expected)
+		}
+	}
+	got, err := db.GetHysteriaSettings(context.Background())
+	if err != nil || !got.Enabled || got.CertificateID != id {
+		t.Fatalf("restored Hysteria settings = %+v, %v", got, err)
 	}
 }
 

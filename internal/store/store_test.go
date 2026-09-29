@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -103,6 +104,58 @@ func TestMigrationSetupAndSettingsLifecycle(t *testing.T) {
 	got, err := db.GetSettings(ctx)
 	if err != nil || got != settings {
 		t.Fatalf("settings round trip = %+v, %v; want %+v", got, err, settings)
+	}
+}
+
+func TestHysteriaSettingsOneTimeEnvironmentMigration(t *testing.T) {
+	db, ctx := openTestStore(t, "hysteria-settings.db")
+	initial := domain.HysteriaSettings{Enabled: true, TLSMode: domain.HysteriaTLSLegacy, UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff}
+	if err := db.InitializeHysteriaSettings(ctx, initial); err != nil {
+		t.Fatal(err)
+	}
+	updated := initial
+	updated.Enabled = false
+	updated.Host = "vpn.example.com"
+	updated.UDPIdleTimeout = 120
+	if err := db.UpdateHysteriaSettings(ctx, updated); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.InitializeHysteriaSettings(ctx, initial); err != nil {
+		t.Fatalf("reapplying environment defaults: %v", err)
+	}
+	got, err := db.GetHysteriaSettings(ctx)
+	if err != nil || got != updated {
+		t.Fatalf("persisted settings = %+v, %v; want %+v", got, err, updated)
+	}
+}
+
+func TestRestoreDatabaseWithoutHysteriaSettingsDefaultsTransportOff(t *testing.T) {
+	db, ctx := openTestStore(t, "current.db")
+	defaults := domain.HysteriaSettings{Enabled: true, TLSMode: domain.HysteriaTLSLegacy, UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff}
+	if err := db.InitializeHysteriaSettings(ctx, defaults); err != nil {
+		t.Fatal(err)
+	}
+	legacyBackup := filepath.Join(t.TempDir(), "legacy.db")
+	if err := db.BackupTo(legacyBackup); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := sql.Open("sqlite", "file:"+legacyBackup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := legacy.Exec(`DROP TABLE hysteria_settings`); err != nil {
+		_ = legacy.Close()
+		t.Fatal(err)
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RestoreFrom(legacyBackup); err != nil {
+		t.Fatalf("restore legacy database: %v", err)
+	}
+	got, err := db.GetHysteriaSettings(ctx)
+	if err != nil || got.Enabled || got.TLSMode != domain.HysteriaTLSLegacy || got.UDPIdleTimeout != 60 {
+		t.Fatalf("restored Hysteria defaults = %+v, %v", got, err)
 	}
 }
 

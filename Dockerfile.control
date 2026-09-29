@@ -7,6 +7,9 @@ COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
 
+FROM golang:1.24-alpine AS mkcert-build
+RUN GOBIN=/out go install filippo.io/mkcert@v1.4.4
+
 FROM node:24-alpine AS web-build
 WORKDIR /web
 COPY web/package.json ./
@@ -19,6 +22,7 @@ FROM alpine:3.22
 RUN addgroup -S -g 10001 xray && adduser -S -D -H -u 10001 -G xray xray \
     && apk add --no-cache ca-certificates
 COPY --from=build /out/xray-easy /usr/local/bin/xray-easy
+COPY --from=mkcert-build /out/mkcert /usr/local/bin/mkcert
 COPY --from=web-build /web/dist /usr/share/xray-easy/ui
 RUN mkdir -p /data /etc/xray \
     && chown -R xray:xray /data /etc/xray /usr/local/bin/xray-easy

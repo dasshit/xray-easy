@@ -39,21 +39,27 @@ const (
 )
 
 type Settings struct {
-	PublicHost            string
-	PublicPort            int
-	XrayAPIListen         string
-	RealityTarget         string
-	RealitySNI            string
-	RealityPrivateKey     string
-	RealityPublicKey      string
-	ClientFingerprint     string
-	LogLevel              string
-	InternalInboundPort   int
-	ReservedShortIDs      []string
-	Hysteria2Enabled      bool
-	HysteriaTLSMode       string
-	HysteriaTLSCertIP     string
-	HysteriaTLSServerName string
+	PublicHost               string
+	PublicPort               int
+	XrayAPIListen            string
+	RealityTarget            string
+	RealitySNI               string
+	RealityPrivateKey        string
+	RealityPublicKey         string
+	ClientFingerprint        string
+	LogLevel                 string
+	InternalInboundPort      int
+	ReservedShortIDs         []string
+	Hysteria2Enabled         bool
+	HysteriaTLSMode          string
+	HysteriaTLSCertIP        string
+	HysteriaTLSServerName    string
+	HysteriaHost             string
+	HysteriaTLSCertPath      string
+	HysteriaTLSKeyPath       string
+	HysteriaUDPIdleTimeout   int
+	HysteriaMasqueradeType   string
+	HysteriaMasqueradeString string
 }
 
 type Client struct {
@@ -172,7 +178,15 @@ type hysteriaCertificate struct {
 	KeyFile         string `json:"keyFile"`
 }
 type hysteriaTransportSettings struct {
-	Version int `json:"version"`
+	Version        int                 `json:"version"`
+	UDPIdleTimeout int                 `json:"udpIdleTimeout,omitempty"`
+	Masquerade     *hysteriaMasquerade `json:"masquerade,omitempty"`
+}
+
+type hysteriaMasquerade struct {
+	Type       string `json:"type"`
+	Content    string `json:"content,omitempty"`
+	StatusCode int    `json:"statusCode,omitempty"`
 }
 
 func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
@@ -233,13 +247,24 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		for _, client := range active {
 			hysteriaUsers = append(hysteriaUsers, hysteriaUser{Auth: client.UUID, Email: client.Email})
 		}
+		certPath, keyPath := settings.HysteriaTLSCertPath, settings.HysteriaTLSKeyPath
+		if certPath == "" {
+			certPath = HysteriaTLSCertPath
+		}
+		if keyPath == "" {
+			keyPath = HysteriaTLSKeyPath
+		}
+		hysteriaTransport := hysteriaTransportSettings{Version: 2, UDPIdleTimeout: settings.HysteriaUDPIdleTimeout}
+		if settings.HysteriaMasqueradeType == "string" {
+			hysteriaTransport.Masquerade = &hysteriaMasquerade{Type: "string", Content: settings.HysteriaMasqueradeString, StatusCode: 404}
+		}
 		inbounds = append(inbounds, hysteriaInbound{
 			Listen: "0.0.0.0", Port: settings.InternalInboundPort, Protocol: "hysteria", Tag: HysteriaInboundTag,
 			Settings: hysteriaInboundSettings{Version: 2, Users: hysteriaUsers},
 			StreamSettings: hysteriaStreamSettings{
 				Network: "hysteria", Security: "tls",
-				TLSSettings:      hysteriaTLSSettings{Certificates: []hysteriaCertificate{{CertificateFile: HysteriaTLSCertPath, KeyFile: HysteriaTLSKeyPath}}},
-				HysteriaSettings: hysteriaTransportSettings{Version: 2},
+				TLSSettings:      hysteriaTLSSettings{Certificates: []hysteriaCertificate{{CertificateFile: certPath, KeyFile: keyPath}}},
+				HysteriaSettings: hysteriaTransport,
 			},
 		})
 	}
@@ -303,7 +328,11 @@ func BuildHysteriaURI(settings Settings, client Client) string {
 		serverName = settings.PublicHost
 	}
 	query.Set("sni", serverName)
-	u := &url.URL{Scheme: "hysteria2", User: url.User(client.UUID), Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.PublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
+	host := settings.HysteriaHost
+	if host == "" {
+		host = settings.PublicHost
+	}
+	u := &url.URL{Scheme: "hysteria2", User: url.User(client.UUID), Host: net.JoinHostPort(host, strconv.Itoa(settings.PublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
 	return u.String()
 }
 

@@ -111,7 +111,7 @@ func ValidateDatabase(path string) error {
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&exists); err != nil {
 			return err
 		}
-		if exists != 1 && table != "reality_short_ids" {
+		if exists != 1 && table != "reality_short_ids" && table != "hysteria_settings" {
 			return fmt.Errorf("database table %s is missing", table)
 		}
 	}
@@ -229,8 +229,17 @@ func (s *Store) RestoreFrom(path string) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("inspect restore table %s: %w", table, err)
 		}
-		if exists == 0 && table == "reality_short_ids" {
-			continue
+		if exists == 0 {
+			switch table {
+			case "reality_short_ids":
+				continue
+			case "hysteria_settings":
+				if _, restoreErr = tx.Exec(`INSERT INTO main.hysteria_settings(id, enabled, host, tls_mode, tls_cert_ip, tls_server_name, certificate_id, udp_idle_timeout, masquerade_type, masquerade_string, updated_at) VALUES(1,0,'','legacy','','','',60,'off','',?)`, time.Now().UTC().Format(time.RFC3339Nano)); restoreErr != nil {
+					_ = tx.Rollback()
+					return fmt.Errorf("restore default Hysteria 2 settings: %w", restoreErr)
+				}
+				continue
+			}
 		}
 		if table == "settings" {
 			restoreErr = restoreSettings(tx)
@@ -264,6 +273,7 @@ var databaseTables = []string{
 	"audit_events",
 	"traffic_snapshots",
 	"reality_short_ids",
+	"hysteria_settings",
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -286,6 +296,19 @@ CREATE TABLE IF NOT EXISTS settings (
   client_fingerprint TEXT NOT NULL DEFAULT 'chrome',
   log_level TEXT NOT NULL DEFAULT 'warning',
   created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS hysteria_settings (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  enabled INTEGER NOT NULL DEFAULT 0,
+  host TEXT NOT NULL DEFAULT '',
+  tls_mode TEXT NOT NULL DEFAULT 'custom',
+  tls_cert_ip TEXT NOT NULL DEFAULT '',
+  tls_server_name TEXT NOT NULL DEFAULT '',
+  certificate_id TEXT NOT NULL DEFAULT '',
+  udp_idle_timeout INTEGER NOT NULL DEFAULT 60,
+  masquerade_type TEXT NOT NULL DEFAULT 'off',
+  masquerade_string TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS admin_users (
@@ -626,6 +649,46 @@ func (s *Store) GetSettings(ctx context.Context) (domain.Settings, error) {
 func (s *Store) UpdateSettings(ctx context.Context, settings domain.Settings) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, log_level=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
+}
+
+// InitializeHysteriaSettings saves the one-time environment migration defaults.
+// Once a row exists, later container environment changes cannot overwrite the
+// values managed through the application.
+func (s *Store) InitializeHysteriaSettings(ctx context.Context, settings domain.HysteriaSettings) error {
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO hysteria_settings(id, enabled, host, tls_mode, tls_cert_ip, tls_server_name, certificate_id, udp_idle_timeout, masquerade_type, masquerade_string, updated_at) VALUES(1,?,?,?,?,?,?,?,?,?,?)`, boolInt(settings.Enabled), settings.Host, settings.TLSMode, settings.TLSCertIP, settings.TLSServerName, settings.CertificateID, settings.UDPIdleTimeout, settings.MasqueradeType, settings.MasqueradeString, time.Now().UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// GetHysteriaSettings returns the shared Hysteria 2 inbound settings.
+func (s *Store) GetHysteriaSettings(ctx context.Context) (domain.HysteriaSettings, error) {
+	var settings domain.HysteriaSettings
+	var enabled int
+	err := s.db.QueryRowContext(ctx, `SELECT enabled, host, tls_mode, tls_cert_ip, tls_server_name, certificate_id, udp_idle_timeout, masquerade_type, masquerade_string FROM hysteria_settings WHERE id=1`).Scan(&enabled, &settings.Host, &settings.TLSMode, &settings.TLSCertIP, &settings.TLSServerName, &settings.CertificateID, &settings.UDPIdleTimeout, &settings.MasqueradeType, &settings.MasqueradeString)
+	if err != nil {
+		return settings, err
+	}
+	settings.Enabled = enabled != 0
+	return settings, nil
+}
+
+// UpdateHysteriaSettings persists a validated Hysteria 2 configuration.
+func (s *Store) UpdateHysteriaSettings(ctx context.Context, settings domain.HysteriaSettings) error {
+	if err := settings.Validate(); err != nil {
+		return err
+	}
+	result, err := s.db.ExecContext(ctx, `UPDATE hysteria_settings SET enabled=?, host=?, tls_mode=?, tls_cert_ip=?, tls_server_name=?, certificate_id=?, udp_idle_timeout=?, masquerade_type=?, masquerade_string=?, updated_at=? WHERE id=1`, boolInt(settings.Enabled), settings.Host, settings.TLSMode, settings.TLSCertIP, settings.TLSServerName, settings.CertificateID, settings.UDPIdleTimeout, settings.MasqueradeType, settings.MasqueradeString, time.Now().UTC().Format(time.RFC3339Nano))
+	if err != nil {
+		return err
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return err
+	} else if count != 1 {
+		return errors.New("Hysteria 2 settings are not initialized")
+	}
+	return nil
 }
 
 // UpdateSettingsAndClientStates commits a node settings change and the

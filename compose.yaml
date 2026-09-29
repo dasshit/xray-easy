@@ -12,12 +12,13 @@ services:
       - |
         # The TLS volume is mounted beneath read-only /etc/xray in the Xray
         # container. Its mountpoint must already exist in xray_config.
-        mkdir -p /data /config/hysteria-tls
+        mkdir -p /data /config/hysteria-tls /tls
         if [ ! -f /config/active.json ]; then cp /bootstrap/active.json /config/active.json; fi
-        chown -R 10001:10001 /data /config
+        chown -R 10001:10001 /data /config /tls
     volumes:
       - app_data:/data
       - xray_config:/config
+      - hysteria_tls_data:/tls
       - ./prototype/config-stage1:/bootstrap:ro
 
   init-supervisor-secret:
@@ -52,6 +53,9 @@ services:
     volumes:
       - ./secrets/hysteria:/source:ro
       - hysteria_tls_data:/target
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
 
   xray:
     build:
@@ -129,6 +133,7 @@ services:
       - "127.0.0.1:${XRAY_EASY_UI_PORT:-8080}:8080/tcp"
     volumes:
       - app_data:/data
+      - hysteria_tls_data:/data/hysteria-tls
       - xray_config:/etc/xray
       - xray_supervisor_token_data:/run/secrets:ro
     networks:
