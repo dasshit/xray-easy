@@ -4,7 +4,7 @@ import type { CreateClientCommand } from '../application/models'
 import { translations } from './i18n/messages'
 import type { UILanguage } from './i18n'
 
-const props = defineProps<{ language: UILanguage; hysteriaAvailable: boolean; busy: boolean }>()
+const props = defineProps<{ language: UILanguage; hysteriaAvailable: boolean; vmessAvailable: boolean; busy: boolean }>()
 const emit = defineEmits<{
   cancel: []
   submit: [command: CreateClientCommand]
@@ -12,7 +12,7 @@ const emit = defineEmits<{
 }>()
 const text = computed(() => translations[props.language])
 const nameInput = ref<HTMLInputElement | null>(null)
-const form = ref<{ name: string; protocol: 'vless' | 'hysteria2'; fingerprint: string; auth: string }>({ name: '', protocol: 'vless', fingerprint: '', auth: '' })
+const form = ref<{ name: string; protocol: 'vless' | 'vmess' | 'hysteria2'; fingerprint: string; auth: string }>({ name: '', protocol: 'vless', fingerprint: '', auth: '' })
 
 /** Focus the device name field when the dialog appears. */
 onMounted(() => { void nextTick(() => nameInput.value?.focus()) })
@@ -20,9 +20,13 @@ onMounted(() => { void nextTick(() => nameInput.value?.focus()) })
 /** Submit only the options belonging to the selected transport. */
 function submit(): void {
   const name = form.value.name.trim()
-  if (!name || (form.value.protocol === 'hysteria2' && !props.hysteriaAvailable)) return
+  if (!name || (form.value.protocol === 'hysteria2' && !props.hysteriaAvailable) || (form.value.protocol === 'vmess' && !props.vmessAvailable)) return
   if (form.value.protocol === 'vless') {
     emit('submit', { name, protocol: 'vless', ...(form.value.fingerprint ? { fingerprint: form.value.fingerprint } : {}) })
+    return
+  }
+  if (form.value.protocol === 'vmess') {
+    emit('submit', { name, protocol: 'vmess' })
     return
   }
   emit('submit', { name, protocol: 'hysteria2', ...(form.value.auth.trim() ? { auth: form.value.auth.trim() } : {}) })
@@ -45,11 +49,16 @@ function submit(): void {
           {{ text.profileProtocol }}
           <select v-model="form.protocol" data-testid="profile-protocol">
             <option value="vless">VLESS + REALITY</option>
+            <option value="vmess" :disabled="!vmessAvailable">VMess + TLS</option>
             <option value="hysteria2" :disabled="!hysteriaAvailable">Hysteria 2</option>
           </select>
         </label>
-        <p v-if="!hysteriaAvailable" class="hint" role="status">
+        <p v-if="!hysteriaAvailable && form.protocol !== 'vmess'" class="hint" role="status">
           {{ text.hysteriaUnavailable }}
+          <button class="text-button" type="button" @click="emit('openSettings')">{{ text.hysteriaSettingsLink }}</button>
+        </p>
+        <p v-if="form.protocol === 'vmess' && !vmessAvailable" class="hint" role="status">
+          {{ text.vmessUnavailable }}
           <button class="text-button" type="button" @click="emit('openSettings')">{{ text.hysteriaSettingsLink }}</button>
         </p>
         <template v-if="form.protocol === 'vless'">
@@ -65,7 +74,7 @@ function submit(): void {
           </label>
           <p class="hint">{{ text.profileCreateSummaryVless }}</p>
         </template>
-        <template v-else>
+        <template v-else-if="form.protocol === 'hysteria2'">
           <p class="hint">{{ text.profileCreateSummaryHysteria }}</p>
           <details class="profile-advanced">
             <summary>{{ text.hysteriaAdvanced }}</summary>
@@ -76,9 +85,12 @@ function submit(): void {
             </label>
           </details>
         </template>
+        <template v-else>
+          <p class="hint">{{ text.profileCreateSummaryVMess }}</p>
+        </template>
         <div class="modal-actions">
           <button class="secondary" type="button" :disabled="busy" @click="emit('cancel')">{{ text.cancel }}</button>
-          <button type="submit" :disabled="busy || !form.name.trim() || (form.protocol === 'hysteria2' && !hysteriaAvailable)">{{ text.createDevice }}</button>
+          <button type="submit" :disabled="busy || !form.name.trim() || (form.protocol === 'hysteria2' && !hysteriaAvailable) || (form.protocol === 'vmess' && !vmessAvailable)">{{ text.createDevice }}</button>
         </div>
       </form>
     </div>

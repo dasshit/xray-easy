@@ -79,6 +79,7 @@ services:
     ports:
       - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
       - "${XRAY_PUBLIC_PORT:-443}:8443/udp"
+      - "${XRAY_VMESS_PORT:-9443}:8444/tcp"
     volumes:
       - xray_config:/etc/xray:ro
       - xray_supervisor_token_data:/run/secrets:ro
@@ -120,6 +121,7 @@ services:
       XRAY_EASY_VERSION: ${XRAY_EASY_BUILD_VERSION:-dev}
       XRAY_EASY_MASTER_KEY: ${XRAY_EASY_MASTER_KEY:?set XRAY_EASY_MASTER_KEY in .env}
       XRAY_PUBLIC_PORT: ${XRAY_PUBLIC_PORT:-443}
+      XRAY_VMESS_PORT: ${XRAY_VMESS_PORT:-9443}
       XRAY_VERSION: ${XRAY_VERSION:-26.7.28}
       XRAY_HYSTERIA2_ENABLED: ${XRAY_HYSTERIA2_ENABLED:-false}
       XRAY_HYSTERIA2_TLS_MODE: ${XRAY_HYSTERIA2_TLS_MODE:-legacy}

@@ -166,7 +166,7 @@ func newTestApp(t *testing.T, initialized bool) testApp {
 	app := testApp{sup: sup, handler: handler}
 	s := &server{
 		store: db, masterKey: []byte("0123456789abcdef0123456789abcdef"), configDir: configDir,
-		publicPort: 443, dataDir: dataDir, maintenancePath: filepath.Join(dataDir, "maintenance.lock"),
+		publicPort: 443, vmessPort: 9443, dataDir: dataDir, maintenancePath: filepath.Join(dataDir, "maintenance.lock"),
 		defaultAPIListen: "127.0.0.1:10085", supervisor: sup, handler: handler,
 		pendingSettings: make(map[string]pendingSettingsChange), eventSubs: make(map[chan struct{}]struct{}),
 		diagnosticBuffer: diagnostics.NewBuffer(200), pendingTOTP: make(map[string]pendingTOTP),
@@ -221,8 +221,8 @@ func writeTestHysteriaCertificate(t *testing.T, directory string) {
 	template := x509.Certificate{
 		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "vpn.example.test"},
 		NotBefore: now, NotAfter: now.Add(24 * time.Hour),
-		DNSNames: []string{"vpn.example.test", "cert.example.test"},
-		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		DNSNames:    []string{"vpn.example.test", "cert.example.test"},
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)

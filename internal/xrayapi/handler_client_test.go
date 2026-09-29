@@ -174,6 +174,39 @@ func TestHandlerClientUsesDedicatedHysteriaInboundAndAccountEncoding(t *testing.
 	}
 }
 
+func TestHandlerClientUsesDedicatedVMessInboundAndAccountEncoding(t *testing.T) {
+	implementation := &handlerTestServer{tags: []*core.InboundHandlerConfig{{Tag: inboundTag}, {Tag: "vmess-tls"}}}
+	client := newHandlerTestClient(t, implementation)
+	ctx := context.Background()
+	if err := client.AddVMessUser(ctx, "macbook@xray-easy", "123e4567-e89b-42d3-a456-426614174000"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RemoveVMessUser(ctx, "macbook@xray-easy"); err != nil {
+		t.Fatal(err)
+	}
+	if len(implementation.alters) != 2 || implementation.alters[0].GetTag() != "vmess-tls" || implementation.alters[1].GetTag() != "vmess-tls" {
+		t.Fatalf("VMess mutations used another inbound: %+v", implementation.alters)
+	}
+	var operation handlercommand.AddUserOperation
+	if err := proto.Unmarshal(implementation.alters[0].GetOperation().GetValue(), &operation); err != nil {
+		t.Fatal(err)
+	}
+	user := operation.GetUser()
+	account := user.GetAccount()
+	if user.GetEmail() != "macbook@xray-easy" || account.GetType() != "xray.proxy.vmess.Account" {
+		t.Fatalf("VMess user account = %+v", user)
+	}
+	number, wireType, tagLength := protowire.ConsumeTag(account.GetValue())
+	uuid, uuidLength := protowire.ConsumeString(account.GetValue()[tagLength:])
+	if number != 1 || wireType != protowire.BytesType || uuidLength < 0 || uuid != "123e4567-e89b-42d3-a456-426614174000" {
+		t.Fatalf("VMess account UUID field = %d/%v/%q", number, wireType, uuid)
+	}
+	var removal handlercommand.RemoveUserOperation
+	if err := proto.Unmarshal(implementation.alters[1].GetOperation().GetValue(), &removal); err != nil || removal.GetEmail() != "macbook@xray-easy" {
+		t.Fatalf("VMess removal = %q, %v", removal.GetEmail(), err)
+	}
+}
+
 func decodeVLESSAccount(t *testing.T, value []byte) (string, string) {
 	t.Helper()
 	var uuid, flow string

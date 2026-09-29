@@ -126,6 +126,7 @@ func writeDoctorHeader(out io.Writer) {
 	fmt.Fprintf(out, "  Xray UDP public port: %s -> container UDP 8443\n", safeDoctorPort("XRAY_PUBLIC_PORT", "443"))
 	fmt.Fprintln(out, "Host ports from active Compose environment:")
 	fmt.Fprintf(out, "  Xray public TCP: %s -> container TCP 8443\n", safeDoctorPort("XRAY_PUBLIC_PORT", "443"))
+	fmt.Fprintf(out, "  VMess TCP: %s -> container TCP 8444\n", safeDoctorPort("XRAY_VMESS_PORT", "9443"))
 	fmt.Fprintf(out, "  Web UI loopback: %s -> container TCP 8080\n", safeDoctorPort("XRAY_EASY_UI_PORT", "8080"))
 }
 
@@ -252,6 +253,11 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 		appendCheck(doctorFail, "Public TCP port", "XRAY_PUBLIC_PORT is invalid", "Set XRAY_PUBLIC_PORT in .env to a port from 1 to 65535, then rerun Compose.")
 	} else {
 		appendCheck(doctorPass, "Public TCP port", fmt.Sprintf("port %d is configured", port), "")
+	}
+	if port, err := configuredVMessPort(); err != nil {
+		appendCheck(doctorFail, "VMess TCP port", err.Error(), "Set XRAY_VMESS_PORT to a free host port distinct from XRAY_PUBLIC_PORT and XRAY_EASY_UI_PORT, then rerun Compose.")
+	} else {
+		appendCheck(doctorPass, "VMess TCP port", fmt.Sprintf("port %d is configured", port), "")
 	}
 
 	if err := probeWritableDirectory(dataDir); err != nil {
@@ -415,7 +421,7 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 			appendCheck(doctorPass, "Xray statistics API", "StatsService is responding", "")
 		}
 	}
-	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s for IPv4 and IPv6 in the VDS firewall/security group and verify a VLESS client connection.", envOr("XRAY_PUBLIC_PORT", "443")))
+	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s (VLESS) and TCP %s (VMess, when used) for IPv4 and IPv6 in the VDS firewall/security group; verify a client connection.", envOr("XRAY_PUBLIC_PORT", "443"), envOr("XRAY_VMESS_PORT", "9443")))
 	if hysteria2Enabled() {
 		hint := fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6 and verify a Hysteria 2 client connection.", envOr("XRAY_PUBLIC_PORT", "443"))
 		if mode := envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy); mode == xray.HysteriaTLSSelfSigned || mode == xray.HysteriaTLSLegacy {

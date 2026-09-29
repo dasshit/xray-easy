@@ -2,9 +2,10 @@
 
 Xray-easy is a private web panel for one Xray server. It runs Xray and the Go
 control plane in separate Docker containers and helps one administrator create
-VLESS + REALITY + TCP/RAW + XTLS Vision profiles. An optional Hysteria 2 inbound
-can use UDP on the same public port and the same Xray process. The panel is
-bound to the server's loopback address; open it through an SSH tunnel.
+VLESS + REALITY + TCP/RAW + XTLS Vision profiles, plus optional VMess + TLS and
+Hysteria 2 inbounds in the same Xray process. VMess uses a separate public TCP
+port; Hysteria 2 uses UDP on the VLESS public port. The panel is bound to the
+server's loopback address; open it through an SSH tunnel.
 
 The pinned and verified Xray version is **26.7.28**. The panel reports both
 `XRAY_VERSION` from Compose and the version reported by the running binary, and
@@ -21,10 +22,11 @@ complete product scope and implementation notes are in
 
 You need a Linux VPS with an `amd64` or `arm64` CPU, Docker Engine **28.0.0 or
 newer**, Docker Compose plugin **2.33.1 or newer**, SSH access, and an available
-public TCP port (443 by default). Hysteria 2 also requires UDP on that port.
-These Docker versions are required to choose the correct IPv4/IPv6 egress gateway for Xray. Allow the public TCP port in the
-VPS firewall/security group for each address family you intend to use. The VPS
-needs outbound access for Docker images and Xray traffic. Go and Node.js are
+public TCP port (443 by default). VMess + TLS also uses TCP port 9443 by
+default. Hysteria 2 requires UDP on the VLESS port. These Docker versions are
+required to choose the correct IPv4/IPv6 egress gateway for Xray. Allow inbound
+TCP on the ports for the protocols you use in the VPS firewall/security group.
+The VPS needs outbound access for Docker images and Xray traffic. Go and Node.js are
 **not required** on the VPS.
 
 Run these commands **on the VPS**:
@@ -61,11 +63,11 @@ Example configuration screen (shortened):
 
   02 / 04   Configuration
   ╭─────────────────────────────────────────────────────╮
-  │  Public Xray TCP port                               │
+  │  Public Xray TCP / UDP port                         │
   │  › [ 443 ]                                          │
-  │  Web UI port on VDS loopback                         │
+  │  Web UI port on VDS loopback                        │
   │    [ 8080 ]                                         │
-  │  The panel is reached through an SSH tunnel.        │
+  │  VMess TCP defaults to 9443                         │
   ╰─────────────────────────────────────────────────────╯
 
   ↑↓ / Tab  Move     Enter  Continue     Esc  Cancel
@@ -86,17 +88,21 @@ In the browser, create the administrator, enter the VPS public IPv4 address,
 IPv6 address, or DNS name, choose a REALITY target and SNI, and create the first
 device profile. Enter an IPv6 address without brackets or a port, for example
 `2001:db8::1`. Use a DNS name with both A and AAAA records to let clients choose
-their available address family. Choose **VLESS + REALITY** or, when enabled and
-its certificate is ready, **Hysteria 2**. The profile dialog then shows only
-that protocol's QR code and link; VLESS profiles also offer a JSON file. To
-give one device both transports, create two profiles with the same device name.
-The public port shown in the setup screen comes from `.env`; it is not edited in
-the panel. A working public inbound is created when the first device is applied.
+their available address family. Choose **VLESS + REALITY**, **VMess + TLS** when
+a valid certificate is available in Settings, or **Hysteria 2** when enabled and
+its certificate is ready. VMess does not require the Hysteria 2 inbound to be
+enabled. The profile dialog shows that protocol's QR code and link; VLESS and
+VMess profiles also offer JSON files. To give one device multiple transports,
+create a separate profile for each transport with the same device name. The
+VLESS/Hysteria public port and VMess TCP port come from `.env`; they are not
+edited in the panel. The VMess host port defaults to 9443. An inbound is created
+when the first profile for its protocol is applied.
 
 ## What is available
 
 - Protocol-specific device creation, enable/disable/revoke and profile delivery.
-  New profiles use either VLESS + REALITY or Hysteria 2, never both. Existing
+  New profiles use either VLESS + REALITY, VMess + TLS or Hysteria 2, never a
+  combination. Existing
   migrated profiles keep both transports and are marked as legacy in the list.
   Reopening a profile shows the same saved credentials; it does not rotate them.
 - VLESS profiles provide a QR code, VLESS link and JSON export. Their fingerprint
@@ -106,6 +112,17 @@ the panel. A working public inbound is created when the first device is applied.
   password in the form's Advanced section. Hysteria 2 has no client JSON export.
   Its option is available only while the inbound is running and its certificate
   is valid; the form links to Settings when it is unavailable.
+- VMess profiles provide a QR code, standard `vmess://` share link, and client
+  JSON. The inbound uses TCP + TLS on the separate `XRAY_VMESS_PORT` (9443 by
+  default), with `alterId: 0`. VMess reuses the certificate configured under
+  **Settings → Hysteria 2**, even when the Hysteria 2 transport is disabled.
+  Create or upload a certificate there before creating a VMess profile. For an
+  untrusted self-signed certificate, generated client profiles set
+  `allowInsecure`; trusted custom certificates keep verification enabled. This
+  compatibility option requires server/client clocks within about two minutes
+  and is easier to identify by traffic analysis than VLESS + REALITY or
+  Hysteria 2. It is not presented as a DPI-resistance improvement. Allow inbound
+  TCP at `XRAY_VMESS_PORT` in the VPS firewall/security group.
 - The REALITY short-ID reserve holds five free values. While IDs remain in the
   reserve, new VLESS users are added through HandlerService without restarting
   Xray. When it is exhausted, Xray's gRPC API replaces only the VLESS inbound;
@@ -145,11 +162,11 @@ the panel. A working public inbound is created when the first device is applied.
   generate a mkcert certificate, upload a trusted PEM pair, or change host/SNI
   and advanced transport options. Settings are stored in SQLite; the Hysteria
   `.env` values only seed a new installation. The private key is not sent to the
-  browser. Each change shows a preview, creates a backup and replaces only the
-  Hysteria inbound; active Hysteria connections may briefly reconnect. A host,
-  SNI, certificate or TLS-mode change can require importing the updated profile
-  link. Allow inbound UDP at `XRAY_PUBLIC_PORT` in the VPS firewall/security
-  group.
+  browser. Each change shows a preview and creates a backup. It updates only the
+  affected Hysteria 2 and/or VMess inbounds; active connections on those
+  inbounds may briefly reconnect, while VLESS stays running. A host, SNI,
+  certificate or TLS-mode change can require importing updated profile links.
+  Allow inbound UDP at `XRAY_PUBLIC_PORT` in the VPS firewall/security group.
 - Online and last-seen indicators, cumulative upload/download totals, and live
   panel updates through SSE.
 - Node settings with a preview of changes, confirmation and an automatic
@@ -167,8 +184,9 @@ the panel. A working public inbound is created when the first device is applied.
   Backups are plaintext, so protect the VPS and any copies you export.
 
 The Compose control and Xray egress networks have IPv6 enabled. Xray's public
-TCP port is published on the VPS and mapped to container port `8443`; Docker
-publishes it on IPv4 and IPv6 host addresses when the host daemon supports
+VLESS TCP port is published on the VPS and mapped to container port `8443`;
+the VMess TCP port is mapped to container port `8444`. Docker publishes them on
+IPv4 and IPv6 host addresses when the host daemon supports
 dual-stack port publishing. The panel remains mapped only to `127.0.0.1` on the
 VPS. Xray and the control plane share a private supervisor token, and their
 persistent state lives in Docker named volumes. IPv6 handling in Compose,

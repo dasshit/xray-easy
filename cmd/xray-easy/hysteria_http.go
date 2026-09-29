@@ -166,7 +166,7 @@ func (s *server) hysteriaSettingsStatus(ctx context.Context) (hysteriaSettingsRe
 	}
 	response := hysteriaSettingsResponse{
 		Enabled: settings.Enabled, State: "off", Host: host, UDPPort: s.publicPort,
-		TLSMode: settings.TLSMode, TLSServerName: effectiveHysteriaServerName(settings, serverSettings),
+		TLSMode: settings.TLSMode, TLSServerName: settings.EffectiveTLSServerName(serverSettings.PublicHost),
 		TLSCertIP: settings.TLSCertIP, CertificateID: settings.CertificateID,
 		UDPIdleTimeout: settings.UDPIdleTimeout, MasqueradeType: settings.MasqueradeType,
 		MasqueradeString: settings.MasqueradeString,
@@ -198,19 +198,6 @@ func (s *server) hysteriaSettingsStatus(ctx context.Context) (hysteriaSettingsRe
 		response.State = "ready"
 	}
 	return response, nil
-}
-
-func effectiveHysteriaServerName(settings domain.HysteriaSettings, node domain.Settings) string {
-	if settings.TLSServerName != "" {
-		return settings.TLSServerName
-	}
-	if settings.TLSMode == domain.HysteriaTLSSelfSigned && settings.TLSCertIP != "" {
-		return settings.TLSCertIP
-	}
-	if settings.Host != "" {
-		return settings.Host
-	}
-	return node.PublicHost
 }
 
 func (s *server) hysteriaSettingsPreview(w http.ResponseWriter, r *http.Request) {
@@ -256,10 +243,16 @@ func (s *server) hysteriaSettingsPreview(w http.ResponseWriter, r *http.Request)
 		}
 		candidate.Host = host
 	}
-	serverName := effectiveHysteriaServerName(candidate, node)
-	if candidate.Enabled {
+	serverName := candidate.EffectiveTLSServerName(node.PublicHost)
+	clients, err := s.store.ListClients(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list profiles"})
+		return
+	}
+	vmessExpected := vmessInboundExpected(clients)
+	if candidate.Enabled || vmessExpected {
 		if _, err := hysteria.Inspect(s.hysteriaTLSDir(), candidate.CertificateID, serverName, candidate.CertificateID == ""); err != nil {
-			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "a matching, valid TLS certificate must be installed before enabling Hysteria 2", "detail": err.Error()})
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "a matching, valid TLS certificate is required by the enabled transports", "detail": err.Error()})
 			return
 		}
 	}
@@ -273,9 +266,26 @@ func (s *server) hysteriaSettingsPreview(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create Hysteria 2 change"})
 		return
 	}
-	consequences := []string{"only the Hysteria 2 inbound will be changed; the VLESS inbound remains active", "active Hysteria 2 connections may briefly reconnect"}
+	activePath := filepath.Join(s.configDir, "active.json")
+	activeHysteria := hasInboundTag(activePath, xray.HysteriaInboundTag)
+	activeVMess := hasInboundTag(activePath, xray.VMessInboundTag)
+	changeVMessTLS := (vmessExpected || activeVMess) && (vmessCertificateChanged(base, candidate) || (!activeVMess && vmessExpected))
+	changeHysteria := activeHysteria || candidate.Enabled
+	consequences := make([]string, 0, 4)
+	if changeHysteria {
+		if changeVMessTLS {
+			consequences = append(consequences, "Hysteria 2 and VMess inbounds will be changed; the VLESS inbound remains active", "active Hysteria 2 and VMess connections may briefly reconnect")
+		} else {
+			consequences = append(consequences, "only the Hysteria 2 inbound will be changed; the VLESS inbound remains active", "active Hysteria 2 connections may briefly reconnect")
+		}
+	} else {
+		consequences = append(consequences, "Hysteria 2 remains disabled")
+	}
+	if changeVMessTLS {
+		consequences = append(consequences, "the VMess TLS certificate or server name will be updated; active VMess connections may briefly reconnect")
+	}
 	if candidate.Host != base.Host || candidate.TLSServerName != base.TLSServerName || candidate.TLSMode != base.TLSMode || candidate.CertificateID != base.CertificateID {
-		consequences = append(consequences, "existing Hysteria 2 links may need to be imported again")
+		consequences = append(consequences, "existing Hysteria 2 or VMess profiles may need to be imported again")
 	}
 	pending := pendingHysteriaChange{ID: changeID, AdminID: admin.ID, Base: base, Candidate: candidate, ExpectedConfirmation: "APPLY", Diff: diff, Consequences: consequences, ExpiresAt: time.Now().UTC().Add(10 * time.Minute)}
 	s.hysteriaMu.Lock()
@@ -298,6 +308,10 @@ func (s *server) hysteriaSettingsPreview(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, response)
 }
 
+func vmessCertificateChanged(base, candidate domain.HysteriaSettings) bool {
+	return base.CertificateID != candidate.CertificateID
+}
+
 func hysteriaSettingsDiff(base, candidate domain.HysteriaSettings, node domain.Settings) []settingsDiff {
 	values := []settingsDiff{}
 	add := func(field, from, to string) {
@@ -315,7 +329,7 @@ func hysteriaSettingsDiff(base, candidate domain.HysteriaSettings, node domain.S
 	}
 	add("host", baseHost, candidateHost)
 	add("tls_mode", base.TLSMode, candidate.TLSMode)
-	add("tls_server_name", effectiveHysteriaServerName(base, node), effectiveHysteriaServerName(candidate, node))
+	add("tls_server_name", base.EffectiveTLSServerName(node.PublicHost), candidate.EffectiveTLSServerName(node.PublicHost))
 	add("certificate", base.CertificateID, candidate.CertificateID)
 	add("udp_idle_timeout", fmt.Sprint(base.UDPIdleTimeout), fmt.Sprint(candidate.UDPIdleTimeout))
 	add("masquerade_type", base.MasqueradeType, candidate.MasqueradeType)
@@ -410,36 +424,54 @@ func (s *server) hysteriaSettingsApply(w http.ResponseWriter, r *http.Request) {
 	}
 	activePath := filepath.Join(s.configDir, "active.json")
 	oldHasInbound := hasInboundTag(activePath, xray.HysteriaInboundTag)
-	needsRuntimeChange := oldHasInbound || pending.Candidate.Enabled
+	oldHasVMessInbound := hasInboundTag(activePath, xray.VMessInboundTag)
+	vmessExpected := vmessInboundExpected(clients)
+	changeVMessTLS := (vmessExpected || oldHasVMessInbound) && (vmessCertificateChanged(current, pending.Candidate) || (!oldHasVMessInbound && vmessExpected))
+	changeHysteria := oldHasInbound || pending.Candidate.Enabled
+	runtimeTags := make([]string, 0, 2)
+	if changeHysteria {
+		runtimeTags = append(runtimeTags, xray.HysteriaInboundTag)
+	}
+	if changeVMessTLS {
+		runtimeTags = append(runtimeTags, xray.VMessInboundTag)
+	}
+	needsRuntimeChange := len(runtimeTags) > 0
 	if err := s.store.UpdateApplyOperation(r.Context(), operationID, "applying", ""); err != nil {
 		_ = os.Remove(path)
 		s.finishHysteriaChange(request.ChangeID, false)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "could not record apply operation"})
 		return
 	}
+	replacedTags := make([]string, 0, len(runtimeTags))
+	var replacer inboundReplacer
 	if needsRuntimeChange {
-		replacer, ok := s.supervisor.(inboundReplacer)
+		var ok bool
+		replacer, ok = s.supervisor.(inboundReplacer)
 		if !ok {
 			_ = os.Remove(path)
 			_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", "inbound replacement is unavailable")
 			s.finishHysteriaChange(request.ChangeID, false)
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"code": "apply_failed", "error": "Hysteria 2 inbound replacement is unavailable"})
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"code": "apply_failed", "error": "Xray inbound replacement is unavailable"})
 			return
 		}
-		if err := replacer.ReplaceInbound(r.Context(), path, activePath, xray.HysteriaInboundTag, operationID); err != nil {
-			_ = os.Remove(path)
-			_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
-			s.recordDiagnostic("error", "Hysteria 2 inbound apply failed: "+err.Error())
-			s.finishHysteriaChange(request.ChangeID, false)
-			writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": "could not update Hysteria 2 inbound; previous state was restored"})
-			return
+		for _, tag := range runtimeTags {
+			if err := replacer.ReplaceInbound(r.Context(), path, activePath, tag, operationID); err != nil {
+				for i := len(replacedTags) - 1; i >= 0; i-- {
+					_ = replacer.ReplaceInbound(r.Context(), activePath, path, replacedTags[i], operationID+"-rollback")
+				}
+				_ = os.Remove(path)
+				_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
+				s.recordDiagnostic("error", tag+" inbound apply failed: "+err.Error())
+				s.finishHysteriaChange(request.ChangeID, false)
+				writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": "could not update Xray inbound; previous state was restored"})
+				return
+			}
+			replacedTags = append(replacedTags, tag)
 		}
 	}
 	if err := s.store.UpdateHysteriaSettings(r.Context(), pending.Candidate); err != nil {
-		if needsRuntimeChange {
-			if replacer, ok := s.supervisor.(inboundReplacer); ok {
-				_ = replacer.ReplaceInbound(r.Context(), activePath, path, xray.HysteriaInboundTag, operationID+"-rollback")
-			}
+		for i := len(replacedTags) - 1; i >= 0; i-- {
+			_ = replacer.ReplaceInbound(r.Context(), activePath, path, replacedTags[i], operationID+"-rollback")
 		}
 		_ = os.Remove(path)
 		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
@@ -450,8 +482,8 @@ func (s *server) hysteriaSettingsApply(w http.ResponseWriter, r *http.Request) {
 	if needsRuntimeChange {
 		if err := os.Rename(path, activePath); err != nil {
 			_ = s.store.UpdateHysteriaSettings(r.Context(), current)
-			if replacer, ok := s.supervisor.(inboundReplacer); ok {
-				_ = replacer.ReplaceInbound(r.Context(), activePath, path, xray.HysteriaInboundTag, operationID+"-rollback")
+			for i := len(replacedTags) - 1; i >= 0; i-- {
+				_ = replacer.ReplaceInbound(r.Context(), activePath, path, replacedTags[i], operationID+"-rollback")
 			}
 			_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
 			s.finishHysteriaChange(request.ChangeID, false)
@@ -489,7 +521,7 @@ func (s *server) hysteriaPublicSettings(settings domain.HysteriaSettings, node d
 	}
 	return hysteriaSettingsResponse{
 		Enabled: settings.Enabled, State: "ready", Host: host, UDPPort: s.publicPort,
-		TLSMode: settings.TLSMode, TLSServerName: effectiveHysteriaServerName(settings, node),
+		TLSMode: settings.TLSMode, TLSServerName: settings.EffectiveTLSServerName(node.PublicHost),
 		TLSCertIP: settings.TLSCertIP, CertificateID: settings.CertificateID,
 		Certificate: certificate, UDPIdleTimeout: settings.UDPIdleTimeout,
 		MasqueradeType: settings.MasqueradeType, MasqueradeString: settings.MasqueradeString,

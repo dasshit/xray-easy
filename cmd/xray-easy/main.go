@@ -46,6 +46,7 @@ type server struct {
 	masterKey        []byte
 	configDir        string
 	publicPort       int
+	vmessPort        int
 	dataDir          string
 	maintenancePath  string
 	defaultAPIListen string
@@ -81,6 +82,12 @@ type xrayHandlerAPI interface {
 type hysteriaHandlerAPI interface {
 	AddHysteriaUser(context.Context, string, string) error
 	RemoveHysteriaUser(context.Context, string) error
+	UsersInInbound(context.Context, string) ([]string, error)
+}
+
+type vmessHandlerAPI interface {
+	AddVMessUser(context.Context, string, string) error
+	RemoveVMessUser(context.Context, string) error
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
@@ -220,6 +227,7 @@ type clientResponse struct {
 	Protocols         []string              `json:"protocols"`
 	VLESS             *clientAccessResponse `json:"vless,omitempty"`
 	Hysteria2         *clientAccessResponse `json:"hysteria2,omitempty"`
+	VMess             *clientAccessResponse `json:"vmess,omitempty"`
 	ID                string                `json:"id"`
 	Name              string                `json:"name"`
 	ClientFingerprint string                `json:"fingerprint,omitempty"`
@@ -288,6 +296,11 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		_ = db.Close()
 		return nil, nil, err
 	}
+	vmessPort, err := configuredVMessPort()
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, err
+	}
 	apiListen := envOr("XRAY_API_LISTEN", "127.0.0.1:10085")
 	statsClient := xrayapi.NewStatsClient(apiListen)
 	defer statsClient.Close()
@@ -298,6 +311,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		masterKey:        masterKey,
 		configDir:        configDir,
 		publicPort:       publicPort,
+		vmessPort:        vmessPort,
 		dataDir:          dataDir,
 		maintenancePath:  filepath.Join(dataDir, "maintenance.lock"),
 		defaultAPIListen: apiListen,
@@ -668,6 +682,29 @@ func configuredPublicPort() (int, error) {
 	port, err := strconv.Atoi(value)
 	if err != nil || port < 1 || port > 65535 {
 		return 0, errors.New("XRAY_PUBLIC_PORT must be an integer between 1 and 65535")
+	}
+	return port, nil
+}
+
+func configuredVMessPort() (int, error) {
+	value := envOr("XRAY_VMESS_PORT", "9443")
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, errors.New("XRAY_VMESS_PORT must be an integer between 1 and 65535")
+	}
+	publicPort, err := configuredPublicPort()
+	if err != nil {
+		return 0, err
+	}
+	if port == publicPort {
+		return 0, errors.New("XRAY_VMESS_PORT must differ from XRAY_PUBLIC_PORT")
+	}
+	uiPort, err := strconv.Atoi(envOr("XRAY_EASY_UI_PORT", "8080"))
+	if err != nil || uiPort < 1 || uiPort > 65535 {
+		return 0, errors.New("XRAY_EASY_UI_PORT must be an integer between 1 and 65535")
+	}
+	if port == uiPort {
+		return 0, errors.New("XRAY_VMESS_PORT must differ from XRAY_EASY_UI_PORT")
 	}
 	return port, nil
 }
@@ -1746,6 +1783,7 @@ func clientsFingerprint(clients []domain.Client) string {
 		fmt.Fprintf(&value, "%s\x00%s\x00%s\x00%s\x00%t\x00%t\x00%t\x00%t\x00%t\x00%t\n",
 			client.ID, client.Protocol, client.UUID, client.HysteriaAuth, client.Enabled, client.Revoked,
 			client.VLESSEnabled, client.VLESSRevoked, client.HysteriaEnabled, client.HysteriaRevoked)
+		fmt.Fprintf(&value, "%t\x00%t\n", client.VMessEnabled, client.VMessRevoked)
 	}
 	hash := sha256.Sum256([]byte(value.String()))
 	return hex.EncodeToString(hash[:])
@@ -1821,15 +1859,15 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	if protocol == "" {
 		protocol = domain.ProtocolVLESS
 	}
-	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless or hysteria2"})
+	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 && protocol != domain.ProtocolVMess {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless, vmess, or hysteria2"})
 		return
 	}
 	if protocol == domain.ProtocolVLESS && authValue != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "auth is only valid for Hysteria 2 profiles"})
 		return
 	}
-	if protocol == domain.ProtocolHysteria2 && fingerprint != "" {
+	if protocol != domain.ProtocolVLESS && fingerprint != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "fingerprint is only valid for VLESS profiles"})
 		return
 	}
@@ -1848,7 +1886,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]any{"code": "setup_incomplete", "error": "REALITY setup is incomplete"})
 			return
 		}
-	} else {
+	} else if protocol == domain.ProtocolHysteria2 {
 		hysteriaSettings, settingsErr := loadHysteriaSettings(r.Context(), s.store)
 		if settingsErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read Hysteria 2 settings"})
@@ -1865,6 +1903,12 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		}
 		if err := s.validateHysteriaHost(r.Context(), status.Host); err != nil {
 			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": err.Error()})
+			return
+		}
+	} else {
+		status, statusErr := s.hysteriaSettingsStatus(r.Context())
+		if statusErr != nil || status.CertificateError != "" || status.Certificate == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "a valid TLS certificate matching the VMess server name must be configured in Hysteria 2 Settings"})
 			return
 		}
 	}
@@ -1962,10 +2006,15 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 			return domain.Client{}, err
 		}
 		shortID, replaceInbound, err = s.store.CreateClientWithReservedShortID(ctx, client, client.UUID, client.Email, xray.ReservedShortIDCount, xray.NewShortID)
+	case domain.ProtocolVMess:
+		client.UUID, err = xray.NewUUID()
+		if err == nil {
+			err = s.store.CreateVMessClient(ctx, client)
+		}
 	case domain.ProtocolHysteria2:
 		err = s.store.CreateHysteriaClient(ctx, client)
 	default:
-		return domain.Client{}, errors.New("new profiles must use VLESS or Hysteria 2")
+		return domain.Client{}, errors.New("new profiles must use VLESS, VMess, or Hysteria 2")
 	}
 	if err != nil {
 		return domain.Client{}, fmt.Errorf("create client: %w", err)
@@ -1990,7 +2039,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	activePath := filepath.Join(s.configDir, "active.json")
 	usedReplace := protocol == domain.ProtocolVLESS && replaceInbound
-	fullApply, vlessReplaced, vlessAdded, hysteriaAdded := false, false, false, false
+	fullApply, vlessReplaced, vlessAdded, hysteriaAdded, vmessReplaced, vmessAdded := false, false, false, false, false, false
 	rollbackRuntime := func() {
 		if fullApply {
 			_ = s.supervisor.Apply(ctx, activePath, operationID+"-rollback")
@@ -2004,6 +2053,16 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		if hysteriaAdded {
 			if hysteria, ok := s.handler.(hysteriaHandlerAPI); ok {
 				_ = hysteria.RemoveHysteriaUser(ctx, client.Email)
+			}
+		}
+		if vmessReplaced {
+			if replacer, ok := s.supervisor.(inboundReplacer); ok {
+				_ = replacer.ReplaceInbound(ctx, activePath, path, xray.VMessInboundTag, operationID+"-rollback")
+			}
+		}
+		if vmessAdded {
+			if vmess, ok := s.handler.(vmessHandlerAPI); ok {
+				_ = vmess.RemoveVMessUser(ctx, client.Email)
 			}
 		}
 		if vlessAdded {
@@ -2053,7 +2112,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		} else {
 			vlessAdded = true
 		}
-	} else {
+	} else if protocol == domain.ProtocolHysteria2 {
 		hysteria, ok := s.handler.(hysteriaHandlerAPI)
 		if !ok {
 			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
@@ -2067,6 +2126,29 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 			fullApply = true
 		} else {
 			hysteriaAdded = true
+		}
+	} else {
+		if !hasInboundTag(activePath, xray.VMessInboundTag) {
+			replacer, ok := s.supervisor.(inboundReplacer)
+			if !ok {
+				if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+					return failCreate(err)
+				}
+				fullApply = true
+			} else if err := replacer.ReplaceInbound(ctx, path, activePath, xray.VMessInboundTag, operationID); err != nil {
+				return failCreate(err)
+			} else {
+				vmessReplaced = true
+			}
+		} else if vmess, ok := s.handler.(vmessHandlerAPI); !ok {
+			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		} else if err := vmess.AddVMessUser(ctx, client.Email, client.UUID); err != nil {
+			return failCreate(err)
+		} else {
+			vmessAdded = true
 		}
 	}
 	if err := os.Rename(path, activePath); err != nil {
@@ -2137,8 +2219,10 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 	activePath := filepath.Join(s.configDir, "active.json")
 	hysteriaChanged := stateChanged(client, next, domain.ProtocolHysteria2)
 	vlessChanged := stateChanged(client, next, domain.ProtocolVLESS)
+	vmessChanged := stateChanged(client, next, domain.ProtocolVMess)
 	vlessRevoked := client.HasVLESS() && !client.VLESSRevoked && next.VLESSRevoked
 	hysteriaEnabled := s.hysteriaEnabled(r.Context())
+	vmessInboundChanged := hasInboundTag(activePath, xray.VMessInboundTag) != hasInboundTag(path, xray.VMessInboundTag)
 	needsFullApply := !hasInboundTag(activePath, "vless-reality") || (hysteriaEnabled && !hasInboundTag(activePath, xray.HysteriaInboundTag))
 	if hysteriaChanged && hysteriaEnabled {
 		if _, ok := s.handler.(hysteriaHandlerAPI); !ok {
@@ -2148,12 +2232,17 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 	if vlessChanged && !vlessRevoked && s.handler == nil {
 		needsFullApply = true
 	}
+	if vmessChanged && !vmessInboundChanged {
+		if _, ok := s.handler.(vmessHandlerAPI); !ok {
+			needsFullApply = true
+		}
+	}
 	replacer, canReplace := s.supervisor.(inboundReplacer)
-	if vlessRevoked && !canReplace {
+	if (vlessRevoked || vmessInboundChanged) && !canReplace {
 		needsFullApply = true
 	}
 	fullApplied, vlessReplaced := false, false
-	vlessAdded, vlessRemoved, hysteriaAdded, hysteriaRemoved := false, false, false, false
+	vlessAdded, vlessRemoved, hysteriaAdded, hysteriaRemoved, vmessAdded, vmessRemoved, vmessReplaced := false, false, false, false, false, false, false
 	rollbackRuntime := func() {
 		if fullApplied {
 			if rollbackErr := s.supervisor.Apply(r.Context(), activePath, operationID+"-rollback"); rollbackErr != nil {
@@ -2164,6 +2253,11 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 		if vlessReplaced {
 			if rollbackErr := replacer.ReplaceInbound(r.Context(), activePath, path, "vless-reality", operationID+"-rollback"); rollbackErr != nil {
 				s.recordDiagnostic("error", "VLESS inbound rollback failed: "+rollbackErr.Error())
+			}
+		}
+		if vmessReplaced {
+			if rollbackErr := replacer.ReplaceInbound(r.Context(), activePath, path, xray.VMessInboundTag, operationID+"-rollback"); rollbackErr != nil {
+				s.recordDiagnostic("error", "VMess inbound rollback failed: "+rollbackErr.Error())
 			}
 		}
 		if vlessAdded {
@@ -2178,6 +2272,15 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 					_ = api.RemoveHysteriaUser(r.Context(), client.Email)
 				} else {
 					_ = api.AddHysteriaUser(r.Context(), client.Email, client.HysteriaCredential())
+				}
+			}
+		}
+		if vmessAdded || vmessRemoved {
+			if api, ok := s.handler.(vmessHandlerAPI); ok {
+				if vmessAdded {
+					_ = api.RemoveVMessUser(r.Context(), client.Email)
+				} else {
+					_ = api.AddVMessUser(r.Context(), client.Email, client.UUID)
 				}
 			}
 		}
@@ -2235,6 +2338,28 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 				vlessRemoved = true
 			}
 		}
+		if vmessInboundChanged {
+			if err := replacer.ReplaceInbound(r.Context(), path, activePath, xray.VMessInboundTag, operationID); err != nil {
+				failApply(err)
+				return
+			}
+			vmessReplaced = true
+		} else if vmessChanged {
+			api := s.handler.(vmessHandlerAPI)
+			if next.VMessCanConnect() {
+				if err := api.AddVMessUser(r.Context(), client.Email, client.UUID); err != nil {
+					failApply(err)
+					return
+				}
+				vmessAdded = true
+			} else {
+				if err := api.RemoveVMessUser(r.Context(), client.Email); err != nil {
+					failApply(err)
+					return
+				}
+				vmessRemoved = true
+			}
+		}
 	}
 	if err := s.store.SetClientProtocolStates(r.Context(), client.ID, states); err != nil {
 		failApply(err)
@@ -2253,7 +2378,7 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 func transitionClientAccesses(client domain.Client, action domain.ClientAction) (map[domain.ClientProtocol]domain.ClientState, domain.Client, error) {
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
 	next := client
-	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2} {
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess} {
 		state, err := client.AccessState(protocol)
 		if err != nil {
 			continue
@@ -2274,15 +2399,17 @@ func transitionClientAccesses(client domain.Client, action domain.ClientAction) 
 		states[protocol] = state
 		if protocol == domain.ProtocolVLESS {
 			next.VLESSEnabled, next.VLESSRevoked = state.Enabled, state.Revoked
-		} else {
+		} else if protocol == domain.ProtocolHysteria2 {
 			next.HysteriaEnabled, next.HysteriaRevoked = state.Enabled, state.Revoked
+		} else {
+			next.VMessEnabled, next.VMessRevoked = state.Enabled, state.Revoked
 		}
 	}
 	if len(states) == 0 {
 		return nil, domain.Client{}, errors.New("profile has no supported protocol access")
 	}
-	next.Enabled = (next.HasVLESS() && next.VLESSEnabled && !next.VLESSRevoked) || (next.HasHysteria2() && next.HysteriaEnabled && !next.HysteriaRevoked)
-	next.Revoked = (!next.HasVLESS() || next.VLESSRevoked) && (!next.HasHysteria2() || next.HysteriaRevoked)
+	next.Enabled = (next.HasVLESS() && next.VLESSEnabled && !next.VLESSRevoked) || (next.HasHysteria2() && next.HysteriaEnabled && !next.HysteriaRevoked) || (next.HasVMess() && next.VMessEnabled && !next.VMessRevoked)
+	next.Revoked = (!next.HasVLESS() || next.VLESSRevoked) && (!next.HasHysteria2() || next.HysteriaRevoked) && (!next.HasVMess() || next.VMessRevoked)
 	return states, next, nil
 }
 
@@ -2294,7 +2421,7 @@ func stateChanged(before, after domain.Client, protocol domain.ClientProtocol) b
 
 func previousAccessStates(client domain.Client) map[domain.ClientProtocol]domain.ClientState {
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
-	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2} {
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess} {
 		if state, err := client.AccessState(protocol); err == nil {
 			states[protocol] = state
 		}
@@ -2332,6 +2459,10 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 		if client.HasHysteria2() {
 			response.Protocols = append(response.Protocols, string(domain.ProtocolHysteria2))
 			response.Hysteria2 = &clientAccessResponse{Enabled: client.HysteriaEnabled, Revoked: client.HysteriaRevoked}
+		}
+		if client.HasVMess() {
+			response.Protocols = append(response.Protocols, string(domain.ProtocolVMess))
+			response.VMess = &clientAccessResponse{Enabled: client.VMessEnabled, Revoked: client.VMessRevoked}
 		}
 		result = append(result, response)
 	}
@@ -2402,12 +2533,16 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 	}
 	activeVLESS := make(map[string]domain.Client)
 	activeHysteria := make(map[string]domain.Client)
+	activeVMess := make(map[string]domain.Client)
 	for _, client := range clients {
 		if client.VLESSCanConnect() {
 			activeVLESS[client.Email] = client
 		}
 		if client.Hysteria2CanConnect() {
 			activeHysteria[client.Email] = client
+		}
+		if client.VMessCanConnect() {
+			activeVMess[client.Email] = client
 		}
 	}
 	runningSet := make(map[string]struct{}, len(running))
@@ -2450,6 +2585,33 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 				continue
 			}
 			if err := hysteria.AddHysteriaUser(ctx, email, client.HysteriaAuth); err != nil {
+				return err
+			}
+		}
+	}
+	if vmessInboundExpected(clients) {
+		vmess, ok := s.handler.(vmessHandlerAPI)
+		if !ok {
+			return errors.New("VMess HandlerService is unavailable")
+		}
+		users, err := vmess.UsersInInbound(ctx, xray.VMessInboundTag)
+		if err != nil {
+			return err
+		}
+		runningVMess := make(map[string]struct{}, len(users))
+		for _, email := range users {
+			runningVMess[email] = struct{}{}
+			if _, ok := activeVMess[email]; !ok {
+				if err := vmess.RemoveVMessUser(ctx, email); err != nil {
+					return err
+				}
+			}
+		}
+		for email, client := range activeVMess {
+			if _, ok := runningVMess[email]; ok {
+				continue
+			}
+			if err := vmess.AddVMessUser(ctx, email, client.UUID); err != nil {
 				return err
 			}
 		}
@@ -2518,6 +2680,7 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 	}
 	wantVLESS := make(map[string]struct{})
 	wantHysteria := make(map[string]struct{})
+	wantVMess := make(map[string]struct{})
 	for _, client := range clients {
 		if client.VLESSCanConnect() && client.UUID != "" {
 			wantVLESS[client.Email+"\x00"+client.UUID] = struct{}{}
@@ -2525,9 +2688,12 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 		if client.Hysteria2CanConnect() && client.HysteriaCredential() != "" {
 			wantHysteria[client.Email+"\x00"+client.HysteriaCredential()] = struct{}{}
 		}
+		if client.VMessCanConnect() && client.UUID != "" {
+			wantVMess[client.Email+"\x00"+client.UUID] = struct{}{}
+		}
 	}
-	var vless, hysteria []string
-	foundHysteria := false
+	var vless, hysteria, vmess []string
+	foundHysteria, foundVMess := false, false
 	for _, inbound := range config.Inbounds {
 		if inbound.Tag == "vless-reality" {
 			for _, client := range inbound.Settings.Clients {
@@ -2540,6 +2706,12 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 				hysteria = append(hysteria, user.Email+"\x00"+user.Auth)
 			}
 		}
+		if inbound.Tag == xray.VMessInboundTag {
+			foundVMess = true
+			for _, client := range inbound.Settings.Clients {
+				vmess = append(vmess, client.Email+"\x00"+client.ID)
+			}
+		}
 	}
 	if !stringSliceMatchesSet(vless, wantVLESS) {
 		return false
@@ -2549,7 +2721,19 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 			return false
 		}
 	}
+	if foundVMess != vmessInboundExpected(clients) || !stringSliceMatchesSet(vmess, wantVMess) {
+		return false
+	}
 	return true
+}
+
+func vmessInboundExpected(clients []domain.Client) bool {
+	for _, client := range clients {
+		if client.HasVMess() && !client.VMessRevoked {
+			return true
+		}
+	}
+	return false
 }
 
 func stringSliceMatchesSet(values []string, expected map[string]struct{}) bool {
@@ -2609,7 +2793,10 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 		}
 	}
 	needApply := !sameStringSet(currentSet, expectedSet)
-	if hasInboundTag(activePath, xray.HysteriaInboundTag) != s.hysteriaEnabled(ctx) {
+	vlessIDsChanged := !sameStringSet(currentSet, expectedSet)
+	hysteriaTopologyChanged := hasInboundTag(activePath, xray.HysteriaInboundTag) != s.hysteriaEnabled(ctx)
+	vmessTopologyChanged := hasInboundTag(activePath, xray.VMessInboundTag) != vmessInboundExpected(clients)
+	if hysteriaTopologyChanged || vmessTopologyChanged {
 		needApply = true
 	}
 	if !needApply {
@@ -2621,16 +2808,33 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	}
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	fullApply := false
-	if !hasInboundTag(activePath, "vless-reality") || hasInboundTag(activePath, xray.HysteriaInboundTag) != s.hysteriaEnabled(ctx) {
+	replacer, canReplace := s.supervisor.(inboundReplacer)
+	changedTags := make([]string, 0, 2)
+	if vlessIDsChanged {
+		changedTags = append(changedTags, "vless-reality")
+	}
+	if vmessTopologyChanged {
+		changedTags = append(changedTags, xray.VMessInboundTag)
+	}
+	if !hasInboundTag(activePath, "vless-reality") || hysteriaTopologyChanged || !canReplace {
 		fullApply = true
 		err = s.supervisor.Apply(ctx, path, operationID)
-	} else if replacer, ok := s.supervisor.(inboundReplacer); ok {
-		err = replacer.ReplaceInbound(ctx, path, activePath, "vless-reality", operationID)
 	} else {
-		fullApply = true
-		err = s.supervisor.Apply(ctx, path, operationID)
+		replacedTags := make([]string, 0, len(changedTags))
+		for _, tag := range changedTags {
+			if err = replacer.ReplaceInbound(ctx, path, activePath, tag, operationID); err != nil {
+				break
+			}
+			replacedTags = append(replacedTags, tag)
+		}
+		changedTags = replacedTags
 	}
 	if err != nil {
+		if !fullApply {
+			for i := len(changedTags) - 1; i >= 0; i-- {
+				_ = replacer.ReplaceInbound(ctx, activePath, path, changedTags[i], operationID+"-rollback")
+			}
+		}
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		_ = os.Remove(path)
 		return err
@@ -2638,8 +2842,10 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	if err := os.Rename(path, activePath); err != nil {
 		if fullApply {
 			_ = s.supervisor.Apply(ctx, activePath, operationID+"-rollback")
-		} else if replacer, ok := s.supervisor.(inboundReplacer); ok {
-			_ = replacer.ReplaceInbound(ctx, activePath, path, "vless-reality", operationID+"-rollback")
+		} else if canReplace {
+			for i := len(changedTags) - 1; i >= 0; i-- {
+				_ = replacer.ReplaceInbound(ctx, activePath, path, changedTags[i], operationID+"-rollback")
+			}
 		}
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		_ = os.Remove(path)
@@ -2810,6 +3016,7 @@ func rendererSettings(settings domain.Settings, privateKey string) xray.Settings
 func rendererSettingsWithHysteria(settings domain.Settings, privateKey string, hysteriaSettings domain.HysteriaSettings) xray.Settings {
 	result := xray.SettingsFromDomain(settings, privateKey)
 	xray.ApplyHysteriaSettings(&result, hysteriaSettings)
+	result.VMessPublicPort, _ = configuredVMessPort()
 	return result
 }
 
@@ -2922,7 +3129,9 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read Hysteria 2 settings"})
 		return
 	}
-	profile, err := xray.BuildProfile(rendererSettingsWithHysteria(settings, "server-secret-not-exported", hysteriaSettings), xray.ClientFromDomain(client))
+	renderSettings := rendererSettingsWithHysteria(settings, "server-secret-not-exported", hysteriaSettings)
+	renderSettings.VMessPublicPort = s.vmessPort
+	profile, err := xray.BuildProfile(renderSettings, xray.ClientFromDomain(client))
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
@@ -2933,7 +3142,7 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 	switch format {
 	case "json":
 		if len(profile.JSON) == 0 {
-			writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_format_unavailable", "error": "JSON profiles are only available for VLESS"})
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_format_unavailable", "error": "JSON profile is unavailable for this device"})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -2963,6 +3172,18 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		}
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(png)
+	case "vmess-qr":
+		if profile.VMessURI == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_format_unavailable", "error": "VMess is not available for this profile"})
+			return
+		}
+		png, err := qrcode.Encode(profile.VMessURI, qrcode.Medium, 512)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encode VMess QR"})
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(png)
 	default:
 		response := map[string]any{"client_id": client.ID, "protocol": client.Protocol, "name": profile.Name}
 		if client.Protocol == domain.ProtocolLegacyDual || client.Protocol == "" {
@@ -2982,8 +3203,13 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 			if len(profile.JSON) > 0 {
 				response["json"] = json.RawMessage(profile.JSON)
 			}
-		} else {
+		} else if client.Protocol == domain.ProtocolHysteria2 {
 			response["hysteria_uri"] = profile.HysteriaURI
+		} else if client.Protocol == domain.ProtocolVMess {
+			response["vmess_uri"] = profile.VMessURI
+			if len(profile.JSON) > 0 {
+				response["json"] = json.RawMessage(profile.JSON)
+			}
 		}
 		writeJSON(w, http.StatusOK, response)
 	}

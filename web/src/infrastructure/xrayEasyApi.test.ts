@@ -121,6 +121,27 @@ describe('Xray-easy API adapter', () => {
     })
   })
 
+  it('creates a VMess profile and validates its link, JSON export, and QR URL', async () => {
+    const vmessDto = {
+      id: 'vmess-1', name: 'macbook', protocol: 'vmess', protocols: ['vmess'],
+      vmess: { enabled: true, revoked: false }, enabled: true, revoked: false, online: false, upload_bytes: 0, download_bytes: 0,
+    }
+    const { send, calls } = requester({
+      '/api/clients': vmessDto,
+      '/api/clients/vmess-1/profile?format=uri': { client_id: 'vmess-1', protocol: 'vmess', vmess_uri: 'vmess://encoded', json: { outbound: true } },
+    })
+    const api = createXrayEasyApi(send)
+
+    await expect(api.clients.create({ name: 'macbook', protocol: 'vmess' })).resolves.toMatchObject({
+      protocol: 'vmess', protocols: ['vmess'], vmess: { enabled: true, revoked: false },
+    })
+    expect(calls[0]?.options?.body).toBe(JSON.stringify({ name: 'macbook', protocol: 'vmess' }))
+    await expect(api.clients.profile('vmess-1')).resolves.toEqual({
+      clientId: 'vmess-1', protocol: 'vmess', vmessUri: 'vmess://encoded', json: { outbound: true },
+    })
+    expect(api.clients.profileVMessQrUrl('vmess-1')).toBe('/api/clients/vmess-1/profile?format=vmess-qr')
+  })
+
   it('rejects a profile response that omits its protocol discriminator', async () => {
     const { send } = requester({
       '/api/clients/device-1/profile?format=uri': { client_id: 'device-1', uri: 'vless://id', json: {} },

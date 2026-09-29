@@ -13,7 +13,7 @@ describe('ProfileDeliveryModal', () => {
   it('shows only the Hysteria 2 URI and QR for a Hysteria profile', async () => {
     const wrapper = mount(ProfileDeliveryModal, { props: {
       profile: { clientId: client.id, protocol: 'hysteria2', hysteriaUri: 'hysteria2://secret@vpn.test:443' },
-      client, language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', jsonUrl: '/json', copiedVless: false, copiedHysteria: false,
+      client, language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr', jsonUrl: '/json', copiedVless: false, copiedHysteria: false, copiedVmess: false,
     } })
 
     expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('hysteria2://secret@vpn.test:443')
@@ -29,7 +29,7 @@ describe('ProfileDeliveryModal', () => {
     const wrapper = mount(ProfileDeliveryModal, { props: {
       profile: { clientId: client.id, protocol: 'legacy_dual', uri: 'vless://id', hysteriaUri: 'hysteria2://auth@vpn.test:443', json: { outbound: true } },
       client: { ...client, protocol: 'legacy_dual', protocols: ['vless', 'hysteria2'], vless: { enabled: true, revoked: false } },
-      language: 'ru', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', jsonUrl: '/json', copiedVless: false, copiedHysteria: false,
+      language: 'ru', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr', jsonUrl: '/json', copiedVless: false, copiedHysteria: false, copiedVmess: false,
     } })
 
     expect(wrapper.text()).toContain('Старый профиль · VLESS + Hysteria 2')
@@ -37,5 +37,22 @@ describe('ProfileDeliveryModal', () => {
     expect((wrapper.findAll('textarea')[1]?.element as HTMLTextAreaElement).value).toBe('hysteria2://auth@vpn.test:443')
     expect(wrapper.findAll('img')).toHaveLength(2)
     expect(wrapper.text()).toContain('JSON-файл')
+  })
+
+  it('shows only VMess share link, QR, and JSON export', async () => {
+    const wrapper = mount(ProfileDeliveryModal, { props: {
+      profile: { clientId: client.id, protocol: 'vmess', vmessUri: 'vmess://base64-profile', json: { outbound: true } },
+      client: { ...client, protocol: 'vmess', protocols: ['vmess'], vmess: { enabled: true, revoked: false } },
+      language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr', jsonUrl: '/json', copiedVless: false, copiedHysteria: false, copiedVmess: false,
+    } })
+
+    expect(wrapper.text()).toContain('VMess + TLS profile')
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('vmess://base64-profile')
+    expect(wrapper.find('img').attributes('src')).toBe('/vmess-qr')
+    expect(wrapper.find('a').attributes('href')).toBe('/json')
+    expect(wrapper.text()).not.toContain('VLESS URI')
+    expect(wrapper.text()).not.toContain('Hysteria 2 URI')
+    await wrapper.findAll('button').find(button => button.text().includes('Copy VMess link'))?.trigger('click')
+    expect(wrapper.emitted('copyVmess')).toHaveLength(1)
   })
 })

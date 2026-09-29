@@ -2,6 +2,7 @@ package xray
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -31,6 +32,8 @@ const (
 	ReservedShortIDCount  = 5
 	VerifiedCoreVersion   = "26.7.28"
 	HysteriaInboundTag    = "hysteria2"
+	VMessInboundTag       = "vmess-tls"
+	VMessInternalPort     = 8444
 	HysteriaTLSCertPath   = "/etc/xray/hysteria-tls/fullchain.pem"
 	HysteriaTLSKeyPath    = "/etc/xray/hysteria-tls/privkey.pem"
 	HysteriaTLSSelfSigned = "self-signed"
@@ -60,6 +63,7 @@ type Settings struct {
 	HysteriaUDPIdleTimeout   int
 	HysteriaMasqueradeType   string
 	HysteriaMasqueradeString string
+	VMessPublicPort          int
 }
 
 type Client struct {
@@ -77,12 +81,15 @@ type Client struct {
 	VLESSRevoked      bool
 	HysteriaEnabled   bool
 	HysteriaRevoked   bool
+	VMessEnabled      bool
+	VMessRevoked      bool
 }
 
 type Profile struct {
 	Protocol    domain.ClientProtocol
 	URI         string
 	HysteriaURI string
+	VMessURI    string
 	JSON        []byte
 	Name        string
 	UUID        string
@@ -196,6 +203,31 @@ type hysteriaMasquerade struct {
 	StatusCode int    `json:"statusCode,omitempty"`
 }
 
+type vmessInbound struct {
+	Listen         string               `json:"listen"`
+	Port           int                  `json:"port"`
+	Protocol       string               `json:"protocol"`
+	Tag            string               `json:"tag"`
+	Settings       vmessInboundSettings `json:"settings"`
+	StreamSettings vmessStreamSettings  `json:"streamSettings"`
+}
+
+type vmessInboundSettings struct {
+	Clients []vmessServerClient `json:"clients"`
+}
+
+type vmessServerClient struct {
+	ID      string `json:"id"`
+	AlterID int    `json:"alterId"`
+	Email   string `json:"email"`
+}
+
+type vmessStreamSettings struct {
+	Network     string              `json:"network"`
+	Security    string              `json:"security"`
+	TLSSettings hysteriaTLSSettings `json:"tlsSettings"`
+}
+
 func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	if settings.LogLevel == "" {
 		settings.LogLevel = "warning"
@@ -205,6 +237,8 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	}
 	activeVLESS := make([]Client, 0, len(clients))
 	activeHysteria := make([]Client, 0, len(clients))
+	activeVMess := make([]Client, 0, len(clients))
+	hasVMessProfile := false
 	for _, client := range clients {
 		if client.VLESSCanConnect() {
 			activeVLESS = append(activeVLESS, client)
@@ -212,9 +246,16 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		if client.Hysteria2CanConnect() {
 			activeHysteria = append(activeHysteria, client)
 		}
+		if client.HasVMess() && !client.VMessIsRevoked() {
+			hasVMessProfile = true
+			if client.VMessCanConnect() {
+				activeVMess = append(activeVMess, client)
+			}
+		}
 	}
 	sort.Slice(activeVLESS, func(i, j int) bool { return activeVLESS[i].ID < activeVLESS[j].ID })
 	sort.Slice(activeHysteria, func(i, j int) bool { return activeHysteria[i].ID < activeHysteria[j].ID })
+	sort.Slice(activeVMess, func(i, j int) bool { return activeVMess[i].ID < activeVMess[j].ID })
 	serverClients := make([]serverClient, 0, len(activeVLESS))
 	shortIDs := make([]string, 0, len(clients)+len(settings.ReservedShortIDs))
 	shortIDSet := make(map[string]struct{}, cap(shortIDs))
@@ -287,6 +328,33 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 			},
 		})
 	}
+	if hasVMessProfile {
+		if settings.VMessPublicPort < 1 || settings.VMessPublicPort > 65535 {
+			return nil, errors.New("VMess public port is not configured")
+		}
+		vmessUsers := make([]vmessServerClient, 0, len(activeVMess))
+		for _, client := range activeVMess {
+			if client.UUID == "" || client.Email == "" {
+				return nil, fmt.Errorf("client %s is missing VMess credentials", client.ID)
+			}
+			vmessUsers = append(vmessUsers, vmessServerClient{ID: client.UUID, AlterID: 0, Email: client.Email})
+		}
+		certPath, keyPath := settings.HysteriaTLSCertPath, settings.HysteriaTLSKeyPath
+		if certPath == "" {
+			certPath = HysteriaTLSCertPath
+		}
+		if keyPath == "" {
+			keyPath = HysteriaTLSKeyPath
+		}
+		inbounds = append(inbounds, vmessInbound{
+			Listen: "0.0.0.0", Port: VMessInternalPort, Protocol: "vmess", Tag: VMessInboundTag,
+			Settings: vmessInboundSettings{Clients: vmessUsers},
+			StreamSettings: vmessStreamSettings{
+				Network: "tcp", Security: "tls",
+				TLSSettings: hysteriaTLSSettings{Certificates: []hysteriaCertificate{{CertificateFile: certPath, KeyFile: keyPath}}},
+			},
+		})
+	}
 	config := serverConfig{
 		Log:       logConfig{LogLevel: settings.LogLevel},
 		API:       apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "StatsService", "LoggerService"}},
@@ -343,10 +411,46 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 			profile.HysteriaURI = BuildHysteriaURI(settings, client)
 		}
 	}
-	if profile.URI == "" && profile.HysteriaURI == "" {
+	if client.HasVMess() && !client.VMessIsRevoked() {
+		if client.UUID == "" {
+			return Profile{}, errors.New("VMess profile is unavailable")
+		}
+		if err := validateVMessProfileSettings(settings); err != nil {
+			return Profile{}, err
+		}
+		profile.VMessURI = BuildVMessURI(settings, client)
+		var err error
+		profile.JSON, err = buildVMessClientJSON(settings, client)
+		if err != nil {
+			return Profile{}, err
+		}
+	}
+	if profile.URI == "" && profile.HysteriaURI == "" && profile.VMessURI == "" {
 		return Profile{}, errors.New("client profile is unavailable")
 	}
 	return profile, nil
+}
+
+func validateVMessProfileSettings(settings Settings) error {
+	if settings.VMessPublicPort < 1 || settings.VMessPublicPort > 65535 {
+		return errors.New("VMess public port is not configured")
+	}
+	if _, err := domain.NormalizePublicHost(settings.PublicHost); err != nil {
+		return fmt.Errorf("VMess public host: %w", err)
+	}
+	if _, err := domain.NormalizePublicHost(vmessServerName(settings)); err != nil {
+		return fmt.Errorf("VMess TLS server name: %w", err)
+	}
+	return nil
+}
+
+func vmessServerName(settings Settings) string {
+	return domain.HysteriaSettings{
+		TLSMode:       settings.HysteriaTLSMode,
+		TLSCertIP:     settings.HysteriaTLSCertIP,
+		TLSServerName: settings.HysteriaTLSServerName,
+		Host:          settings.HysteriaHost,
+	}.EffectiveTLSServerName(settings.PublicHost)
 }
 
 func validateHysteriaProfileSettings(settings Settings) error {
@@ -389,6 +493,8 @@ func (c Client) HasHysteria2() bool {
 	return protocol == domain.ProtocolHysteria2 || protocol == domain.ProtocolLegacyDual
 }
 
+func (c Client) HasVMess() bool { return c.protocol() == domain.ProtocolVMess }
+
 func (c Client) VLESSCanConnect() bool {
 	if c.Protocol == "" {
 		return c.Enabled && !c.Revoked
@@ -403,6 +509,20 @@ func (c Client) Hysteria2CanConnect() bool {
 	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked
 }
 
+func (c Client) VMessCanConnect() bool {
+	if c.Protocol == "" {
+		return c.Enabled && !c.Revoked
+	}
+	return c.HasVMess() && c.VMESSEnabled() && !c.VMessIsRevoked()
+}
+
+func (c Client) VMESSEnabled() bool {
+	if c.Protocol == "" {
+		return c.Enabled
+	}
+	return c.VMessEnabled
+}
+
 func (c Client) VLESSIsRevoked() bool {
 	if c.Protocol == "" {
 		return c.Revoked
@@ -415,6 +535,13 @@ func (c Client) HysteriaIsRevoked() bool {
 		return c.Revoked
 	}
 	return c.HysteriaRevoked
+}
+
+func (c Client) VMessIsRevoked() bool {
+	if c.Protocol == "" {
+		return c.Revoked
+	}
+	return c.VMessRevoked
 }
 
 func (c Client) HysteriaCredential() string {
@@ -441,6 +568,47 @@ func BuildHysteriaURI(settings Settings, client Client) string {
 	}
 	u := &url.URL{Scheme: "hysteria2", User: url.User(client.HysteriaCredential()), Host: net.JoinHostPort(host, strconv.Itoa(settings.PublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
 	return u.String()
+}
+
+// BuildVMessURI creates a standard VMess v2 share link for one device.
+func BuildVMessURI(settings Settings, client Client) string {
+	serverName := vmessServerName(settings)
+	value := map[string]any{
+		"v": "2", "ps": client.Name, "add": settings.PublicHost,
+		"port": strconv.Itoa(settings.VMessPublicPort), "id": client.UUID,
+		"aid": "0", "scy": "auto", "net": "tcp", "type": "none",
+		"host": "", "path": "", "tls": "tls", "sni": serverName,
+	}
+	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
+		value["allowInsecure"] = true
+	}
+	data, _ := json.Marshal(value)
+	return "vmess://" + base64.StdEncoding.EncodeToString(data)
+}
+
+func buildVMessClientJSON(settings Settings, client Client) ([]byte, error) {
+	serverName := vmessServerName(settings)
+	tls := map[string]any{"serverName": serverName}
+	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
+		tls["allowInsecure"] = true
+	}
+	value := map[string]any{
+		"log":      map[string]any{"loglevel": "warning"},
+		"inbounds": []any{map[string]any{"listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": map[string]any{"udp": true}}},
+		"outbounds": []any{map[string]any{
+			"protocol":       "vmess",
+			"settings":       map[string]any{"vnext": []any{map[string]any{"address": settings.PublicHost, "port": settings.VMessPublicPort, "users": []any{map[string]any{"id": client.UUID, "alterId": 0, "security": "auto"}}}}},
+			"streamSettings": map[string]any{"network": "tcp", "security": "tls", "tlsSettings": tls},
+		}},
+	}
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 func BuildVLESSURI(settings Settings, client Client, fingerprint string) string {

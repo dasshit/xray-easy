@@ -56,6 +56,7 @@ func ClientFromDomain(value domain.Client) Client {
 		Enabled: value.Enabled, Revoked: value.Revoked,
 		VLESSEnabled: value.VLESSEnabled, VLESSRevoked: value.VLESSRevoked,
 		HysteriaEnabled: value.HysteriaEnabled, HysteriaRevoked: value.HysteriaRevoked,
+		VMessEnabled: value.VMessEnabled, VMessRevoked: value.VMessRevoked,
 	}
 }
 

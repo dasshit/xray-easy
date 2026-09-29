@@ -43,6 +43,37 @@ func createTestClient(t *testing.T, db *Store, ctx context.Context, id string) d
 	return client
 }
 
+func TestVMessProfileStoresAndTransitionsIndependentAccessState(t *testing.T) {
+	db, ctx := openTestStore(t, "vmess.db")
+	client, err := domain.NewProtocolClient("vmess-device", "macbook", domain.ProtocolVMess, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.UUID = "123e4567-e89b-42d3-a456-426614174000"
+	client.Email = "device-vmess@xray-easy"
+	if err := db.CreateVMessClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetClient(ctx, client.ID)
+	if err != nil || got.Protocol != domain.ProtocolVMess || !got.HasVMess() || !got.VMessCanConnect() || got.UUID != client.UUID || got.ShortID != "" || got.HasVLESS() || got.HasHysteria2() {
+		t.Fatalf("created VMess profile = %+v, %v", got, err)
+	}
+	if err := db.SetClientProtocolState(ctx, client.ID, domain.ProtocolVMess, domain.ClientState{Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.GetClient(ctx, client.ID)
+	if err != nil || got.VMessCanConnect() || got.VMessRevoked {
+		t.Fatalf("disabled VMess profile = %+v, %v", got, err)
+	}
+	if err := db.SetClientProtocolState(ctx, client.ID, domain.ProtocolVMess, domain.ClientState{Enabled: false, Revoked: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.GetClient(ctx, client.ID)
+	if err != nil || got.Enabled || !got.Revoked || !got.VMessRevoked || got.VMessEnabled {
+		t.Fatalf("revoked VMess profile = %+v, %v", got, err)
+	}
+}
+
 func TestMigrationSetupAndSettingsLifecycle(t *testing.T) {
 	db, ctx := openTestStore(t, "state.db")
 	if err := db.Ping(ctx); err != nil {

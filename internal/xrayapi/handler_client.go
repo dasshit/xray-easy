@@ -65,6 +65,20 @@ func (c *HandlerClient) RemoveHysteriaUser(ctx context.Context, email string) er
 	return c.alter(ctx, "hysteria2", &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
 }
 
+// AddVMessUser adds one generated UUID to the dedicated VMess TLS inbound.
+func (c *HandlerClient) AddVMessUser(ctx context.Context, email, uuid string) error {
+	account := protowire.AppendTag(nil, 1, protowire.BytesType)
+	account = protowire.AppendString(account, uuid)
+	operation := &handlercommand.AddUserOperation{User: &protocol.User{Email: email, Account: &serial.TypedMessage{Type: "xray.proxy.vmess.Account", Value: account}}}
+	return c.alter(ctx, "vmess-tls", &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
+}
+
+// RemoveVMessUser revokes a device credential from the VMess TLS inbound.
+func (c *HandlerClient) RemoveVMessUser(ctx context.Context, email string) error {
+	operation := &handlercommand.RemoveUserOperation{Email: email}
+	return c.alter(ctx, "vmess-tls", &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
+}
+
 func (c *HandlerClient) Users(ctx context.Context) ([]string, error) {
 	return c.UsersInInbound(ctx, inboundTag)
 }

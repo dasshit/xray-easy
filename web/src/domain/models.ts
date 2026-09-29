@@ -10,6 +10,8 @@ export type Client = {
   vless?: ClientProtocolAccess
   /** Access state when the profile includes a Hysteria 2 inbound. */
   hysteria2?: ClientProtocolAccess
+  /** Access state when the profile includes a VMess inbound. */
+  vmess?: ClientProtocolAccess
   /** Whether the profile is enabled in the active Xray configuration. */
   enabled: boolean
   /** Whether the profile was permanently revoked and cannot be re-enabled. */
@@ -26,7 +28,7 @@ export type Client = {
 }
 
 /** Protocols supported by a device profile, including migrated combined profiles. */
-export type ClientProtocol = 'vless' | 'hysteria2' | 'legacy_dual'
+export type ClientProtocol = 'vless' | 'vmess' | 'hysteria2' | 'legacy_dual'
 
 /** Enabled and revoked state for one protocol access. */
 export type ClientProtocolAccess = { enabled: boolean; revoked: boolean }

@@ -21,6 +21,7 @@ const clients = ref<Client[]>([])
 const selectedProfile = ref<ProfileDelivery | null>(null)
 const copiedProfile = ref(false)
 const copiedHysteria = ref(false)
+const copiedVMess = ref(false)
 const error = ref('')
 const busy = ref(false)
 const { language, t, toggleLanguage } = useI18n()
@@ -49,6 +50,10 @@ const successMessage = ref('')
 const hysteriaAvailable = computed(() => {
   const status = hysteriaStatus.value
   return status !== null && status.enabled && status.state === 'on' && (status.certificateError === undefined || status.certificateError === '')
+})
+const vmessAvailable = computed(() => {
+  const status = hysteriaStatus.value
+  return status !== null && status.certificate !== undefined && (status.certificateError === undefined || status.certificateError === '')
 })
 let events: EventSubscription | null = null
 let reconnectTimer: number | null = null
@@ -332,11 +337,11 @@ async function createDevice(input: CreateClientCommand) {
  * @param client - The device whose profile should be displayed.
  * @returns A promise that resolves after the profile has been loaded or an error is shown.
  */
-async function showProfile(client: Client) { try { copiedProfile.value = false; copiedHysteria.value = false; selectedProfile.value = await api.clients.profile(client.id) } catch (cause) { showError(cause) } }
+async function showProfile(client: Client) { try { copiedProfile.value = false; copiedHysteria.value = false; copiedVMess.value = false; selectedProfile.value = await api.clients.profile(client.id) } catch (cause) { showError(cause) } }
 /**
  * Close the profile dialog when no operation is in progress.
  */
-function closeProfile() { if (!busy.value) { selectedProfile.value = null; copiedProfile.value = false; copiedHysteria.value = false } }
+function closeProfile() { if (!busy.value) { selectedProfile.value = null; copiedProfile.value = false; copiedHysteria.value = false; copiedVMess.value = false } }
 /**
  * Find the device associated with the currently displayed profile.
  * @returns The matching device, or undefined if it is no longer in the list.
@@ -349,7 +354,9 @@ function selectedClient() { return clients.value.find(client => client.id === se
  */
 function clientProtocolLabel(client: Client) {
   if (client.protocol === 'legacy_dual') return t().legacyDual
-  return client.protocol === 'hysteria2' ? 'Hysteria 2' : 'VLESS + REALITY'
+  if (client.protocol === 'hysteria2') return 'Hysteria 2'
+  if (client.protocol === 'vmess') return 'VMess + TLS'
+  return 'VLESS + REALITY'
 }
 /**
  * Describe protocol access separately from observed online traffic.
@@ -359,22 +366,34 @@ function clientProtocolLabel(client: Client) {
 function clientAccessSummary(client: Client) {
   const state = (access?: { enabled: boolean; revoked: boolean }) => access?.revoked === true ? t().revoked : access?.enabled === true ? t().enabled : t().disabled
   if (client.protocol === 'legacy_dual') return `VLESS: ${state(client.vless)} · Hysteria 2: ${state(client.hysteria2)}`
-  return state(client.protocol === 'hysteria2' ? client.hysteria2 : client.vless)
+  if (client.protocol === 'hysteria2') return state(client.hysteria2)
+  if (client.protocol === 'vmess') return state(client.vmess)
+  return state(client.vless)
 }
 /**
  * Copy the selected VLESS URI to the clipboard and report the result.
  */
 async function copyProfileUri() {
-  const uri = selectedProfile.value && selectedProfile.value.protocol !== 'hysteria2' ? selectedProfile.value.uri : undefined
+  const profile = selectedProfile.value
+  const uri = profile && (profile.protocol === 'vless' || profile.protocol === 'legacy_dual') ? profile.uri : undefined
   if (uri === undefined || uri === '') return
   try { await navigator.clipboard.writeText(uri); copiedProfile.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedProfile.value = false }, 2200) }
   catch (cause) { showError(cause) }
 }
 /** Copy the Hysteria 2 URI and report the result. */
 async function copyHysteriaUri() {
-  const uri = selectedProfile.value && selectedProfile.value.protocol !== 'vless' ? selectedProfile.value.hysteriaUri : undefined
+  const profile = selectedProfile.value
+  const uri = profile && (profile.protocol === 'hysteria2' || profile.protocol === 'legacy_dual') ? profile.hysteriaUri : undefined
   if (uri === undefined || uri === '') return
   try { await navigator.clipboard.writeText(uri); copiedHysteria.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedHysteria.value = false }, 2200) }
+  catch (cause) { showError(cause) }
+}
+/** Copy the VMess share link and report the result. */
+async function copyVMessUri() {
+  const profile = selectedProfile.value
+  const uri = profile?.protocol === 'vmess' ? profile.vmessUri : undefined
+  if (uri === undefined || uri === '') return
+  try { await navigator.clipboard.writeText(uri); copiedVMess.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedVMess.value = false }, 2200) }
   catch (cause) { showError(cause) }
 }
 /**
@@ -565,9 +584,9 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         </div>
       </section>
 
-      <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
+      <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" :vmess-available="vmessAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
       <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
-      <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" />
+      <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :vmess-qr-url="api.clients.profileVMessQrUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" :copied-vmess="copiedVMess" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" @copy-vmess="copyVMessUri" />
       <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
     </section>
   </main>

@@ -31,3 +31,44 @@ func TestHysteriaSettingsValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestHysteriaSettingsEffectiveTLSServerName(t *testing.T) {
+	tests := []struct {
+		name     string
+		settings HysteriaSettings
+		public   string
+		want     string
+	}{
+		{
+			name:     "explicit server name",
+			settings: HysteriaSettings{TLSServerName: "tls.example.net", Host: "proxy.example.net", TLSMode: HysteriaTLSSelfSigned, TLSCertIP: "203.0.113.4"},
+			public:   "node.example.net",
+			want:     "tls.example.net",
+		},
+		{
+			name:     "self-signed certificate address",
+			settings: HysteriaSettings{TLSMode: HysteriaTLSSelfSigned, TLSCertIP: "203.0.113.4", Host: "proxy.example.net"},
+			public:   "node.example.net",
+			want:     "203.0.113.4",
+		},
+		{
+			name:     "configured host",
+			settings: HysteriaSettings{Host: "proxy.example.net"},
+			public:   "node.example.net",
+			want:     "proxy.example.net",
+		},
+		{
+			name:     "node public host fallback",
+			settings: HysteriaSettings{},
+			public:   "node.example.net",
+			want:     "node.example.net",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := test.settings.EffectiveTLSServerName(test.public); got != test.want {
+				t.Fatalf("EffectiveTLSServerName() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}

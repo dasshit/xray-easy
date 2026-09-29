@@ -21,7 +21,7 @@ export const AdminDtoSchema = z.object({
 export type AdminDto = z.infer<typeof AdminDtoSchema>
 
 /** Runtime validator for the protocol variants accepted from the server. */
-export const ClientProtocolDtoSchema = z.enum(['vless', 'hysteria2', 'legacy_dual'])
+export const ClientProtocolDtoSchema = z.enum(['vless', 'vmess', 'hysteria2', 'legacy_dual'])
 /** Wire-format protocol access state. */
 export const ClientProtocolAccessDtoSchema = z.object({ enabled: z.boolean(), revoked: z.boolean() })
 
@@ -33,6 +33,7 @@ export const ClientDtoSchema = z.object({
   protocols: z.array(ClientProtocolDtoSchema),
   vless: ClientProtocolAccessDtoSchema.optional(),
   hysteria2: ClientProtocolAccessDtoSchema.optional(),
+  vmess: ClientProtocolAccessDtoSchema.optional(),
   enabled: z.boolean(),
   revoked: z.boolean(),
   fingerprint: z.string().optional(),
@@ -78,6 +79,10 @@ const VLESSProfileDeliveryDtoSchema = z.object({
 const HysteriaProfileDeliveryDtoSchema = z.object({
   client_id: z.string(), protocol: z.literal('hysteria2'), hysteria_uri: z.string(),
 })
+/** Runtime validator for VMess profile delivery. */
+const VMessProfileDeliveryDtoSchema = z.object({
+  client_id: z.string(), protocol: z.literal('vmess'), vmess_uri: z.string(), json: z.json(),
+})
 /** Runtime validator for migrated combined profiles; revoked protocols may be omitted. */
 const LegacyProfileDeliveryDtoSchema = z.object({
   client_id: z.string(), protocol: z.literal('legacy_dual'), uri: z.string().optional(),
@@ -86,6 +91,7 @@ const LegacyProfileDeliveryDtoSchema = z.object({
 /** Runtime validator for a protocol-discriminated profile delivery response. */
 export const ProfileDeliveryDtoSchema = z.discriminatedUnion('protocol', [
   VLESSProfileDeliveryDtoSchema, HysteriaProfileDeliveryDtoSchema, LegacyProfileDeliveryDtoSchema,
+  VMessProfileDeliveryDtoSchema,
 ])
 /** Wire-format type inferred from {@link ProfileDeliveryDtoSchema}. */
 export type ProfileDeliveryDto = z.infer<typeof ProfileDeliveryDtoSchema>

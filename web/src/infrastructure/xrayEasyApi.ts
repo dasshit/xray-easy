@@ -86,6 +86,7 @@ function mapClient(dto: ClientDto): Client {
     protocols: dto.protocols,
     ...(dto.vless === undefined ? {} : { vless: dto.vless }),
     ...(dto.hysteria2 === undefined ? {} : { hysteria2: dto.hysteria2 }),
+    ...(dto.vmess === undefined ? {} : { vmess: dto.vmess }),
     enabled: dto.enabled,
     revoked: dto.revoked,
     online: dto.online,
@@ -323,6 +324,7 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
         const dto = await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/profile?format=uri`, ProfileDeliveryDtoSchema)
         if (dto.protocol === 'vless') return { clientId: dto.client_id, protocol: dto.protocol, uri: dto.uri, json: dto.json }
         if (dto.protocol === 'hysteria2') return { clientId: dto.client_id, protocol: dto.protocol, hysteriaUri: dto.hysteria_uri }
+        if (dto.protocol === 'vmess') return { clientId: dto.client_id, protocol: dto.protocol, vmessUri: dto.vmess_uri, json: dto.json }
         return {
           clientId: dto.client_id, protocol: dto.protocol,
           ...(dto.uri === undefined ? {} : { uri: dto.uri }),
@@ -335,6 +337,7 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
       ),
       profileQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=qr`,
       profileHysteriaQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=hysteria-qr`,
+      profileVMessQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=vmess-qr`,
       profileJsonUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=json`,
     },
     settings: {

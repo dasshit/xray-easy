@@ -14,6 +14,7 @@ func setBootstrapEnv(t *testing.T, root string) {
 	t.Setenv("XRAY_EASY_CONFIG_DIR", filepath.Join(root, "xray"))
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
 	t.Setenv("XRAY_PUBLIC_PORT", "8443")
+	t.Setenv("XRAY_VMESS_PORT", "9443")
 	t.Setenv("XRAY_API_LISTEN", "127.0.0.1:10100")
 	t.Setenv("XRAY_SUPERVISOR_URL", "http://supervisor.test:10086")
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", "/tmp/supervisor.token")
@@ -28,7 +29,7 @@ func TestInitializeControlPlaneBuildsConfiguredDependenciesAndCleanup(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.store == nil || len(s.masterKey) != 32 || s.configDir != filepath.Join(root, "xray") || s.publicPort != 8443 || s.dataDir != filepath.Join(root, "data") || s.maintenancePath != filepath.Join(root, "data", "maintenance.lock") || s.defaultAPIListen != "127.0.0.1:10100" || s.stats == nil || s.supervisor == nil || s.handler == nil {
+	if s.store == nil || len(s.masterKey) != 32 || s.configDir != filepath.Join(root, "xray") || s.publicPort != 8443 || s.vmessPort != 9443 || s.dataDir != filepath.Join(root, "data") || s.maintenancePath != filepath.Join(root, "data", "maintenance.lock") || s.defaultAPIListen != "127.0.0.1:10100" || s.stats == nil || s.supervisor == nil || s.handler == nil {
 		t.Fatalf("initialized control plane dependencies incomplete: %+v", s)
 	}
 	if info, err := os.Stat(filepath.Join(root, "xray", "candidates")); err != nil || !info.IsDir() {

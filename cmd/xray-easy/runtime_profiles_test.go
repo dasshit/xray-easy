@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"testing"
 
 	"xray-easy/internal/domain"
+	"xray-easy/internal/xray"
 )
 
 type recordingInboundReplacer struct {
@@ -39,6 +41,46 @@ type recordingHysteriaHandler struct {
 	addErr    error
 	removeErr error
 	afterAdd  func()
+}
+
+type recordingVMessHandler struct {
+	*fakeXrayHandler
+	users     []string
+	added     []string
+	removed   []string
+	listErr   error
+	addErr    error
+	removeErr error
+}
+
+func (h *recordingVMessHandler) AddVMessUser(_ context.Context, email, _ string) error {
+	h.added = append(h.added, email)
+	if h.addErr != nil {
+		return h.addErr
+	}
+	h.users = append(h.users, email)
+	return nil
+}
+
+func (h *recordingVMessHandler) RemoveVMessUser(_ context.Context, email string) error {
+	h.removed = append(h.removed, email)
+	if h.removeErr != nil {
+		return h.removeErr
+	}
+	for i, value := range h.users {
+		if value == email {
+			h.users = append(h.users[:i], h.users[i+1:]...)
+			break
+		}
+	}
+	return nil
+}
+
+func (h *recordingVMessHandler) UsersInInbound(_ context.Context, tag string) ([]string, error) {
+	if tag != xray.VMessInboundTag {
+		return nil, fmt.Errorf("unexpected inbound tag %q", tag)
+	}
+	return append([]string(nil), h.users...), h.listErr
 }
 
 func (h *recordingHysteriaHandler) AddHysteriaUser(_ context.Context, email, _ string) error {
@@ -93,6 +135,20 @@ func createRuntimeHysteriaClient(t *testing.T, app testApp, name string) domain.
 	response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolHysteria2), Name: name}, true)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create Hysteria 2 profile %s: %d %s", name, response.Code, response.Body.String())
+	}
+	created := decodeResponse[clientResponse](t, response)
+	client, err := app.server.store.GetClient(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func createRuntimeVMessClient(t *testing.T, app testApp, name string) domain.Client {
+	t.Helper()
+	response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolVMess), Name: name}, true)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create VMess profile %s: %d %s", name, response.Code, response.Body.String())
 	}
 	created := decodeResponse[clientResponse](t, response)
 	client, err := app.server.store.GetClient(t.Context(), created.ID)
@@ -207,6 +263,90 @@ func TestHysteriaProfileDeliveryAndLiveUserRollback(t *testing.T) {
 	}
 	if len(app.handler.users) != 0 || len(handler.users) != 1 || handler.users[0] != second.Email {
 		t.Fatalf("failed Hysteria creation changed runtime users: Hysteria=%v VLESS=%v", handler.users, app.handler.users)
+	}
+}
+
+func TestVMessProfilesUseCertificateAndLiveUserLifecycle(t *testing.T) {
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "custom")
+	t.Setenv("XRAY_HYSTERIA2_TLS_SERVER_NAME", "cert.example.test")
+	app := newTestApp(t, true)
+	handler := &recordingVMessHandler{fakeXrayHandler: app.handler}
+	app.server.handler = handler
+	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
+	app.server.supervisor = replacer
+
+	first := createRuntimeVMessClient(t, app, "macbook")
+	if first.UUID == "" || first.ShortID != "" || !first.VMessCanConnect() || len(app.sup.applyCalls) != 1 || len(replacer.calls) != 0 || len(handler.added) != 0 || !hasInboundTag(filepath.Join(app.server.configDir, "active.json"), xray.VMessInboundTag) {
+		t.Fatalf("first VMess profile lifecycle: client=%+v apply=%v replace=%v AddUser=%v", first, app.sup.applyCalls, replacer.calls, handler.added)
+	}
+	second := createRuntimeVMessClient(t, app, "iphone")
+	if len(handler.added) != 1 || handler.added[0] != second.Email || len(app.handler.addCall) != 0 {
+		t.Fatalf("subsequent VMess profile did not use its live inbound: VMess=%v VLESS=%v", handler.added, app.handler.addCall)
+	}
+
+	profile := requestJSON(t, app, http.MethodGet, "/api/clients/"+second.ID+"/profile", nil, true)
+	if profile.Code != http.StatusOK || !strings.Contains(profile.Body.String(), `"protocol":"vmess"`) || !strings.Contains(profile.Body.String(), `"vmess_uri":"vmess://`) || strings.Contains(profile.Body.String(), `"uri":`) {
+		t.Fatalf("VMess profile response = %d %s", profile.Code, profile.Body.String())
+	}
+	var delivery struct {
+		VMessURI string `json:"vmess_uri"`
+	}
+	if err := json.Unmarshal(profile.Body.Bytes(), &delivery); err != nil {
+		t.Fatal(err)
+	}
+	encoded := strings.TrimPrefix(delivery.VMessURI, "vmess://")
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode VMess share link: %v", err)
+	}
+	var share struct {
+		Address string `json:"add"`
+		Port    string `json:"port"`
+		ID      string `json:"id"`
+		SNI     string `json:"sni"`
+		TLS     string `json:"tls"`
+	}
+	if err := json.Unmarshal(decoded, &share); err != nil || share.Address != "vpn.example.test" || share.Port != "9443" || share.ID != second.UUID || share.SNI != "cert.example.test" || share.TLS != "tls" {
+		t.Fatalf("VMess share fields = %+v, err=%v", share, err)
+	}
+	jsonProfile := requestJSON(t, app, http.MethodGet, "/api/clients/"+second.ID+"/profile?format=json", nil, true)
+	if jsonProfile.Code != http.StatusOK || !strings.Contains(jsonProfile.Body.String(), `"protocol": "vmess"`) || !strings.Contains(jsonProfile.Body.String(), `"serverName": "cert.example.test"`) {
+		t.Fatalf("VMess JSON profile = %d %s", jsonProfile.Code, jsonProfile.Body.String())
+	}
+	qr := requestJSON(t, app, http.MethodGet, "/api/clients/"+second.ID+"/profile?format=vmess-qr", nil, true)
+	if qr.Code != http.StatusOK || qr.Header().Get("Content-Type") != "image/png" || qr.Body.Len() < 8 {
+		t.Fatalf("VMess QR response = %d %v", qr.Code, qr.Header())
+	}
+
+	disabled := requestJSON(t, app, http.MethodPost, "/api/clients/"+second.ID+"/disable", nil, true)
+	if disabled.Code != http.StatusOK || len(handler.removed) != 1 || handler.removed[0] != second.Email {
+		t.Fatalf("VMess disable = %d removals=%v body=%s", disabled.Code, handler.removed, disabled.Body.String())
+	}
+	enabled := requestJSON(t, app, http.MethodPost, "/api/clients/"+second.ID+"/enable", nil, true)
+	if enabled.Code != http.StatusOK || len(handler.added) != 2 || handler.added[1] != second.Email {
+		t.Fatalf("VMess enable = %d additions=%v body=%s", enabled.Code, handler.added, enabled.Body.String())
+	}
+	revoked := requestJSON(t, app, http.MethodPost, "/api/clients/"+second.ID+"/revoke", nil, true)
+	if revoked.Code != http.StatusOK || len(handler.removed) != 2 || handler.removed[1] != second.Email {
+		t.Fatalf("VMess revoke = %d removals=%v body=%s", revoked.Code, handler.removed, revoked.Body.String())
+	}
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients/"+second.ID+"/enable", nil, true).Code; got != http.StatusConflict {
+		t.Fatalf("enable revoked VMess profile = %d", got)
+	}
+}
+
+func TestVMessCreationRequiresAValidSharedTLSCertificate(t *testing.T) {
+	app := newTestApp(t, true)
+	if err := os.Remove(filepath.Join(app.server.dataDir, "hysteria-tls", "fullchain.pem")); err != nil {
+		t.Fatal(err)
+	}
+	response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolVMess), Name: "macbook"}, true)
+	if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), `"code":"certificate_not_ready"`) {
+		t.Fatalf("VMess profile without certificate = %d %s", response.Code, response.Body.String())
+	}
+	clients, err := app.server.store.ListClients(t.Context())
+	if err != nil || len(clients) != 0 {
+		t.Fatalf("certificate validation persisted profiles: %v, %v", clients, err)
 	}
 }
 

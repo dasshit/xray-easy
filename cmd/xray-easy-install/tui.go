@@ -706,17 +706,18 @@ func (w *wizard) renderLocked() {
 				put(14, panelLine("  "+fieldText(w.hysteriaFields[2], "required", w.focus == 2), panelWidth), fieldStyle(w.focus == 2))
 				put(16, panelLine("  A custom certificate keeps TLS verification enabled.", panelWidth), "dim")
 			default:
-				put(10, panelLine("  Public Xray TCP port", panelWidth), "normal")
+				put(10, panelLine("  Public Xray TCP / UDP port", panelWidth), "normal")
 				put(11, panelLine("  "+fieldText(w.fields[0], "443", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))
 				put(13, panelLine("  Web UI port on VDS loopback", panelWidth), "normal")
 				put(14, panelLine("  "+fieldText(w.fields[1], "8080", w.focus == 1), panelWidth), fieldStyle(w.focus == 1))
-				put(16, panelLine("  The panel is reached through an SSH tunnel.", panelWidth), "dim")
+				put(16, panelLine("  VMess TCP defaults to 9443; edit XRAY_VMESS_PORT in .env", panelWidth), "dim")
 			}
 		case 3:
 			put(9, panelLine("  Xray version:       "+w.config.version, panelWidth), "normal")
-			put(10, panelLine(fmt.Sprintf("  Public TCP port:    %d", w.config.public), panelWidth), "normal")
-			put(11, panelLine(fmt.Sprintf("  Web UI:             127.0.0.1:%d", w.config.ui), panelWidth), "normal")
-			put(12, panelLine("  Compose project:    "+w.config.project, panelWidth), "normal")
+			put(10, panelLine(fmt.Sprintf("  VLESS TCP/UDP:      %d", w.config.public), panelWidth), "normal")
+			put(11, panelLine(fmt.Sprintf("  VMess TCP:          %d", w.config.vmess), panelWidth), "normal")
+			put(12, panelLine(fmt.Sprintf("  Web UI:             127.0.0.1:%d", w.config.ui), panelWidth), "normal")
+			put(13, panelLine("  Compose project:    "+w.config.project, panelWidth), "normal")
 			hysteriaDescription := "off"
 			if w.config.hysteriaEnabled {
 				hysteriaDescription = w.config.hysteriaMode
@@ -724,12 +725,9 @@ func (w *wizard) renderLocked() {
 					hysteriaDescription += " for " + w.config.hysteriaCertIP
 				}
 			}
-			put(13, panelLine("  Hysteria 2 TLS:     "+hysteriaDescription, panelWidth), "normal")
-			put(14, panelLine("  "+optionText("Build and start", w.choice), panelWidth), fieldStyle(w.choice))
-			put(15, panelLine("  "+optionText("Cancel", !w.choice), panelWidth), fieldStyle(!w.choice))
-			if w.choiceRaw != "" {
-				put(16, panelLine("  Keyboard answer: "+w.choiceRaw, panelWidth), "dim")
-			}
+			put(14, panelLine("  Hysteria 2 TLS:     "+hysteriaDescription, panelWidth), "normal")
+			put(15, panelLine("  "+optionText("Build and start", w.choice), panelWidth), fieldStyle(w.choice))
+			put(16, panelLine("  "+optionText("Cancel", !w.choice), panelWidth), fieldStyle(!w.choice))
 		case 4:
 			put(9, panelLine("  Docker Compose output", panelWidth), "normal")
 			available := max(0, panelBottom-10)

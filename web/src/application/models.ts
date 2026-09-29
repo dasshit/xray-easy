@@ -135,6 +135,14 @@ export type HysteriaProfileDelivery = {
   hysteriaUri: string
 }
 
+/** Authenticated VMess delivery with a standard share link, QR endpoint, and client JSON configuration. */
+export type VMessProfileDelivery = {
+  clientId: string
+  protocol: 'vmess'
+  vmessUri: string
+  json: unknown
+}
+
 /** Existing combined profile, retained for compatibility with migrated records. */
 export type LegacyProfileDelivery = {
   clientId: string
@@ -145,7 +153,7 @@ export type LegacyProfileDelivery = {
 }
 
 /** Delivery payload discriminated by the protocol credentials on the profile. */
-export type ProfileDelivery = VLESSProfileDelivery | HysteriaProfileDelivery | LegacyProfileDelivery
+export type ProfileDelivery = VLESSProfileDelivery | VMessProfileDelivery | HysteriaProfileDelivery | LegacyProfileDelivery
 
 /** Proposed server settings submitted for preview before applying changes. */
 export type SettingsPreviewCommand = {

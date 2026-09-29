@@ -1,8 +1,10 @@
 package xray
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/url"
+	"strings"
 	"testing"
 
 	"xray-easy/internal/domain"
@@ -196,6 +198,95 @@ func TestProtocolSpecificProfilesDeliverOnlyTheirOwnCredentials(t *testing.T) {
 	}
 	if vlessProfile.URI == "" || vlessProfile.HysteriaURI != "" || len(vlessProfile.JSON) == 0 {
 		t.Fatalf("VLESS-only profile included another protocol: %+v", vlessProfile)
+	}
+}
+
+func TestVMessTLSProfileProducesStandardShareLinkAndClientJSON(t *testing.T) {
+	settings := validTestSettings()
+	settings.VMessPublicPort = 9443
+	settings.HysteriaTLSMode = HysteriaTLSCustom
+	settings.HysteriaTLSServerName = "vpn.example.com"
+	settings.HysteriaTLSCertPath = "/etc/xray/hysteria-tls/test/fullchain.pem"
+	settings.HysteriaTLSKeyPath = "/etc/xray/hysteria-tls/test/privkey.pem"
+	client := Client{
+		ID: "vmess-device", Name: "MacBook", Protocol: domain.ProtocolVMess,
+		UUID: "123e4567-e89b-42d3-a456-426614174000", Email: "vmess-device@xray-easy",
+		Enabled: true, VMessEnabled: true,
+	}
+
+	profile, err := BuildProfile(settings, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.URI != "" || profile.HysteriaURI != "" || profile.VMessURI == "" || len(profile.JSON) == 0 {
+		t.Fatalf("unexpected VMess-only delivery: %+v", profile)
+	}
+	encoded := strings.TrimPrefix(profile.VMessURI, "vmess://")
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var share struct {
+		Version       string `json:"v"`
+		Name          string `json:"ps"`
+		Address       string `json:"add"`
+		Port          string `json:"port"`
+		UUID          string `json:"id"`
+		AlterID       string `json:"aid"`
+		Network       string `json:"net"`
+		TLS           string `json:"tls"`
+		SNI           string `json:"sni"`
+		AllowInsecure bool   `json:"allowInsecure"`
+	}
+	if err := json.Unmarshal(decoded, &share); err != nil {
+		t.Fatal(err)
+	}
+	if share.Version != "2" || share.Name != client.Name || share.Address != settings.PublicHost || share.Port != "9443" || share.UUID != client.UUID || share.AlterID != "0" || share.Network != "tcp" || share.TLS != "tls" || share.SNI != "vpn.example.com" || share.AllowInsecure {
+		t.Fatalf("VMess share JSON = %+v", share)
+	}
+	var clientConfig struct {
+		Outbounds []struct {
+			Protocol string `json:"protocol"`
+			Settings struct {
+				VNext []struct {
+					Address string `json:"address"`
+					Port    int    `json:"port"`
+					Users   []struct {
+						ID      string `json:"id"`
+						AlterID int    `json:"alterId"`
+					} `json:"users"`
+				} `json:"vnext"`
+			} `json:"settings"`
+			StreamSettings struct {
+				Security    string `json:"security"`
+				TLSSettings struct {
+					ServerName    string `json:"serverName"`
+					AllowInsecure bool   `json:"allowInsecure"`
+				} `json:"tlsSettings"`
+			} `json:"streamSettings"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(profile.JSON, &clientConfig); err != nil {
+		t.Fatal(err)
+	}
+	server := clientConfig.Outbounds[0]
+	endpoint := server.Settings.VNext[0]
+	user := endpoint.Users[0]
+	if server.Protocol != "vmess" || endpoint.Address != settings.PublicHost || endpoint.Port != 9443 || user.ID != client.UUID || user.AlterID != 0 || server.StreamSettings.Security != "tls" || server.StreamSettings.TLSSettings.ServerName != "vpn.example.com" || server.StreamSettings.TLSSettings.AllowInsecure {
+		t.Fatalf("VMess client config does not match profile: %+v", server)
+	}
+
+	settings.HysteriaTLSMode = HysteriaTLSSelfSigned
+	profile, err = BuildProfile(settings, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err = base64.StdEncoding.DecodeString(strings.TrimPrefix(profile.VMessURI, "vmess://"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(decoded, &share); err != nil || !share.AllowInsecure {
+		t.Fatalf("self-signed VMess link did not set allowInsecure: %+v, %v", share, err)
 	}
 }
 

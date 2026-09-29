@@ -12,15 +12,18 @@ const props = defineProps<{
   language: UILanguage
   vlessQrUrl: string
   hysteriaQrUrl: string
+  vmessQrUrl: string
   jsonUrl: string
   copiedVless: boolean
   copiedHysteria: boolean
+  copiedVmess: boolean
 }>()
-const emit = defineEmits<{ close: []; copyVless: []; copyHysteria: [] }>()
+const emit = defineEmits<{ close: []; copyVless: []; copyHysteria: []; copyVmess: [] }>()
 const text = computed(() => translations[props.language])
-const vlessUri = computed(() => props.profile.protocol === 'hysteria2' ? undefined : props.profile.uri)
-const hysteriaUri = computed(() => props.profile.protocol === 'vless' ? undefined : props.profile.hysteriaUri)
-const hasJsonProfile = computed(() => props.profile.protocol === 'vless' || (props.profile.protocol === 'legacy_dual' && props.profile.json !== undefined))
+const vlessUri = computed(() => props.profile.protocol === 'vless' || props.profile.protocol === 'legacy_dual' ? props.profile.uri : undefined)
+const hysteriaUri = computed(() => props.profile.protocol === 'hysteria2' || props.profile.protocol === 'legacy_dual' ? props.profile.hysteriaUri : undefined)
+const vmessUri = computed(() => props.profile.protocol === 'vmess' ? props.profile.vmessUri : undefined)
+const hasJsonProfile = computed(() => props.profile.protocol === 'vless' || props.profile.protocol === 'vmess' || (props.profile.protocol === 'legacy_dual' && props.profile.json !== undefined))
 
 /**
  * Return the display label for a legacy or protocol-specific profile.
@@ -28,7 +31,9 @@ const hasJsonProfile = computed(() => props.profile.protocol === 'vless' || (pro
  */
 function profileLabel(): string {
   if (props.profile.protocol === 'legacy_dual') return text.value.legacyDual
-  return props.profile.protocol === 'hysteria2' ? text.value.hysteria2Profile : 'VLESS + REALITY'
+  if (props.profile.protocol === 'hysteria2') return text.value.hysteria2Profile
+  if (props.profile.protocol === 'vmess') return text.value.vmessProfile
+  return 'VLESS + REALITY'
 }
 </script>
 
@@ -59,6 +64,15 @@ function profileLabel(): string {
           <label>{{ text.hysteria2Uri }}<textarea readonly :value="hysteriaUri"></textarea></label>
           <button class="secondary copy-button" type="button" @click="emit('copyHysteria')"><span aria-hidden="true">⧉</span>{{ copiedHysteria ? text.copied : text.copyHysteria2 }}</button>
           <p class="hint">{{ text.hysteria2Help }}</p>
+        </div>
+      </div>
+      <div v-if="vmessUri" class="profile-delivery hysteria-delivery">
+        <div class="qr-panel"><span class="qr-label">{{ text.vmessProfile }}</span><img class="qr" :src="vmessQrUrl" :alt="text.qr" /></div>
+        <div class="profile-link-panel">
+          <label>{{ text.vmessUri }}<textarea readonly :value="vmessUri"></textarea></label>
+          <button class="secondary copy-button" type="button" @click="emit('copyVmess')"><span aria-hidden="true">⧉</span>{{ copiedVmess ? text.copied : text.copyVMess }}</button>
+          <a v-if="hasJsonProfile" class="download-link" :href="jsonUrl"><span aria-hidden="true">↓</span>{{ text.jsonFile }}</a>
+          <p class="hint">{{ text.profileCreateSummaryVMess }}</p>
         </div>
       </div>
     </div>

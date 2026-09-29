@@ -125,11 +125,23 @@ func TestInvalidPortsAreReprompted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if values["XRAY_PUBLIC_PORT"] != "4443" || values["XRAY_EASY_UI_PORT"] != "8080" {
+	if values["XRAY_PUBLIC_PORT"] != "4443" || values["XRAY_VMESS_PORT"] != "9443" || values["XRAY_EASY_UI_PORT"] != "8080" {
 		t.Fatalf("ports were not saved: %#v", values)
 	}
 	if !strings.Contains(output.String(), "Choose a different Web UI port") {
 		t.Fatal("matching host ports were not explained")
+	}
+}
+
+func TestDefaultVMessPortAvoidsInstallerPortSelections(t *testing.T) {
+	if got := defaultVMessPort(443, 8080); got != 9443 {
+		t.Fatalf("default VMess port = %d, want 9443", got)
+	}
+	if got := defaultVMessPort(9443, 8080); got != 9444 {
+		t.Fatalf("VMess port collides with public port: %d", got)
+	}
+	if got := defaultVMessPort(443, 9443); got != 9444 {
+		t.Fatalf("VMess port collides with Web UI port: %d", got)
 	}
 }
 

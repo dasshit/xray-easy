@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"xray-easy/internal/domain"
+	"xray-easy/internal/xray"
 )
 
 func TestHysteriaSettingsStatusAndPreviewRequireAuthenticationAndCertificate(t *testing.T) {
@@ -73,6 +74,61 @@ func TestHysteriaSettingsPreviewAndApplyPersistsDisabledNodeSettings(t *testing.
 	}
 	if len(app.sup.applyCalls) != 0 {
 		t.Fatalf("disabled transport settings restarted Xray: %v", app.sup.applyCalls)
+	}
+}
+
+func TestTLSSettingsApplyUpdatesExistingVMessInboundWhenHysteriaIsOff(t *testing.T) {
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "custom")
+	t.Setenv("XRAY_HYSTERIA2_TLS_SERVER_NAME", "cert.example.test")
+	app := newTestApp(t, true)
+	createRuntimeVMessClient(t, app, "macbook")
+	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
+	app.server.supervisor = replacer
+
+	invalid := hysteriaSettingsRequest{
+		TLSMode: domain.HysteriaTLSCustom, TLSServerName: "missing.example.test",
+		UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff,
+	}
+	response := requestJSON(t, app, "POST", "/api/transports/hysteria2/preview", invalid, true)
+	if response.Code != 409 || !strings.Contains(response.Body.String(), "certificate_not_ready") {
+		t.Fatalf("mismatched certificate accepted for existing VMess inbound: %d %s", response.Code, response.Body.String())
+	}
+
+	request := invalid
+	request.TLSServerName = "vpn.example.test"
+	preview := requestJSON(t, app, "POST", "/api/transports/hysteria2/preview", request, true)
+	if preview.Code != 200 || strings.Contains(preview.Body.String(), "VMess TLS certificate or server name will be updated") {
+		t.Fatalf("VMess SNI-only change preview = %d %s", preview.Code, preview.Body.String())
+	}
+	var result struct {
+		ChangeID string `json:"change_id"`
+	}
+	if err := json.Unmarshal(preview.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	response = requestJSON(t, app, "POST", "/api/transports/hysteria2/apply", hysteriaApplyRequest{ChangeID: result.ChangeID, Confirmation: "APPLY"}, true)
+	if response.Code != 200 || len(replacer.calls) != 0 {
+		t.Fatalf("SNI-only update replaced a VMess inbound: %d calls=%v body=%s", response.Code, replacer.calls, response.Body.String())
+	}
+
+	request.CertificateID = "0123456789abcdef0123456789abcdef"
+	writeTestHysteriaCertificate(t, filepath.Join(app.server.dataDir, "hysteria-tls", request.CertificateID))
+	preview = requestJSON(t, app, "POST", "/api/transports/hysteria2/preview", request, true)
+	if preview.Code != 200 || !strings.Contains(preview.Body.String(), "VMess TLS certificate or server name will be updated") {
+		t.Fatalf("VMess TLS change preview = %d %s", preview.Code, preview.Body.String())
+	}
+	if err := json.Unmarshal(preview.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+	response = requestJSON(t, app, "POST", "/api/transports/hysteria2/apply", hysteriaApplyRequest{ChangeID: result.ChangeID, Confirmation: "APPLY"}, true)
+	if response.Code != 200 {
+		t.Fatalf("VMess TLS update = %d %s", response.Code, response.Body.String())
+	}
+	if len(replacer.calls) != 1 || replacer.calls[0][2] != xray.VMessInboundTag {
+		t.Fatalf("certificate change replaced wrong inbounds: %v", replacer.calls)
+	}
+	if hasInboundTag(filepath.Join(app.server.configDir, "active.json"), xray.HysteriaInboundTag) {
+		t.Fatal("updating VMess TLS unexpectedly enabled the Hysteria 2 inbound")
 	}
 }
 

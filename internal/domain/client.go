@@ -27,6 +27,7 @@ const (
 	ProtocolLegacyDual ClientProtocol = "legacy_dual"
 	ProtocolVLESS      ClientProtocol = "vless"
 	ProtocolHysteria2  ClientProtocol = "hysteria2"
+	ProtocolVMess      ClientProtocol = "vmess"
 )
 
 const (
@@ -52,6 +53,8 @@ type Client struct {
 	VLESSRevoked      bool
 	HysteriaEnabled   bool
 	HysteriaRevoked   bool
+	VMessEnabled      bool
+	VMessRevoked      bool
 	CreatedAt         time.Time
 	UpdatedAt         time.Time
 }
@@ -66,6 +69,9 @@ func (c Client) HasHysteria2() bool {
 	return c.Protocol == ProtocolHysteria2 || c.Protocol == ProtocolLegacyDual
 }
 
+// HasVMess reports whether this profile has VMess credentials.
+func (c Client) HasVMess() bool { return c.Protocol == ProtocolVMess }
+
 // VLESSCanConnect reports whether the VLESS access for this profile is active.
 func (c Client) VLESSCanConnect() bool {
 	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked
@@ -75,6 +81,9 @@ func (c Client) VLESSCanConnect() bool {
 func (c Client) Hysteria2CanConnect() bool {
 	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked
 }
+
+// VMessCanConnect reports whether the VMess access for this profile is active.
+func (c Client) VMessCanConnect() bool { return c.HasVMess() && c.Enabled && !c.Revoked }
 
 // HysteriaCredential returns the stored password or the legacy UUID fallback.
 func (c Client) HysteriaCredential() string {
@@ -102,6 +111,11 @@ func (c Client) AccessState(protocol ClientProtocol) (ClientState, error) {
 			return ClientState{}, errors.New("profile has no Hysteria 2 access")
 		}
 		return ClientState{Enabled: c.HysteriaEnabled, Revoked: c.HysteriaRevoked}, nil
+	case ProtocolVMess:
+		if !c.HasVMess() {
+			return ClientState{}, errors.New("profile has no VMess access")
+		}
+		return ClientState{Enabled: c.Enabled, Revoked: c.Revoked}, nil
 	default:
 		return ClientState{}, errors.New("unsupported protocol access")
 	}
@@ -147,8 +161,10 @@ func NewProtocolClient(id, name string, protocol ClientProtocol, fingerprint, hy
 			return Client{}, errors.New("Hysteria 2 auth must contain 1-256 bytes without control characters")
 		}
 		return Client{ID: id, Name: name, Protocol: protocol, HysteriaAuth: hysteriaAuth, Enabled: true, HysteriaEnabled: true}, nil
+	case ProtocolVMess:
+		return Client{ID: id, Name: name, Protocol: protocol, Enabled: true, VMessEnabled: true}, nil
 	default:
-		return Client{}, errors.New("new profiles must use VLESS or Hysteria 2")
+		return Client{}, errors.New("new profiles must use VLESS, VMess, or Hysteria 2")
 	}
 }
 

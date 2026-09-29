@@ -108,6 +108,10 @@ func TestNewProtocolClientCreatesOneInboundAccess(t *testing.T) {
 	if err != nil || hysteria.Protocol != ProtocolHysteria2 || !hysteria.Hysteria2CanConnect() || hysteria.HasVLESS() || hysteria.HysteriaAuth != "device-secret" {
 		t.Fatalf("Hysteria-only profile = %+v, %v", hysteria, err)
 	}
+	vmess, err := NewProtocolClient("vmess-id", "phone", ProtocolVMess, "", "")
+	if err != nil || vmess.Protocol != ProtocolVMess || !vmess.HasVMess() || !vmess.VMessCanConnect() || vmess.HasVLESS() || vmess.HasHysteria2() {
+		t.Fatalf("VMess-only profile = %+v, %v", vmess, err)
+	}
 	if _, err := NewProtocolClient("dual-id", "phone", ProtocolLegacyDual, "", "secret"); err == nil {
 		t.Fatal("new dual-protocol profile was accepted")
 	}
@@ -136,7 +140,7 @@ func TestClientAccessStateIsIndependentByProtocol(t *testing.T) {
 	if _, err := NewProtocolClient("id", "phone", ProtocolHysteria2, "", "secret"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.AccessState("vmess"); err == nil {
+	if _, err := client.AccessState("unsupported"); err == nil {
 		t.Fatal("unsupported protocol state was returned")
 	}
 }

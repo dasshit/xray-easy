@@ -31,6 +31,22 @@ type HysteriaSettings struct {
 	MasqueradeString string
 }
 
+// EffectiveTLSServerName returns the TLS name shared by the configured Xray
+// transports. Explicit SNI takes priority, followed by the self-signed
+// certificate address, the configured public host, and finally the node host.
+func (s HysteriaSettings) EffectiveTLSServerName(publicHost string) string {
+	if s.TLSServerName != "" {
+		return s.TLSServerName
+	}
+	if s.TLSMode == HysteriaTLSSelfSigned && s.TLSCertIP != "" {
+		return s.TLSCertIP
+	}
+	if s.Host != "" {
+		return s.Host
+	}
+	return publicHost
+}
+
 // Validate checks settings that affect the shared Hysteria 2 inbound.
 func (s HysteriaSettings) Validate() error {
 	if s.TLSMode != HysteriaTLSCustom && s.TLSMode != HysteriaTLSSelfSigned && s.TLSMode != HysteriaTLSLegacy {

@@ -37,7 +37,7 @@ func TestRenderServerConfigSeparatesProtocolUsersAndShortIDs(t *testing.T) {
 	}
 	var config struct {
 		Inbounds []struct {
-			Tag string `json:"tag"`
+			Tag      string `json:"tag"`
 			Settings struct {
 				Clients []struct {
 					ID string `json:"id"`
@@ -58,7 +58,7 @@ func TestRenderServerConfigSeparatesProtocolUsersAndShortIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	var vless, hysteria *struct {
-		Tag string `json:"tag"`
+		Tag      string `json:"tag"`
 		Settings struct {
 			Clients []struct {
 				ID string `json:"id"`
@@ -123,5 +123,63 @@ func TestRenderServerConfigSeparatesProtocolUsersAndShortIDs(t *testing.T) {
 		if id == "old-short" {
 			t.Fatalf("revoked VLESS short ID remained in inbound: %v", shortIDs)
 		}
+	}
+}
+
+func TestRenderVMessInboundUsesTLSAndRetainsDisabledProfiles(t *testing.T) {
+	settings := validTestSettings()
+	settings.VMessPublicPort = 9443
+	settings.HysteriaTLSMode = HysteriaTLSCustom
+	settings.HysteriaTLSServerName = "vpn.example.com"
+	settings.HysteriaTLSCertPath = "/certs/fullchain.pem"
+	settings.HysteriaTLSKeyPath = "/certs/privkey.pem"
+	clients := []Client{
+		{ID: "active", Name: "Mac", Protocol: domain.ProtocolVMess, UUID: "active-uuid", Email: "active@xray-easy", Enabled: true, VMessEnabled: true},
+		{ID: "disabled", Name: "iPad", Protocol: domain.ProtocolVMess, UUID: "disabled-uuid", Email: "disabled@xray-easy", Enabled: false, VMessEnabled: false},
+	}
+	data, err := RenderServerConfig(settings, clients)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Inbounds []struct {
+			Tag      string `json:"tag"`
+			Protocol string `json:"protocol"`
+			Port     int    `json:"port"`
+			Settings struct {
+				Clients []struct {
+					ID      string `json:"id"`
+					AlterID int    `json:"alterId"`
+					Email   string `json:"email"`
+				} `json:"clients"`
+			} `json:"settings"`
+			StreamSettings struct {
+				Network     string `json:"network"`
+				Security    string `json:"security"`
+				TLSSettings struct {
+					Certificates []struct {
+						CertificateFile string `json:"certificateFile"`
+						KeyFile         string `json:"keyFile"`
+					} `json:"certificates"`
+				} `json:"tlsSettings"`
+			} `json:"streamSettings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	if len(config.Inbounds) != 2 {
+		t.Fatalf("VMess config contains %d inbounds, want 2", len(config.Inbounds))
+	}
+	inbound := config.Inbounds[1]
+	if inbound.Tag != VMessInboundTag || inbound.Protocol != "vmess" || inbound.Port != VMessInternalPort || inbound.StreamSettings.Network != "tcp" || inbound.StreamSettings.Security != "tls" {
+		t.Fatalf("unexpected VMess inbound: %+v", inbound)
+	}
+	if len(inbound.Settings.Clients) != 1 || inbound.Settings.Clients[0].ID != "active-uuid" || inbound.Settings.Clients[0].AlterID != 0 || inbound.Settings.Clients[0].Email != "active@xray-easy" {
+		t.Fatalf("VMess inbound users = %+v", inbound.Settings.Clients)
+	}
+	certificates := inbound.StreamSettings.TLSSettings.Certificates
+	if len(certificates) != 1 || certificates[0].CertificateFile != "/certs/fullchain.pem" || certificates[0].KeyFile != "/certs/privkey.pem" {
+		t.Fatalf("VMess certificate files = %+v", certificates)
 	}
 }
