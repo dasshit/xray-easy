@@ -19,6 +19,8 @@ import (
 
 var errCancelled = errors.New("installation cancelled")
 
+const maxInstallerLogLine = 4096
+
 func installerContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
@@ -396,7 +398,10 @@ func (w *wizard) Write(data []byte) (int, error) {
 			}
 			continue
 		}
-		if b >= 32 && b != 127 && len(w.partial) < 500 {
+		if b >= 32 && b != 127 {
+			if len(w.partial) >= maxInstallerLogLine {
+				w.partial = w.partial[1:]
+			}
 			w.partial += string(b)
 		}
 	}

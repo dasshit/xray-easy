@@ -10,7 +10,9 @@ services:
       - /bin/sh
       - -ec
       - |
-        mkdir -p /data /config
+        # The TLS volume is mounted beneath read-only /etc/xray in the Xray
+        # container. Its mountpoint must already exist in xray_config.
+        mkdir -p /data /config/hysteria-tls
         if [ ! -f /config/active.json ]; then cp /bootstrap/active.json /config/active.json; fi
         chown -R 10001:10001 /data /config
     volumes:

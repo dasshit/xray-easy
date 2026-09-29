@@ -50,6 +50,15 @@ func TestClientMethodsSignRequestsAndDecodeResponses(t *testing.T) {
 				return nil, err
 			}
 			switch request.URL.Path {
+			case "/replace-inbound":
+				var payload replaceInboundRequest
+				if err := json.Unmarshal(body, &payload); err != nil {
+					return nil, err
+				}
+				if payload.CandidatePath != "/etc/xray/candidate.json" || payload.PreviousPath != "/etc/xray/active.json" || payload.Tag != "vless-reality" || payload.OperationID != "op-3" {
+					return nil, fmt.Errorf("unexpected replace-inbound payload: %+v", payload)
+				}
+				return responseFor(request, http.StatusOK, `{"ok":true}`), nil
 			case "/status":
 				return responseFor(request, http.StatusOK, `{"protocol":"v1","state":"running","pid":123,"restart_count":4,"last_error":""}`), nil
 			case "/logs":
@@ -64,6 +73,9 @@ func TestClientMethodsSignRequestsAndDecodeResponses(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := client.Apply(ctx, "/etc/xray/candidate.json", "op-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.ReplaceInbound(ctx, "/etc/xray/candidate.json", "/etc/xray/active.json", "vless-reality", "op-3"); err != nil {
 		t.Fatal(err)
 	}
 	if err := client.ProbeTarget(ctx, "example.com:443", "example.com"); err != nil {
@@ -83,10 +95,10 @@ func TestClientMethodsSignRequestsAndDecodeResponses(t *testing.T) {
 	if err != nil || len(logs) != 2 || logs[0] != "one" || logs[1] != "two" {
 		t.Fatalf("Logs() = %v, %v", logs, err)
 	}
-	if len(requests) != 7 {
-		t.Fatalf("requests = %d, want 7", len(requests))
+	if len(requests) != 8 {
+		t.Fatalf("requests = %d, want 8", len(requests))
 	}
-	wantPaths := []string{"/validate", "/apply", "/probe-target", "/probe-ipv6", "/health", "/status", "/logs"}
+	wantPaths := []string{"/validate", "/apply", "/replace-inbound", "/probe-target", "/probe-ipv6", "/health", "/status", "/logs"}
 	for i, request := range requests {
 		if request.URL.Path != wantPaths[i] || request.Header.Get("X-Xray-Operation") != "control-plane" || request.Header.Get("Content-Type") != "application/json" {
 			t.Errorf("request %d headers/path = %s %+v", i, request.URL.Path, request.Header)

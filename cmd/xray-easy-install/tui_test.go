@@ -130,6 +130,13 @@ func TestDockerOutputIsBoundedAndCannotControlTerminal(t *testing.T) {
 	if strings.Contains(w.logTail(3), "\x1b") {
 		t.Fatal("Docker escape sequence reached displayed logs")
 	}
+	_, _ = w.Write([]byte(strings.Repeat("x", maxInstallerLogLine+800) + "read-only file system\n"))
+	if !strings.Contains(w.logTail(1), "read-only file system") {
+		t.Fatal("long OCI error was truncated before its cause")
+	}
+	if len(w.logs[len(w.logs)-1]) > maxInstallerLogLine {
+		t.Fatal("unbounded OCI error reached the log buffer")
+	}
 	if !strings.Contains(output.String(), "Docker Compose output") {
 		t.Fatal("Docker progress panel was not rendered")
 	}
