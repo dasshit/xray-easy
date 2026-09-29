@@ -192,6 +192,9 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .icon-button:hover:not(:disabled) { background: var(--border); color: var(--text); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 16px; margin-top: 24px; }
 .profile-hint { margin: -4px 0 18px; }
+.profile-connection { margin: 0 0 20px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); }
+.profile-connection p { margin: 5px 0 0; color: var(--muted); font-size: .9rem; }
+.profile-connection.is-online { border-color: var(--success); }
 .profile-delivery { display: grid; grid-template-columns: minmax(210px, .85fr) minmax(0, 1.15fr); gap: 24px; align-items: start; }
 .qr-panel, .profile-link-panel { display: grid; gap: 10px; min-width: 0; }
 .qr-panel { justify-items: center; padding: 17px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface-muted); }
