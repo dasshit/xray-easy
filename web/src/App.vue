@@ -588,13 +588,13 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
             <a class="settings-inline-link" href="#hysteria-settings">{{ t().vmessCertificateLink }}</a>
           </article>
 
+          <HysteriaSettingsPanel :api="api" :language="language" @error="showError" @saved="handleHysteriaSettingsSaved" />
+
           <article class="settings-card settings-logging-card">
             <div class="card-heading"><div><h3>{{ t().xrayLogging }}</h3><p class="hint">{{ t().loggingHelp }}</p></div><span class="settings-icon" aria-hidden="true">≋</span></div>
             <label>{{ t().logLevel }}<select v-model="logLevelForm"><option value="debug">{{ t().logLevelDebug }}</option><option value="info">{{ t().logLevelInfo }}</option><option value="warning">{{ t().logLevelWarning }}</option><option value="error">{{ t().logLevelError }}</option><option value="none">{{ t().logLevelNone }}</option></select></label>
             <div class="section-actions"><button :disabled="busy || !loggingSettingsChanged" @click="reviewSettings('logging')">{{ t().reviewLoggingChanges }}</button></div>
           </article>
-
-          <HysteriaSettingsPanel :api="api" :language="language" @error="showError" @saved="handleHysteriaSettingsSaved" />
         </div>
       </section>
       <section v-if="activeSection === 'diagnostics'" class="section-panel">
