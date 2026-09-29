@@ -104,7 +104,7 @@ func TestHysteria2InboundAndProfileUseDedicatedTLSUDPSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Scheme != "hysteria2" || parsed.User.Username() != client.UUID || parsed.Host != "vpn.example.com:443" || parsed.Query().Get("sni") != settings.PublicHost || parsed.Query().Has("insecure") {
+	if parsed.Scheme != "hysteria2" || parsed.User.Username() != client.UUID || parsed.Host != "vpn.example.com:443" || parsed.Query().Get("sni") != settings.PublicHost || parsed.Query().Get("insecure") != "1" {
 		t.Fatalf("unexpected Hysteria 2 URI: %s", profile.HysteriaURI)
 	}
 	if parsed.Fragment != client.Name {

@@ -288,6 +288,8 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 // BuildHysteriaURI creates the V2RAGE-compatible Hysteria 2 URI for one device.
 func BuildHysteriaURI(settings Settings, client Client) string {
 	query := url.Values{}
+	// Temporary self-signed certificate test mode; restore verification before regular use.
+	query.Set("insecure", "1")
 	query.Set("sni", settings.PublicHost)
 	u := &url.URL{Scheme: "hysteria2", User: url.User(client.UUID), Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.PublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
 	return u.String()

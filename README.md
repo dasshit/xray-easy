@@ -100,8 +100,8 @@ device is applied.
   SQLite, `active.json` and runtime state after interruptions.
 - Optional Hysteria 2 URI and QR for V2Rage. It runs as a second inbound in the
   same Xray container and does not require a second VPS. Enable it by setting
-  `XRAY_HYSTERIA2_ENABLED=true` in `.env`. Install a valid TLS certificate for
-  the configured public host before starting it:
+  `XRAY_HYSTERIA2_ENABLED=true` in `.env`. Install a TLS certificate and key
+  before starting it:
 
   ```sh
   install -m 0644 /path/to/fullchain.pem secrets/hysteria/fullchain.pem
@@ -112,8 +112,11 @@ device is applied.
 
   The init service copies the certificate and key into a dedicated Docker
   volume. The key is readable by Xray and stays inaccessible to the panel. The
-  certificate must cover the public host used in the profile. The URI keeps
-  TLS verification enabled. After renewal, refresh the volume and restart Xray:
+  generated Hysteria 2 URI currently includes `insecure=1` to test connections
+  with a self-signed certificate. This disables certificate verification in the
+  client. Do not rely on it for server authentication; replace it with a trusted
+  certificate covering the profile's SNI and remove `insecure=1` for regular
+  use. After certificate renewal, refresh the volume and restart Xray:
 
   ```sh
   docker compose run --rm init-hysteria-tls
