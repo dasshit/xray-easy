@@ -711,6 +711,36 @@ func (s *Store) EnsureReservedShortIDs(ctx context.Context, count int, generate 
 	return tx.Commit()
 }
 
+// SeedReservedShortIDs creates the initial reserve for an installation or a
+// legacy database. After initialization, the reserve is allowed to drain;
+// an exhausted pool is replenished by CreateClientWithReservedShortID.
+func (s *Store) SeedReservedShortIDs(ctx context.Context, count int, generate func() (string, error)) error {
+	if count < 1 || generate == nil {
+		return errors.New("short ID pool size and generator are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := ensureShortIDHistory(ctx, tx); err != nil {
+		return err
+	}
+	var initialized int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM schema_migrations WHERE version=3`).Scan(&initialized); err != nil {
+		return err
+	}
+	if initialized == 0 {
+		if err := replenishShortIDPool(ctx, tx, count, generate); err != nil {
+			return err
+		}
+		if err := markShortIDPoolInitialized(ctx, tx); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 // CreateClientWithReservedShortID assigns a reserved ID and inserts its client atomically.
 // When the pool was exhausted, a new assigned ID plus a fresh reserve is generated.
 func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client domain.Client, uuid, email string, reserveSize int, generate func() (string, error)) (string, bool, error) {
@@ -768,6 +798,9 @@ func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client doma
 	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, uuid, email, shortID, client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), now, now); err != nil {
 		return "", false, err
 	}
+	if err := markShortIDPoolInitialized(ctx, tx); err != nil {
+		return "", false, err
+	}
 	if err := tx.Commit(); err != nil {
 		return "", false, err
 	}
@@ -776,6 +809,12 @@ func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client doma
 
 func ensureShortIDHistory(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO reality_short_ids(short_id, assigned_client_id, created_at) SELECT short_id, id, created_at FROM clients`)
+	return err
+}
+
+func markShortIDPoolInitialized(ctx context.Context, tx *sql.Tx) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, ?)`, now)
 	return err
 }
 

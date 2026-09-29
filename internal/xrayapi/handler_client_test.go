@@ -135,6 +135,45 @@ func TestHandlerClientAddsAndRemovesVLESSUsers(t *testing.T) {
 	}
 }
 
+func TestHandlerClientUsesDedicatedHysteriaInboundAndAccountEncoding(t *testing.T) {
+	implementation := &handlerTestServer{
+		tags:  []*core.InboundHandlerConfig{{Tag: inboundTag}, {Tag: "hysteria2"}},
+		users: []*protocol.User{{Email: "phone@example.test"}},
+	}
+	client := newHandlerTestClient(t, implementation)
+	ctx := context.Background()
+	if err := client.AddHysteriaUser(ctx, "phone@example.test", "device-secret"); err != nil {
+		t.Fatal(err)
+	}
+	users, err := client.UsersInInbound(ctx, "hysteria2")
+	if err != nil || len(users) != 1 || users[0] != "phone@example.test" || len(implementation.queries) != 1 || implementation.queries[0].GetTag() != "hysteria2" {
+		t.Fatalf("Hysteria users = %v, queries=%v, err=%v", users, implementation.queries, err)
+	}
+	if err := client.RemoveHysteriaUser(ctx, "phone@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if len(implementation.alters) != 2 || implementation.alters[0].GetTag() != "hysteria2" || implementation.alters[1].GetTag() != "hysteria2" {
+		t.Fatalf("Hysteria mutations used another inbound: %+v", implementation.alters)
+	}
+	var added handlercommand.AddUserOperation
+	if err := proto.Unmarshal(implementation.alters[0].GetOperation().GetValue(), &added); err != nil {
+		t.Fatal(err)
+	}
+	account := added.GetUser().GetAccount()
+	if account.GetType() != "xray.proxy.hysteria.Account" {
+		t.Fatalf("Hysteria account type = %q", account.GetType())
+	}
+	number, wireType, tagLength := protowire.ConsumeTag(account.GetValue())
+	auth, _ := protowire.ConsumeString(account.GetValue()[tagLength:])
+	if number != 1 || wireType != protowire.BytesType || auth != "device-secret" {
+		t.Fatalf("Hysteria account auth field = %d/%v/%q", number, wireType, auth)
+	}
+	var removed handlercommand.RemoveUserOperation
+	if err := proto.Unmarshal(implementation.alters[1].GetOperation().GetValue(), &removed); err != nil || removed.GetEmail() != "phone@example.test" {
+		t.Fatalf("Hysteria removal = %v, %v", removed.GetEmail(), err)
+	}
+}
+
 func decodeVLESSAccount(t *testing.T, value []byte) (string, string) {
 	t.Helper()
 	var uuid, flow string

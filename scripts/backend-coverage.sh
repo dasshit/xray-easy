@@ -17,7 +17,9 @@ validate_threshold() {
 validate_threshold BACKEND_COVERAGE_MIN "$overall_min"
 validate_threshold BACKEND_PACKAGE_COVERAGE_MIN "$package_min"
 
-go test -count=1 -covermode=atomic -coverprofile="$profile" ./...
+# Limit the profile to project packages. npm dependencies can contain unrelated
+# Go modules (for example web/node_modules/flatted/golang) that ./... discovers.
+go test -count=1 -covermode=atomic -coverprofile="$profile" ./cmd/... ./internal/...
 
 printf '\nHandwritten Go code by package (covered/total statements):\n'
 awk '

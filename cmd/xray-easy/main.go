@@ -395,10 +395,12 @@ func runAdminCLI(ctx context.Context, dataDir string, args []string) error {
 	}
 }
 
+var readCLIPassword = readPasswordLineNoEcho
+
 func readNewPassword() ([]byte, error) {
 	fd := int(os.Stdin.Fd())
 	fmt.Fprint(os.Stderr, "New administrator password (at least 12 characters): ")
-	password, err := readPasswordLineNoEcho(fd)
+	password, err := readCLIPassword(fd)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return nil, fmt.Errorf("read new password (use an interactive terminal; run docker compose exec without -T): %w", err)
@@ -408,7 +410,7 @@ func readNewPassword() ([]byte, error) {
 		return nil, errors.New("password must contain at least 12 characters")
 	}
 	fmt.Fprint(os.Stderr, "Confirm new password: ")
-	confirmation, err := readPasswordLineNoEcho(fd)
+	confirmation, err := readCLIPassword(fd)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		clear(password)
@@ -544,7 +546,7 @@ func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, mast
 		return err
 	}
 	xrayClients := xray.ClientsFromDomain(clients)
-	if err := db.EnsureReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
+	if err := db.SeedReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
 		return err
 	}
 	reservedShortIDs, err := db.ListReservedShortIDs(ctx)
@@ -2174,7 +2176,7 @@ func stringSliceMatchesSet(values []string, expected map[string]struct{}) bool {
 }
 
 func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []domain.Client) error {
-	if err := s.store.EnsureReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
+	if err := s.store.SeedReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
 		return fmt.Errorf("ensure REALITY short-ID reserve: %w", err)
 	}
 	settings, err := s.store.GetSettings(ctx)
@@ -2359,7 +2361,7 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Set
 }
 
 func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client) (string, string, error) {
-	if err := s.store.EnsureReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
+	if err := s.store.SeedReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
 		return "", "", err
 	}
 	reserved, err := s.store.ListReservedShortIDs(ctx)

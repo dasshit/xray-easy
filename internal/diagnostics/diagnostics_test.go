@@ -85,6 +85,56 @@ func TestCreateBundleWritesPrivateTarGzipAndRejectsUnsafePaths(t *testing.T) {
 	}
 }
 
+func TestCreateBundleRejectsEmptyOrUnwritableDestination(t *testing.T) {
+	if _, err := CreateBundle(t.TempDir(), nil, time.Time{}); err == nil {
+		t.Fatal("empty support bundle was accepted")
+	}
+	root := t.TempDir()
+	blockingFile := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(blockingFile, []byte("occupied"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateBundle(blockingFile, map[string][]byte{"report.txt": []byte("safe")}, time.Time{}); err == nil {
+		t.Fatal("bundle was created below a regular file")
+	}
+	if path, err := CreateBundle(root, map[string][]byte{"report.txt": []byte("safe")}, time.Time{}); err != nil {
+		t.Fatalf("bundle with current UTC timestamp: %v", err)
+	} else if _, err := os.Stat(path); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	occupiedPath := filepath.Join(root, "diagnostics", "doctor-20260929T100000.000000000Z.tar.gz")
+	if err := os.Mkdir(occupiedPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CreateBundle(root, map[string][]byte{"report.txt": []byte("safe")}, now); err == nil {
+		t.Fatal("bundle replaced an occupied directory")
+	}
+}
+
+func TestArchiveNamesAndJSONRedactionRejectUnsafeInput(t *testing.T) {
+	for _, name := range []string{"", ".", "..", "../escape", "/absolute", "nested/../escape", `nested\escape`} {
+		if safeArchiveName(name) {
+			t.Errorf("unsafe archive name %q was accepted", name)
+		}
+	}
+	if !safeArchiveName("nested/report.txt") {
+		t.Fatal("safe nested report name was rejected")
+	}
+	for _, document := range []string{"{", `{"ok":true} {"extra":true}`, `{"ok":true} garbage`} {
+		if _, err := RedactJSON([]byte(document)); err == nil {
+			t.Errorf("invalid JSON %q was accepted", document)
+		}
+	}
+	redacted, err := RedactJSON([]byte(`[{"name":"phone","nested":[{"short_id":"1234","note":"Bearer credential"}]}]`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(redacted), "phone") || strings.Contains(string(redacted), "1234") || strings.Contains(string(redacted), "credential") {
+		t.Fatalf("nested secret leaked: %s", redacted)
+	}
+}
+
 func TestBufferKeepsBoundedTail(t *testing.T) {
 	buffer := NewBuffer(2)
 	buffer.Add("app", "error", "one")
