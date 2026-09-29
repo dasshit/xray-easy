@@ -11,12 +11,6 @@ import (
 
 // LoadOrCreateToken creates a private control API token on first start.
 func LoadOrCreateToken(path string) (string, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
-		return "", fmt.Errorf("create AWG data directory: %w", err)
-	}
-	if err := os.Chmod(filepath.Dir(path), 0750); err != nil {
-		return "", fmt.Errorf("secure AWG data directory: %w", err)
-	}
 	data, err := os.ReadFile(path)
 	if err == nil {
 		token := strings.TrimSpace(string(data))
@@ -29,6 +23,9 @@ func LoadOrCreateToken(path string) (string, error) {
 	}
 	if !os.IsNotExist(err) {
 		return "", fmt.Errorf("read AWG control token: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+		return "", fmt.Errorf("create AWG data directory: %w", err)
 	}
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {

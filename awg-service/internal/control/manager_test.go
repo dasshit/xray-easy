@@ -208,7 +208,11 @@ func TestAddressPoolDoesNotAllocateNetworkGatewayOrBroadcast(t *testing.T) {
 }
 
 func TestLoadOrCreateTokenIsPersistentAndPrivate(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "control.token")
+	directory := filepath.Join(t.TempDir(), "token-dir")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(directory, "control.token")
 	first, err := LoadOrCreateToken(path)
 	if err != nil {
 		t.Fatal(err)
@@ -226,6 +230,13 @@ func TestLoadOrCreateTokenIsPersistentAndPrivate(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0640 {
 		t.Errorf("token mode = %04o, want 0640", info.Mode().Perm())
+	}
+	directoryInfo, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if directoryInfo.Mode().Perm() != 0700 {
+		t.Errorf("existing token directory mode = %04o, want it unchanged at 0700", directoryInfo.Mode().Perm())
 	}
 }
 
