@@ -1,4 +1,4 @@
-import type { Admin, DiagnosticEntry, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
+import type { Admin, DiagnosticEntry, HysteriaCertificateInfo, HysteriaCertificateUpload, HysteriaSettings, HysteriaSettingsCommand, HysteriaSettingsPreview, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
 import type { XrayEasyGateway } from '../application/ports/xrayEasyGateway'
 import type { Client, ClientActionType, Settings, SettingsChange } from '../domain/models'
 import { parseResponse, request } from './api'
@@ -9,6 +9,9 @@ import {
   BackupDtoSchema,
   ClientDtoSchema,
   DiagnosticEntriesDtoSchema,
+  HysteriaCertificateUploadDtoSchema,
+  HysteriaSettingsDtoSchema,
+  HysteriaSettingsPreviewDtoSchema,
   NodeStatusDtoSchema,
   ProfileDeliveryDtoSchema,
   SettingsChangeDtoSchema,
@@ -23,6 +26,10 @@ import type {
   ClientDto,
   DiagnosticEntryDto,
   DiagnosticEntriesDto,
+  HysteriaCertificateInfoDto,
+  HysteriaCertificateUploadDto,
+  HysteriaSettingsDto,
+  HysteriaSettingsPreviewDto,
   NodeStatusDto,
   SettingsChangeDto,
   SettingsDto,
@@ -120,6 +127,77 @@ function mapSettingsChange(dto: SettingsChangeDto): Omit<SettingsChange, 'confir
     consequences: dto.consequences,
     revokedClients: dto.revoked_clients,
     settings: mapSettings(dto.settings),
+  }
+}
+
+/**
+ * Convert certificate metadata into the application model.
+ * @param dto - The validated public certificate metadata.
+ * @returns The certificate details without key material.
+ */
+function mapHysteriaCertificate(dto: HysteriaCertificateInfoDto): HysteriaCertificateInfo {
+  return {
+    subject: dto.subject,
+    issuer: dto.issuer,
+    dnsNames: dto.dns_names,
+    ipAddresses: dto.ip_addresses,
+    notBefore: dto.not_before,
+    notAfter: dto.not_after,
+    fingerprint: dto.fingerprint,
+  }
+}
+
+/**
+ * Convert the Hysteria 2 status DTO into the application model.
+ * @param dto - The validated Hysteria settings response.
+ * @returns The current transport state and optional public certificate metadata.
+ */
+function mapHysteriaSettings(dto: HysteriaSettingsDto): HysteriaSettings {
+  return {
+    enabled: dto.enabled,
+    state: dto.state,
+    host: dto.host,
+    udpPort: dto.udp_port,
+    tlsMode: dto.tls_mode,
+    tlsServerName: dto.tls_server_name,
+    udpIdleTimeout: dto.udp_idle_timeout,
+    masqueradeType: dto.masquerade_type,
+    insecureUri: dto.insecure_uri,
+    ...(dto.tls_cert_ip === undefined ? {} : { tlsCertIp: dto.tls_cert_ip }),
+    ...(dto.certificate_id === undefined ? {} : { certificateId: dto.certificate_id }),
+    ...(dto.certificate === undefined ? {} : { certificate: mapHysteriaCertificate(dto.certificate) }),
+    ...(dto.certificate_error === undefined ? {} : { certificateError: dto.certificate_error }),
+    ...(dto.runtime_error === undefined ? {} : { runtimeError: dto.runtime_error }),
+    ...(dto.masquerade_string === undefined ? {} : { masqueradeString: dto.masquerade_string }),
+  }
+}
+
+/**
+ * Convert the certificate staging response into the application model.
+ * @param dto - The validated certificate upload response.
+ * @returns The immutable certificate version and public metadata.
+ */
+function mapHysteriaCertificateUpload(dto: HysteriaCertificateUploadDto): HysteriaCertificateUpload {
+  return { certificateId: dto.certificate_id, certificate: mapHysteriaCertificate(dto.certificate) }
+}
+
+/**
+ * Convert the Hysteria settings preview DTO into the application result.
+ * @param dto - The validated preview response.
+ * @returns The review information, or current settings when no change is needed.
+ */
+function mapHysteriaPreview(dto: HysteriaSettingsPreviewDto): HysteriaSettingsPreview {
+  const settings = mapHysteriaSettings(dto.settings)
+  if (!dto.changed) return { changed: false, settings }
+  return {
+    changed: true,
+    changeId: dto.change_id,
+    expiresIn: dto.expires_in,
+    expectedConfirmation: dto.expected_confirmation,
+    requiresConfirmation: dto.requires_confirmation,
+    diff: dto.diff,
+    consequences: dto.consequences,
+    settings,
   }
 }
 
@@ -260,6 +338,31 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
         }),
       })),
       apply: (changeId: string, confirmation: string): Promise<void> => sendVoid('/api/settings/apply', post({ change_id: changeId, confirmation })),
+    },
+    hysteria: {
+      status: async (): Promise<HysteriaSettings> => mapHysteriaSettings(await sendDto(send, '/api/transports/hysteria2', HysteriaSettingsDtoSchema)),
+      uploadCertificate: async (fullchain: File, privateKey: File, serverName: string): Promise<HysteriaCertificateUpload> => {
+        const form = new FormData()
+        form.append('fullchain', fullchain)
+        form.append('private_key', privateKey)
+        form.append('server_name', serverName)
+        return mapHysteriaCertificateUpload(await sendDto(send, '/api/transports/hysteria2/certificate', HysteriaCertificateUploadDtoSchema, {
+          method: 'POST', body: form, headers: {},
+        }))
+      },
+      generateCertificate: async (ipv4: string): Promise<HysteriaCertificateUpload> => mapHysteriaCertificateUpload(await sendDto(send, '/api/transports/hysteria2/certificate/mkcert', HysteriaCertificateUploadDtoSchema, post({ ipv4 }))),
+      preview: async (input: HysteriaSettingsCommand): Promise<HysteriaSettingsPreview> => mapHysteriaPreview(await sendDto(send, '/api/transports/hysteria2/preview', HysteriaSettingsPreviewDtoSchema, post({
+        enabled: input.enabled,
+        host: input.host,
+        tls_mode: input.tlsMode,
+        tls_cert_ip: input.tlsCertIp,
+        tls_server_name: input.tlsServerName,
+        certificate_id: input.certificateId,
+        udp_idle_timeout: input.udpIdleTimeout,
+        masquerade_type: input.masqueradeType,
+        masquerade_string: input.masqueradeString,
+      }))),
+      apply: (changeId: string, confirmation: string): Promise<void> => sendVoid('/api/transports/hysteria2/apply', post({ change_id: changeId, confirmation })),
     },
     backups: {
       create: async (): Promise<{ name: string }> => {

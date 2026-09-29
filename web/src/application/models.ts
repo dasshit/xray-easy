@@ -19,6 +19,69 @@ export type InitializeSetupCommand = {
   realitySni: string
 }
 
+/** Public TLS certificate metadata returned after checking or importing a pair. */
+export type HysteriaCertificateInfo = {
+  subject: string
+  issuer: string
+  dnsNames: string[]
+  ipAddresses: string[]
+  notBefore: string
+  notAfter: string
+  fingerprint: string
+}
+
+/** Server-side Hysteria 2 inbound state; private key material is never returned. */
+export type HysteriaSettings = {
+  enabled: boolean
+  state: string
+  host: string
+  udpPort: number
+  tlsMode: 'custom' | 'self-signed' | 'legacy'
+  tlsServerName: string
+  tlsCertIp?: string
+  certificateId?: string
+  certificate?: HysteriaCertificateInfo
+  certificateError?: string
+  runtimeError?: string
+  udpIdleTimeout: number
+  masqueradeType: 'off' | 'string'
+  masqueradeString?: string
+  insecureUri: boolean
+}
+
+/** Settings submitted for review before applying a Hysteria 2 inbound change. */
+export type HysteriaSettingsCommand = {
+  enabled: boolean
+  host: string
+  tlsMode: 'custom' | 'self-signed' | 'legacy'
+  tlsCertIp: string
+  tlsServerName: string
+  certificateId: string
+  udpIdleTimeout: number
+  masqueradeType: 'off' | 'string'
+  masqueradeString: string
+}
+
+/** Preview of a Hysteria 2 settings change, including its no-change result. */
+export type HysteriaSettingsPreview =
+  | { changed: false; settings: HysteriaSettings }
+  | {
+      changed: true
+      changeId: string
+      expiresIn: number
+      expectedConfirmation: string
+      requiresConfirmation: boolean
+      diff: Array<{ field: string; from: string; to: string }>
+      consequences: string[]
+      settings: HysteriaSettings
+    }
+
+/** Result returned when a certificate is staged for a later reviewed apply. */
+export type HysteriaCertificateUpload = {
+  certificateId: string
+  certificate: HysteriaCertificateInfo
+}
+
 /** Authenticated administrator identity and optional security metadata. */
 export type Admin = {
   username: string

@@ -133,6 +133,22 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .device-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 14px; }
 .settings-grid, .security-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .settings-card, .security-card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.settings-grid .hysteria-settings-card { grid-column: 1 / -1; }
+.hysteria-status-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
+.hysteria-enable-row { margin: 20px 0 8px; color: var(--text); font-weight: 650; }
+.hysteria-enable-row input { accent-color: var(--primary); }
+.hysteria-inline-error, .hysteria-inline-warning { margin: 12px 0; overflow-wrap: anywhere; }
+.hysteria-inline-warning { padding: 10px 12px; border-radius: 9px; background: color-mix(in srgb, #f0a000 12%, var(--surface)); }
+.hysteria-security-note { margin: 10px 0; padding: 12px 14px; border: 1px solid color-mix(in srgb, #f0a000 40%, var(--border)); border-radius: 10px; color: var(--label); background: color-mix(in srgb, #f0a000 12%, var(--surface)); font-size: .86rem; }
+.hysteria-file-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.hysteria-file-grid input[type='file'] { padding: 8px; }
+.hysteria-action { justify-self: start; margin: 0 0 8px; }
+.hysteria-certificate-meta { display: grid; gap: 5px; margin-top: 16px; padding: 13px 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-muted); color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
+.hysteria-certificate-meta strong { color: var(--success); }
+.hysteria-fingerprint { font: .72rem ui-monospace, monospace; }
+.hysteria-advanced { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
+.hysteria-advanced summary { color: var(--primary); font-weight: 650; cursor: pointer; }
+.hysteria-save-row { justify-content: flex-start; margin-top: 16px; }
 .settings-card-danger { border-color: color-mix(in srgb, var(--error) 35%, var(--border)); background: color-mix(in srgb, var(--error-surface) 35%, var(--surface)); }
 .card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .card-heading h3 { margin: 0 0 7px; }
@@ -223,6 +239,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .device-actions { width: 100%; flex-wrap: wrap; gap: 12px 18px; }
   .header-actions { gap: 12px; }
   .settings-grid, .security-grid, .diagnostics-overview { grid-template-columns: 1fr; }
+  .hysteria-file-grid { grid-template-columns: 1fr; gap: 0; }
   .totp-setup-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {

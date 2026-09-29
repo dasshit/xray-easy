@@ -71,6 +71,65 @@ export const ProfileDeliveryDtoSchema = z.object({
 /** Wire-format type inferred from {@link ProfileDeliveryDtoSchema}. */
 export type ProfileDeliveryDto = z.infer<typeof ProfileDeliveryDtoSchema>
 
+/** Runtime validator for public metadata returned by Hysteria 2 certificate operations. */
+export const HysteriaCertificateInfoDtoSchema = z.object({
+  subject: z.string(),
+  issuer: z.string(),
+  dns_names: z.array(z.string()),
+  ip_addresses: z.array(z.string()),
+  not_before: z.string(),
+  not_after: z.string(),
+  fingerprint: z.string(),
+})
+/** Wire-format type inferred from {@link HysteriaCertificateInfoDtoSchema}. */
+export type HysteriaCertificateInfoDto = z.infer<typeof HysteriaCertificateInfoDtoSchema>
+
+/** Runtime validator for Hysteria 2 listener state; certificate keys are never included. */
+export const HysteriaSettingsDtoSchema = z.object({
+  enabled: z.boolean(),
+  state: z.string(),
+  host: z.string(),
+  udp_port: z.number(),
+  tls_mode: z.enum(['custom', 'self-signed', 'legacy']),
+  tls_server_name: z.string(),
+  tls_cert_ip: z.string().optional(),
+  certificate_id: z.string().optional(),
+  certificate: HysteriaCertificateInfoDtoSchema.optional(),
+  certificate_error: z.string().optional(),
+  runtime_error: z.string().optional(),
+  udp_idle_timeout: z.number(),
+  masquerade_type: z.enum(['off', 'string']),
+  masquerade_string: z.string().optional(),
+  insecure_uri: z.boolean(),
+})
+/** Wire-format type inferred from {@link HysteriaSettingsDtoSchema}. */
+export type HysteriaSettingsDto = z.infer<typeof HysteriaSettingsDtoSchema>
+
+/** Runtime validator for the preview returned before applying Hysteria 2 settings. */
+export const HysteriaSettingsPreviewDtoSchema = z.discriminatedUnion('changed', [
+  z.object({ changed: z.literal(false), settings: HysteriaSettingsDtoSchema }),
+  z.object({
+    changed: z.literal(true),
+    change_id: z.string(),
+    expires_in: z.number(),
+    expected_confirmation: z.string(),
+    requires_confirmation: z.boolean(),
+    diff: z.array(z.object({ field: z.string(), from: z.string(), to: z.string() })),
+    consequences: z.array(z.string()),
+    settings: HysteriaSettingsDtoSchema,
+  }),
+])
+/** Wire-format type inferred from {@link HysteriaSettingsPreviewDtoSchema}. */
+export type HysteriaSettingsPreviewDto = z.infer<typeof HysteriaSettingsPreviewDtoSchema>
+
+/** Runtime validator for the staged certificate version and its public metadata. */
+export const HysteriaCertificateUploadDtoSchema = z.object({
+  certificate_id: z.string(),
+  certificate: HysteriaCertificateInfoDtoSchema,
+})
+/** Wire-format type inferred from {@link HysteriaCertificateUploadDtoSchema}. */
+export type HysteriaCertificateUploadDto = z.infer<typeof HysteriaCertificateUploadDtoSchema>
+
 /** Runtime validator for the active server connection settings. */
 export const SettingsDtoSchema = z.object({
   public_host: z.string(),

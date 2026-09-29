@@ -35,6 +35,17 @@ export const settings: SettingsDto = {
   flow: 'xtls-rprx-vision',
 }
 export const totpStatus: TOTPStatusDto = { enabled: false, recovery_codes_remaining: 0 }
+export const hysteriaStatus = {
+  enabled: false,
+  state: 'ready',
+  host: 'vpn.example.com',
+  udp_port: 8443,
+  tls_mode: 'custom',
+  tls_server_name: 'vpn.example.com',
+  udp_idle_timeout: 60,
+  masquerade_type: 'off',
+  insecure_uri: false,
+}
 export const nodeStatus: NodeStatusDto = { state: 'running', restart_count: 2 }
 export const xrayEntries: DiagnosticEntry[] = []
 export const appEntries: DiagnosticEntry[] = []
@@ -149,6 +160,7 @@ export function defaultHandler({ initialized = true, authenticated = false, clie
     if (method === 'GET' && profilePath) return { body: { client_id: profilePath[1], uri: `vless://${profilePath[1]}@vpn.example.com:443?security=reality#phone`, json: { id: profilePath[1] } } }
     if (method === 'GET' && url === '/api/auth/totp/status') return { body: totpData }
     if (method === 'GET' && url === '/api/settings') return { body: settingsData }
+    if (method === 'GET' && url === '/api/transports/hysteria2') return { body: hysteriaStatus }
     if (method === 'GET' && url === '/api/status') return { body: statusData }
     if (method === 'GET' && url === '/api/logs?component=xray&limit=100') return { body: { entries: xrayEntries } }
     if (method === 'GET' && url === '/api/logs?component=app&limit=100') return { body: { entries: appEntries } }

@@ -1,6 +1,10 @@
 import type {
   Admin,
   DiagnosticEntry,
+  HysteriaCertificateUpload,
+  HysteriaSettings,
+  HysteriaSettingsCommand,
+  HysteriaSettingsPreview,
   InitializeSetupCommand,
   NodeStatus,
   ProfileDelivery,
@@ -184,6 +188,44 @@ export interface XrayEasyGateway {
      * @param changeId - The ID returned by the settings preview.
      * @param confirmation - The exact confirmation phrase required by the preview.
      * @rejects {Error} When the preview expired or confirmation does not match.
+     */
+    apply(changeId: string, confirmation: string): Promise<void>
+  }
+  hysteria: {
+    /**
+     * Read the authenticated Hysteria 2 inbound status and certificate metadata.
+     * @returns The current Hysteria 2 settings without private key data.
+     * @rejects {Error} When the status request fails.
+     */
+    status(): Promise<HysteriaSettings>
+    /**
+     * Stage a trusted PEM certificate and matching private key for review.
+     * @param fullchain - The PEM certificate chain file.
+     * @param privateKey - The matching PEM private key file.
+     * @param serverName - The host name or IP address the certificate must cover.
+     * @returns The new immutable certificate version and its public metadata.
+     * @rejects {Error} When the upload is too large, untrusted, expired, or mismatched.
+     */
+    uploadCertificate(fullchain: File, privateKey: File, serverName: string): Promise<HysteriaCertificateUpload>
+    /**
+     * Generate a temporary-CA mkcert certificate for one public IPv4 address.
+     * @param ipv4 - The public IPv4 address to include in the certificate.
+     * @returns The staged certificate version and its public metadata.
+     * @rejects {Error} When mkcert is unavailable or the address is invalid.
+     */
+    generateCertificate(ipv4: string): Promise<HysteriaCertificateUpload>
+    /**
+     * Preview Hysteria 2 settings and show effects before applying them.
+     * @param input - The proposed inbound, TLS, timeout, and masquerade settings.
+     * @returns The change preview, or the current settings if nothing changed.
+     * @rejects {Error} When settings or the selected certificate are invalid.
+     */
+    preview(input: HysteriaSettingsCommand): Promise<HysteriaSettingsPreview>
+    /**
+     * Apply the reviewed Hysteria 2 inbound change through Xray HandlerService.
+     * @param changeId - The change identifier returned by preview.
+     * @param confirmation - The exact confirmation phrase shown in the preview.
+     * @rejects {Error} When the preview expires, confirmation fails, or Xray rejects the inbound.
      */
     apply(changeId: string, confirmation: string): Promise<void>
   }

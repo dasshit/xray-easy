@@ -156,6 +156,63 @@ describe('Xray-easy API adapter', () => {
     expect(calls.some(call => call.url === '/api/auth/totp/disable' && call.options?.body === JSON.stringify({ password: 'password', code: '654321' }))).toBe(true)
   })
 
+  it('maps Hysteria status, stages certificates, previews settings, and applies them', async () => {
+    const certificate = {
+      subject: 'CN=vpn.example.test', issuer: 'CN=Example CA', dns_names: ['vpn.example.test'], ip_addresses: [],
+      not_before: '2026-09-01T00:00:00Z', not_after: '2027-09-01T00:00:00Z', fingerprint: 'ABCD',
+    }
+    const settings = {
+      enabled: false, state: 'ready', host: 'vpn.example.test', udp_port: 443, tls_mode: 'custom', tls_server_name: 'vpn.example.test',
+      certificate_id: '1234567890abcdef1234567890abcdef', certificate, udp_idle_timeout: 60,
+      masquerade_type: 'off', insecure_uri: false,
+    }
+    const { send, calls } = requester({
+      '/api/transports/hysteria2': settings,
+      '/api/transports/hysteria2/certificate': { certificate_id: settings.certificate_id, certificate },
+      '/api/transports/hysteria2/certificate/mkcert': { certificate_id: settings.certificate_id, certificate },
+      '/api/transports/hysteria2/preview': sequence(
+        { changed: false, settings },
+        {
+          changed: true, change_id: 'hysteria-change', expires_in: 600, expected_confirmation: 'APPLY', requires_confirmation: true,
+          diff: [{ field: 'enabled', from: 'false', to: 'true' }], consequences: ['replace Hysteria inbound'], settings: { ...settings, enabled: true, state: 'applying' },
+        },
+      ),
+      '/api/transports/hysteria2/apply': {},
+    })
+    const api = createXrayEasyApi(send)
+    await expect(api.hysteria.status()).resolves.toMatchObject({
+      state: 'ready', udpPort: 443, tlsMode: 'custom', certificate: { fingerprint: 'ABCD' }, insecureUri: false,
+    })
+    const fullchain = new File(['certificate'], 'fullchain.pem')
+    const privateKey = new File(['key'], 'privkey.pem')
+    await expect(api.hysteria.uploadCertificate(fullchain, privateKey, 'vpn.example.test')).resolves.toMatchObject({
+      certificateId: settings.certificate_id, certificate: { fingerprint: 'ABCD' },
+    })
+    await api.hysteria.generateCertificate('89.169.13.234')
+    const input = {
+      enabled: true, host: 'vpn.example.test', tlsMode: 'custom' as const, tlsCertIp: '', tlsServerName: 'vpn.example.test',
+      certificateId: settings.certificate_id, udpIdleTimeout: 60, masqueradeType: 'off' as const, masqueradeString: '',
+    }
+    await expect(api.hysteria.preview(input)).resolves.toMatchObject({ changed: false })
+    await expect(api.hysteria.preview(input)).resolves.toMatchObject({ changed: true, changeId: 'hysteria-change', expectedConfirmation: 'APPLY' })
+    await api.hysteria.apply('hysteria-change', 'APPLY')
+
+    const uploadCall = calls.find(call => call.url === '/api/transports/hysteria2/certificate')
+    expect(uploadCall?.options?.body).toBeInstanceOf(FormData)
+    const upload = uploadCall?.options?.body
+    if (!(upload instanceof FormData)) throw new Error('certificate upload was not encoded as multipart form data')
+    expect(upload.get('fullchain')).toBe(fullchain)
+    expect(upload.get('private_key')).toBe(privateKey)
+    expect(upload.get('server_name')).toBe('vpn.example.test')
+    expect(uploadCall?.options?.headers).toEqual({})
+    expect(calls.some(call => call.url === '/api/transports/hysteria2/certificate/mkcert' && call.options?.body === JSON.stringify({ ipv4: '89.169.13.234' }))).toBe(true)
+    expect(calls.some(call => call.url === '/api/transports/hysteria2/preview' && call.options?.body === JSON.stringify({
+      enabled: true, host: 'vpn.example.test', tls_mode: 'custom', tls_cert_ip: '', tls_server_name: 'vpn.example.test',
+      certificate_id: settings.certificate_id, udp_idle_timeout: 60, masquerade_type: 'off', masquerade_string: '',
+    }))).toBe(true)
+    expect(calls.some(call => call.url === '/api/transports/hysteria2/apply' && call.options?.body === JSON.stringify({ change_id: 'hysteria-change', confirmation: 'APPLY' }))).toBe(true)
+  })
+
   it('maps diagnostics and exposes backup and authentication requests', async () => {
     const { send, calls } = requester({
       '/api/status': {

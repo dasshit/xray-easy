@@ -11,6 +11,7 @@ import { useI18n } from './presentation/i18n'
 import { readTheme, persistTheme } from './presentation/theme'
 import { xrayEasyGatewayKey } from './presentation/api'
 import type { Section, Theme } from './presentation/models'
+import HysteriaSettingsPanel from './presentation/HysteriaSettingsPanel.vue'
 
 const setup = ref<SetupStatus | null>(null)
 const admin = ref<Admin | null>(null)
@@ -488,6 +489,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
             <label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label>
             <p class="hint">{{ t().settingsWarning }}</p>
           </article>
+          <HysteriaSettingsPanel :api="api" :language="language" @error="showError" @saved="showSuccess(t().saved)" />
         </div>
         <div class="section-actions"><button :disabled="busy" @click="reviewSettings">{{ t().saveSettings }}</button></div>
       </section>
