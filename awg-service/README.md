@@ -105,7 +105,9 @@ particular profile will evade DPI or work through every network.
 ## Validation boundary
 
 Unit tests, race checks, `go vet`, Linux amd64/arm64 cross-builds, Compose
-configuration validation and a local image build can run off-VDS. They do not
-verify host TUN access, the VDS firewall/security group, inbound UDP, kernel
-forwarding/NAT, IPv6 egress or real-client traffic. Those require the documented
-VDS trial before this service should be integrated into the product UI.
+configuration validation and a local image build run off-VDS. A VDS smoke test
+succeeded with the official AmneziaWG iOS client: after creating and importing
+a peer profile, the container was restarted, the peer and its addresses
+persisted, and the client reconnected with working traffic. Long-term
+stability, macOS clients, and IPv6 egress still need separate validation before
+product integration.

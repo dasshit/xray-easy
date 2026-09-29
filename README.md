@@ -417,11 +417,12 @@ client networks with routes already used by the VDS. To stop the optional
 service without affecting Xray, run `docker compose --profile awg-prototype
 stop awg`.
 
-The prototype has not yet been verified on a VDS or with real AmneziaWG
-clients. In particular, UDP reachability, host forwarding/NAT behavior,
-IPv6 egress, and end-to-end traffic must be checked on the target VDS before
-using it. These results will determine whether to integrate the service with
-the Xray-easy database, UI, installer, backup, and doctor flows.
+VDS smoke test passed: a peer profile was created and imported into the official
+AmneziaWG client on iOS. After restarting the container, the peer and its
+addresses persisted; the client reconnected and traffic worked. Longer-term
+stability, macOS clients, and IPv6 egress still need separate verification
+before integrating the service with the Xray-easy database, UI, installer,
+backup, and doctor flows.
 
 Backend test coverage and the test plan are documented in
 [docs/backend-test-plan.md](docs/backend-test-plan.md). Run
