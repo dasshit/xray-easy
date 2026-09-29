@@ -30,6 +30,7 @@ prototype/secrets/*
 !prototype/secrets/.gitkeep
 /data/
 /backups/
+/awg-profiles/
 *.db
 *.db-shm
 *.db-wal

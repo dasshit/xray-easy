@@ -1,0 +1,18 @@
+syntax = "proto3";
+
+package xrayeasy.awg.v1;
+
+option go_package = "xray-easy/awg-service/api/v1";
+
+import "google/protobuf/struct.proto";
+
+// Prototype API uses google.protobuf.Struct to avoid generated language-specific
+// message types while the lifecycle contract is being validated. Field names
+// and validation rules are documented in the service package README.
+service Control {
+  rpc GetStatus(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ListPeers(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc AddPeer(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc RemovePeer(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc RenderClientConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+}

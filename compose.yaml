@@ -151,6 +151,100 @@ services:
       timeout: 5s
       retries: 5
 
+  init-awg-data:
+    profiles: ["awg-prototype"]
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data
+        chown -R 10001:10001 /data
+        chmod 0750 /data
+    volumes:
+      - awg_data:/data
+
+  awg:
+    profiles: ["awg-prototype"]
+    build:
+      context: .
+      dockerfile: Dockerfile.awg
+    restart: unless-stopped
+    user: "10001:10001"
+    read_only: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    tmpfs:
+      - /tmp
+      - /run
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+      net.ipv6.conf.default.forwarding: "1"
+    environment:
+      AWG_DATA_DIR: /data
+      AWG_MASTER_KEY: ${XRAY_EASY_MASTER_KEY:?set XRAY_EASY_MASTER_KEY in .env}
+      AWG_PUBLIC_HOST: ${AWG_PUBLIC_HOST:-}
+      AWG_PUBLIC_PORT: ${AWG_PUBLIC_PORT:-51820}
+      AWG_LISTEN_PORT: ${AWG_LISTEN_PORT:-51820}
+      AWG_CONTROL_ADDR: 172.31.241.4:10087
+      AWG_GRPC_LISTEN: 172.31.241.4:10087
+      AWG_CONTROL_TOKEN_FILE: /data/control.token
+      AWG_IPV4_POOL: ${AWG_IPV4_POOL:-10.88.0.0/24}
+      AWG_IPV6_POOL: ${AWG_IPV6_POOL:-fd88:88:88::/64}
+      AWG_DNS_SERVERS: ${AWG_DNS_SERVERS:-1.1.1.1,2606:4700:4700::1111}
+      AWG_INTERFACE: ${AWG_INTERFACE:-awg0}
+      AWG_JC: ${AWG_JC:-}
+      AWG_JMIN: ${AWG_JMIN:-}
+      AWG_JMAX: ${AWG_JMAX:-}
+      AWG_S1: ${AWG_S1:-}
+      AWG_S2: ${AWG_S2:-}
+      AWG_S3: ${AWG_S3:-}
+      AWG_S4: ${AWG_S4:-}
+      AWG_H1: ${AWG_H1:-}
+      AWG_H2: ${AWG_H2:-}
+      AWG_H3: ${AWG_H3:-}
+      AWG_H4: ${AWG_H4:-}
+      AWG_I1: ${AWG_I1:-}
+      AWG_I2: ${AWG_I2:-}
+      AWG_I3: ${AWG_I3:-}
+      AWG_I4: ${AWG_I4:-}
+      AWG_I5: ${AWG_I5:-}
+      AWG_HEADER_PROTECTION_KEY: ${AWG_HEADER_PROTECTION_KEY:-}
+      AWG_CONTENT_PADDING_ADDITION: ${AWG_CONTENT_PADDING_ADDITION:-}
+      AWG_REKEY_AFTER_TIME: ${AWG_REKEY_AFTER_TIME:-}
+      AWG_REKEY_TIMEOUT: ${AWG_REKEY_TIMEOUT:-}
+      AWG_REJECT_AFTER_TIME: ${AWG_REJECT_AFTER_TIME:-}
+      AWG_KEEPALIVE_TIMEOUT: ${AWG_KEEPALIVE_TIMEOUT:-}
+      AWG_MAX_HANDSHAKE_ATTEMPTS: ${AWG_MAX_HANDSHAKE_ATTEMPTS:-}
+      AWG_RANDOM_TRAILERS: ${AWG_RANDOM_TRAILERS:-}
+      AWG_DISABLE_COOKIES: ${AWG_DISABLE_COOKIES:-}
+    ports:
+      - "${AWG_PUBLIC_PORT:-51820}:51820/udp"
+    volumes:
+      - awg_data:/data
+    networks:
+      control:
+        ipv4_address: 172.31.241.4
+      egress:
+        gw_priority: 1
+    depends_on:
+      init-awg-data:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "awg-service", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
 secrets:
   xray_supervisor_token:
     file: ${XRAY_SUPERVISOR_TOKEN_SOURCE:-./prototype/secrets/xray_supervisor_token}
@@ -160,6 +254,7 @@ volumes:
   xray_config:
   xray_supervisor_token_data:
   hysteria_tls_data:
+  awg_data:
 
 networks:
   control:

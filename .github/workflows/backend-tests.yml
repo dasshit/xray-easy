@@ -81,3 +81,28 @@ jobs:
         env:
           BACKEND_COVERAGE_MIN: "90"
           BACKEND_PACKAGE_COVERAGE_MIN: "80"
+
+  awg-prototype:
+    name: AmneziaWG prototype tests and Linux builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go for the pinned AmneziaWG engine
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: awg-service/go.mod
+          cache: true
+          cache-dependency-path: awg-service/go.sum
+
+      - name: Run AWG unit tests
+        run: go test -count=1 -race ./...
+        working-directory: awg-service
+
+      - name: Build Linux amd64 and arm64 services
+        run: |
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...
+          GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./...
+        working-directory: awg-service

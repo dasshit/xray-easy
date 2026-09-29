@@ -349,6 +349,80 @@ If startup fails, inspect `docker compose ps` and
 `docker compose logs --tail=100 xray xray-easy`. Installer failures retain
 `.env` and the token so you can correct the problem and rerun `./install.sh`.
 
+## Experimental AmneziaWG service
+
+The `awg-prototype` Compose profile is an isolated implementation spike. It
+adds an `awg` container that embeds the pinned AmneziaWG Go engine and exposes
+a token-protected gRPC lifecycle API only on the private Compose control
+network. It does not change the Xray services or add an Internet-facing control
+port. The current Web UI and installer do not manage AmneziaWG yet.
+
+This prototype requires a Linux Docker host with `/dev/net/tun`, the
+`NET_ADMIN` capability, IPv4/IPv6 forwarding, IPv4 and IPv6 outbound routes,
+and an available UDP port. It creates separate NAT rules for the IPv4 and IPv6
+egress interfaces; startup fails with an actionable error when either route is
+missing. The normal Compose deployment does not start the service. After a
+regular Xray-easy installation, set `AWG_PUBLIC_HOST` in `.env` to the IPv4
+address, IPv6 address, or DNS name that clients will use, then build and start
+the optional profile:
+
+```sh
+docker compose --profile awg-prototype up -d --build awg
+docker compose --profile awg-prototype exec -T awg awg-service status
+docker compose --profile awg-prototype exec -T awg awg-service peer-add --name iphone
+mkdir -m 700 -p awg-profiles
+docker compose --profile awg-prototype cp awg:/data/profiles/iphone.conf ./awg-profiles/iphone.conf
+```
+
+Import `iphone.conf` into the official AmneziaWG client on iOS or macOS. The
+file contains the client's private key: transfer it securely and do not commit
+it or attach it to diagnostics. `peer-add` saves the profile with mode `0600`
+inside the persistent `awg_data` volume. Copy it out before revoking the peer;
+`peer-remove` deletes the saved `/data/profiles/NAME.conf` after revocation.
+If you change shared obfuscation settings, restart the service, refresh the
+saved profile without exposing its private key in command arguments, then copy
+the updated file to the client again:
+
+```sh
+docker compose --profile awg-prototype up -d --build awg
+docker compose --profile awg-prototype exec -T awg awg-service profile --name iphone
+docker compose --profile awg-prototype cp awg:/data/profiles/iphone.conf ./awg-profiles/iphone-refreshed.conf
+```
+
+The server private key is encrypted with `XRAY_EASY_MASTER_KEY`; keep that key
+unchanged. The service allocates an IPv4 and an IPv6 address, enables full-tunnel
+routes, and applies the peer to the live engine without restarting the
+container. Revoke a peer with:
+
+```sh
+docker compose --profile awg-prototype exec -T awg awg-service peer-remove --name iphone
+```
+
+The built-in AmneziaWG 3.x obfuscation preset follows the current defaults in
+the [official Amnezia client implementation](https://github.com/amnezia-vpn/amnezia-client/blob/dev/client/core/installers/awgInstaller.cpp):
+`Jc=4`, `Jmin=10`, `Jmax=50`, `S1`–`S4=12`, `H1`–`H4=1`–`4`, header protection,
+content padding, timing ranges, random trailers and disabled cookies. The same
+values are configured on the server and emitted in every client profile; the
+header-protection key is derived from the installation master key. These are
+protocol compatibility defaults, not a guarantee against DPI or blocking. If
+you override any shared obfuscation value in `.env`, restart the service and
+refresh each saved profile with `awg-service profile --name NAME`, then
+re-import the updated profile so its parameters match the server. The service
+README documents the private gRPC API and all lifecycle commands.
+
+Allow the configured `AWG_PUBLIC_PORT`/UDP in the VDS firewall. The prototype
+defaults to UDP 51820, client networks `10.88.0.0/24` and `fd88:88:88::/64`,
+and DNS servers `1.1.1.1` and `2606:4700:4700::1111`. Do not overlap these
+client networks with routes already used by the VDS. To stop the optional
+service without affecting Xray, run `docker compose --profile awg-prototype
+stop awg`.
+
+The prototype has not yet been verified on a VDS or with real AmneziaWG
+clients. In particular, UDP reachability, host forwarding/NAT behavior,
+IPv6 egress, and end-to-end traffic must be checked on the target VDS before
+using it. These results will determine whether to integrate the service with
+the Xray-easy database, UI, installer, backup, and doctor flows.
+
 Backend test coverage and the test plan are documented in
 [docs/backend-test-plan.md](docs/backend-test-plan.md). Run
 `bash scripts/backend-coverage.sh` to check coverage thresholds locally.
