@@ -1,5 +1,6 @@
 import type {
   Admin,
+  CreateClientCommand,
   DiagnosticEntry,
   HysteriaCertificateUpload,
   HysteriaSettings,
@@ -133,16 +134,15 @@ export interface XrayEasyGateway {
     list(): Promise<Client[]>
     /**
      * Create a device profile for a new client installation.
-     * @param name - The user-selected device name.
-     * @param fingerprint - The optional client TLS fingerprint.
-     * @returns The newly created device.
-     * @rejects {Error} When the name, fingerprint, or server configuration is rejected.
+     * @param input - The device name, selected protocol, and optional protocol-specific credentials.
+     * @returns The newly created single-protocol device.
+     * @rejects {Error} When the input or server configuration is rejected.
      */
-    create(name: string, fingerprint?: string): Promise<Client>
+    create(input: CreateClientCommand): Promise<Client>
     /**
      * Read the connection profile for a device.
      * @param clientId - The internal ID of the device.
-     * @returns The VLESS URI and JSON configuration for the device.
+     * @returns A protocol-specific profile URI and any supported JSON configuration.
      * @rejects {Error} When the device is missing or its profile cannot be generated.
      */
     profile(clientId: string): Promise<ProfileDelivery>
@@ -161,7 +161,7 @@ export interface XrayEasyGateway {
      */
     profileQrUrl(clientId: string): string
     /** Build the authenticated URL for a Hysteria 2 share URI QR code. */
-    profileHysteriaQrUrl?(clientId: string): string
+    profileHysteriaQrUrl(clientId: string): string
     /**
      * Build the authenticated URL for a device’s JSON profile.
      * @param clientId - The internal ID of the device.

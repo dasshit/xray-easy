@@ -1,4 +1,4 @@
-import type { Admin, DiagnosticEntry, HysteriaCertificateInfo, HysteriaCertificateUpload, HysteriaSettings, HysteriaSettingsCommand, HysteriaSettingsPreview, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
+import type { Admin, CreateClientCommand, DiagnosticEntry, HysteriaCertificateInfo, HysteriaCertificateUpload, HysteriaSettings, HysteriaSettingsCommand, HysteriaSettingsPreview, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
 import type { XrayEasyGateway } from '../application/ports/xrayEasyGateway'
 import type { Client, ClientActionType, Settings, SettingsChange } from '../domain/models'
 import { parseResponse, request } from './api'
@@ -82,6 +82,10 @@ function mapClient(dto: ClientDto): Client {
   return {
     id: dto.id,
     name: dto.name,
+    protocol: dto.protocol,
+    protocols: dto.protocols,
+    ...(dto.vless === undefined ? {} : { vless: dto.vless }),
+    ...(dto.hysteria2 === undefined ? {} : { hysteria2: dto.hysteria2 }),
     enabled: dto.enabled,
     revoked: dto.revoked,
     online: dto.online,
@@ -307,15 +311,24 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
     },
     clients: {
       list: async (): Promise<Client[]> => (await sendDto(send, '/api/clients', ClientDtoSchema.array())).map(mapClient),
-      create: async (name: string, fingerprint?: string): Promise<Client> => mapClient(await sendDto(send, '/api/clients', ClientDtoSchema, {
+      create: async (input: CreateClientCommand): Promise<Client> => mapClient(await sendDto(send, '/api/clients', ClientDtoSchema, {
         method: 'POST', body: JSON.stringify({
-          name,
-          ...(fingerprint === undefined || fingerprint === '' ? {} : { fingerprint }),
+          name: input.name,
+          protocol: input.protocol,
+          ...(input.fingerprint === undefined || input.fingerprint === '' ? {} : { fingerprint: input.fingerprint }),
+          ...(input.auth === undefined || input.auth === '' ? {} : { auth: input.auth }),
         }),
       })),
       profile: async (clientId: string): Promise<ProfileDelivery> => {
         const dto = await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/profile?format=uri`, ProfileDeliveryDtoSchema)
-        return { clientId: dto.client_id, uri: dto.uri, ...(dto.hysteria_uri === undefined ? {} : { hysteriaUri: dto.hysteria_uri }), json: dto.json }
+        if (dto.protocol === 'vless') return { clientId: dto.client_id, protocol: dto.protocol, uri: dto.uri, json: dto.json }
+        if (dto.protocol === 'hysteria2') return { clientId: dto.client_id, protocol: dto.protocol, hysteriaUri: dto.hysteria_uri }
+        return {
+          clientId: dto.client_id, protocol: dto.protocol,
+          ...(dto.uri === undefined ? {} : { uri: dto.uri }),
+          ...(dto.hysteria_uri === undefined ? {} : { hysteriaUri: dto.hysteria_uri }),
+          ...(dto.json === undefined ? {} : { json: dto.json }),
+        }
       },
       setAction: async (clientId: string, action: ClientActionType): Promise<Client> => mapClient(
         await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/${action}`, ClientDtoSchema, post()),

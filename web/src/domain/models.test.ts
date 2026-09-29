@@ -5,6 +5,9 @@ function client(overrides: Partial<Client> = {}): Client {
   return {
     id: 'client-id',
     name: 'phone',
+    protocol: 'vless',
+    protocols: ['vless'],
+    vless: { enabled: true, revoked: false },
     enabled: true,
     revoked: false,
     online: false,

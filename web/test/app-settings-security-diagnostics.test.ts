@@ -138,6 +138,57 @@ describe('connection settings', () => {
 })
 
 describe('backups and TOTP security', () => {
+  it('changes the administrator password, closes the session, and asks for a new sign-in', async () => {
+    const requests: RequestRecord[] = []
+    const { wrapper, eventSources } = await mountApp(request => {
+      requests.push(request)
+      if (request.url === '/api/auth/password') return { status: 204 }
+      return defaultHandler({ authenticated: true, clients: [sampleClient] })(request)
+    })
+    await openTab(wrapper, 'Security')
+    const card = securityCard(wrapper, 'Administrator password')
+    const inputs = card.findAll('input')
+    await itemAt(inputs, 0).setValue('old-password')
+    await itemAt(inputs, 1).setValue('a-new-password-long-enough')
+    await itemAt(inputs, 2).setValue('does-not-match')
+    expect(card.text()).toContain('The passwords do not match.')
+    expect((card.get('button').element as HTMLButtonElement).disabled).toBe(true)
+
+    await itemAt(inputs, 2).setValue('a-new-password-long-enough')
+    expect((card.get('button').element as HTMLButtonElement).disabled).toBe(false)
+    await card.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(requests.find(request => request.url === '/api/auth/password')?.body).toEqual({
+      current_password: 'old-password',
+      new_password: 'a-new-password-long-enough',
+    })
+    expect(itemAt(eventSources, 0).closed).toBe(true)
+    expect(wrapper.findAll('.security-card')).toHaveLength(0)
+    expect(wrapper.text()).toContain('Password changed. Sign in with the new password.')
+    expect(wrapper.text()).toContain('Administrator login')
+  })
+
+  it('keeps the current session and form when a password change fails', async () => {
+    const { wrapper, eventSources } = await mountApp(request => {
+      if (request.url === '/api/auth/password') return { status: 400, body: { error: 'Current password is incorrect' } }
+      return defaultHandler({ authenticated: true })(request)
+    })
+    await openTab(wrapper, 'Security')
+    const card = securityCard(wrapper, 'Administrator password')
+    const inputs = card.findAll('input')
+    await itemAt(inputs, 0).setValue('wrong-password')
+    await itemAt(inputs, 1).setValue('a-new-password-long-enough')
+    await itemAt(inputs, 2).setValue('a-new-password-long-enough')
+    await card.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.get('[role="alert"]').text()).toContain('Current password is incorrect')
+    expect(wrapper.findAll('.security-card')).toHaveLength(3)
+    expect(itemAt(eventSources, 0).closed).toBe(false)
+    expect((itemAt(card.findAll('input'), 0).element as HTMLInputElement).value).toBe('wrong-password')
+  })
+
   it('creates a backup and displays the backup name', async () => {
     const requests: RequestRecord[] = []
     const { wrapper } = await mountApp(request => {

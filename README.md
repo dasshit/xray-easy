@@ -44,8 +44,8 @@ TLS mode, generates the master key
 and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
 mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
 services to become healthy, then runs the final `xray-easy doctor` check. A
-repeat run reuses the existing keys and Docker volumes. You can run it again to
-change the Hysteria 2 TLS mode or import a renewed certificate. If Compose cannot make
+repeat run reuses the existing keys and Docker volumes. After the first start,
+manage Hysteria 2 settings and certificates in the Web UI. If Compose cannot make
 the services healthy, the installer displays `compose ps --all` and the latest
 100 lines from both service logs in the terminal. It leaves containers and
 configuration in place and prints recovery commands.
@@ -84,24 +84,37 @@ panel is never published on the VPS public interface by `compose.yaml`.
 
 In the browser, create the administrator, enter the VPS public IPv4 address,
 IPv6 address, or DNS name, choose a REALITY target and SNI, and create the first
-device. Enter an IPv6 address without brackets or a port, for example
+device profile. Enter an IPv6 address without brackets or a port, for example
 `2001:db8::1`. Use a DNS name with both A and AAAA records to let clients choose
-their available address family. Import the QR code, VLESS link or JSON profile
-into a client. The public port shown in the setup screen comes from `.env`; it
-is not edited in the panel. A working public inbound is created when the first
-device is applied.
+their available address family. Choose **VLESS + REALITY** or, when enabled and
+its certificate is ready, **Hysteria 2**. The profile dialog then shows only
+that protocol's QR code and link; VLESS profiles also offer a JSON file. To
+give one device both transports, create two profiles with the same device name.
+The public port shown in the setup screen comes from `.env`; it is not edited in
+the panel. A working public inbound is created when the first device is applied.
 
 ## What is available
 
-- Device creation, enable/disable/revoke, QR code, VLESS link and JSON export.
-  SQLite keeps five free REALITY `shortId` values and permanent assignment
-  history. While IDs remain in the reserve, new VLESS users are added through
-  HandlerService without restarting Xray. When the reserve is exhausted, Xray's
-  gRPC API replaces only the VLESS inbound; its active connections may briefly
-  reconnect. The control plane validates candidate configs and reconciles
-  SQLite, `active.json` and runtime state after interruptions.
-- Optional Hysteria 2 URI and QR for V2Rage. It runs as a second inbound in the
-  same Xray container, on UDP at `XRAY_PUBLIC_PORT`. During `./install.sh`,
+- Protocol-specific device creation, enable/disable/revoke and profile delivery.
+  New profiles use either VLESS + REALITY or Hysteria 2, never both. Existing
+  migrated profiles keep both transports and are marked as legacy in the list.
+  Reopening a profile shows the same saved credentials; it does not rotate them.
+- VLESS profiles provide a QR code, VLESS link and JSON export. Their fingerprint
+  can be selected per profile.
+- Hysteria 2 profiles provide a QR code and `hysteria2://` link, with an
+  independently generated password by default. An administrator can set a
+  password in the form's Advanced section. Hysteria 2 has no client JSON export.
+  Its option is available only while the inbound is running and its certificate
+  is valid; the form links to Settings when it is unavailable.
+- The REALITY short-ID reserve holds five free values. While IDs remain in the
+  reserve, new VLESS users are added through HandlerService without restarting
+  Xray. When it is exhausted, Xray's gRPC API replaces only the VLESS inbound;
+  its active connections may briefly reconnect. The control plane validates
+  candidate configs and reconciles SQLite, `active.json` and runtime state after
+  interruptions.
+- Optional Hysteria 2 profile transport for V2Rage. It runs as a second inbound
+  in the same Xray container, on UDP at `XRAY_PUBLIC_PORT`. During the initial
+  `./install.sh`,
   choose one of three options:
 
   1. **Off:** VLESS/REALITY only. This is the default.
@@ -127,18 +140,16 @@ device is applied.
      omit `insecure`, so clients verify the certificate normally. Make sure
      the chain is trusted by your clients.
 
-  The certificate and private key used by Xray live in a dedicated Docker
-  volume. The panel cannot read the key. Run `./install.sh` again to switch
-  modes or import a renewed custom certificate; it preserves the master key,
-  supervisor token, database and profiles, then recreates services when the
-  certificate changes. A mode change can briefly reconnect Hysteria 2 clients.
-  For manual setup, use `XRAY_HYSTERIA2_ENABLED`,
-  `XRAY_HYSTERIA2_TLS_MODE`, `XRAY_HYSTERIA2_CERT_IP`, and optionally
-  `XRAY_HYSTERIA2_TLS_SERVER_NAME` in `.env` (see `.env.example`). Allow inbound UDP at
-  `XRAY_PUBLIC_PORT` in the VPS firewall/security group.
-  Existing installations without a TLS mode keep their previous `insecure=1`
-  links until you rerun `./install.sh` and explicitly select one of the two
-  certificate modes.
+  The control plane manages the Hysteria TLS volume; Xray mounts it read-only.
+  After setup, use **Settings → Hysteria 2** to enable or disable the inbound,
+  generate a mkcert certificate, upload a trusted PEM pair, or change host/SNI
+  and advanced transport options. Settings are stored in SQLite; the Hysteria
+  `.env` values only seed a new installation. The private key is not sent to the
+  browser. Each change shows a preview, creates a backup and replaces only the
+  Hysteria inbound; active Hysteria connections may briefly reconnect. A host,
+  SNI, certificate or TLS-mode change can require importing the updated profile
+  link. Allow inbound UDP at `XRAY_PUBLIC_PORT` in the VPS firewall/security
+  group.
 - Online and last-seen indicators, cumulative upload/download totals, and live
   panel updates through SSE.
 - Node settings with a preview of changes, confirmation and an automatic

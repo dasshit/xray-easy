@@ -2,6 +2,14 @@
 export type Client = {
   id: string
   name: string
+  /** Credential-bearing protocol profile created for this device record. */
+  protocol: ClientProtocol
+  /** Protocols with credentials attached to this profile. */
+  protocols: ClientProtocol[]
+  /** Access state when the profile includes a VLESS inbound. */
+  vless?: ClientProtocolAccess
+  /** Access state when the profile includes a Hysteria 2 inbound. */
+  hysteria2?: ClientProtocolAccess
   /** Whether the profile is enabled in the active Xray configuration. */
   enabled: boolean
   /** Whether the profile was permanently revoked and cannot be re-enabled. */
@@ -16,6 +24,12 @@ export type Client = {
   /** Cumulative downloaded traffic in bytes; totals are retained across Xray restarts. */
   downloadBytes: number
 }
+
+/** Protocols supported by a device profile, including migrated combined profiles. */
+export type ClientProtocol = 'vless' | 'hysteria2' | 'legacy_dual'
+
+/** Enabled and revoked state for one protocol access. */
+export type ClientProtocolAccess = { enabled: boolean; revoked: boolean }
 
 /** Log verbosity supported by Xray's server log configuration. */
 export type XrayLogLevel = 'debug' | 'info' | 'warning' | 'error' | 'none'

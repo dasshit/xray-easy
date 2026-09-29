@@ -1,10 +1,10 @@
 <script setup lang="ts">
-import { inject, nextTick, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import { APIError } from './application/errors'
 import type { EventSubscription, XrayEasyGateway } from './application/ports/xrayEasyGateway'
 import { clientActionFor } from './domain/models'
 import type { Client, ClientAction, ClientActionType, Settings, SettingsChange, XrayLogLevel } from './domain/models'
-import type { Admin, DiagnosticEntry, NodeStatus, ProfileDelivery, SetupStatus, TOTPSetup, TOTPStatus } from './application/models'
+import type { Admin, CreateClientCommand, DiagnosticEntry, HysteriaSettings, NodeStatus, ProfileDelivery, SetupStatus, TOTPSetup, TOTPStatus } from './application/models'
 import { loadAuthenticatedDashboard, loadDiagnosticsSnapshot, loadNodeStatusSnapshot } from './application/services/dashboard'
 import { formatBytes, formatTimestamp } from './presentation/format'
 import { useI18n } from './presentation/i18n'
@@ -12,11 +12,12 @@ import { readTheme, persistTheme } from './presentation/theme'
 import { xrayEasyGatewayKey } from './presentation/api'
 import type { Section, Theme } from './presentation/models'
 import HysteriaSettingsPanel from './presentation/HysteriaSettingsPanel.vue'
+import CreateProfileModal from './presentation/CreateProfileModal.vue'
+import ProfileDeliveryModal from './presentation/ProfileDeliveryModal.vue'
 
 const setup = ref<SetupStatus | null>(null)
 const admin = ref<Admin | null>(null)
 const clients = ref<Client[]>([])
-const newDevice = ref({ name: '', fingerprint: '' })
 const selectedProfile = ref<ProfileDelivery | null>(null)
 const copiedProfile = ref(false)
 const copiedHysteria = ref(false)
@@ -27,7 +28,7 @@ const api = requireGateway(inject(xrayEasyGatewayKey))
 const theme = ref<Theme>(readTheme())
 const activeSection = ref<Section>('profiles')
 const createModalOpen = ref(false)
-const newDeviceNameInput = ref<HTMLInputElement | null>(null)
+const hysteriaStatus = ref<HysteriaSettings | null>(null)
 const clientAction = ref<ClientAction>(null)
 const setupForm = ref({ username: 'admin', password: '', publicHost: '', publicPort: 443, realityTarget: 'www.cloudflare.com:443', realitySNI: 'www.cloudflare.com' })
 const loginForm = ref({ username: 'admin', password: '', totpCode: '', recoveryCode: '' })
@@ -45,6 +46,10 @@ const diagnostics = ref<DiagnosticEntry[]>([])
 const loginNeedsTOTP = ref(false)
 const loginUsesRecovery = ref(false)
 const successMessage = ref('')
+const hysteriaAvailable = computed(() => {
+  const status = hysteriaStatus.value
+  return status !== null && status.enabled && status.state === 'on' && (status.certificateError === undefined || status.certificateError === '')
+})
 let events: EventSubscription | null = null
 let reconnectTimer: number | null = null
 let disposed = false
@@ -165,6 +170,19 @@ async function loadAuthenticated() {
   }
   nodeStatus.value = dashboard.nodeStatus
   diagnostics.value = dashboard.diagnostics
+  await refreshHysteriaStatus()
+}
+
+/** Refresh Hysteria availability used by the profile creation dialog. */
+async function refreshHysteriaStatus() {
+  try { hysteriaStatus.value = await api.hysteria.status() }
+  catch { hysteriaStatus.value = null }
+}
+
+/** Refresh the profile-creation availability after Hysteria settings are applied. */
+async function handleHysteriaSettingsSaved() {
+  await refreshHysteriaStatus()
+  showSuccess(t().saved)
 }
 /**
  * Refresh the device list from the API.
@@ -291,25 +309,28 @@ async function changePassword() {
  */
 function openCreateModal() {
   error.value = ''
-  newDevice.value = { name: '', fingerprint: '' }
   createModalOpen.value = true
-  void nextTick(() => newDeviceNameInput.value?.focus())
+  void refreshHysteriaStatus()
 }
 /**
  * Close the new-device dialog when no operation is in progress.
  */
 function closeCreateModal() { if (!busy.value) createModalOpen.value = false }
+/** Move to the transport settings from the profile-creation dialog. */
+function openHysteriaSettings() { createModalOpen.value = false; activeSection.value = 'settings' }
 /**
  * Create a device, add it to the list, and show its connection profile.
+ * @param input - The selected protocol and its profile-specific options.
  */
-async function createDevice() {
+async function createDevice(input: CreateClientCommand) {
   busy.value = true; error.value = ''
-  try { const created = await api.clients.create(newDevice.value.name, newDevice.value.fingerprint || undefined); clients.value.push(created); createModalOpen.value = false; await showProfile(created) }
+  try { const created = await api.clients.create(input); clients.value.push(created); createModalOpen.value = false; await showProfile(created) }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 /**
  * Load and display the connection profile for a device.
  * @param client - The device whose profile should be displayed.
+ * @returns A promise that resolves after the profile has been loaded or an error is shown.
  */
 async function showProfile(client: Client) { try { copiedProfile.value = false; copiedHysteria.value = false; selectedProfile.value = await api.clients.profile(client.id) } catch (cause) { showError(cause) } }
 /**
@@ -321,24 +342,37 @@ function closeProfile() { if (!busy.value) { selectedProfile.value = null; copie
  * @returns The matching device, or undefined if it is no longer in the list.
  */
 function selectedClient() { return clients.value.find(client => client.id === selectedProfile.value?.clientId) }
-/** Return the QR URL for the Hysteria 2 profile currently shown.
- * @returns The profile QR endpoint, or an empty string when no profile is selected.
+/**
+ * Return the localized protocol names attached to a device.
+ * @param client - The device whose protocol label should be shown.
+ * @returns The visible protocol label.
  */
-function selectedHysteriaQrUrl() {
-  const clientId = selectedProfile.value?.clientId
-  return clientId !== undefined && clientId !== '' ? api.clients.profileHysteriaQrUrl?.(clientId) ?? '' : ''
+function clientProtocolLabel(client: Client) {
+  if (client.protocol === 'legacy_dual') return t().legacyDual
+  return client.protocol === 'hysteria2' ? 'Hysteria 2' : 'VLESS + REALITY'
+}
+/**
+ * Describe protocol access separately from observed online traffic.
+ * @param client - The device whose protocol state should be described.
+ * @returns The localized access state for each attached protocol.
+ */
+function clientAccessSummary(client: Client) {
+  const state = (access?: { enabled: boolean; revoked: boolean }) => access?.revoked === true ? t().revoked : access?.enabled === true ? t().enabled : t().disabled
+  if (client.protocol === 'legacy_dual') return `VLESS: ${state(client.vless)} · Hysteria 2: ${state(client.hysteria2)}`
+  return state(client.protocol === 'hysteria2' ? client.hysteria2 : client.vless)
 }
 /**
  * Copy the selected VLESS URI to the clipboard and report the result.
  */
 async function copyProfileUri() {
-  if (!selectedProfile.value) return
-  try { await navigator.clipboard.writeText(selectedProfile.value.uri); copiedProfile.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedProfile.value = false }, 2200) }
+  const uri = selectedProfile.value && selectedProfile.value.protocol !== 'hysteria2' ? selectedProfile.value.uri : undefined
+  if (uri === undefined || uri === '') return
+  try { await navigator.clipboard.writeText(uri); copiedProfile.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedProfile.value = false }, 2200) }
   catch (cause) { showError(cause) }
 }
 /** Copy the Hysteria 2 URI and report the result. */
 async function copyHysteriaUri() {
-  const uri = selectedProfile.value?.hysteriaUri
+  const uri = selectedProfile.value && selectedProfile.value.protocol !== 'vless' ? selectedProfile.value.hysteriaUri : undefined
   if (uri === undefined || uri === '') return
   try { await navigator.clipboard.writeText(uri); copiedHysteria.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedHysteria.value = false }, 2200) }
   catch (cause) { showError(cause) }
@@ -461,7 +495,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         <div v-if="!clients.length" class="empty-state"><span class="empty-icon" aria-hidden="true">⌁</span><strong>{{ t().emptyProfiles }}</strong><button @click="openCreateModal">{{ t().createProfile }}</button></div>
         <ul v-else class="devices">
           <li v-for="client in clients" :key="client.id" class="device-card">
-            <div class="device-card-header"><div class="device-identity"><span class="device-status" :class="{ online: client.online, disabled: !client.enabled || client.revoked }"><span class="status-dot" :class="{ online: client.online }"></span></span><div class="device-main"><strong>{{ client.name }}</strong><span class="device-meta">{{ client.fingerprint || 'chrome' }} · {{ client.online ? t().online : t().offline }}</span></div></div><span class="status-badge" :class="{ positive: client.enabled && !client.revoked, muted: !client.enabled, negative: client.revoked }">{{ client.revoked ? t().revoked : client.enabled ? t().enabled : t().disabled }}</span></div>
+            <div class="device-card-header"><div class="device-identity"><span class="device-status" :class="{ online: client.online, disabled: !client.enabled || client.revoked }"><span class="status-dot" :class="{ online: client.online }"></span></span><div class="device-main"><strong>{{ client.name }}</strong><span class="protocol-badge">{{ clientProtocolLabel(client) }}</span><span class="device-meta">{{ clientAccessSummary(client) }} · {{ client.online ? t().online : t().offline }}<template v-if="client.protocol === 'vless'"> · {{ client.fingerprint || settings?.clientFingerprint || 'chrome' }}</template></span></div></div><span class="status-badge" :class="{ positive: client.enabled && !client.revoked, muted: !client.enabled, negative: client.revoked }">{{ client.revoked ? t().revoked : client.enabled ? t().enabled : t().disabled }}</span></div>
             <div class="device-stats"><div class="device-stat"><span>{{ t().upload }}</span><strong>{{ formatBytes(client.uploadBytes) }}</strong></div><div class="device-stat"><span>{{ t().downloadTraffic }}</span><strong>{{ formatBytes(client.downloadBytes) }}</strong></div><div class="device-stat device-stat-wide"><span>{{ t().lastSeen }}</span><strong>{{ client.lastSeen ? formatTimestamp(client.lastSeen, language) : '—' }}</strong></div></div>
             <div class="device-card-footer"><span class="device-id">ID {{ client.id.slice(0, 8) }}</span><div class="device-actions"><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked" class="secondary" @click="openClientAction(client, clientActionFor(client))">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ t().remove }}</button></div></div>
           </li>
@@ -489,7 +523,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
             <label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label>
             <p class="hint">{{ t().settingsWarning }}</p>
           </article>
-          <HysteriaSettingsPanel :api="api" :language="language" @error="showError" @saved="showSuccess(t().saved)" />
+          <HysteriaSettingsPanel :api="api" :language="language" @error="showError" @saved="handleHysteriaSettingsSaved" />
         </div>
         <div class="section-actions"><button :disabled="busy" @click="reviewSettings">{{ t().saveSettings }}</button></div>
       </section>
@@ -531,27 +565,9 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         </div>
       </section>
 
-      <div v-if="createModalOpen" class="modal-backdrop" role="presentation" @click.self="closeCreateModal"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-profile-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="create-profile-title">{{ t().createProfile }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeCreateModal">×</button></div><form @submit.prevent="createDevice"><label>{{ t().newDevice }}<input ref="newDeviceNameInput" v-model="newDevice.name" class="device-name-input" :placeholder="t().newDevice" required maxlength="64" /></label><label>{{ t().fingerprint }}<select v-model="newDevice.fingerprint"><option value="">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option></select></label><div class="modal-actions"><button type="button" class="secondary" @click="closeCreateModal">{{ t().cancel }}</button><button type="submit" :disabled="busy || !newDevice.name.trim()">{{ t().createDevice }}</button></div></form></div></div>
-      <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
-      <div v-if="selectedProfile" class="modal-backdrop" role="presentation" @click.self="closeProfile">
-        <div class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-delivery-title" tabindex="-1">
-          <div class="modal-header"><div><p class="eyebrow">{{ t().profiles }}</p><h2 id="profile-delivery-title">{{ t().profileFor }} {{ selectedClient()?.name || '' }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeProfile">×</button></div>
-          <p class="hint profile-hint">{{ t().scanHint }}</p>
-          <div class="profile-connection" :class="selectedClient()?.online ? 'is-online' : 'is-offline'">
-            <strong v-if="selectedClient()?.online">{{ t().connectionOnline }}</strong>
-            <template v-else-if="selectedClient()?.lastSeen"><strong>{{ t().offline }}</strong><p>{{ t().connectionLastSeen }}: {{ formatTimestamp(selectedClient()?.lastSeen || '', language) }}</p></template>
-            <template v-else><strong>{{ t().connectionPending }}</strong><p>{{ t().connectionPendingHelp }}</p></template>
-          </div>
-          <div class="profile-delivery">
-            <div class="qr-panel"><span class="qr-label">VLESS</span><img class="qr" :src="api.clients.profileQrUrl(selectedProfile.clientId)" :alt="t().qr" /></div>
-            <div class="profile-link-panel"><label>{{ t().copyUri }}<textarea readonly :value="selectedProfile.uri"></textarea></label><button class="secondary copy-button" @click="copyProfileUri"><span aria-hidden="true">⧉</span>{{ copiedProfile ? t().copied : t().copy }}</button><a class="download-link" :href="api.clients.profileJsonUrl(selectedProfile.clientId)"><span aria-hidden="true">↓</span>{{ t().jsonFile }}</a></div>
-          </div>
-          <div v-if="selectedProfile.hysteriaUri" class="profile-delivery hysteria-delivery">
-            <div class="qr-panel"><span class="qr-label">{{ t().hysteria2Profile }}</span><img class="qr" :src="selectedHysteriaQrUrl()" :alt="t().hysteria2Profile" /></div>
-            <div class="profile-link-panel"><label>{{ t().hysteria2Uri }}<textarea readonly :value="selectedProfile.hysteriaUri"></textarea></label><button class="secondary copy-button" @click="copyHysteriaUri"><span aria-hidden="true">⧉</span>{{ copiedHysteria ? t().copied : t().copyHysteria2 }}</button><p class="hint">{{ t().hysteria2Help }}</p></div>
-          </div>
-        </div>
-      </div>
+      <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
+      <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
+      <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" />
       <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
     </section>
   </main>

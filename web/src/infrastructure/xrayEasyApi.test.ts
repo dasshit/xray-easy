@@ -23,7 +23,7 @@ describe('Xray-easy API adapter', () => {
     const { send } = requester({
       '/api/setup/status': { initialized: true },
       '/api/me': { username: 'admin' },
-      '/api/clients': [{ id: 'client-1', name: 'phone', enabled: true, revoked: false, online: false, upload_bytes: 0, download_bytes: 0 }],
+      '/api/clients': [{ id: 'client-1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, online: false, upload_bytes: 0, download_bytes: 0 }],
       '/api/auth/totp/setup': {
         setup_token: 'setup-token', secret: 'secret', otpauth_uri: 'otpauth://totp/test', recovery_codes: [], expires_in: 300,
       },
@@ -34,7 +34,7 @@ describe('Xray-easy API adapter', () => {
     await expect(api.setup.status()).resolves.toEqual({ initialized: true })
     await expect(api.auth.current()).resolves.toEqual({ username: 'admin' })
     await expect(api.clients.list()).resolves.toEqual([{
-      id: 'client-1', name: 'phone', enabled: true, revoked: false, online: false, uploadBytes: 0, downloadBytes: 0,
+      id: 'client-1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, online: false, uploadBytes: 0, downloadBytes: 0,
     }])
     await expect(api.auth.beginTOTPSetup()).resolves.toEqual({
       setupToken: 'setup-token', secret: 'secret', otpauthUri: 'otpauth://totp/test', recoveryCodes: [], expiresIn: 300,
@@ -77,28 +77,58 @@ describe('Xray-easy API adapter', () => {
 
   it('maps client and profile responses, encodes path IDs, and sends lifecycle actions', async () => {
     const clientDto = {
-      id: 'device/1', name: 'phone', enabled: true, revoked: false, fingerprint: 'safari', online: false,
+      id: 'device/1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, fingerprint: 'safari', online: false,
       last_seen: '2026-09-28T12:00:00Z', upload_bytes: 22, download_bytes: 33,
     }
     const { send, calls } = requester({
       '/api/clients': sequence([clientDto], clientDto),
-      '/api/clients/device%2F1/profile?format=uri': { client_id: 'device/1', uri: 'vless://id', json: { id: 'id' } },
+      '/api/clients/device%2F1/profile?format=uri': { client_id: 'device/1', protocol: 'vless', uri: 'vless://id', json: { id: 'id' } },
       '/api/clients/device%2F1/disable': { ...clientDto, enabled: false },
     })
     const api = createXrayEasyApi(send)
     const expected = {
-      id: 'device/1', name: 'phone', enabled: true, revoked: false, fingerprint: 'safari', online: false,
+      id: 'device/1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, fingerprint: 'safari', online: false,
       lastSeen: '2026-09-28T12:00:00Z', uploadBytes: 22, downloadBytes: 33,
     }
 
     await expect(api.clients.list()).resolves.toEqual([expected])
-    await expect(api.clients.profile('device/1')).resolves.toEqual({ clientId: 'device/1', uri: 'vless://id', json: { id: 'id' } })
+    await expect(api.clients.profile('device/1')).resolves.toEqual({ clientId: 'device/1', protocol: 'vless', uri: 'vless://id', json: { id: 'id' } })
     await expect(api.clients.setAction('device/1', 'disable')).resolves.toMatchObject({ enabled: false, uploadBytes: 22 })
-    await expect(api.clients.create('tablet', '')).resolves.toEqual(expected)
+    await expect(api.clients.create({ name: 'tablet', protocol: 'vless' })).resolves.toEqual(expected)
     expect(calls[2]).toMatchObject({ url: '/api/clients/device%2F1/disable', options: { method: 'POST' } })
-    expect(calls[3]).toMatchObject({ url: '/api/clients', options: { method: 'POST', body: JSON.stringify({ name: 'tablet' }) } })
+    expect(calls[3]).toMatchObject({ url: '/api/clients', options: { method: 'POST', body: JSON.stringify({ name: 'tablet', protocol: 'vless' }) } })
     expect(api.clients.profileQrUrl('device/1')).toBe('/api/clients/device%2F1/profile?format=qr')
     expect(api.clients.profileJsonUrl('device/1')).toBe('/api/clients/device%2F1/profile?format=json')
+  })
+
+  it('creates Hysteria profiles with optional auth and validates Hysteria-only delivery', async () => {
+    const hysteriaDto = {
+      id: 'hyst-1', name: 'tablet', protocol: 'hysteria2', protocols: ['hysteria2'],
+      hysteria2: { enabled: true, revoked: false }, enabled: true, revoked: false, online: false, upload_bytes: 0, download_bytes: 0,
+    }
+    const { send, calls } = requester({
+      '/api/clients': hysteriaDto,
+      '/api/clients/hyst-1/profile?format=uri': { client_id: 'hyst-1', protocol: 'hysteria2', hysteria_uri: 'hysteria2://password@vpn.test:443' },
+    })
+    const api = createXrayEasyApi(send)
+
+    await expect(api.clients.create({ name: 'tablet', protocol: 'hysteria2', auth: 'custom-password' })).resolves.toMatchObject({
+      protocol: 'hysteria2', protocols: ['hysteria2'], hysteria2: { enabled: true, revoked: false },
+    })
+    expect(calls[0]?.options?.body).toBe(JSON.stringify({ name: 'tablet', protocol: 'hysteria2', auth: 'custom-password' }))
+    await expect(api.clients.profile('hyst-1')).resolves.toEqual({
+      clientId: 'hyst-1', protocol: 'hysteria2', hysteriaUri: 'hysteria2://password@vpn.test:443',
+    })
+  })
+
+  it('rejects a profile response that omits its protocol discriminator', async () => {
+    const { send } = requester({
+      '/api/clients/device-1/profile?format=uri': { client_id: 'device-1', uri: 'vless://id', json: {} },
+    })
+    const api = createXrayEasyApi(send)
+    await expect(api.clients.profile('device-1')).rejects.toMatchObject({
+      name: 'APIError', code: 'invalid_response', message: 'The server returned an invalid response',
+    })
   })
 
   it('maps settings preview, serializes apply, and preserves TOTP wire contracts', async () => {

@@ -117,6 +117,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .device-status .status-dot { width: 9px; height: 9px; margin: 0; }
 .device-main { min-width: 0; display: grid; gap: 5px; }
 .device-main strong { overflow-wrap: anywhere; }
+.protocol-badge { justify-self: start; padding: 3px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--label); background: var(--surface-muted); font-size: .68rem; font-weight: 700; }
 .device-meta { display: block; color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
 .status-dot { display: inline-block; width: 7px; height: 7px; margin: 0 6px 1px 0; border-radius: 50%; background: var(--status); }
 .status-dot.online { background: var(--success); }
@@ -219,6 +220,11 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .copy-button { justify-self: start; }
 .copy-button span, .download-link span { margin-right: 6px; }
 .device-name-input { min-height: 48px; font-size: 1rem; }
+.profile-advanced { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.profile-advanced summary { color: var(--primary); cursor: pointer; font-weight: 650; }
+.profile-advanced label { margin-bottom: 0; }
+.text-button { min-height: 0; margin-left: 4px; padding: 0; background: transparent; color: var(--primary); text-decoration: underline; }
+.text-button:hover:not(:disabled) { background: transparent; color: var(--primary-hover); }
 .qr { display: block; width: min(280px, 100%); height: auto; margin: 18px auto; image-rendering: pixelated; }
 .download-link { display: inline-block; color: var(--primary); font-weight: 600; }
 .review-list { margin: 8px 0 18px; padding-left: 20px; }

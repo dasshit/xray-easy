@@ -14,6 +14,9 @@ export const admin = { username: 'admin', totp_enabled: false, recovery_codes_re
 export const sampleClient: Client = {
   id: 'client-12345678',
   name: 'phone',
+  protocol: 'vless',
+  protocols: ['vless'],
+  vless: { enabled: true, revoked: false },
   enabled: true,
   revoked: false,
   fingerprint: 'safari',
@@ -54,6 +57,10 @@ export function clientDto(client: Client): ClientDto {
   return {
     id: client.id,
     name: client.name,
+    protocol: client.protocol,
+    protocols: client.protocols,
+    ...(client.vless === undefined ? {} : { vless: client.vless }),
+    ...(client.hysteria2 === undefined ? {} : { hysteria2: client.hysteria2 }),
     enabled: client.enabled,
     revoked: client.revoked,
     online: client.online,
@@ -157,7 +164,7 @@ export function defaultHandler({ initialized = true, authenticated = false, clie
     if (method === 'GET' && url === '/api/clients') return { body: clients.map(clientDto) }
     if (method === 'POST' && url === '/api/clients') return { status: 201, body: clientDto({ ...sampleClient, name: 'new-device' }) }
     const profilePath = url.match(/^\/api\/clients\/([^/]+)\/profile\?format=uri$/)
-    if (method === 'GET' && profilePath) return { body: { client_id: profilePath[1], uri: `vless://${profilePath[1]}@vpn.example.com:443?security=reality#phone`, json: { id: profilePath[1] } } }
+    if (method === 'GET' && profilePath) return { body: { client_id: profilePath[1], protocol: 'vless', uri: `vless://${profilePath[1]}@vpn.example.com:443?security=reality#phone`, json: { id: profilePath[1] } } }
     if (method === 'GET' && url === '/api/auth/totp/status') return { body: totpData }
     if (method === 'GET' && url === '/api/settings') return { body: settingsData }
     if (method === 'GET' && url === '/api/transports/hysteria2') return { body: hysteriaStatus }
