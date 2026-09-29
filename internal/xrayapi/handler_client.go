@@ -50,7 +50,7 @@ func (c *HandlerClient) AddUser(ctx context.Context, email, uuid, flow string) e
 func (c *HandlerClient) AddHysteriaUser(ctx context.Context, email, auth string) error {
 	account := protowire.AppendTag(nil, 1, protowire.BytesType)
 	account = protowire.AppendString(account, auth)
-	operation := &handlercommand.AddUserOperation{User: &protocol.User{Email: email, Account: &serial.TypedMessage{Type: "xray.proxy.hysteria.Account", Value: account}}}
+	operation := &handlercommand.AddUserOperation{User: &protocol.User{Email: email, Account: &serial.TypedMessage{Type: "xray.proxy.hysteria.account.Account", Value: account}}}
 	return c.alter(ctx, "hysteria2", &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
 }
 

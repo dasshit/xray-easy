@@ -160,7 +160,7 @@ func TestHandlerClientUsesDedicatedHysteriaInboundAndAccountEncoding(t *testing.
 		t.Fatal(err)
 	}
 	account := added.GetUser().GetAccount()
-	if account.GetType() != "xray.proxy.hysteria.Account" {
+	if account.GetType() != "xray.proxy.hysteria.account.Account" {
 		t.Fatalf("Hysteria account type = %q", account.GetType())
 	}
 	number, wireType, tagLength := protowire.ConsumeTag(account.GetValue())
