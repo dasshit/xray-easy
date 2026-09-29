@@ -32,11 +32,17 @@ If xray-easy is stopped, create a report with a one-off container:
 )
 
 type configuration struct {
-	project   string
-	version   string
-	public    int
-	ui        int
-	tokenPath string
+	project            string
+	version            string
+	public             int
+	ui                 int
+	tokenPath          string
+	hysteriaEnabled    bool
+	hysteriaMode       string
+	hysteriaCertIP     string
+	hysteriaServerName string
+	hysteriaCertSource string
+	hysteriaKeySource  string
 }
 
 type commandRunner interface {
@@ -82,15 +88,19 @@ func (r dockerRunner) capture(ctx context.Context, dir string, args ...string) (
 // different XRAY_* or project values exported.
 func composeEnvironment() []string {
 	excluded := map[string]bool{
-		"COMPOSE_PROJECT_NAME":         true,
-		"COMPOSE_ENV_FILES":            true,
-		"COMPOSE_DISABLE_ENV_FILE":     true,
-		"XRAY_EASY_PROJECT_NAME":       true,
-		"XRAY_VERSION":                 true,
-		"XRAY_PUBLIC_PORT":             true,
-		"XRAY_EASY_UI_PORT":            true,
-		"XRAY_EASY_MASTER_KEY":         true,
-		"XRAY_SUPERVISOR_TOKEN_SOURCE": true,
+		"COMPOSE_PROJECT_NAME":           true,
+		"COMPOSE_ENV_FILES":              true,
+		"COMPOSE_DISABLE_ENV_FILE":       true,
+		"XRAY_EASY_PROJECT_NAME":         true,
+		"XRAY_VERSION":                   true,
+		"XRAY_PUBLIC_PORT":               true,
+		"XRAY_EASY_UI_PORT":              true,
+		"XRAY_EASY_MASTER_KEY":           true,
+		"XRAY_SUPERVISOR_TOKEN_SOURCE":   true,
+		"XRAY_HYSTERIA2_ENABLED":         true,
+		"XRAY_HYSTERIA2_TLS_MODE":        true,
+		"XRAY_HYSTERIA2_CERT_IP":         true,
+		"XRAY_HYSTERIA2_TLS_SERVER_NAME": true,
 	}
 	var env []string
 	for _, entry := range os.Environ() {
@@ -181,7 +191,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		}
 		ui.message("Existing .env and supervisor token found; they will be reused.")
 	} else {
-		cfg = configuration{project: defaultProject, version: defaultVersion, tokenPath: newTokenPath}
+		cfg = configuration{project: defaultProject, version: defaultVersion, tokenPath: newTokenPath, hysteriaMode: "custom"}
 		cfg.public, cfg.ui, err = ui.ports(ctx, 443, 8080)
 		if err != nil {
 			if errors.Is(err, errCancelled) {
@@ -189,6 +199,14 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 			}
 			return installResult{}, err
 		}
+	}
+	previous := cfg
+	cfg, err = ui.hysteria(ctx, root, cfg)
+	if err != nil {
+		if errors.Is(err, errCancelled) {
+			return installResult{}, nil
+		}
+		return installResult{}, err
 	}
 
 	ui.review(cfg)
@@ -205,18 +223,37 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	if err := ctx.Err(); err != nil {
 		return installResult{}, err
 	}
+	if err := validateHysteriaConfiguration(cfg); err != nil {
+		return installResult{}, err
+	}
+	certificateChanged := false
+	if cfg.hysteriaEnabled && cfg.hysteriaMode == "custom" {
+		certificateChanged, err = importHysteriaCertificate(root, cfg)
+		if err != nil {
+			return installResult{}, err
+		}
+	}
 	if !existing {
 		if err := createConfiguration(root, cfg); err != nil {
 			return installResult{}, err
 		}
 		ui.message("Saved .env and supervisor token with private file permissions")
+	} else if hysteriaConfigurationChanged(previous, cfg) {
+		if err := updateHysteriaConfiguration(root, cfg); err != nil {
+			return installResult{}, err
+		}
+		ui.message("Updated Hysteria 2 settings in .env; existing keys were preserved")
 	}
 
 	ui.step(4, "Building and starting containers")
 	if err := runner.run(ctx, root, false, "compose", "-f", "compose.yaml", "config", "--quiet"); err != nil {
 		return installResult{}, fmt.Errorf("Compose configuration is invalid: %w", err)
 	}
-	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"); err != nil {
+	upArgs := []string{"compose", "-f", "compose.yaml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"}
+	if existing && (hysteriaConfigurationChanged(previous, cfg) || certificateChanged || cfg.hysteriaEnabled && cfg.hysteriaMode == "self-signed") {
+		upArgs = append(upArgs, "--force-recreate")
+	}
+	if err := runner.run(ctx, root, true, upArgs...); err != nil {
 		ui.step(4, "Collecting startup diagnostics")
 		ui.message("Compose did not become healthy. Collecting service state and recent logs; containers and configuration are preserved.")
 		collectStartupDiagnostics(ctx, root, runner, ui)
@@ -250,6 +287,9 @@ func collectStartupDiagnostics(ctx context.Context, root string, runner commandR
 
 func printNextSteps(output io.Writer, cfg configuration) {
 	fmt.Fprintf(output, "Xray-easy is running.\n\nOn your computer:\n  ssh -N -L %d:127.0.0.1:%d user@your-vds\n\nOpen http://127.0.0.1:%d to create the admin and first device.\nAllow inbound TCP %d through the VDS firewall for clients.\n", cfg.ui, cfg.ui, cfg.ui, cfg.public)
+	if cfg.hysteriaEnabled {
+		fmt.Fprintf(output, "Allow inbound UDP %d through the VDS firewall for Hysteria 2.\n", cfg.public)
+	}
 }
 
 func parsePort(value string) (int, error) {
@@ -326,7 +366,7 @@ func createConfiguration(root string, cfg configuration) error {
 	if err != nil {
 		return err
 	}
-	content := fmt.Sprintf("# Generated by ./install.sh. Keep this file and its master key private.\nXRAY_EASY_PROJECT_NAME=%s\nXRAY_VERSION=%s\nXRAY_PUBLIC_PORT=%d\nXRAY_EASY_UI_PORT=%d\nXRAY_SUPERVISOR_TOKEN_SOURCE=%s\nXRAY_EASY_MASTER_KEY=%s\n", cfg.project, cfg.version, cfg.public, cfg.ui, cfg.tokenPath, masterKey)
+	content := fmt.Sprintf("# Generated by ./install.sh. Keep this file and its master key private.\nXRAY_EASY_PROJECT_NAME=%s\nXRAY_VERSION=%s\nXRAY_PUBLIC_PORT=%d\nXRAY_EASY_UI_PORT=%d\nXRAY_SUPERVISOR_TOKEN_SOURCE=%s\nXRAY_EASY_MASTER_KEY=%s\n%s", cfg.project, cfg.version, cfg.public, cfg.ui, cfg.tokenPath, masterKey, hysteriaEnvironment(cfg))
 	if err := writeNewPrivateFile(filepath.Join(root, ".env"), content); err != nil {
 		return fmt.Errorf("save .env: %w", err)
 	}
@@ -394,13 +434,21 @@ func loadConfiguration(root string) (configuration, error) {
 	if err := validateToken(filepath.Join(root, tokenPath)); err != nil {
 		return configuration{}, err
 	}
-	return configuration{
-		project:   valueOr(values["XRAY_EASY_PROJECT_NAME"], legacyProject),
-		version:   valueOr(values["XRAY_VERSION"], defaultVersion),
-		public:    publicPort,
-		ui:        uiPort,
-		tokenPath: tokenPath,
-	}, nil
+	cfg := configuration{
+		project:            valueOr(values["XRAY_EASY_PROJECT_NAME"], legacyProject),
+		version:            valueOr(values["XRAY_VERSION"], defaultVersion),
+		public:             publicPort,
+		ui:                 uiPort,
+		tokenPath:          tokenPath,
+		hysteriaEnabled:    strings.EqualFold(values["XRAY_HYSTERIA2_ENABLED"], "true"),
+		hysteriaMode:       valueOr(values["XRAY_HYSTERIA2_TLS_MODE"], "legacy"),
+		hysteriaCertIP:     values["XRAY_HYSTERIA2_CERT_IP"],
+		hysteriaServerName: values["XRAY_HYSTERIA2_TLS_SERVER_NAME"],
+	}
+	if err := validateHysteriaConfiguration(cfg); err != nil {
+		return configuration{}, err
+	}
+	return cfg, nil
 }
 
 func readEnvironmentFile(path string) (map[string]string, error) {

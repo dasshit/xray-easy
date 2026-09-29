@@ -44,12 +44,12 @@ describe('Xray-easy API adapter', () => {
 
   it('maps setup and administrator wire values and sends setup fields in API format', async () => {
     const { send, calls } = requester({
-      '/api/setup/status': { initialized: false, public_port: 18443 },
+      '/api/setup/status': { initialized: false, public_port: 18443, suggested_public_host: '89.169.13.234' },
       '/api/me': { username: 'admin', totp_enabled: true, recovery_codes_remaining: 4 },
     })
     const api = createXrayEasyApi(send)
 
-    await expect(api.setup.status()).resolves.toEqual({ initialized: false, publicPort: 18443 })
+    await expect(api.setup.status()).resolves.toEqual({ initialized: false, publicPort: 18443, suggestedPublicHost: '89.169.13.234' })
     await api.setup.initialize({
       username: 'admin', password: 'secret', publicHost: 'vpn.example.test', publicPort: 18443,
       realityTarget: 'www.example.test:443', realitySni: 'www.example.test',

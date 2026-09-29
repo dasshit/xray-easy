@@ -190,6 +190,7 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
         return {
           initialized: dto.initialized,
           ...(dto.public_port === undefined ? {} : { publicPort: dto.public_port }),
+          ...(dto.suggested_public_host === undefined ? {} : { suggestedPublicHost: dto.suggested_public_host }),
         }
       },
       initialize: (input: InitializeSetupCommand): Promise<void> => sendVoid('/api/setup/initialize', {

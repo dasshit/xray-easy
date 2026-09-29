@@ -417,7 +417,13 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 	}
 	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s for IPv4 and IPv6 in the VDS firewall/security group and verify a VLESS client connection.", envOr("XRAY_PUBLIC_PORT", "443")))
 	if hysteria2Enabled() {
-		appendCheck(doctorWarn, "Hysteria 2 UDP firewall", "public UDP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6, and install a valid certificate for XRAY_PUBLIC_HOST in secrets/hysteria.", envOr("XRAY_PUBLIC_PORT", "443")))
+		hint := fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6 and verify a Hysteria 2 client connection.", envOr("XRAY_PUBLIC_PORT", "443"))
+		if mode := envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy); mode == xray.HysteriaTLSSelfSigned || mode == xray.HysteriaTLSLegacy {
+			hint += " mkcert mode uses insecure=1, so the client does not authenticate the server certificate."
+		} else {
+			hint += " The supplied certificate must be trusted and cover the Hysteria 2 TLS server name."
+		}
+		appendCheck(doctorWarn, "Hysteria 2 UDP firewall", "public UDP reachability cannot be checked from inside the Compose network", hint)
 	}
 
 	return checks

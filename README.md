@@ -39,11 +39,13 @@ The repository is currently private, so GitHub access is required to clone it.
 The installer builds its terminal UI in a temporary Docker container, then
 opens a full-screen terminal workspace. Use **↑/↓ or Tab** to move between
 fields, **Enter** to continue, **Esc** to cancel, and **Ctrl+C** to stop. It checks
-Docker/Compose, asks for the public and panel ports, generates the master key
+Docker/Compose, asks for the public and panel ports and the optional Hysteria 2
+TLS mode, generates the master key
 and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
 mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
 services to become healthy, then runs the final `xray-easy doctor` check. A
-repeat run reuses the existing keys and Docker volumes. If Compose cannot make
+repeat run reuses the existing keys and Docker volumes. You can run it again to
+change the Hysteria 2 TLS mode or import a renewed certificate. If Compose cannot make
 the services healthy, the installer displays `compose ps --all` and the latest
 100 lines from both service logs in the terminal. It leaves containers and
 configuration in place and prints recovery commands.
@@ -99,31 +101,42 @@ device is applied.
   reconnect. The control plane validates candidate configs and reconciles
   SQLite, `active.json` and runtime state after interruptions.
 - Optional Hysteria 2 URI and QR for V2Rage. It runs as a second inbound in the
-  same Xray container and does not require a second VPS. Enable it by setting
-  `XRAY_HYSTERIA2_ENABLED=true` in `.env`. Install a TLS certificate and key
-  before starting it:
+  same Xray container, on UDP at `XRAY_PUBLIC_PORT`. During `./install.sh`,
+  choose one of three options:
 
-  ```sh
-  install -m 0644 /path/to/fullchain.pem secrets/hysteria/fullchain.pem
-  install -m 0600 /path/to/privkey.pem secrets/hysteria/privkey.pem
-  # Set XRAY_HYSTERIA2_ENABLED=true in .env, then:
-  docker compose up -d --build --wait
-  ```
+  1. **Off:** VLESS/REALITY only. This is the default.
+  2. **mkcert for public IPv4:** enter the VPS public IPv4. The Web UI suggests
+     this address during first-run setup and requires the public host to match
+     it. The installer builds `mkcert` and
+     generates a certificate with that IP in its SAN. The CA is not installed
+     into any trust store and its private key is discarded. Generated Hysteria 2
+     links include `insecure=1`. This disables server certificate verification
+     in the client, so this mode does not authenticate the server against a
+     man-in-the-middle. The certificate is kept in a Docker volume and reused
+     on repeat installation until it is within 30 days of expiry or the
+     configured IPv4 changes. Run `./install.sh` again to renew it later.
+  3. **My TLS certificate:** enter paths to a PEM full chain and matching
+     private key on the VPS. You can leave them blank if they are already at
+     `secrets/hysteria/fullchain.pem` and `secrets/hysteria/privkey.pem`. The
+     installer checks the pair and imports it. Enter a DNS name or IP address
+     covered by the certificate. If clients connect to an IPv4 address while
+     the certificate covers a DNS name, enter that DNS name; it becomes the
+     URI `sni` value. These links
+     omit `insecure`, so clients verify the certificate normally. Make sure
+     the chain is trusted by your clients.
 
-  The init service copies the certificate and key into a dedicated Docker
-  volume. The key is readable by Xray and stays inaccessible to the panel. The
-  generated Hysteria 2 URI currently includes `insecure=1` to test connections
-  with a self-signed certificate. This disables certificate verification in the
-  client. Do not rely on it for server authentication; replace it with a trusted
-  certificate covering the profile's SNI and remove `insecure=1` for regular
-  use. After certificate renewal, refresh the volume and restart Xray:
-
-  ```sh
-  docker compose run --rm init-hysteria-tls
-  docker compose restart xray
-  ```
-
-  The UDP firewall rule must allow `XRAY_PUBLIC_PORT` for Hysteria 2 traffic.
+  The certificate and private key used by Xray live in a dedicated Docker
+  volume. The panel cannot read the key. Run `./install.sh` again to switch
+  modes or import a renewed custom certificate; it preserves the master key,
+  supervisor token, database and profiles, then recreates services when the
+  certificate changes. A mode change can briefly reconnect Hysteria 2 clients.
+  For manual setup, use `XRAY_HYSTERIA2_ENABLED`,
+  `XRAY_HYSTERIA2_TLS_MODE`, `XRAY_HYSTERIA2_CERT_IP`, and optionally
+  `XRAY_HYSTERIA2_TLS_SERVER_NAME` in `.env` (see `.env.example`). Allow inbound UDP at
+  `XRAY_PUBLIC_PORT` in the VPS firewall/security group.
+  Existing installations without a TLS mode keep their previous `insecure=1`
+  links until you rerun `./install.sh` and explicitly select one of the two
+  certificate modes.
 - Online and last-seen indicators, cumulative upload/download totals, and live
   panel updates through SSE.
 - Node settings with a preview of changes, confirmation and an automatic

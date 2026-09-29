@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"sort"
 	"strconv"
@@ -26,27 +27,33 @@ const (
 	// Xray requires at least one REALITY short ID even when there are no
 	// enabled clients. This reserved value has no matching UUID and therefore
 	// cannot authenticate a device.
-	emptyShortID         = "0000000000000000"
-	ReservedShortIDCount = 5
-	VerifiedCoreVersion  = "26.7.28"
-	HysteriaInboundTag   = "hysteria2"
-	HysteriaTLSCertPath  = "/etc/xray/hysteria-tls/fullchain.pem"
-	HysteriaTLSKeyPath   = "/etc/xray/hysteria-tls/privkey.pem"
+	emptyShortID          = "0000000000000000"
+	ReservedShortIDCount  = 5
+	VerifiedCoreVersion   = "26.7.28"
+	HysteriaInboundTag    = "hysteria2"
+	HysteriaTLSCertPath   = "/etc/xray/hysteria-tls/fullchain.pem"
+	HysteriaTLSKeyPath    = "/etc/xray/hysteria-tls/privkey.pem"
+	HysteriaTLSSelfSigned = "self-signed"
+	HysteriaTLSCustom     = "custom"
+	HysteriaTLSLegacy     = "legacy"
 )
 
 type Settings struct {
-	PublicHost          string
-	PublicPort          int
-	XrayAPIListen       string
-	RealityTarget       string
-	RealitySNI          string
-	RealityPrivateKey   string
-	RealityPublicKey    string
-	ClientFingerprint   string
-	LogLevel            string
-	InternalInboundPort int
-	ReservedShortIDs    []string
-	Hysteria2Enabled    bool
+	PublicHost            string
+	PublicPort            int
+	XrayAPIListen         string
+	RealityTarget         string
+	RealitySNI            string
+	RealityPrivateKey     string
+	RealityPublicKey      string
+	ClientFingerprint     string
+	LogLevel              string
+	InternalInboundPort   int
+	ReservedShortIDs      []string
+	Hysteria2Enabled      bool
+	HysteriaTLSMode       string
+	HysteriaTLSCertIP     string
+	HysteriaTLSServerName string
 }
 
 type Client struct {
@@ -288,9 +295,14 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 // BuildHysteriaURI creates the V2RAGE-compatible Hysteria 2 URI for one device.
 func BuildHysteriaURI(settings Settings, client Client) string {
 	query := url.Values{}
-	// Temporary self-signed certificate test mode; restore verification before regular use.
-	query.Set("insecure", "1")
-	query.Set("sni", settings.PublicHost)
+	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
+		query.Set("insecure", "1")
+	}
+	serverName := settings.HysteriaTLSServerName
+	if serverName == "" {
+		serverName = settings.PublicHost
+	}
+	query.Set("sni", serverName)
 	u := &url.URL{Scheme: "hysteria2", User: url.User(client.UUID), Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.PublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
 	return u.String()
 }
@@ -357,6 +369,29 @@ func validateSettings(settings Settings) error {
 	}
 	if settings.RealityPrivateKey == "" || settings.RealityPublicKey == "" {
 		return errors.New("REALITY key pair is not configured")
+	}
+	if settings.Hysteria2Enabled {
+		switch settings.HysteriaTLSMode {
+		case "", HysteriaTLSCustom, HysteriaTLSLegacy:
+			if settings.HysteriaTLSServerName != "" {
+				if _, err := domain.NormalizePublicHost(settings.HysteriaTLSServerName); err != nil {
+					return fmt.Errorf("Hysteria 2 TLS server name: %w", err)
+				}
+			}
+		case HysteriaTLSSelfSigned:
+			ip, err := netip.ParseAddr(settings.HysteriaTLSCertIP)
+			if err != nil || !ip.Is4() || !ip.IsGlobalUnicast() {
+				return errors.New("Hysteria 2 self-signed certificate requires a public IPv4 address")
+			}
+			if settings.PublicHost != ip.String() {
+				return errors.New("Hysteria 2 public host must match the self-signed certificate IPv4 address")
+			}
+			if settings.HysteriaTLSServerName != "" && settings.HysteriaTLSServerName != ip.String() {
+				return errors.New("Hysteria 2 self-signed TLS server name must match the certificate IPv4 address")
+			}
+		default:
+			return errors.New("unsupported Hysteria 2 TLS mode")
+		}
 	}
 	return nil
 }

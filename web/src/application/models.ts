@@ -5,6 +5,8 @@ export type SetupStatus = {
   initialized: boolean
   /** Configured public Xray listener port, when the server includes it. */
   publicPort?: number
+  /** Public IPv4 already selected during Hysteria 2 TLS setup, when present. */
+  suggestedPublicHost?: string
 }
 
 /** Administrator credentials and connection settings for first-run setup. */

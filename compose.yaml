@@ -37,26 +37,18 @@ services:
         target: /source/xray_supervisor_token
 
   init-hysteria-tls:
-    image: alpine:3.22
+    build:
+      context: .
+      dockerfile: Dockerfile.hysteria-tls
     restart: "no"
     user: "0:0"
+    tmpfs:
+      - /tmp
     environment:
       XRAY_HYSTERIA2_ENABLED: ${XRAY_HYSTERIA2_ENABLED:-false}
-    command:
-      - /bin/sh
-      - -ec
-      - |
-        mkdir -p /target
-        if [ "$(printf '%s' "$$XRAY_HYSTERIA2_ENABLED" | tr '[:upper:]' '[:lower:]')" = "true" ]; then
-          test -s /source/fullchain.pem || { echo "missing secrets/hysteria/fullchain.pem" >&2; exit 1; }
-          test -s /source/privkey.pem || { echo "missing secrets/hysteria/privkey.pem" >&2; exit 1; }
-          staging=$(mktemp -d /target/.hysteria-tls.XXXXXX)
-          trap 'rm -rf "$$staging"' EXIT
-          install -m 0444 -o 10001 -g 10001 /source/fullchain.pem "$$staging/fullchain.pem"
-          install -m 0400 -o 10001 -g 10001 /source/privkey.pem "$$staging/privkey.pem"
-          mv "$$staging/fullchain.pem" /target/fullchain.pem
-          mv "$$staging/privkey.pem" /target/privkey.pem
-        fi
+      XRAY_HYSTERIA2_TLS_MODE: ${XRAY_HYSTERIA2_TLS_MODE:-legacy}
+      XRAY_HYSTERIA2_CERT_IP: ${XRAY_HYSTERIA2_CERT_IP:-}
+      XRAY_HYSTERIA2_TLS_SERVER_NAME: ${XRAY_HYSTERIA2_TLS_SERVER_NAME:-}
     volumes:
       - ./secrets/hysteria:/source:ro
       - hysteria_tls_data:/target
@@ -126,6 +118,9 @@ services:
       XRAY_PUBLIC_PORT: ${XRAY_PUBLIC_PORT:-443}
       XRAY_VERSION: ${XRAY_VERSION:-26.7.28}
       XRAY_HYSTERIA2_ENABLED: ${XRAY_HYSTERIA2_ENABLED:-false}
+      XRAY_HYSTERIA2_TLS_MODE: ${XRAY_HYSTERIA2_TLS_MODE:-legacy}
+      XRAY_HYSTERIA2_CERT_IP: ${XRAY_HYSTERIA2_CERT_IP:-}
+      XRAY_HYSTERIA2_TLS_SERVER_NAME: ${XRAY_HYSTERIA2_TLS_SERVER_NAME:-}
       XRAY_EASY_UI_PORT: ${XRAY_EASY_UI_PORT:-8080}
       XRAY_SUPERVISOR_URL: http://172.31.241.2:10086
       XRAY_API_LISTEN: 172.31.241.2:10085

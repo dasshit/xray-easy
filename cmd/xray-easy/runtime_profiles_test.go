@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -149,6 +150,8 @@ func TestVLESSShortIDReserveAddsUsersThenReplacesInbound(t *testing.T) {
 
 func TestHysteriaProfileDeliveryAndLiveUserRollback(t *testing.T) {
 	t.Setenv("XRAY_HYSTERIA2_ENABLED", "true")
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "custom")
+	t.Setenv("XRAY_HYSTERIA2_TLS_SERVER_NAME", "cert.example.test")
 	app := newTestApp(t, true)
 	handler := &recordingHysteriaHandler{fakeXrayHandler: app.handler}
 	app.server.handler = handler
@@ -163,6 +166,16 @@ func TestHysteriaProfileDeliveryAndLiveUserRollback(t *testing.T) {
 	profile := requestJSON(t, app, http.MethodGet, "/api/clients/"+first.ID+"/profile", nil, true)
 	if profile.Code != http.StatusOK || !strings.Contains(profile.Body.String(), `"hysteria_uri":"hysteria2://`) {
 		t.Fatalf("Hysteria profile response = %d %s", profile.Code, profile.Body.String())
+	}
+	var delivered struct {
+		HysteriaURI string `json:"hysteria_uri"`
+	}
+	if err := json.Unmarshal(profile.Body.Bytes(), &delivered); err != nil {
+		t.Fatal(err)
+	}
+	uri, err := url.Parse(delivered.HysteriaURI)
+	if err != nil || uri.Query().Get("sni") != "cert.example.test" || uri.Query().Has("insecure") {
+		t.Fatalf("custom certificate profile must verify its DNS name: %q, %v", delivered.HysteriaURI, err)
 	}
 	qr := requestJSON(t, app, http.MethodGet, "/api/clients/"+first.ID+"/profile?format=hysteria-qr", nil, true)
 	if qr.Code != http.StatusOK || qr.Header().Get("Content-Type") != "image/png" || qr.Body.Len() < 8 {

@@ -32,7 +32,7 @@ export interface XrayEasyGateway {
   setup: {
     /**
      * Read whether first-run setup has been completed.
-     * @returns The initialization state and configured public port when available.
+     * @returns The initialization state, public port, and optional mkcert IPv4 suggestion.
      * @rejects {Error} When the setup status request fails.
      */
     status(): Promise<SetupStatus>

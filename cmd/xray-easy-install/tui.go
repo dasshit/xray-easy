@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -75,26 +76,29 @@ type keyPress struct {
 }
 
 type wizard struct {
-	out        io.Writer
-	inputFile  *os.File
-	bytes      chan byte
-	done       chan struct{}
-	resize     chan os.Signal
-	resizeDone chan struct{}
-	mu         sync.Mutex
-	width      int
-	height     int
-	stepNo     int
-	title      string
-	notice     string
-	fields     [2]string
-	focus      int
-	choice     bool
-	choiceRaw  string
-	config     configuration
-	logs       []string
-	partial    string
-	noColor    bool
+	out            io.Writer
+	inputFile      *os.File
+	bytes          chan byte
+	done           chan struct{}
+	resize         chan os.Signal
+	resizeDone     chan struct{}
+	mu             sync.Mutex
+	width          int
+	height         int
+	stepNo         int
+	title          string
+	notice         string
+	fields         [2]string
+	configPage     string
+	tlsSelection   int
+	hysteriaFields [3]string
+	focus          int
+	choice         bool
+	choiceRaw      string
+	config         configuration
+	logs           []string
+	partial        string
+	noColor        bool
 }
 
 func newWizard(input io.Reader, output io.Writer) *wizard {
@@ -257,6 +261,146 @@ func (w *wizard) review(cfg configuration) {
 	w.stepNo, w.title, w.config, w.notice = 3, "Review installation", cfg, ""
 	w.choice, w.choiceRaw = true, ""
 	w.renderLocked()
+}
+
+func (w *wizard) hysteria(ctx context.Context, root string, cfg configuration) (configuration, error) {
+	w.mu.Lock()
+	w.configPage = "hysteria-choice"
+	w.focus = 0
+	w.tlsSelection = 0
+	if cfg.hysteriaEnabled {
+		if cfg.hysteriaMode == "self-signed" {
+			w.tlsSelection = 1
+		} else if cfg.hysteriaMode == "legacy" {
+			w.tlsSelection = -1
+		} else {
+			w.tlsSelection = 2
+		}
+	}
+	w.hysteriaFields = [3]string{"", "", cfg.hysteriaServerName}
+	w.title = "Hysteria 2 TLS"
+	w.notice = ""
+	if w.tlsSelection == -1 {
+		w.notice = "Existing Hysteria 2 setup: select a TLS mode before continuing."
+	}
+	w.renderLocked()
+	w.mu.Unlock()
+
+	for {
+		key, err := w.key(ctx)
+		if err != nil {
+			return configuration{}, err
+		}
+		w.mu.Lock()
+		if (w.width < 64 || w.height < 22) && key.kind != keyEscape {
+			w.notice = "Enlarge the terminal before continuing."
+			w.renderLocked()
+			w.mu.Unlock()
+			continue
+		}
+		if key.kind == keyEscape {
+			w.mu.Unlock()
+			return configuration{}, errCancelled
+		}
+		switch w.configPage {
+		case "hysteria-choice":
+			switch key.kind {
+			case keyUp, keyLeft:
+				if w.tlsSelection < 0 {
+					w.tlsSelection = 2
+				} else {
+					w.tlsSelection = (w.tlsSelection + 2) % 3
+				}
+			case keyDown, keyRight, keyTab:
+				w.tlsSelection = (w.tlsSelection + 1) % 3
+			case keyCharacter:
+				if key.char >= '1' && key.char <= '3' {
+					w.tlsSelection = int(key.char - '1')
+				}
+			case keyEnter:
+				switch w.tlsSelection {
+				case 0:
+					cfg.hysteriaEnabled = false
+					w.mu.Unlock()
+					return cfg, nil
+				case 1:
+					cfg.hysteriaEnabled = true
+					cfg.hysteriaMode = "self-signed"
+					cfg.hysteriaServerName = ""
+					w.configPage = "hysteria-ip"
+					w.hysteriaFields[0] = cfg.hysteriaCertIP
+				case 2:
+					cfg.hysteriaEnabled = true
+					cfg.hysteriaMode = "custom"
+					cfg.hysteriaCertIP = ""
+					w.configPage = "hysteria-custom"
+					w.focus = 0
+				default:
+					w.notice = "Select mkcert or your certificate for the existing Hysteria 2 setup."
+				}
+			}
+		case "hysteria-ip":
+			switch key.kind {
+			case keyBackspace:
+				w.hysteriaFields[0] = strings.TrimSuffix(w.hysteriaFields[0], lastRune(w.hysteriaFields[0]))
+			case keyCharacter:
+				if (key.char >= '0' && key.char <= '9' || key.char == '.') && len(w.hysteriaFields[0]) < 15 {
+					w.hysteriaFields[0] += string(key.char)
+				}
+			case keyEnter:
+				ip, parseErr := netip.ParseAddr(w.hysteriaFields[0])
+				if parseErr != nil || !ip.Is4() || !ip.IsGlobalUnicast() {
+					w.notice = "Enter the public IPv4 address that you will use in the Web UI."
+					break
+				}
+				cfg.hysteriaCertIP = ip.String()
+				w.mu.Unlock()
+				return cfg, nil
+			}
+		case "hysteria-custom":
+			switch key.kind {
+			case keyUp:
+				w.focus = (w.focus + 2) % 3
+			case keyDown, keyTab:
+				w.focus = (w.focus + 1) % 3
+			case keyBackspace:
+				w.hysteriaFields[w.focus] = strings.TrimSuffix(w.hysteriaFields[w.focus], lastRune(w.hysteriaFields[w.focus]))
+			case keyCharacter:
+				if key.char >= 32 && key.char < 127 && len(w.hysteriaFields[w.focus]) < 255 {
+					w.hysteriaFields[w.focus] += string(key.char)
+				}
+			case keyEnter:
+				if w.focus < 2 {
+					w.focus++
+					break
+				}
+				certPath := resolveHysteriaSource(root, w.hysteriaFields[0], "fullchain.pem")
+				keyPath := resolveHysteriaSource(root, w.hysteriaFields[1], "privkey.pem")
+				if _, statErr := os.Stat(certPath); statErr != nil {
+					w.notice = "Certificate file is missing. Enter its path or copy it to secrets/hysteria."
+					w.focus = 0
+					break
+				}
+				if _, statErr := os.Stat(keyPath); statErr != nil {
+					w.notice = "Private key file is missing. Enter its path or copy it to secrets/hysteria."
+					w.focus = 1
+					break
+				}
+				serverName := strings.TrimSpace(w.hysteriaFields[2])
+				if serverName == "" {
+					w.notice = "Enter the DNS name or IP address covered by the certificate."
+					break
+				}
+				cfg.hysteriaCertSource = certPath
+				cfg.hysteriaKeySource = keyPath
+				cfg.hysteriaServerName = serverName
+				w.mu.Unlock()
+				return cfg, nil
+			}
+		}
+		w.renderLocked()
+		w.mu.Unlock()
+	}
 }
 
 func (w *wizard) ports(ctx context.Context, publicDefault, uiDefault int) (int, int, error) {
@@ -467,16 +611,46 @@ func (w *wizard) renderLocked() {
 			put(10, panelLine("  Checking Docker Engine and Compose", panelWidth), "normal")
 			put(12, panelLine("  The installer will use Docker to build and start Xray-easy.", panelWidth), "dim")
 		case 2:
-			put(10, panelLine("  Public Xray TCP port", panelWidth), "normal")
-			put(11, panelLine("  "+fieldText(w.fields[0], "443", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))
-			put(13, panelLine("  Web UI port on VDS loopback", panelWidth), "normal")
-			put(14, panelLine("  "+fieldText(w.fields[1], "8080", w.focus == 1), panelWidth), fieldStyle(w.focus == 1))
-			put(16, panelLine("  The panel is reached through an SSH tunnel.", panelWidth), "dim")
+			switch w.configPage {
+			case "hysteria-choice":
+				put(9, panelLine("  Optional Hysteria 2 on the public UDP port", panelWidth), "normal")
+				put(11, panelLine("  "+optionText("Off (VLESS only)", w.tlsSelection == 0), panelWidth), fieldStyle(w.tlsSelection == 0))
+				put(12, panelLine("  "+optionText("mkcert for public IPv4 (insecure=1)", w.tlsSelection == 1), panelWidth), fieldStyle(w.tlsSelection == 1))
+				put(13, panelLine("  "+optionText("My TLS certificate (verified)", w.tlsSelection == 2), panelWidth), fieldStyle(w.tlsSelection == 2))
+				put(15, panelLine("  Changing TLS mode reconnects Hysteria 2 clients.", panelWidth), "dim")
+			case "hysteria-ip":
+				put(10, panelLine("  Public IPv4 for the mkcert certificate", panelWidth), "normal")
+				put(11, panelLine("  "+fieldText(w.hysteriaFields[0], "e.g. 89.169.13.234", true), panelWidth), "selected")
+				put(14, panelLine("  Use this same IPv4 as the public host in the Web UI.", panelWidth), "dim")
+				put(15, panelLine("  Client TLS verification will be disabled in exported links.", panelWidth), "dim")
+			case "hysteria-custom":
+				put(9, panelLine("  Full chain PEM (blank: secrets/hysteria/fullchain.pem)", panelWidth), "normal")
+				put(10, panelLine("  "+fieldText(w.hysteriaFields[0], "existing file", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))
+				put(11, panelLine("  Private key PEM (blank: secrets/hysteria/privkey.pem)", panelWidth), "normal")
+				put(12, panelLine("  "+fieldText(w.hysteriaFields[1], "existing file", w.focus == 1), panelWidth), fieldStyle(w.focus == 1))
+				put(13, panelLine("  Certificate DNS name or IP address (from SAN)", panelWidth), "normal")
+				put(14, panelLine("  "+fieldText(w.hysteriaFields[2], "required", w.focus == 2), panelWidth), fieldStyle(w.focus == 2))
+				put(16, panelLine("  A custom certificate keeps TLS verification enabled.", panelWidth), "dim")
+			default:
+				put(10, panelLine("  Public Xray TCP port", panelWidth), "normal")
+				put(11, panelLine("  "+fieldText(w.fields[0], "443", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))
+				put(13, panelLine("  Web UI port on VDS loopback", panelWidth), "normal")
+				put(14, panelLine("  "+fieldText(w.fields[1], "8080", w.focus == 1), panelWidth), fieldStyle(w.focus == 1))
+				put(16, panelLine("  The panel is reached through an SSH tunnel.", panelWidth), "dim")
+			}
 		case 3:
 			put(9, panelLine("  Xray version:       "+w.config.version, panelWidth), "normal")
 			put(10, panelLine(fmt.Sprintf("  Public TCP port:    %d", w.config.public), panelWidth), "normal")
 			put(11, panelLine(fmt.Sprintf("  Web UI:             127.0.0.1:%d", w.config.ui), panelWidth), "normal")
 			put(12, panelLine("  Compose project:    "+w.config.project, panelWidth), "normal")
+			hysteriaDescription := "off"
+			if w.config.hysteriaEnabled {
+				hysteriaDescription = w.config.hysteriaMode
+				if w.config.hysteriaMode == "self-signed" {
+					hysteriaDescription += " for " + w.config.hysteriaCertIP
+				}
+			}
+			put(13, panelLine("  Hysteria 2 TLS:     "+hysteriaDescription, panelWidth), "normal")
 			put(14, panelLine("  "+optionText("Build and start", w.choice), panelWidth), fieldStyle(w.choice))
 			put(15, panelLine("  "+optionText("Cancel", !w.choice), panelWidth), fieldStyle(!w.choice))
 			if w.choiceRaw != "" {

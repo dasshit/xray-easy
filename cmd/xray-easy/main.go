@@ -614,7 +614,13 @@ func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read setup status"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"initialized": status.Initialized, "public_port": s.publicPort})
+	response := map[string]any{"initialized": status.Initialized, "public_port": s.publicPort}
+	if !status.Initialized && hysteria2Enabled() && envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy) == xray.HysteriaTLSSelfSigned {
+		if ip := strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_CERT_IP")); ip != "" {
+			response["suggested_public_host"] = ip
+		}
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
@@ -652,6 +658,10 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.PublicHost = publicHost
+	if err := validateHysteriaPublicHost(req.PublicHost); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
+		return
+	}
 	req.RealityTarget = strings.TrimSpace(req.RealityTarget)
 	req.RealitySNI = strings.TrimSpace(req.RealitySNI)
 	if err := domain.ValidateRealityTarget(req.RealityTarget, req.RealitySNI); err != nil {
@@ -1316,6 +1326,10 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	candidate.PublicHost = publicHost
+	if err := validateHysteriaPublicHost(candidate.PublicHost); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
+	}
 	if candidate.ClientFingerprint == "" || !domain.SupportsFingerprint(candidate.ClientFingerprint) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "unsupported client fingerprint"})
 		return
@@ -2404,11 +2418,21 @@ func (s *server) prepareCandidateWithReservedLocked(ctx context.Context, setting
 func rendererSettings(settings domain.Settings, privateKey string) xray.Settings {
 	result := xray.SettingsFromDomain(settings, privateKey)
 	result.Hysteria2Enabled = hysteria2Enabled()
+	result.HysteriaTLSMode = envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy)
+	result.HysteriaTLSCertIP = strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_CERT_IP"))
+	result.HysteriaTLSServerName = strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_TLS_SERVER_NAME"))
 	return result
 }
 
 func hysteria2Enabled() bool {
 	return strings.EqualFold(strings.TrimSpace(envOr("XRAY_HYSTERIA2_ENABLED", "false")), "true")
+}
+
+func validateHysteriaPublicHost(host string) error {
+	if hysteria2Enabled() && envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy) == xray.HysteriaTLSSelfSigned && host != strings.TrimSpace(os.Getenv("XRAY_HYSTERIA2_CERT_IP")) {
+		return errors.New("public_host must match XRAY_HYSTERIA2_CERT_IP for the mkcert Hysteria 2 certificate")
+	}
+	return nil
 }
 
 func hasInboundTag(path, tag string) bool {

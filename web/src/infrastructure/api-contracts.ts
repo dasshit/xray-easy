@@ -5,6 +5,8 @@ export const SetupStatusDtoSchema = z.object({
   initialized: z.boolean(),
   /** Configured public Xray listener port, when the server includes it. */
   public_port: z.number().optional(),
+  /** Public IPv4 already selected for a mkcert Hysteria 2 certificate. */
+  suggested_public_host: z.string().optional(),
 })
 /** Wire-format type inferred from {@link SetupStatusDtoSchema}. */
 export type SetupStatusDto = z.infer<typeof SetupStatusDtoSchema>

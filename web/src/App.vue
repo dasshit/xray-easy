@@ -138,6 +138,7 @@ async function load() {
   try {
     setup.value = await api.setup.status()
     if (setup.value.publicPort !== undefined) setupForm.value.publicPort = setup.value.publicPort
+    if (setup.value.suggestedPublicHost !== undefined && setup.value.suggestedPublicHost !== '' && setupForm.value.publicHost === '') setupForm.value.publicHost = setup.value.suggestedPublicHost
     if (setup.value.initialized) {
       try { admin.value = await api.auth.current() } catch { admin.value = null }
       if (admin.value) { await loadAuthenticated(); connectEvents() }

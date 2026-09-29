@@ -104,7 +104,7 @@ func TestHysteria2InboundAndProfileUseDedicatedTLSUDPSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if parsed.Scheme != "hysteria2" || parsed.User.Username() != client.UUID || parsed.Host != "vpn.example.com:443" || parsed.Query().Get("sni") != settings.PublicHost || parsed.Query().Get("insecure") != "1" {
+	if parsed.Scheme != "hysteria2" || parsed.User.Username() != client.UUID || parsed.Host != "vpn.example.com:443" || parsed.Query().Get("sni") != settings.PublicHost || parsed.Query().Has("insecure") {
 		t.Fatalf("unexpected Hysteria 2 URI: %s", profile.HysteriaURI)
 	}
 	if parsed.Fragment != client.Name {
@@ -158,6 +158,49 @@ func TestHysteria2InboundAndProfileUseDedicatedTLSUDPSettings(t *testing.T) {
 	certificates := inbound.StreamSettings.TLSSettings.Certificates
 	if len(certificates) != 1 || certificates[0].CertificateFile != HysteriaTLSCertPath || certificates[0].KeyFile != HysteriaTLSKeyPath {
 		t.Fatalf("unexpected Hysteria TLS files: %+v", certificates)
+	}
+}
+
+func TestHysteria2URIUsesCertificateMode(t *testing.T) {
+	client := Client{ID: "device", Name: "phone", UUID: "123e4567-e89b-42d3-a456-426614174000", ShortID: "0123456789abcdef"}
+	for _, test := range []struct {
+		name, host, mode, certIP, serverName, wantSNI, wantInsecure string
+	}{
+		{"mkcert IPv4", "89.169.13.234", HysteriaTLSSelfSigned, "89.169.13.234", "", "89.169.13.234", "1"},
+		{"legacy unverified", "89.169.13.234", HysteriaTLSLegacy, "", "", "89.169.13.234", "1"},
+		{"custom DNS", "vpn.example.com", HysteriaTLSCustom, "", "", "vpn.example.com", ""},
+		{"custom DNS SNI with IP endpoint", "89.169.13.234", HysteriaTLSCustom, "", "vpn.example.com", "vpn.example.com", ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			settings := validTestSettings()
+			settings.PublicHost = test.host
+			settings.Hysteria2Enabled = true
+			settings.HysteriaTLSMode = test.mode
+			settings.HysteriaTLSCertIP = test.certIP
+			settings.HysteriaTLSServerName = test.serverName
+			profile, err := BuildProfile(settings, client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			parsed, err := url.Parse(profile.HysteriaURI)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parsed.Query().Get("sni") != test.wantSNI || parsed.Query().Get("insecure") != test.wantInsecure {
+				t.Fatalf("unexpected URI query: %s", profile.HysteriaURI)
+			}
+		})
+	}
+}
+
+func TestHysteria2SelfSignedRejectsMismatchedPublicHost(t *testing.T) {
+	settings := validTestSettings()
+	settings.Hysteria2Enabled = true
+	settings.HysteriaTLSMode = HysteriaTLSSelfSigned
+	settings.HysteriaTLSCertIP = "89.169.13.234"
+	client := Client{ID: "device", Name: "phone", UUID: "123e4567-e89b-42d3-a456-426614174000", ShortID: "0123456789abcdef"}
+	if _, err := BuildProfile(settings, client); err == nil {
+		t.Fatal("expected a public host/certificate IP mismatch error")
 	}
 }
 

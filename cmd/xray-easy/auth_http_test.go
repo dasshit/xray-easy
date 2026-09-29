@@ -79,6 +79,32 @@ func TestSetupInitializeCanonicalizesIPv6PublicHost(t *testing.T) {
 	}
 }
 
+func TestMkcertIPv4IsSuggestedAndRequiredDuringSetup(t *testing.T) {
+	t.Setenv("XRAY_HYSTERIA2_ENABLED", "true")
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "self-signed")
+	t.Setenv("XRAY_HYSTERIA2_CERT_IP", "89.169.13.234")
+	app := newTestApp(t, false)
+	status := decodeResponse[map[string]any](t, requestJSON(t, app, http.MethodGet, "/api/setup/status", nil, false))
+	if status["suggested_public_host"] != "89.169.13.234" {
+		t.Fatalf("mkcert setup status = %+v", status)
+	}
+	request := initializeRequest{Username: "admin", Password: "correct horse battery", PublicHost: "vpn.example.test", RealityTarget: "www.example.com:443", RealitySNI: "www.example.com"}
+	bad := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false)
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "XRAY_HYSTERIA2_CERT_IP") {
+		t.Fatalf("mismatched mkcert host = %d %s", bad.Code, bad.Body.String())
+	}
+	request.PublicHost = "89.169.13.234"
+	if got := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false); got.Code != http.StatusCreated {
+		t.Fatalf("matching mkcert host = %d %s", got.Code, got.Body.String())
+	}
+	settingsApp := newTestApp(t, true)
+	other := "vpn.example.test"
+	bad = requestJSON(t, settingsApp, http.MethodPatch, "/api/settings", settingsPatchRequest{PublicHost: &other}, true)
+	if bad.Code != http.StatusBadRequest || !strings.Contains(bad.Body.String(), "XRAY_HYSTERIA2_CERT_IP") {
+		t.Fatalf("mismatched mkcert settings host = %d %s", bad.Code, bad.Body.String())
+	}
+}
+
 func TestLoginSessionCookieLogoutAndProtectedRoutes(t *testing.T) {
 	app := newTestApp(t, true)
 	if got := requestJSON(t, app, http.MethodGet, "/api/me", nil, false).Code; got != http.StatusUnauthorized {

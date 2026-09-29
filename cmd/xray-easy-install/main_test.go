@@ -54,7 +54,7 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{}
 	var output bytes.Buffer
-	if err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("\n\n\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
 	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --wait") || !strings.Contains(runner.calls[4], "exec -T xray-easy xray-easy doctor") {
@@ -84,7 +84,7 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 
 	runner.calls = nil
 	output.Reset()
-	if err := run(context.Background(), root, strings.NewReader("\n"), &output, runner); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
 	if got := readPrivateFile(t, envPath); got != firstEnv {
@@ -102,7 +102,7 @@ func TestCancellationLeavesNoConfiguration(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{}
 	var output bytes.Buffer
-	if err := run(context.Background(), root, strings.NewReader("\n\nn\n"), &output, runner); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("\n\n\nn\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
 	if len(runner.calls) != 2 {
@@ -117,7 +117,7 @@ func TestInvalidPortsAreReprompted(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{}
 	var output bytes.Buffer
-	input := "65536\n4443\n4443\n8080\ny\n"
+	input := "65536\n4443\n4443\n8080\n\ny\n"
 	if err := run(context.Background(), root, strings.NewReader(input), &output, runner); err != nil {
 		t.Fatal(err)
 	}
@@ -179,7 +179,7 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{failOn: "up -d"}
 	var output bytes.Buffer
-	err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner)
+	err := run(context.Background(), root, strings.NewReader("\n\n\n\n"), &output, runner)
 	if err == nil || !strings.Contains(err.Error(), "troubleshooting") || !strings.Contains(err.Error(), "docker compose -f compose.yaml logs --tail=100 --timestamps xray xray-easy") {
 		t.Fatalf("expected retryable Compose error, got %v", err)
 	}
@@ -198,7 +198,7 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 	firstToken := readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token"))
 	runner.failOn = ""
 	runner.calls = nil
-	if err := run(context.Background(), root, strings.NewReader("\n"), &output, runner); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
 	if got := readPrivateFile(t, filepath.Join(root, ".env")); got != firstEnv {
@@ -213,7 +213,7 @@ func TestDoctorFailurePreservesStartedStackAndShowsRetryCommand(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{failOn: "exec -T xray-easy xray-easy doctor"}
 	var output bytes.Buffer
-	err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner)
+	err := run(context.Background(), root, strings.NewReader("\n\n\n\n"), &output, runner)
 	if err == nil || !strings.Contains(err.Error(), "docker compose -f compose.yaml exec -T xray-easy xray-easy doctor") {
 		t.Fatalf("expected doctor failure with retry command, got %v", err)
 	}
@@ -361,7 +361,7 @@ func TestComposeValidationFailureKeepsSecrets(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{failOn: "config --quiet"}
 	var output bytes.Buffer
-	err := run(context.Background(), root, strings.NewReader("\n\nmaybe\ny\n"), &output, runner)
+	err := run(context.Background(), root, strings.NewReader("\n\n\nmaybe\ny\n"), &output, runner)
 	if err == nil || !strings.Contains(err.Error(), "Compose configuration is invalid") {
 		t.Fatalf("expected config error, got %v", err)
 	}
@@ -476,7 +476,7 @@ func TestSetupRejectsUnusableSecretsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, &fakeRunner{})
+	err := run(context.Background(), root, strings.NewReader("\n\n\n\n"), &output, &fakeRunner{})
 	if err == nil || !strings.Contains(err.Error(), "secrets directory") {
 		t.Fatalf("expected secrets directory error, got %v", err)
 	}

@@ -196,6 +196,32 @@ func TestTerminalRenderingHandlesSmallScreenAndStyles(t *testing.T) {
 	}
 }
 
+func TestWizardBlocksPortAndConfirmationInputOnSmallTerminal(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		input string
+		run   func(*wizard) error
+	}{
+		{"ports", "1\x1b", func(w *wizard) error { _, _, err := w.ports(context.Background(), 443, 8080); return err }},
+		{"confirmation", "y\x1b", func(w *wizard) error { _, err := w.confirm(context.Background()); return err }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			w := newWizard(strings.NewReader(test.input), &output)
+			defer w.close()
+			w.mu.Lock()
+			w.width, w.height = 50, 18
+			w.mu.Unlock()
+			if err := test.run(w); err != nil && !errors.Is(err, errCancelled) {
+				t.Fatal(err)
+			}
+			if !strings.Contains(output.String(), "Enlarge the terminal") {
+				t.Fatal("small terminal did not block input")
+			}
+		})
+	}
+}
+
 func TestTerminalSessionRestoresSettingsAndMainRuns(t *testing.T) {
 	binDir := t.TempDir()
 	sttyLog := filepath.Join(binDir, "stty.log")
@@ -215,7 +241,7 @@ func TestTerminalSessionRestoresSettingsAndMainRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer input.Close()
-	if _, err := io.WriteString(writer, "\n\n\n"); err != nil {
+	if _, err := io.WriteString(writer, "\n\n\n\n"); err != nil {
 		t.Fatal(err)
 	}
 	writer.Close()
