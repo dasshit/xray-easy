@@ -188,8 +188,10 @@ func TestBuildProfileRejectsUnavailableClientAndIncompleteSettings(t *testing.T)
 	}
 }
 
-func TestRenderServerConfigProducesReservedShortIDWithoutActiveClients(t *testing.T) {
-	config, err := RenderServerConfig(validTestSettings(), []Client{
+func TestRenderServerConfigPreservesDisabledAndReservedShortIDsWithoutActiveClients(t *testing.T) {
+	settings := validTestSettings()
+	settings.ReservedShortIDs = []string{"1111111111111111"}
+	config, err := RenderServerConfig(settings, []Client{
 		{ID: "disabled", UUID: "uuid-disabled", Email: "disabled@example.test", ShortID: "0123456789abcdef", Enabled: false},
 		{ID: "revoked", UUID: "uuid-revoked", Email: "revoked@example.test", ShortID: "fedcba9876543210", Enabled: true, Revoked: true},
 	})
@@ -214,8 +216,8 @@ func TestRenderServerConfigProducesReservedShortIDWithoutActiveClients(t *testin
 	if len(decoded.Inbounds) != 1 || len(decoded.Inbounds[0].Settings.Clients) != 0 {
 		t.Fatalf("disabled or revoked client was rendered: %+v", decoded.Inbounds)
 	}
-	if got := decoded.Inbounds[0].StreamSettings.Reality.ShortIDs; len(got) != 1 || got[0] != emptyShortID {
-		t.Fatalf("reserved REALITY short ID = %v", got)
+	if got := decoded.Inbounds[0].StreamSettings.Reality.ShortIDs; len(got) != 2 || got[0] != "0123456789abcdef" || got[1] != "1111111111111111" {
+		t.Fatalf("REALITY short IDs for disabled profile and reserve = %v", got)
 	}
 }
 

@@ -47,6 +47,8 @@ services:
       - /etc/xray
       - --xray-bin
       - /usr/local/bin/xray
+      - --xray-api
+      - 172.31.241.2:10085
       - --token-file
       - /run/secrets/xray_supervisor_token
       - --listen

@@ -216,6 +216,23 @@ func TestSafePathResolvesSymlinksBeforeCheckingBoundary(t *testing.T) {
 	}
 }
 
+func TestInboundOnlyFileKeepsXrayAPIConfigEnvelope(t *testing.T) {
+	_, configDir := newProcessTestSupervisor(t)
+	configPath := writeTestConfig(t, configDir, "candidates/with-two-inbounds.json", `{"inbounds":[{"tag":"vless-reality","protocol":"vless"},{"tag":"hysteria2","protocol":"hysteria"}]}`)
+	path, err := inboundOnlyFile(configPath, "vless-reality")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(path) })
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(content), `"inbounds"`) || !strings.Contains(string(content), `"vless-reality"`) || strings.Contains(string(content), `"hysteria2"`) {
+		t.Fatalf("Xray API inbound file has wrong envelope or selection: %s", content)
+	}
+}
+
 func TestApplyPreservesCurrentProcessOnValidationFailureAndRollsBackStartupFailure(t *testing.T) {
 	s, configDir := newProcessTestSupervisor(t)
 	active := writeTestConfig(t, configDir, "active.json", "valid-active")

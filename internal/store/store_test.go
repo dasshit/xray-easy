@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -102,6 +103,53 @@ func TestMigrationSetupAndSettingsLifecycle(t *testing.T) {
 	got, err := db.GetSettings(ctx)
 	if err != nil || got != settings {
 		t.Fatalf("settings round trip = %+v, %v; want %+v", got, err, settings)
+	}
+}
+
+func TestReservedRealityShortIDPoolRefillsAndNeverReusesAssignments(t *testing.T) {
+	db, ctx := openTestStore(t, "short-id-pool.db")
+	createTestClient(t, db, ctx, "legacy")
+	counter := 0
+	generate := func() (string, error) {
+		counter++
+		return fmt.Sprintf("%016x", counter), nil
+	}
+	if err := db.EnsureReservedShortIDs(ctx, 5, generate); err != nil {
+		t.Fatalf("seed migrated reserve: %v", err)
+	}
+	reserved, err := db.ListReservedShortIDs(ctx)
+	if err != nil || len(reserved) != 5 {
+		t.Fatalf("initial short-ID reserve = %v, %v", reserved, err)
+	}
+	for index := 1; index <= 5; index++ {
+		clientID := fmt.Sprintf("new-%d", index)
+		shortID, exhausted, err := db.CreateClientWithReservedShortID(ctx, domain.Client{ID: clientID, Name: clientID, Enabled: true}, "uuid-"+clientID, clientID+"@example.test", 5, generate)
+		if err != nil || exhausted {
+			t.Fatalf("claim reserved ID %d = %q, exhausted=%v, err=%v", index, shortID, exhausted, err)
+		}
+	}
+	reserved, err = db.ListReservedShortIDs(ctx)
+	if err != nil || len(reserved) != 0 {
+		t.Fatalf("reserve after five claims = %v, %v", reserved, err)
+	}
+	shortID, exhausted, err := db.CreateClientWithReservedShortID(ctx, domain.Client{ID: "overflow", Name: "overflow", Enabled: true}, "uuid-overflow", "overflow@example.test", 5, generate)
+	if err != nil || !exhausted || shortID != "0000000000000006" {
+		t.Fatalf("overflow allocation = %q, exhausted=%v, err=%v", shortID, exhausted, err)
+	}
+	reserved, err = db.ListReservedShortIDs(ctx)
+	if err != nil || len(reserved) != 5 {
+		t.Fatalf("refilled short-ID reserve = %v, %v", reserved, err)
+	}
+	if err := db.DeleteClient(ctx, "legacy"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.EnsureReservedShortIDs(ctx, 5, generate); err != nil {
+		t.Fatalf("ensure reserve after deletion: %v", err)
+	}
+	clientID := "after-delete"
+	got, _, err := db.CreateClientWithReservedShortID(ctx, domain.Client{ID: clientID, Name: clientID, Enabled: true}, "uuid-"+clientID, clientID+"@example.test", 5, generate)
+	if err != nil || got == "short-legacy" {
+		t.Fatalf("deleted profile short ID was reused: %q, %v", got, err)
 	}
 }
 

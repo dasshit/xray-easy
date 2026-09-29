@@ -33,6 +33,13 @@ type probeRequest struct {
 	SNI    string `json:"sni"`
 }
 
+type replaceInboundRequest struct {
+	CandidatePath string `json:"candidate_path"`
+	PreviousPath  string `json:"previous_path"`
+	Tag           string `json:"tag"`
+	OperationID   string `json:"operation_id"`
+}
+
 type Status struct {
 	Protocol     string    `json:"protocol"`
 	XrayVersion  string    `json:"xray_version"`
@@ -51,6 +58,12 @@ func (c Client) Validate(ctx context.Context, path, operationID string) error {
 
 func (c Client) Apply(ctx context.Context, path, operationID string) error {
 	_, err := c.call(ctx, http.MethodPost, "/apply", operationRequest{Path: path, OperationID: operationID})
+	return err
+}
+
+// ReplaceInbound updates one Xray inbound through HandlerService without restarting the Xray process.
+func (c Client) ReplaceInbound(ctx context.Context, candidatePath, previousPath, tag, operationID string) error {
+	_, err := c.call(ctx, http.MethodPost, "/replace-inbound", replaceInboundRequest{CandidatePath: candidatePath, PreviousPath: previousPath, Tag: tag, OperationID: operationID})
 	return err
 }
 

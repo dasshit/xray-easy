@@ -111,7 +111,7 @@ func ValidateDatabase(path string) error {
 		if err := db.QueryRow(`SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?`, table).Scan(&exists); err != nil {
 			return err
 		}
-		if exists != 1 {
+		if exists != 1 && table != "reality_short_ids" {
 			return fmt.Errorf("database table %s is missing", table)
 		}
 	}
@@ -224,6 +224,14 @@ func (s *Store) RestoreFrom(path string) error {
 	}
 	for _, table := range databaseTables {
 		var restoreErr error
+		var exists int
+		if err := tx.QueryRow(`SELECT COUNT(*) FROM restore_source.sqlite_master WHERE type='table' AND name=?`, table).Scan(&exists); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("inspect restore table %s: %w", table, err)
+		}
+		if exists == 0 && table == "reality_short_ids" {
+			continue
+		}
 		if table == "settings" {
 			restoreErr = restoreSettings(tx)
 		} else {
@@ -233,6 +241,10 @@ func (s *Store) RestoreFrom(path string) error {
 			_ = tx.Rollback()
 			return fmt.Errorf("restore table %s: %w", table, restoreErr)
 		}
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO main.reality_short_ids(short_id, assigned_client_id, created_at) SELECT short_id, id, created_at FROM main.clients`); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("restore short ID history: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -251,6 +263,7 @@ var databaseTables = []string{
 	"apply_operations",
 	"audit_events",
 	"traffic_snapshots",
+	"reality_short_ids",
 }
 
 func (s *Store) migrate(ctx context.Context) error {
@@ -313,6 +326,12 @@ CREATE TABLE IF NOT EXISTS clients (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS reality_short_ids (
+  short_id TEXT PRIMARY KEY,
+  assigned_client_id TEXT,
+  created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS reality_short_ids_pool_idx ON reality_short_ids(assigned_client_id, created_at);
 CREATE TABLE IF NOT EXISTS config_revisions (
   revision INTEGER PRIMARY KEY,
   config_hash TEXT NOT NULL,
@@ -366,7 +385,11 @@ CREATE TABLE IF NOT EXISTS traffic_snapshots (
 			return fmt.Errorf("migrate settings: %w", err)
 		}
 	}
-	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)`, time.Now().UTC().Format(time.RFC3339Nano))
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(1, ?)`, now); err != nil {
+		return err
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, ?)`, now)
 	return err
 }
 
@@ -637,8 +660,162 @@ func (s *Store) CreateClient(ctx context.Context, client domain.Client, uuid, em
 		return errors.New("client id is required")
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	_, err := s.db.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, uuid, email, shortID, client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), now, now)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, uuid, email, shortID, client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), now, now); err != nil {
+		return err
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO reality_short_ids(short_id, assigned_client_id, created_at) VALUES(?,?,?)`, shortID, client.ID, now); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// ListReservedShortIDs returns the durable, unassigned REALITY IDs in issuance order.
+func (s *Store) ListReservedShortIDs(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT short_id FROM reality_short_ids WHERE assigned_client_id IS NULL ORDER BY created_at, short_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []string
+	for rows.Next() {
+		var shortID string
+		if err := rows.Scan(&shortID); err != nil {
+			return nil, err
+		}
+		result = append(result, shortID)
+	}
+	return result, rows.Err()
+}
+
+// EnsureReservedShortIDs adds stock IDs until count free IDs are available. Existing assignments are never changed.
+func (s *Store) EnsureReservedShortIDs(ctx context.Context, count int, generate func() (string, error)) error {
+	if count < 1 || generate == nil {
+		return errors.New("short ID pool size and generator are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := ensureShortIDHistory(ctx, tx); err != nil {
+		return err
+	}
+	if err := replenishShortIDPool(ctx, tx, count, generate); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+// CreateClientWithReservedShortID assigns a reserved ID and inserts its client atomically.
+// When the pool was exhausted, a new assigned ID plus a fresh reserve is generated.
+func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client domain.Client, uuid, email string, reserveSize int, generate func() (string, error)) (string, bool, error) {
+	if client.ID == "" || reserveSize < 1 || generate == nil {
+		return "", false, errors.New("client, reserve size and short ID generator are required")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return "", false, err
+	}
+	defer tx.Rollback()
+	if err := ensureShortIDHistory(ctx, tx); err != nil {
+		return "", false, err
+	}
+	var total, available int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*), COALESCE(SUM(CASE WHEN assigned_client_id IS NULL THEN 1 ELSE 0 END), 0) FROM reality_short_ids`).Scan(&total, &available); err != nil {
+		return "", false, err
+	}
+	if total == 0 {
+		if err := replenishShortIDPool(ctx, tx, reserveSize, generate); err != nil {
+			return "", false, err
+		}
+		available = reserveSize
+	}
+	shortID := ""
+	exhausted := available == 0
+	if exhausted {
+		shortID, err = generateUnusedShortID(ctx, tx, generate)
+		if err != nil {
+			return "", false, err
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO reality_short_ids(short_id, assigned_client_id, created_at) VALUES(?,?,?)`, shortID, client.ID, now); err != nil {
+			return "", false, err
+		}
+		if err := replenishShortIDPool(ctx, tx, reserveSize, generate); err != nil {
+			return "", false, err
+		}
+	} else {
+		if err := tx.QueryRowContext(ctx, `SELECT short_id FROM reality_short_ids WHERE assigned_client_id IS NULL ORDER BY created_at, short_id LIMIT 1`).Scan(&shortID); err != nil {
+			return "", false, err
+		}
+		result, err := tx.ExecContext(ctx, `UPDATE reality_short_ids SET assigned_client_id=? WHERE short_id=? AND assigned_client_id IS NULL`, client.ID, shortID)
+		if err != nil {
+			return "", false, err
+		}
+		if changed, err := result.RowsAffected(); err != nil || changed != 1 {
+			if err != nil {
+				return "", false, err
+			}
+			return "", false, errors.New("reserved REALITY short ID was claimed concurrently")
+		}
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, uuid, email, shortID, client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), now, now); err != nil {
+		return "", false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return "", false, err
+	}
+	return shortID, exhausted, nil
+}
+
+func ensureShortIDHistory(ctx context.Context, tx *sql.Tx) error {
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO reality_short_ids(short_id, assigned_client_id, created_at) SELECT short_id, id, created_at FROM clients`)
 	return err
+}
+
+func replenishShortIDPool(ctx context.Context, tx *sql.Tx, target int, generate func() (string, error)) error {
+	var available int
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM reality_short_ids WHERE assigned_client_id IS NULL`).Scan(&available); err != nil {
+		return err
+	}
+	for available < target {
+		shortID, err := generateUnusedShortID(ctx, tx, generate)
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err := tx.ExecContext(ctx, `INSERT INTO reality_short_ids(short_id, assigned_client_id, created_at) VALUES(?,NULL,?)`, shortID, now); err != nil {
+			return err
+		}
+		available++
+	}
+	return nil
+}
+
+func generateUnusedShortID(ctx context.Context, tx *sql.Tx, generate func() (string, error)) (string, error) {
+	for range 32 {
+		shortID, err := generate()
+		if err != nil {
+			return "", err
+		}
+		if shortID == "" || shortID == "0000000000000000" {
+			continue
+		}
+		var exists int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM reality_short_ids WHERE short_id=?`, shortID).Scan(&exists); err != nil {
+			return "", err
+		}
+		if exists == 0 {
+			return shortID, nil
+		}
+	}
+	return "", errors.New("could not generate a unique REALITY short ID")
 }
 
 func (s *Store) ListClients(ctx context.Context) ([]domain.Client, error) {

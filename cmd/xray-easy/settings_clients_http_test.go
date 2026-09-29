@@ -284,9 +284,11 @@ func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
 	}
 	app.sup.validateErr = nil
 	app.sup.applyErrors = []error{errors.New("candidate apply failed")}
+	app.handler.addErr = errors.New("live AddUser unavailable")
 	if got := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "apply-failure"}, true).Code; got != http.StatusBadGateway {
 		t.Fatalf("candidate apply failure status = %d", got)
 	}
+	app.handler.addErr = nil
 	if got := requestJSON(t, app, http.MethodGet, "/api/clients/", nil, true).Code; got != http.StatusNotFound {
 		t.Fatalf("empty client route status = %d", got)
 	}

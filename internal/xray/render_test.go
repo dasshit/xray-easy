@@ -44,7 +44,7 @@ func TestRenderServerConfigKeepsRealityShortIDsInSyncWithActiveClients(t *testin
 	if len(inbound.Settings.Clients) != 1 || inbound.Settings.Clients[0].ID != "uuid-active" {
 		t.Fatalf("unexpected active clients: %+v", inbound.Settings.Clients)
 	}
-	if got := inbound.StreamSettings.RealitySettings.ShortIDs; len(got) != 1 || got[0] != "0123456789abcdef" {
+	if got := inbound.StreamSettings.RealitySettings.ShortIDs; len(got) != 2 || got[0] != "0123456789abcdef" || got[1] != "fedcba9876543210" {
 		t.Fatalf("unexpected REALITY shortIds: %v", got)
 	}
 	if got := inbound.StreamSettings.RealitySettings.MinClientVer; got != "1.0.0" {

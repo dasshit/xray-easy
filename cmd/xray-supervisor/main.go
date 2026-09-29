@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -39,6 +40,7 @@ const protocolVersion = "v1"
 type config struct {
 	configDir  string
 	xrayBinary string
+	xrayAPI    string
 	tokenFile  string
 	listen     string
 	grace      time.Duration
@@ -327,6 +329,7 @@ func (s *supervisor) handler() http.Handler {
 	mux.HandleFunc("/logs", s.handleLogs)
 	mux.HandleFunc("/validate", s.handleValidate)
 	mux.HandleFunc("/apply", s.handleApply)
+	mux.HandleFunc("/replace-inbound", s.handleReplaceInbound)
 	mux.HandleFunc("/probe-target", s.handleProbe)
 	mux.HandleFunc("/probe-ipv6", s.handleIPv6Probe)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -342,6 +345,147 @@ func (s *supervisor) handler() http.Handler {
 		r.Body = io.NopCloser(strings.NewReader(string(body)))
 		mux.ServeHTTP(w, r)
 	})
+}
+
+type replaceInboundRequest struct {
+	CandidatePath string `json:"candidate_path"`
+	PreviousPath  string `json:"previous_path"`
+	Tag           string `json:"tag"`
+	OperationID   string `json:"operation_id"`
+}
+
+func (s *supervisor) handleReplaceInbound(w http.ResponseWriter, r *http.Request) {
+	var req replaceInboundRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+	if req.OperationID == "" || req.Tag == "" {
+		writeError(w, http.StatusBadRequest, errors.New("operation_id and inbound tag are required"))
+		return
+	}
+	if err := s.replaceInbound(req); err != nil {
+		writeError(w, http.StatusBadGateway, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation_id": req.OperationID, "protocol": protocolVersion})
+}
+
+// replaceInbound performs Xray's native RemoveInbound/AddInbound sequence.
+// It briefly interrupts connections on the selected tag, but leaves the Xray
+// process and every other inbound running.
+func (s *supervisor) replaceInbound(req replaceInboundRequest) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	if s.cfg.xrayAPI == "" {
+		return errors.New("Xray API address is not configured in supervisor")
+	}
+	if !regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`).MatchString(req.Tag) {
+		return errors.New("invalid inbound tag")
+	}
+	s.mu.Lock()
+	running := s.state == "running" && s.child != nil && s.child.Process != nil
+	s.mu.Unlock()
+	if !running {
+		return errors.New("Xray is not running")
+	}
+	candidatePath, err := s.safePath(req.CandidatePath)
+	if err != nil {
+		return err
+	}
+	previousPath, err := s.safePath(req.PreviousPath)
+	if err != nil {
+		return err
+	}
+	candidateInbound, err := inboundOnlyFile(candidatePath, req.Tag)
+	if err != nil {
+		return fmt.Errorf("read candidate inbound: %w", err)
+	}
+	defer os.Remove(candidateInbound)
+	previousInbound, err := inboundOnlyFile(previousPath, req.Tag)
+	if err != nil {
+		return fmt.Errorf("read previous inbound for rollback: %w", err)
+	}
+	defer os.Remove(previousInbound)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := s.runXrayAPI(ctx, "rmi", "--server="+s.cfg.xrayAPI, "--timeout=20", req.Tag); err != nil {
+		return errors.New("Xray rejected RemoveInbound")
+	}
+	if err := s.runXrayAPI(ctx, "adi", "--server="+s.cfg.xrayAPI, "--timeout=20", candidateInbound); err != nil {
+		rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		rollbackErr := s.runXrayAPI(rollbackCtx, "adi", "--server="+s.cfg.xrayAPI, "--timeout=20", previousInbound)
+		rollbackCancel()
+		if rollbackErr != nil {
+			s.logf("inbound replacement failed; rollback also failed for tag %s", req.Tag)
+			return errors.New("Xray rejected AddInbound and the previous inbound could not be restored")
+		}
+		s.logf("inbound replacement failed; restored tag %s", req.Tag)
+		return errors.New("Xray rejected AddInbound; previous inbound restored")
+	}
+	s.logf("replaced inbound %s without restarting the Xray process", req.Tag)
+	return nil
+}
+
+func (s *supervisor) runXrayAPI(ctx context.Context, args ...string) error {
+	cmd := exec.CommandContext(ctx, s.cfg.xrayBinary, append([]string{"api"}, args...)...)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		// Xray CLI output can contain fragments of the submitted configuration;
+		// keep it out of the API response and persistent logs.
+		_ = output
+		return errors.New("Xray API command failed")
+	}
+	return nil
+}
+
+func inboundOnlyFile(configPath, tag string) (string, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return "", err
+	}
+	var config struct {
+		Inbounds []json.RawMessage `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return "", errors.New("invalid Xray config")
+	}
+	for _, raw := range config.Inbounds {
+		var inbound struct {
+			Tag string `json:"tag"`
+		}
+		if err := json.Unmarshal(raw, &inbound); err != nil {
+			return "", errors.New("invalid Xray inbound")
+		}
+		if inbound.Tag == tag {
+			content, err := json.Marshal(struct {
+				Inbounds []json.RawMessage `json:"inbounds"`
+			}{Inbounds: []json.RawMessage{raw}})
+			if err != nil {
+				return "", err
+			}
+			file, err := os.CreateTemp("", "xray-inbound-*.json")
+			if err != nil {
+				return "", err
+			}
+			if _, err := file.Write(content); err != nil {
+				_ = file.Close()
+				_ = os.Remove(file.Name())
+				return "", err
+			}
+			if err := file.Chmod(0o600); err != nil {
+				_ = file.Close()
+				_ = os.Remove(file.Name())
+				return "", err
+			}
+			if err := file.Close(); err != nil {
+				_ = os.Remove(file.Name())
+				return "", err
+			}
+			return file.Name(), nil
+		}
+	}
+	return "", fmt.Errorf("inbound %q was not found", tag)
 }
 
 func readBody(r *http.Request) ([]byte, error) {
@@ -636,6 +780,7 @@ func main() {
 	cfg := &config{}
 	fs.StringVar(&cfg.configDir, "config-dir", "/etc/xray", "directory containing active and candidate configs")
 	fs.StringVar(&cfg.xrayBinary, "xray-bin", "/usr/local/bin/xray", "Xray binary")
+	fs.StringVar(&cfg.xrayAPI, "xray-api", "127.0.0.1:10085", "private Xray gRPC API address")
 	fs.StringVar(&cfg.tokenFile, "token-file", "/run/secrets/xray_supervisor_token", "HMAC token file")
 	fs.StringVar(&cfg.listen, "listen", "0.0.0.0:10086", "private supervisor API address")
 	fs.DurationVar(&cfg.grace, "grace-period", 10*time.Second, "grace period for Xray shutdown")

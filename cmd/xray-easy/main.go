@@ -74,6 +74,10 @@ type xrayHandlerAPI interface {
 	Users(context.Context) ([]string, error)
 }
 
+type inboundReplacer interface {
+	ReplaceInbound(context.Context, string, string, string, string) error
+}
+
 type initializeRequest struct {
 	Username      string `json:"username"`
 	Password      string `json:"password"`
@@ -534,7 +538,16 @@ func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, mast
 		return err
 	}
 	xrayClients := xray.ClientsFromDomain(clients)
-	rendered, err := xray.RenderServerConfig(xray.SettingsFromDomain(settings, privateKey), xrayClients)
+	if err := db.EnsureReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
+		return err
+	}
+	reservedShortIDs, err := db.ListReservedShortIDs(ctx)
+	if err != nil {
+		return err
+	}
+	renderSettings := rendererSettings(settings, privateKey)
+	renderSettings.ReservedShortIDs = reservedShortIDs
+	rendered, err := xray.RenderServerConfig(renderSettings, xrayClients)
 	if err != nil {
 		return err
 	}
@@ -1743,6 +1756,11 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 func (s *server) createClient(ctx context.Context, settings domain.Settings, privateKey, name, fingerprint, actorID string) (domain.Client, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
+	if err != nil {
+		return domain.Client{}, err
+	}
+	defer maintenanceLock.Close()
 	clients, err := s.store.ListClients(ctx)
 	if err != nil {
 		return domain.Client{}, fmt.Errorf("list clients: %w", err)
@@ -1755,10 +1773,6 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 	if err != nil {
 		return domain.Client{}, err
 	}
-	shortID, err := xray.NewShortID()
-	if err != nil {
-		return domain.Client{}, err
-	}
 	if fingerprint == "" {
 		fingerprint = settings.ClientFingerprint
 	}
@@ -1767,18 +1781,90 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 		return domain.Client{}, err
 	}
 	clientEmail := "device-" + clientID + "@xray-easy"
-	if err := s.store.CreateClient(ctx, client, uuid, clientEmail, shortID); err != nil {
+	shortID, replaceInbound, err := s.store.CreateClientWithReservedShortID(ctx, client, uuid, clientEmail, xray.ReservedShortIDCount, xray.NewShortID)
+	if err != nil {
 		return domain.Client{}, fmt.Errorf("create client: %w", err)
 	}
 	client.UUID, client.Email, client.ShortID = uuid, clientEmail, shortID
 	clients = append(clients, client)
-	// A client changes the REALITY shortIds list as well as the VLESS user
-	// list. HandlerService can mutate the latter, but it cannot update
-	// realitySettings.shortIds, so the complete candidate must be applied.
-	if err := s.applyClientsLiveLocked(ctx, settings, privateKey, clients, actorID, "client.create", clientID, nil, nil); err != nil {
+	reserved, err := s.store.ListReservedShortIDs(ctx)
+	if err != nil {
+		_ = s.store.DeleteClient(ctx, clientID)
+		return domain.Client{}, fmt.Errorf("list reserved REALITY short IDs: %w", err)
+	}
+	path, operationID, err := s.prepareCandidateWithReservedLocked(ctx, settings, privateKey, clients, reserved)
+	if err != nil {
 		_ = s.store.DeleteClient(ctx, clientID)
 		return domain.Client{}, err
 	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
+	activePath := filepath.Join(s.configDir, "active.json")
+	usedReplace := replaceInbound
+	fullApply, vlessReplaced, vlessAdded := false, false, false
+	rollbackRuntime := func() {
+		if fullApply {
+			_ = s.supervisor.Apply(ctx, activePath, operationID+"-rollback")
+			return
+		}
+		if vlessReplaced {
+			if replacer, ok := s.supervisor.(inboundReplacer); ok {
+				_ = replacer.ReplaceInbound(ctx, activePath, path, "vless-reality", operationID+"-rollback")
+			}
+		}
+		if vlessAdded {
+			_ = s.handler.RemoveUser(ctx, client.Email)
+		}
+	}
+	failCreate := func(cause error) (domain.Client, error) {
+		rollbackRuntime()
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", cause.Error())
+		_ = os.Remove(path)
+		_ = s.store.DeleteClient(ctx, clientID)
+		return domain.Client{}, cause
+	}
+	if !hasInboundTag(activePath, "vless-reality") {
+		usedReplace = false
+		if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+			return failCreate(err)
+		}
+		fullApply = true
+	} else if usedReplace {
+		replacer, ok := s.supervisor.(inboundReplacer)
+		if ok {
+			if err := replacer.ReplaceInbound(ctx, path, activePath, "vless-reality", operationID); err != nil {
+				return failCreate(err)
+			}
+			vlessReplaced = true
+		} else {
+			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		}
+	} else {
+		if s.handler == nil {
+			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		} else if err := s.handler.AddUser(ctx, client.Email, client.UUID, xray.Flow); err != nil {
+			// If Xray has no live inbound yet, a normal first start is needed.
+			if applyErr := s.supervisor.Apply(ctx, path, operationID); applyErr != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		} else {
+			vlessAdded = true
+		}
+	}
+	if err := os.Rename(path, activePath); err != nil {
+		return failCreate(fmt.Errorf("promote Xray config: %w", err))
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "committed", "")
+	if vlessReplaced {
+		s.recordDiagnostic("warn", "REALITY short-ID reserve exhausted; the VLESS inbound was replaced and active VLESS connections may reconnect")
+	}
+	_ = s.store.AddAudit(ctx, actorID, "client.create", "client", clientID, "profile added to the running Xray instance")
 	return s.store.GetClient(ctx, clientID)
 }
 
@@ -1887,7 +1973,17 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 		return err
 	}
 	if len(clients) == 0 {
-		return nil
+		// Before the first device exists there may already be a configured
+		// Xray instance. Seed the reserve once node settings are present so the
+		// first issued profile can be added without restarting Xray.
+		if _, err := s.store.GetSettings(ctx); errors.Is(err, store.ErrSettingsNotInitialized) {
+			return nil // first-run setup has not saved node settings yet
+		} else if err != nil {
+			return err
+		}
+	}
+	if err := s.reconcileRealityShortIDsLocked(ctx, clients); err != nil {
+		return fmt.Errorf("reconcile REALITY short IDs: %w", err)
 	}
 	running, err := s.handler.Users(ctx)
 	if err != nil {
@@ -1916,7 +2012,215 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.reconcilePersistedClientConfigLocked(ctx, clients); err != nil {
+		return fmt.Errorf("persist reconciled client state: %w", err)
+	}
 	return nil
+}
+
+func (s *server) reconcilePersistedClientConfigLocked(ctx context.Context, clients []domain.Client) error {
+	activePath := filepath.Join(s.configDir, "active.json")
+	if activeConfigUsersMatch(activePath, clients) {
+		return nil
+	}
+	settings, err := s.store.GetSettings(ctx)
+	if err != nil {
+		return err
+	}
+	settings.PublicPort = s.publicPort
+	privateKey, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		return errors.New("could not decrypt REALITY private key while persisting reconciled state")
+	}
+	reserved, err := s.store.ListReservedShortIDs(ctx)
+	if err != nil {
+		return err
+	}
+	path, operationID, err := s.prepareCandidateWithReservedLocked(ctx, settings, privateKey, clients, reserved)
+	if err != nil {
+		return err
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
+	if err := os.Rename(path, activePath); err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		_ = os.Remove(path)
+		return fmt.Errorf("promote reconciled client config: %w", err)
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "committed", "")
+	_ = s.store.AddAudit(ctx, "system", "runtime.reconcile", "clients", "all", "persisted reconciled live client state")
+	return nil
+}
+
+func activeConfigUsersMatch(path string, clients []domain.Client) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var config struct {
+		Inbounds []struct {
+			Tag      string `json:"tag"`
+			Settings struct {
+				Clients []struct {
+					ID    string `json:"id"`
+					Email string `json:"email"`
+				} `json:"clients"`
+			} `json:"settings"`
+		} `json:"inbounds"`
+	}
+	if json.Unmarshal(data, &config) != nil {
+		return false
+	}
+	want := make(map[string]struct{})
+	for _, client := range clients {
+		if client.Enabled && !client.Revoked {
+			want[client.Email+"\x00"+client.UUID] = struct{}{}
+		}
+	}
+	var vless []string
+	for _, inbound := range config.Inbounds {
+		if inbound.Tag == "vless-reality" {
+			for _, client := range inbound.Settings.Clients {
+				vless = append(vless, client.Email+"\x00"+client.ID)
+			}
+		}
+	}
+	if !stringSliceMatchesSet(vless, want) {
+		return false
+	}
+	return true
+}
+
+func stringSliceMatchesSet(values []string, expected map[string]struct{}) bool {
+	if len(values) != len(expected) {
+		return false
+	}
+	seen := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		if _, exists := expected[value]; !exists {
+			return false
+		}
+		if _, duplicate := seen[value]; duplicate {
+			return false
+		}
+		seen[value] = struct{}{}
+	}
+	return true
+}
+
+func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []domain.Client) error {
+	if err := s.store.EnsureReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
+		return fmt.Errorf("ensure REALITY short-ID reserve: %w", err)
+	}
+	settings, err := s.store.GetSettings(ctx)
+	if err != nil {
+		return err
+	}
+	settings.PublicPort = s.publicPort
+	privateKey, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		return errors.New("could not decrypt REALITY private key during reconciliation")
+	}
+	reserved, err := s.store.ListReservedShortIDs(ctx)
+	if err != nil {
+		return err
+	}
+	activePath := filepath.Join(s.configDir, "active.json")
+	currentIDs, err := activeRealityShortIDs(activePath)
+	if errors.Is(err, os.ErrNotExist) {
+		currentIDs = nil
+	} else if err != nil {
+		return err
+	}
+	expectedSet := make(map[string]struct{}, len(clients)+len(reserved))
+	for _, client := range clients {
+		if !client.Revoked && client.ShortID != "" {
+			expectedSet[client.ShortID] = struct{}{}
+		}
+	}
+	for _, id := range reserved {
+		expectedSet[id] = struct{}{}
+	}
+	currentSet := make(map[string]struct{}, len(currentIDs))
+	for _, id := range currentIDs {
+		if id != "0000000000000000" {
+			currentSet[id] = struct{}{}
+		}
+	}
+	needApply := !sameStringSet(currentSet, expectedSet)
+	if !needApply {
+		return nil
+	}
+	path, operationID, err := s.prepareCandidateWithReservedLocked(ctx, settings, privateKey, clients, reserved)
+	if err != nil {
+		return err
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
+	fullApply := false
+	if !hasInboundTag(activePath, "vless-reality") {
+		fullApply = true
+		err = s.supervisor.Apply(ctx, path, operationID)
+	} else if replacer, ok := s.supervisor.(inboundReplacer); ok {
+		err = replacer.ReplaceInbound(ctx, path, activePath, "vless-reality", operationID)
+	} else {
+		fullApply = true
+		err = s.supervisor.Apply(ctx, path, operationID)
+	}
+	if err != nil {
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		_ = os.Remove(path)
+		return err
+	}
+	if err := os.Rename(path, activePath); err != nil {
+		if fullApply {
+			_ = s.supervisor.Apply(ctx, activePath, operationID+"-rollback")
+		} else if replacer, ok := s.supervisor.(inboundReplacer); ok {
+			_ = replacer.ReplaceInbound(ctx, activePath, path, "vless-reality", operationID+"-rollback")
+		}
+		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		_ = os.Remove(path)
+		return fmt.Errorf("promote reconciled Xray config: %w", err)
+	}
+	_ = s.store.UpdateApplyOperation(ctx, operationID, "committed", "")
+	_ = s.store.AddAudit(ctx, "system", "runtime.reconcile", "xray", "vless-reality", "recovered desired REALITY inbound state")
+	return nil
+}
+
+func activeRealityShortIDs(path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var config struct {
+		Inbounds []struct {
+			Tag            string `json:"tag"`
+			StreamSettings struct {
+				RealitySettings struct {
+					ShortIDs []string `json:"shortIds"`
+				} `json:"realitySettings"`
+			} `json:"streamSettings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, errors.New("active Xray config is invalid JSON")
+	}
+	for _, inbound := range config.Inbounds {
+		if inbound.Tag == "vless-reality" {
+			return inbound.StreamSettings.RealitySettings.ShortIDs, nil
+		}
+	}
+	return nil, nil
+}
+
+func sameStringSet(left, right map[string]struct{}) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for value := range left {
+		if _, exists := right[value]; !exists {
+			return false
+		}
+	}
+	return true
 }
 
 func (s *server) applyClientsLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, actorID, action, entityID string) error {
@@ -1986,8 +2290,21 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Set
 }
 
 func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client) (string, string, error) {
+	if err := s.store.EnsureReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
+		return "", "", err
+	}
+	reserved, err := s.store.ListReservedShortIDs(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	return s.prepareCandidateWithReservedLocked(ctx, settings, privateKey, clients, reserved)
+}
+
+func (s *server) prepareCandidateWithReservedLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, reserved []string) (string, string, error) {
 	xrayClients := xray.ClientsFromDomain(clients)
-	rendered, err := xray.RenderServerConfig(xray.SettingsFromDomain(settings, privateKey), xrayClients)
+	renderSettings := rendererSettings(settings, privateKey)
+	renderSettings.ReservedShortIDs = append([]string(nil), reserved...)
+	rendered, err := xray.RenderServerConfig(renderSettings, xrayClients)
 	if err != nil {
 		return "", "", fmt.Errorf("render Xray config: %w", err)
 	}
@@ -2011,6 +2328,31 @@ func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Set
 		return "", "", err
 	}
 	return path, operationID, nil
+}
+
+func rendererSettings(settings domain.Settings, privateKey string) xray.Settings {
+	return xray.SettingsFromDomain(settings, privateKey)
+}
+
+func hasInboundTag(path, tag string) bool {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return false
+	}
+	var config struct {
+		Inbounds []struct {
+			Tag string `json:"tag"`
+		} `json:"inbounds"`
+	}
+	if json.Unmarshal(data, &config) != nil {
+		return false
+	}
+	for _, inbound := range config.Inbounds {
+		if inbound.Tag == tag {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *server) promoteCandidateLocked(ctx context.Context, path, operationID, actorID, action, entityID string) error {

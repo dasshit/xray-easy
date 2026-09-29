@@ -26,8 +26,9 @@ const (
 	// Xray requires at least one REALITY short ID even when there are no
 	// enabled clients. This reserved value has no matching UUID and therefore
 	// cannot authenticate a device.
-	emptyShortID = "0000000000000000"
-	VerifiedCoreVersion = "26.7.28"
+	emptyShortID         = "0000000000000000"
+	ReservedShortIDCount = 5
+	VerifiedCoreVersion  = "26.7.28"
 )
 
 type Settings struct {
@@ -41,6 +42,7 @@ type Settings struct {
 	ClientFingerprint   string
 	LogLevel            string
 	InternalInboundPort int
+	ReservedShortIDs    []string
 }
 
 type Client struct {
@@ -67,7 +69,7 @@ type serverConfig struct {
 	API       apiConfig      `json:"api"`
 	Stats     map[string]any `json:"stats"`
 	Policy    policyConfig   `json:"policy"`
-	Inbounds  []inbound      `json:"inbounds"`
+	Inbounds  []any          `json:"inbounds"`
 	Outbounds []outbound     `json:"outbounds"`
 }
 
@@ -143,28 +145,50 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	}
 	sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
 	serverClients := make([]serverClient, 0, len(active))
-	shortIDs := make([]string, 0, len(active))
+	shortIDs := make([]string, 0, len(clients)+len(settings.ReservedShortIDs))
+	shortIDSet := make(map[string]struct{}, cap(shortIDs))
 	for _, client := range active {
 		if client.UUID == "" || client.ShortID == "" || client.Email == "" {
 			return nil, fmt.Errorf("client %s is missing generated fields", client.ID)
 		}
 		serverClients = append(serverClients, serverClient{ID: client.UUID, Flow: Flow, Email: client.Email})
-		shortIDs = append(shortIDs, client.ShortID)
+	}
+	// Keep IDs for disabled profiles in REALITY so they can be enabled with
+	for _, client := range clients {
+		if client.Revoked || client.ShortID == "" {
+			continue
+		}
+		if _, exists := shortIDSet[client.ShortID]; !exists {
+			shortIDSet[client.ShortID] = struct{}{}
+			shortIDs = append(shortIDs, client.ShortID)
+		}
+	}
+	for _, shortID := range settings.ReservedShortIDs {
+		if shortID == "" || shortID == emptyShortID {
+			return nil, errors.New("reserved REALITY short ID is invalid")
+		}
+		if _, exists := shortIDSet[shortID]; exists {
+			return nil, errors.New("REALITY short IDs must be unique")
+		}
+		shortIDSet[shortID] = struct{}{}
+		shortIDs = append(shortIDs, shortID)
 	}
 	if len(shortIDs) == 0 {
 		shortIDs = []string{emptyShortID}
 	}
+	sort.Strings(shortIDs)
+	inbounds := []any{inbound{
+		Listen: "0.0.0.0", Port: settings.InternalInboundPort, Protocol: Protocol, Tag: "vless-reality",
+		Settings:       inboundSettings{Clients: serverClients, Decryption: "none"},
+		StreamSettings: streamSettings{Network: Network, Security: Security, RealitySettings: realityServer{Show: false, Target: settings.RealityTarget, XVer: 0, ServerNames: []string{settings.RealitySNI}, PrivateKey: settings.RealityPrivateKey, MinClientVer: realityMinClientVersion, ShortIDs: shortIDs}},
+		Sniffing:       sniffing{Enabled: true, DestOverride: []string{"http", "tls", "quic"}},
+	}}
 	config := serverConfig{
-		Log:    logConfig{LogLevel: settings.LogLevel},
-		API:    apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "StatsService", "LoggerService"}},
-		Stats:  map[string]any{},
-		Policy: policyConfig{Levels: map[string]policyLevel{"0": {StatsUserUplink: true, StatsUserDownlink: true, StatsUserOnline: true}}},
-		Inbounds: []inbound{{
-			Listen: "0.0.0.0", Port: settings.InternalInboundPort, Protocol: Protocol, Tag: "vless-reality",
-			Settings:       inboundSettings{Clients: serverClients, Decryption: "none"},
-			StreamSettings: streamSettings{Network: Network, Security: Security, RealitySettings: realityServer{Show: false, Target: settings.RealityTarget, XVer: 0, ServerNames: []string{settings.RealitySNI}, PrivateKey: settings.RealityPrivateKey, MinClientVer: realityMinClientVersion, ShortIDs: shortIDs}},
-			Sniffing:       sniffing{Enabled: true, DestOverride: []string{"http", "tls", "quic"}},
-		}},
+		Log:       logConfig{LogLevel: settings.LogLevel},
+		API:       apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "StatsService", "LoggerService"}},
+		Stats:     map[string]any{},
+		Policy:    policyConfig{Levels: map[string]policyLevel{"0": {StatsUserUplink: true, StatsUserDownlink: true, StatsUserOnline: true}}},
+		Inbounds:  inbounds,
 		Outbounds: []outbound{{Protocol: "freedom", Tag: "direct"}},
 	}
 	var out bytes.Buffer

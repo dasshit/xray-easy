@@ -91,8 +91,12 @@ device is applied.
 ## What is available
 
 - Device creation, enable/disable/revoke, QR code, VLESS link and JSON export.
-  New devices are normally applied through Xray's gRPC API without restarting
-  the Xray process; the supervisor validates and applies full config changes.
+  SQLite keeps five free REALITY `shortId` values and permanent assignment
+  history. While IDs remain in the reserve, new VLESS users are added through
+  HandlerService without restarting Xray. When the reserve is exhausted, Xray's
+  gRPC API replaces only the VLESS inbound; its active connections may briefly
+  reconnect. The control plane validates candidate configs and reconciles
+  SQLite, `active.json` and runtime state after interruptions.
 - Online and last-seen indicators, cumulative upload/download totals, and live
   panel updates through SSE.
 - Node settings with a preview of changes, confirmation and an automatic
