@@ -76,6 +76,14 @@ func (c Client) Hysteria2CanConnect() bool {
 	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked
 }
 
+// HysteriaCredential returns the stored password or the legacy UUID fallback.
+func (c Client) HysteriaCredential() string {
+	if c.HysteriaAuth != "" {
+		return c.HysteriaAuth
+	}
+	return c.UUID
+}
+
 type ClientState struct {
 	Enabled bool
 	Revoked bool

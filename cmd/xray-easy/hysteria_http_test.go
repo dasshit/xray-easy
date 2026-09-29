@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -11,6 +13,9 @@ import (
 
 func TestHysteriaSettingsStatusAndPreviewRequireAuthenticationAndCertificate(t *testing.T) {
 	app := newTestApp(t, true)
+	if err := os.RemoveAll(filepath.Join(app.server.dataDir, "hysteria-tls")); err != nil {
+		t.Fatal(err)
+	}
 	initial := domain.HysteriaSettings{TLSMode: domain.HysteriaTLSCustom, UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff}
 	if err := app.server.store.InitializeHysteriaSettings(context.Background(), initial); err != nil {
 		t.Fatal(err)

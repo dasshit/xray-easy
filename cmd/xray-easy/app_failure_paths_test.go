@@ -27,8 +27,8 @@ func TestCandidateApplicationHelpersCommitRollbackAndRejectInvalidConfigs(t *tes
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := clientStates([]domain.Client{client}); got[client.ID] != (domain.ClientState{Enabled: true, Revoked: false}) {
-		t.Fatalf("clientStates = %+v", got)
+	if got, err := client.AccessState(domain.ProtocolVLESS); err != nil || got != (domain.ClientState{Enabled: true, Revoked: false}) {
+		t.Fatalf("VLESS access state = %+v, %v", got, err)
 	}
 	if err := app.server.applyClientsLocked(context.Background(), settings, privateKey, []domain.Client{client}, app.admin.ID, "test.apply", client.ID); err != nil {
 		t.Fatalf("applyClientsLocked: %v", err)

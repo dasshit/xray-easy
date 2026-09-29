@@ -199,8 +199,10 @@ func TestSettingsRotationBacksUpAppliesAndRevokesProfiles(t *testing.T) {
 		t.Fatalf("rotated settings = %+v, %v", settings, err)
 	}
 	updated, err := app.server.store.GetClient(t.Context(), client.ID)
-	if err != nil || updated.Enabled || !updated.Revoked {
-		t.Fatalf("rotated profile state = %+v, %v", updated, err)
+	vlessState, vlessErr := updated.AccessState(domain.ProtocolVLESS)
+	hysteriaState, hysteriaErr := updated.AccessState(domain.ProtocolHysteria2)
+	if err != nil || vlessErr != nil || hysteriaErr != nil || vlessState != (domain.ClientState{Enabled: false, Revoked: true}) || hysteriaState != (domain.ClientState{Enabled: true, Revoked: false}) {
+		t.Fatalf("rotation must revoke only VLESS access; got client=%+v VLESS=%+v/%v Hysteria=%+v/%v err=%v", updated, vlessState, vlessErr, hysteriaState, hysteriaErr, err)
 	}
 	activeConfig, err := os.ReadFile(filepath.Join(app.server.configDir, "active.json"))
 	if err != nil || strings.Contains(string(activeConfig), client.UUID) || !strings.Contains(string(activeConfig), newTarget) {

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/url"
 	"testing"
+
+	"xray-easy/internal/domain"
 )
 
 func validTestSettings() Settings {
@@ -158,6 +160,42 @@ func TestHysteria2InboundAndProfileUseDedicatedTLSUDPSettings(t *testing.T) {
 	certificates := inbound.StreamSettings.TLSSettings.Certificates
 	if len(certificates) != 1 || certificates[0].CertificateFile != HysteriaTLSCertPath || certificates[0].KeyFile != HysteriaTLSKeyPath {
 		t.Fatalf("unexpected Hysteria TLS files: %+v", certificates)
+	}
+}
+
+func TestProtocolSpecificProfilesDeliverOnlyTheirOwnCredentials(t *testing.T) {
+	settings := validTestSettings()
+	settings.Hysteria2Enabled = true
+	settings.HysteriaTLSMode = HysteriaTLSCustom
+	settings.HysteriaTLSServerName = "vpn.example.com"
+	hysteriaClient := Client{
+		ID: "hysteria-device", Name: "iPhone", Protocol: domain.ProtocolHysteria2,
+		Email: "hysteria-device@xray-easy", HysteriaAuth: "auth with spaces",
+		Enabled: true, HysteriaEnabled: true,
+	}
+	hysteriaProfile, err := BuildProfile(settings, hysteriaClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(hysteriaProfile.HysteriaURI)
+	if err != nil || parsed.Scheme != "hysteria2" || parsed.User.Username() != hysteriaClient.HysteriaAuth {
+		t.Fatalf("Hysteria-only URI = %q, %v", hysteriaProfile.HysteriaURI, err)
+	}
+	if hysteriaProfile.URI != "" || hysteriaProfile.JSON != nil || hysteriaProfile.Protocol != domain.ProtocolHysteria2 {
+		t.Fatalf("Hysteria-only profile leaked a VLESS delivery: %+v", hysteriaProfile)
+	}
+
+	vlessClient := Client{
+		ID: "vless-device", Name: "Mac", Protocol: domain.ProtocolVLESS,
+		UUID: "vless-uuid", Email: "vless-device@xray-easy", ShortID: "0123456789abcdef",
+		ClientFingerprint: "safari", Enabled: true, VLESSEnabled: true,
+	}
+	vlessProfile, err := BuildProfile(settings, vlessClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if vlessProfile.URI == "" || vlessProfile.HysteriaURI != "" || len(vlessProfile.JSON) == 0 {
+		t.Fatalf("VLESS-only profile included another protocol: %+v", vlessProfile)
 	}
 }
 

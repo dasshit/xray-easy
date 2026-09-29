@@ -3,8 +3,15 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -148,6 +155,7 @@ func newTestApp(t *testing.T, initialized bool) testApp {
 	if err := os.MkdirAll(filepath.Join(configDir, "candidates"), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	writeTestHysteriaCertificate(t, filepath.Join(dataDir, "hysteria-tls"))
 	db, err := store.Open(context.Background(), filepath.Join(dataDir, "state.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +209,41 @@ func newTestApp(t *testing.T, initialized bool) testApp {
 		app.admin, app.token = admin, token
 	}
 	return app
+}
+
+func writeTestHysteriaCertificate(t *testing.T, directory string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Minute)
+	template := x509.Certificate{
+		SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "vpn.example.test"},
+		NotBefore: now, NotAfter: now.Add(24 * time.Hour),
+		DNSNames: []string{"vpn.example.test", "cert.example.test"},
+		KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &template, &template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string][]byte{
+		"fullchain.pem": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
+		"privkey.pem":   pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+	} {
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func requestJSON(t *testing.T, app testApp, method, path string, payload any, authenticated bool) *httptest.ResponseRecorder {

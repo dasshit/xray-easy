@@ -127,8 +127,10 @@ type pendingTOTP struct {
 }
 
 type clientRequest struct {
+	Protocol    string `json:"protocol"`
 	Name        string `json:"name"`
 	Fingerprint string `json:"fingerprint"`
+	Auth        string `json:"auth"`
 }
 
 type hysteriaSettingsRequest struct {
@@ -214,17 +216,26 @@ type pendingSettingsChange struct {
 }
 
 type clientResponse struct {
-	ID                string     `json:"id"`
-	Name              string     `json:"name"`
-	ClientFingerprint string     `json:"fingerprint,omitempty"`
-	Enabled           bool       `json:"enabled"`
-	Revoked           bool       `json:"revoked"`
-	CreatedAt         time.Time  `json:"created_at"`
-	UpdatedAt         time.Time  `json:"updated_at"`
-	Online            bool       `json:"online"`
-	LastSeen          *time.Time `json:"last_seen,omitempty"`
-	UploadBytes       int64      `json:"upload_bytes"`
-	DownloadBytes     int64      `json:"download_bytes"`
+	Protocol          domain.ClientProtocol `json:"protocol"`
+	Protocols         []string              `json:"protocols"`
+	VLESS             *clientAccessResponse `json:"vless,omitempty"`
+	Hysteria2         *clientAccessResponse `json:"hysteria2,omitempty"`
+	ID                string                `json:"id"`
+	Name              string                `json:"name"`
+	ClientFingerprint string                `json:"fingerprint,omitempty"`
+	Enabled           bool                  `json:"enabled"`
+	Revoked           bool                  `json:"revoked"`
+	CreatedAt         time.Time             `json:"created_at"`
+	UpdatedAt         time.Time             `json:"updated_at"`
+	Online            bool                  `json:"online"`
+	LastSeen          *time.Time            `json:"last_seen,omitempty"`
+	UploadBytes       int64                 `json:"upload_bytes"`
+	DownloadBytes     int64                 `json:"download_bytes"`
+}
+
+type clientAccessResponse struct {
+	Enabled bool `json:"enabled"`
+	Revoked bool `json:"revoked"`
 }
 
 func main() {
@@ -1475,10 +1486,16 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 			expectedConfirmation = "ROTATE"
 		}
 		consequences = append(consequences,
-			"all existing device profiles will be revoked and cannot be re-enabled",
-			"new profiles must be created after the change",
+			"all existing VLESS accesses will be revoked and cannot be re-enabled",
+			"Hysteria 2 access remains active; create a new VLESS profile after the change",
 			"Xray will be validated and reloaded after an automatic backup",
 		)
+		for _, client := range clients {
+			if client.Protocol == domain.ProtocolLegacyDual && client.HasHysteria2() {
+				consequences = append(consequences, "legacy dual-protocol profiles keep Hysteria 2 access while their VLESS access is revoked")
+				break
+			}
+		}
 	} else {
 		if candidate.ClientFingerprint != current.ClientFingerprint {
 			consequences = append(consequences, "existing profiles remain valid; new profiles use the updated default fingerprint")
@@ -1489,7 +1506,11 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	}
 	revokedClients := 0
 	if dangerous {
-		revokedClients = len(clients)
+		for _, client := range clients {
+			if client.HasVLESS() && !client.VLESSRevoked {
+				revokedClients++
+			}
+		}
 	}
 	pending := pendingSettingsChange{ID: changeID, AdminID: admin.ID, BaseFingerprint: settingsFingerprint(current), ClientsFingerprint: clientsFingerprint(clients), Settings: candidate, ExpectedConfirmation: expectedConfirmation, RequiresXrayApply: logLevelChanged, Diff: diff, Consequences: consequences, RevokedClients: revokedClients, ExpiresAt: time.Now().UTC().Add(10 * time.Minute)}
 	s.settingsMu.Lock()
@@ -1614,11 +1635,18 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	newClients := append([]domain.Client(nil), oldClients...)
-	states := make(map[string]domain.ClientState, len(oldClients))
+	states := make(map[string]map[domain.ClientProtocol]domain.ClientState, len(oldClients))
 	if pending.ExpectedConfirmation != "" {
 		for i := range newClients {
-			newClients[i].Enabled, newClients[i].Revoked = false, true
-			states[newClients[i].ID] = domain.ClientState{Enabled: false, Revoked: true}
+			if !newClients[i].HasVLESS() || newClients[i].VLESSRevoked {
+				continue
+			}
+			newClients[i].VLESSEnabled, newClients[i].VLESSRevoked = false, true
+			newClients[i].Enabled = newClients[i].HasHysteria2() && newClients[i].HysteriaEnabled && !newClients[i].HysteriaRevoked
+			newClients[i].Revoked = (!newClients[i].HasHysteria2() || newClients[i].HysteriaRevoked)
+			states[newClients[i].ID] = map[domain.ClientProtocol]domain.ClientState{
+				domain.ProtocolVLESS: {Enabled: false, Revoked: true},
+			}
 		}
 	}
 	path, operationID, err := s.prepareCandidateLocked(r.Context(), pending.Settings, privateKey, newClients)
@@ -1642,7 +1670,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": err.Error()})
 		return
 	}
-	if err := s.store.UpdateSettingsAndClientStates(r.Context(), pending.Settings, states); err != nil {
+	if err := s.store.UpdateSettingsAndClientProtocolStates(r.Context(), pending.Settings, states); err != nil {
 		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
 		_ = s.supervisor.Apply(r.Context(), filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 		_ = os.Remove(path)
@@ -1651,7 +1679,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := os.Rename(path, filepath.Join(s.configDir, "active.json")); err != nil {
-		_ = s.store.UpdateSettingsAndClientStates(r.Context(), current, clientStates(oldClients))
+		_ = s.store.UpdateSettingsAndClientProtocolStates(r.Context(), current, clientProtocolStates(oldClients))
 		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
 		_ = s.supervisor.Apply(r.Context(), filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 		s.finishSettingsChange(req.ChangeID, false)
@@ -1663,7 +1691,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	auditDetail := fmt.Sprintf("Xray log level changed from %s to %s", current.LogLevel, pending.Settings.LogLevel)
 	if pending.ExpectedConfirmation != "" {
 		auditAction = "settings.rotation"
-		auditDetail = fmt.Sprintf("settings rotated; %d profiles revoked; backup=%s", len(states), backupName)
+		auditDetail = fmt.Sprintf("settings rotated; %d VLESS accesses revoked; Hysteria 2 accesses preserved; backup=%s", len(states), backupName)
 	}
 	_ = s.store.AddAudit(r.Context(), admin.ID, auditAction, "settings", "node", auditDetail)
 	s.finishSettingsChange(req.ChangeID, true)
@@ -1687,10 +1715,19 @@ func (s *server) finishSettingsChange(id string, success bool) {
 	}
 }
 
-func clientStates(clients []domain.Client) map[string]domain.ClientState {
-	states := make(map[string]domain.ClientState, len(clients))
+func clientProtocolStates(clients []domain.Client) map[string]map[domain.ClientProtocol]domain.ClientState {
+	states := make(map[string]map[domain.ClientProtocol]domain.ClientState, len(clients))
 	for _, client := range clients {
-		states[client.ID] = domain.ClientState{Enabled: client.Enabled, Revoked: client.Revoked}
+		transitions := make(map[domain.ClientProtocol]domain.ClientState, 2)
+		if state, err := client.AccessState(domain.ProtocolVLESS); err == nil {
+			transitions[domain.ProtocolVLESS] = state
+		}
+		if state, err := client.AccessState(domain.ProtocolHysteria2); err == nil {
+			transitions[domain.ProtocolHysteria2] = state
+		}
+		if len(transitions) > 0 {
+			states[client.ID] = transitions
+		}
 	}
 	return states
 }
@@ -1706,7 +1743,9 @@ func clientsFingerprint(clients []domain.Client) string {
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
 	var value strings.Builder
 	for _, client := range ordered {
-		fmt.Fprintf(&value, "%s\x00%s\x00%t\x00%t\n", client.ID, client.UUID, client.Enabled, client.Revoked)
+		fmt.Fprintf(&value, "%s\x00%s\x00%s\x00%s\x00%t\x00%t\x00%t\x00%t\x00%t\x00%t\n",
+			client.ID, client.Protocol, client.UUID, client.HysteriaAuth, client.Enabled, client.Revoked,
+			client.VLESSEnabled, client.VLESSRevoked, client.HysteriaEnabled, client.HysteriaRevoked)
 	}
 	hash := sha256.Sum256([]byte(value.String()))
 	return hex.EncodeToString(hash[:])
@@ -1777,22 +1816,63 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	}
 	name := strings.TrimSpace(req.Name)
 	fingerprint := strings.TrimSpace(req.Fingerprint)
+	authValue := strings.TrimSpace(req.Auth)
+	protocol := domain.ClientProtocol(strings.ToLower(strings.TrimSpace(req.Protocol)))
+	if protocol == "" {
+		protocol = domain.ProtocolVLESS
+	}
+	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless or hysteria2"})
+		return
+	}
+	if protocol == domain.ProtocolVLESS && authValue != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "auth is only valid for Hysteria 2 profiles"})
+		return
+	}
+	if protocol == domain.ProtocolHysteria2 && fingerprint != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "fingerprint is only valid for VLESS profiles"})
+		return
+	}
 	settings, err := s.store.GetSettings(r.Context())
-	if err != nil || settings.RealityPrivateKeyEnc == "" {
-		writeJSON(w, http.StatusConflict, map[string]any{"error": "REALITY setup is incomplete"})
+	if err != nil || settings.RealityPrivateKeyEnc == "" || settings.RealityPublicKey == "" {
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "setup_incomplete", "error": "Xray node setup is incomplete"})
 		return
 	}
 	settings.PublicPort = s.publicPort
-	if fingerprint != "" && !domain.SupportsFingerprint(fingerprint) {
+	if protocol == domain.ProtocolVLESS && fingerprint != "" && !domain.SupportsFingerprint(fingerprint) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported client fingerprint"})
 		return
 	}
-	privateKey, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
-	if err != nil {
+	if protocol == domain.ProtocolVLESS {
+		if settings.RealityPrivateKeyEnc == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "setup_incomplete", "error": "REALITY setup is incomplete"})
+			return
+		}
+	} else {
+		hysteriaSettings, settingsErr := loadHysteriaSettings(r.Context(), s.store)
+		if settingsErr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read Hysteria 2 settings"})
+			return
+		}
+		if !hysteriaSettings.Enabled {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "transport_disabled", "error": "Hysteria 2 is disabled; enable it in Settings first"})
+			return
+		}
+		status, statusErr := s.hysteriaSettingsStatus(r.Context())
+		if statusErr != nil || status.CertificateError != "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "Hysteria 2 TLS certificate is not ready"})
+			return
+		}
+		if err := s.validateHysteriaHost(r.Context(), status.Host); err != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": err.Error()})
+			return
+		}
+	}
+	if _, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key"); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt REALITY private key"})
 		return
 	}
-	client, err := s.createClient(r.Context(), settings, privateKey, name, fingerprint, admin.ID)
+	client, err := s.createProtocolClient(r.Context(), settings, protocol, name, fingerprint, authValue, admin.ID)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
@@ -1841,6 +1921,10 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) createClient(ctx context.Context, settings domain.Settings, privateKey, name, fingerprint, actorID string) (domain.Client, error) {
+	return s.createProtocolClient(ctx, settings, domain.ProtocolVLESS, name, fingerprint, "", actorID)
+}
+
+func (s *server) createProtocolClient(ctx context.Context, settings domain.Settings, protocol domain.ClientProtocol, name, fingerprint, authValue, actorID string) (domain.Client, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
@@ -1856,28 +1940,47 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 	if err != nil {
 		return domain.Client{}, err
 	}
-	uuid, err := xray.NewUUID()
-	if err != nil {
-		return domain.Client{}, err
-	}
-	if fingerprint == "" {
+	if protocol == domain.ProtocolVLESS && fingerprint == "" {
 		fingerprint = settings.ClientFingerprint
 	}
-	client, err := domain.NewClient(clientID, name, fingerprint)
+	if protocol == domain.ProtocolHysteria2 && authValue == "" {
+		authValue, err = newHysteriaAuth()
+		if err != nil {
+			return domain.Client{}, fmt.Errorf("generate Hysteria 2 auth: %w", err)
+		}
+	}
+	client, err := domain.NewProtocolClient(clientID, name, protocol, fingerprint, authValue)
 	if err != nil {
 		return domain.Client{}, err
 	}
-	clientEmail := "device-" + clientID + "@xray-easy"
-	shortID, replaceInbound, err := s.store.CreateClientWithReservedShortID(ctx, client, uuid, clientEmail, xray.ReservedShortIDCount, xray.NewShortID)
+	client.Email = "device-" + clientID + "-" + string(protocol) + "@xray-easy"
+	shortID, replaceInbound := "", false
+	switch protocol {
+	case domain.ProtocolVLESS:
+		client.UUID, err = xray.NewUUID()
+		if err != nil {
+			return domain.Client{}, err
+		}
+		shortID, replaceInbound, err = s.store.CreateClientWithReservedShortID(ctx, client, client.UUID, client.Email, xray.ReservedShortIDCount, xray.NewShortID)
+	case domain.ProtocolHysteria2:
+		err = s.store.CreateHysteriaClient(ctx, client)
+	default:
+		return domain.Client{}, errors.New("new profiles must use VLESS or Hysteria 2")
+	}
 	if err != nil {
 		return domain.Client{}, fmt.Errorf("create client: %w", err)
 	}
-	client.UUID, client.Email, client.ShortID = uuid, clientEmail, shortID
+	client.ShortID = shortID
 	clients = append(clients, client)
 	reserved, err := s.store.ListReservedShortIDs(ctx)
 	if err != nil {
 		_ = s.store.DeleteClient(ctx, clientID)
 		return domain.Client{}, fmt.Errorf("list reserved REALITY short IDs: %w", err)
+	}
+	privateKey, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+	if err != nil {
+		_ = s.store.DeleteClient(ctx, clientID)
+		return domain.Client{}, errors.New("could not decrypt REALITY private key")
 	}
 	path, operationID, err := s.prepareCandidateWithReservedLocked(ctx, settings, privateKey, clients, reserved)
 	if err != nil {
@@ -1886,7 +1989,7 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 	}
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	activePath := filepath.Join(s.configDir, "active.json")
-	usedReplace := replaceInbound
+	usedReplace := protocol == domain.ProtocolVLESS && replaceInbound
 	fullApply, vlessReplaced, vlessAdded, hysteriaAdded := false, false, false, false
 	rollbackRuntime := func() {
 		if fullApply {
@@ -1935,7 +2038,7 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 			}
 			fullApply = true
 		}
-	} else {
+	} else if protocol == domain.ProtocolVLESS {
 		if s.handler == nil {
 			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
 				return failCreate(err)
@@ -1950,16 +2053,21 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 		} else {
 			vlessAdded = true
 		}
-	}
-	if s.hysteriaEnabled(ctx) && !fullApply {
+	} else {
 		hysteria, ok := s.handler.(hysteriaHandlerAPI)
 		if !ok {
-			return failCreate(errors.New("Hysteria 2 API is unavailable"))
+			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		} else if err := hysteria.AddHysteriaUser(ctx, client.Email, client.HysteriaAuth); err != nil {
+			if applyErr := s.supervisor.Apply(ctx, path, operationID); applyErr != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		} else {
+			hysteriaAdded = true
 		}
-		if err := hysteria.AddHysteriaUser(ctx, client.Email, client.UUID); err != nil {
-			return failCreate(err)
-		}
-		hysteriaAdded = true
 	}
 	if err := os.Rename(path, activePath); err != nil {
 		return failCreate(fmt.Errorf("promote Xray config: %w", err))
@@ -1968,16 +2076,32 @@ func (s *server) createClient(ctx context.Context, settings domain.Settings, pri
 	if vlessReplaced {
 		s.recordDiagnostic("warn", "REALITY short-ID reserve exhausted; the VLESS inbound was replaced and active VLESS connections may reconnect")
 	}
-	_ = s.store.AddAudit(ctx, actorID, "client.create", "client", clientID, "profile added to the running Xray instance")
+	_ = s.store.AddAudit(ctx, actorID, "client.create", "client", clientID, "created a "+string(protocol)+" profile")
 	return s.store.GetClient(ctx, clientID)
 }
 
+func newHysteriaAuth() (string, error) {
+	value := make([]byte, 32)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
 func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client domain.Client, action domain.ClientAction, actorID string) {
-	next, err := client.Transition(action)
+	states, next, err := transitionClientAccesses(client, action)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	maintenanceLock, err := maintenance.Acquire(r.Context(), s.maintenancePath)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "Xray maintenance is in progress"})
+		return
+	}
+	defer maintenanceLock.Close()
 	settings, err := s.store.GetSettings(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "settings are incomplete"})
@@ -1989,8 +2113,6 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt REALITY private key"})
 		return
 	}
-	s.applyMu.Lock()
-	defer s.applyMu.Unlock()
 	clients, err := s.store.ListClients(r.Context())
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list clients"})
@@ -2001,17 +2123,192 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 			clients[i] = next
 		}
 	}
-	oldEnabled, oldRevoked := client.Enabled, client.Revoked
-	persist := func() error { return s.store.SetClientState(r.Context(), client.ID, next.Enabled, next.Revoked) }
-	rollbackPersist := func() error { return s.store.SetClientState(r.Context(), client.ID, oldEnabled, oldRevoked) }
-	// Enabling, disabling and revoking also change REALITY shortIds. Apply the
-	// full candidate through supervisor instead of only mutating HandlerService.
-	if err := s.applyClientsLiveLocked(r.Context(), settings, privateKey, clients, actorID, "client.state", client.ID, persist, rollbackPersist); err != nil {
+	reserved, err := s.store.ListReservedShortIDs(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read REALITY short-ID reserve"})
+		return
+	}
+	path, operationID, err := s.prepareCandidateWithReservedLocked(r.Context(), settings, privateKey, clients, reserved)
+	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
+	_ = s.store.UpdateApplyOperation(r.Context(), operationID, "applying", "")
+	activePath := filepath.Join(s.configDir, "active.json")
+	hysteriaChanged := stateChanged(client, next, domain.ProtocolHysteria2)
+	vlessChanged := stateChanged(client, next, domain.ProtocolVLESS)
+	vlessRevoked := client.HasVLESS() && !client.VLESSRevoked && next.VLESSRevoked
+	hysteriaEnabled := s.hysteriaEnabled(r.Context())
+	needsFullApply := !hasInboundTag(activePath, "vless-reality") || (hysteriaEnabled && !hasInboundTag(activePath, xray.HysteriaInboundTag))
+	if hysteriaChanged && hysteriaEnabled {
+		if _, ok := s.handler.(hysteriaHandlerAPI); !ok {
+			needsFullApply = true
+		}
+	}
+	if vlessChanged && !vlessRevoked && s.handler == nil {
+		needsFullApply = true
+	}
+	replacer, canReplace := s.supervisor.(inboundReplacer)
+	if vlessRevoked && !canReplace {
+		needsFullApply = true
+	}
+	fullApplied, vlessReplaced := false, false
+	vlessAdded, vlessRemoved, hysteriaAdded, hysteriaRemoved := false, false, false, false
+	rollbackRuntime := func() {
+		if fullApplied {
+			if rollbackErr := s.supervisor.Apply(r.Context(), activePath, operationID+"-rollback"); rollbackErr != nil {
+				s.recordDiagnostic("error", "client state rollback failed: "+rollbackErr.Error())
+			}
+			return
+		}
+		if vlessReplaced {
+			if rollbackErr := replacer.ReplaceInbound(r.Context(), activePath, path, "vless-reality", operationID+"-rollback"); rollbackErr != nil {
+				s.recordDiagnostic("error", "VLESS inbound rollback failed: "+rollbackErr.Error())
+			}
+		}
+		if vlessAdded {
+			_ = s.handler.RemoveUser(r.Context(), client.Email)
+		}
+		if vlessRemoved {
+			_ = s.handler.AddUser(r.Context(), client.Email, client.UUID, xray.Flow)
+		}
+		if hysteriaAdded || hysteriaRemoved {
+			if api, ok := s.handler.(hysteriaHandlerAPI); ok {
+				if hysteriaAdded {
+					_ = api.RemoveHysteriaUser(r.Context(), client.Email)
+				} else {
+					_ = api.AddHysteriaUser(r.Context(), client.Email, client.HysteriaCredential())
+				}
+			}
+		}
+	}
+	failApply := func(cause error) {
+		rollbackRuntime()
+		_ = s.store.SetClientProtocolStates(r.Context(), client.ID, previousAccessStates(client))
+		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", cause.Error())
+		_ = os.Remove(path)
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": cause.Error()})
+	}
+	if needsFullApply {
+		if err := s.supervisor.Apply(r.Context(), path, operationID); err != nil {
+			_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
+			_ = os.Remove(path)
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		fullApplied = true
+	} else {
+		if hysteriaChanged && hysteriaEnabled {
+			api := s.handler.(hysteriaHandlerAPI)
+			if next.Hysteria2CanConnect() {
+				if err := api.AddHysteriaUser(r.Context(), client.Email, client.HysteriaCredential()); err != nil {
+					failApply(err)
+					return
+				}
+				hysteriaAdded = true
+			} else {
+				if err := api.RemoveHysteriaUser(r.Context(), client.Email); err != nil {
+					failApply(err)
+					return
+				}
+				hysteriaRemoved = true
+			}
+		}
+		if vlessRevoked {
+			if err := replacer.ReplaceInbound(r.Context(), path, activePath, "vless-reality", operationID); err != nil {
+				failApply(err)
+				return
+			}
+			vlessReplaced = true
+		} else if vlessChanged {
+			if next.VLESSCanConnect() {
+				if err := s.handler.AddUser(r.Context(), client.Email, client.UUID, xray.Flow); err != nil {
+					failApply(err)
+					return
+				}
+				vlessAdded = true
+			} else {
+				if err := s.handler.RemoveUser(r.Context(), client.Email); err != nil {
+					failApply(err)
+					return
+				}
+				vlessRemoved = true
+			}
+		}
+	}
+	if err := s.store.SetClientProtocolStates(r.Context(), client.ID, states); err != nil {
+		failApply(err)
+		return
+	}
+	if err := os.Rename(path, activePath); err != nil {
+		failApply(fmt.Errorf("promote client state config: %w", err))
+		return
+	}
+	_ = s.store.UpdateApplyOperation(r.Context(), operationID, "committed", "")
+	_ = s.store.AddAudit(r.Context(), actorID, "client.state", "client", client.ID, "protocol access state changed: "+strings.Join(protocolStateNames(states), ", "))
 	updated, _ := s.store.GetClient(r.Context(), client.ID)
 	writeJSON(w, http.StatusOK, s.withStats([]domain.Client{updated})[0])
+}
+
+func transitionClientAccesses(client domain.Client, action domain.ClientAction) (map[domain.ClientProtocol]domain.ClientState, domain.Client, error) {
+	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
+	next := client
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2} {
+		state, err := client.AccessState(protocol)
+		if err != nil {
+			continue
+		}
+		if action == domain.ActionEnable && state.Revoked {
+			return nil, domain.Client{}, domain.ErrClientRevoked
+		}
+		switch action {
+		case domain.ActionEnable:
+			state.Enabled = true
+		case domain.ActionDisable:
+			state.Enabled = false
+		case domain.ActionRevoke:
+			state.Enabled, state.Revoked = false, true
+		default:
+			return nil, domain.Client{}, errors.New("unsupported client action")
+		}
+		states[protocol] = state
+		if protocol == domain.ProtocolVLESS {
+			next.VLESSEnabled, next.VLESSRevoked = state.Enabled, state.Revoked
+		} else {
+			next.HysteriaEnabled, next.HysteriaRevoked = state.Enabled, state.Revoked
+		}
+	}
+	if len(states) == 0 {
+		return nil, domain.Client{}, errors.New("profile has no supported protocol access")
+	}
+	next.Enabled = (next.HasVLESS() && next.VLESSEnabled && !next.VLESSRevoked) || (next.HasHysteria2() && next.HysteriaEnabled && !next.HysteriaRevoked)
+	next.Revoked = (!next.HasVLESS() || next.VLESSRevoked) && (!next.HasHysteria2() || next.HysteriaRevoked)
+	return states, next, nil
+}
+
+func stateChanged(before, after domain.Client, protocol domain.ClientProtocol) bool {
+	oldState, oldErr := before.AccessState(protocol)
+	newState, newErr := after.AccessState(protocol)
+	return oldErr == nil && newErr == nil && oldState != newState
+}
+
+func previousAccessStates(client domain.Client) map[domain.ClientProtocol]domain.ClientState {
+	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2} {
+		if state, err := client.AccessState(protocol); err == nil {
+			states[protocol] = state
+		}
+	}
+	return states
+}
+
+func protocolStateNames(states map[domain.ClientProtocol]domain.ClientState) []string {
+	names := make([]string, 0, len(states))
+	for protocol := range states {
+		names = append(names, string(protocol))
+	}
+	sort.Strings(names)
+	return names
 }
 
 func (s *server) withStats(clients []domain.Client) []clientResponse {
@@ -2022,11 +2319,21 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 	result := make([]clientResponse, 0, len(clients))
 	for _, client := range clients {
 		current := snapshot[client.ID]
-		result = append(result, clientResponse{
-			ID: client.ID, Name: client.Name, ClientFingerprint: client.ClientFingerprint,
+		response := clientResponse{
+			Protocol: client.Protocol,
+			ID:       client.ID, Name: client.Name, ClientFingerprint: client.ClientFingerprint,
 			Enabled: client.Enabled, Revoked: client.Revoked, CreatedAt: client.CreatedAt, UpdatedAt: client.UpdatedAt,
 			Online: current.Online, LastSeen: current.LastSeen, UploadBytes: current.UploadBytes, DownloadBytes: current.DownloadBytes,
-		})
+		}
+		if client.HasVLESS() {
+			response.Protocols = append(response.Protocols, string(domain.ProtocolVLESS))
+			response.VLESS = &clientAccessResponse{Enabled: client.VLESSEnabled, Revoked: client.VLESSRevoked}
+		}
+		if client.HasHysteria2() {
+			response.Protocols = append(response.Protocols, string(domain.ProtocolHysteria2))
+			response.Hysteria2 = &clientAccessResponse{Enabled: client.HysteriaEnabled, Revoked: client.HysteriaRevoked}
+		}
+		result = append(result, response)
 	}
 	return result
 }
@@ -2093,22 +2400,26 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	active := make(map[string]domain.Client)
+	activeVLESS := make(map[string]domain.Client)
+	activeHysteria := make(map[string]domain.Client)
 	for _, client := range clients {
-		if client.Enabled && !client.Revoked {
-			active[client.Email] = client
+		if client.VLESSCanConnect() {
+			activeVLESS[client.Email] = client
+		}
+		if client.Hysteria2CanConnect() {
+			activeHysteria[client.Email] = client
 		}
 	}
 	runningSet := make(map[string]struct{}, len(running))
 	for _, email := range running {
 		runningSet[email] = struct{}{}
-		if _, ok := active[email]; !ok {
+		if _, ok := activeVLESS[email]; !ok {
 			if err := s.handler.RemoveUser(ctx, email); err != nil {
 				return err
 			}
 		}
 	}
-	for email, client := range active {
+	for email, client := range activeVLESS {
 		if _, ok := runningSet[email]; ok {
 			continue
 		}
@@ -2128,17 +2439,17 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 		runningHysteria := make(map[string]struct{}, len(hysteriaUsers))
 		for _, email := range hysteriaUsers {
 			runningHysteria[email] = struct{}{}
-			if _, ok := active[email]; !ok {
+			if _, ok := activeHysteria[email]; !ok {
 				if err := hysteria.RemoveHysteriaUser(ctx, email); err != nil {
 					return err
 				}
 			}
 		}
-		for email, client := range active {
+		for email, client := range activeHysteria {
 			if _, ok := runningHysteria[email]; ok {
 				continue
 			}
-			if err := hysteria.AddHysteriaUser(ctx, email, client.UUID); err != nil {
+			if err := hysteria.AddHysteriaUser(ctx, email, client.HysteriaAuth); err != nil {
 				return err
 			}
 		}
@@ -2205,10 +2516,14 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 	if json.Unmarshal(data, &config) != nil {
 		return false
 	}
-	want := make(map[string]struct{})
+	wantVLESS := make(map[string]struct{})
+	wantHysteria := make(map[string]struct{})
 	for _, client := range clients {
-		if client.Enabled && !client.Revoked {
-			want[client.Email+"\x00"+client.UUID] = struct{}{}
+		if client.VLESSCanConnect() && client.UUID != "" {
+			wantVLESS[client.Email+"\x00"+client.UUID] = struct{}{}
+		}
+		if client.Hysteria2CanConnect() && client.HysteriaCredential() != "" {
+			wantHysteria[client.Email+"\x00"+client.HysteriaCredential()] = struct{}{}
 		}
 	}
 	var vless, hysteria []string
@@ -2226,11 +2541,11 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 			}
 		}
 	}
-	if !stringSliceMatchesSet(vless, want) {
+	if !stringSliceMatchesSet(vless, wantVLESS) {
 		return false
 	}
 	if includeHysteria {
-		if !foundHysteria || !stringSliceMatchesSet(hysteria, want) {
+		if !foundHysteria || !stringSliceMatchesSet(hysteria, wantHysteria) {
 			return false
 		}
 	}
@@ -2280,7 +2595,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	}
 	expectedSet := make(map[string]struct{}, len(clients)+len(reserved))
 	for _, client := range clients {
-		if !client.Revoked && client.ShortID != "" {
+		if client.HasVLESS() && !client.VLESSRevoked && client.ShortID != "" {
 			expectedSet[client.ShortID] = struct{}{}
 		}
 	}
@@ -2593,10 +2908,13 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		return
 	}
 	settings.PublicPort = s.publicPort
-	privateKey, err := secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
-	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt REALITY private key"})
-		return
+	privateKey := ""
+	if client.HasVLESS() && !client.VLESSRevoked {
+		privateKey, err = secret.Open(s.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt REALITY private key"})
+			return
+		}
 	}
 	_ = privateKey
 	hysteriaSettings, err := loadHysteriaSettings(r.Context(), s.store)
@@ -2614,10 +2932,18 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 	format := r.URL.Query().Get("format")
 	switch format {
 	case "json":
+		if len(profile.JSON) == 0 {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_format_unavailable", "error": "JSON profiles are only available for VLESS"})
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+client.Name+`.json"`)
 		_, _ = w.Write(profile.JSON)
 	case "qr":
+		if profile.URI == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_format_unavailable", "error": "VLESS is not available for this profile"})
+			return
+		}
 		png, err := qrcode.Encode(profile.URI, qrcode.Medium, 512)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encode QR"})
@@ -2638,8 +2964,25 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(png)
 	default:
-		response := map[string]any{"client_id": client.ID, "uri": profile.URI, "name": profile.Name, "json": json.RawMessage(profile.JSON)}
-		if profile.HysteriaURI != "" {
+		response := map[string]any{"client_id": client.ID, "protocol": client.Protocol, "name": profile.Name}
+		if client.Protocol == domain.ProtocolLegacyDual || client.Protocol == "" {
+			if profile.URI != "" {
+				response["uri"] = profile.URI
+			}
+			if len(profile.JSON) > 0 {
+				response["json"] = json.RawMessage(profile.JSON)
+			}
+			if profile.HysteriaURI != "" {
+				response["hysteria_uri"] = profile.HysteriaURI
+			}
+		} else if client.Protocol == domain.ProtocolVLESS {
+			if profile.URI != "" {
+				response["uri"] = profile.URI
+			}
+			if len(profile.JSON) > 0 {
+				response["json"] = json.RawMessage(profile.JSON)
+			}
+		} else {
 			response["hysteria_uri"] = profile.HysteriaURI
 		}
 		writeJSON(w, http.StatusOK, response)

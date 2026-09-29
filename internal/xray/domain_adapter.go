@@ -50,8 +50,13 @@ func validCertificateID(value string) bool {
 }
 
 func ClientFromDomain(value domain.Client) Client {
-	return Client{ID: value.ID, Name: value.Name, UUID: value.UUID, Email: value.Email, ShortID: value.ShortID,
-		ClientFingerprint: value.ClientFingerprint, Enabled: value.Enabled, Revoked: value.Revoked}
+	return Client{
+		ID: value.ID, Name: value.Name, Protocol: value.Protocol, UUID: value.UUID, Email: value.Email,
+		ShortID: value.ShortID, HysteriaAuth: value.HysteriaAuth, ClientFingerprint: value.ClientFingerprint,
+		Enabled: value.Enabled, Revoked: value.Revoked,
+		VLESSEnabled: value.VLESSEnabled, VLESSRevoked: value.VLESSRevoked,
+		HysteriaEnabled: value.HysteriaEnabled, HysteriaRevoked: value.HysteriaRevoked,
+	}
 }
 
 func ClientsFromDomain(values []domain.Client) []Client {

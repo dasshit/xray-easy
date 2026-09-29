@@ -65,15 +65,22 @@ type Settings struct {
 type Client struct {
 	ID                string
 	Name              string
+	Protocol          domain.ClientProtocol
 	UUID              string
 	Email             string
 	ShortID           string
+	HysteriaAuth      string
 	ClientFingerprint string
 	Enabled           bool
 	Revoked           bool
+	VLESSEnabled      bool
+	VLESSRevoked      bool
+	HysteriaEnabled   bool
+	HysteriaRevoked   bool
 }
 
 type Profile struct {
+	Protocol    domain.ClientProtocol
 	URI         string
 	HysteriaURI string
 	JSON        []byte
@@ -196,17 +203,22 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	if err := validateSettings(settings); err != nil {
 		return nil, err
 	}
-	active := make([]Client, 0, len(clients))
+	activeVLESS := make([]Client, 0, len(clients))
+	activeHysteria := make([]Client, 0, len(clients))
 	for _, client := range clients {
-		if client.Enabled && !client.Revoked {
-			active = append(active, client)
+		if client.VLESSCanConnect() {
+			activeVLESS = append(activeVLESS, client)
+		}
+		if client.Hysteria2CanConnect() {
+			activeHysteria = append(activeHysteria, client)
 		}
 	}
-	sort.Slice(active, func(i, j int) bool { return active[i].ID < active[j].ID })
-	serverClients := make([]serverClient, 0, len(active))
+	sort.Slice(activeVLESS, func(i, j int) bool { return activeVLESS[i].ID < activeVLESS[j].ID })
+	sort.Slice(activeHysteria, func(i, j int) bool { return activeHysteria[i].ID < activeHysteria[j].ID })
+	serverClients := make([]serverClient, 0, len(activeVLESS))
 	shortIDs := make([]string, 0, len(clients)+len(settings.ReservedShortIDs))
 	shortIDSet := make(map[string]struct{}, cap(shortIDs))
-	for _, client := range active {
+	for _, client := range activeVLESS {
 		if client.UUID == "" || client.ShortID == "" || client.Email == "" {
 			return nil, fmt.Errorf("client %s is missing generated fields", client.ID)
 		}
@@ -214,7 +226,7 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	}
 	// Keep IDs for disabled profiles in REALITY so they can be enabled with
 	for _, client := range clients {
-		if client.Revoked || client.ShortID == "" {
+		if !client.HasVLESS() || client.VLESSIsRevoked() || client.ShortID == "" {
 			continue
 		}
 		if _, exists := shortIDSet[client.ShortID]; !exists {
@@ -243,9 +255,16 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		Sniffing:       sniffing{Enabled: true, DestOverride: []string{"http", "tls", "quic"}},
 	}}
 	if settings.Hysteria2Enabled {
-		hysteriaUsers := make([]hysteriaUser, 0, len(active))
-		for _, client := range active {
-			hysteriaUsers = append(hysteriaUsers, hysteriaUser{Auth: client.UUID, Email: client.Email})
+		hysteriaUsers := make([]hysteriaUser, 0, len(activeHysteria))
+		for _, client := range activeHysteria {
+			auth := client.HysteriaAuth
+			if auth == "" {
+				auth = client.UUID
+			}
+			if auth == "" || client.Email == "" {
+				return nil, fmt.Errorf("client %s is missing Hysteria 2 credentials", client.ID)
+			}
+			hysteriaUsers = append(hysteriaUsers, hysteriaUser{Auth: auth, Email: client.Email})
 		}
 		certPath, keyPath := settings.HysteriaTLSCertPath, settings.HysteriaTLSKeyPath
 		if certPath == "" {
@@ -287,34 +306,122 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 }
 
 func BuildProfile(settings Settings, client Client) (Profile, error) {
-	if err := validateSettings(settings); err != nil {
-		return Profile{}, err
+	profile := Profile{Protocol: client.Protocol, Name: client.Name, UUID: client.UUID, ShortID: client.ShortID}
+	if client.HasVLESS() && !client.VLESSIsRevoked() {
+		if err := validateSettings(settings); err != nil {
+			return Profile{}, err
+		}
+		publicHost, err := domain.NormalizePublicHost(settings.PublicHost)
+		if err != nil {
+			return Profile{}, err
+		}
+		settings.PublicHost = publicHost
+		if client.UUID == "" || client.ShortID == "" {
+			return Profile{}, errors.New("VLESS profile is unavailable")
+		}
+		fingerprint := client.ClientFingerprint
+		if fingerprint == "" {
+			fingerprint = settings.ClientFingerprint
+		}
+		if fingerprint == "" {
+			return Profile{}, errors.New("client fingerprint is required")
+		}
+		profile.URI = BuildVLESSURI(settings, client, fingerprint)
+		profile.JSON, err = buildClientJSON(settings, client, fingerprint)
+		if err != nil {
+			return Profile{}, err
+		}
 	}
-	publicHost, err := domain.NormalizePublicHost(settings.PublicHost)
-	if err != nil {
-		return Profile{}, err
+	if client.HasHysteria2() && !client.HysteriaIsRevoked() {
+		if client.HysteriaCredential() == "" {
+			return Profile{}, errors.New("Hysteria 2 profile is unavailable")
+		}
+		if settings.Hysteria2Enabled {
+			if err := validateHysteriaProfileSettings(settings); err != nil {
+				return Profile{}, err
+			}
+			profile.HysteriaURI = BuildHysteriaURI(settings, client)
+		}
 	}
-	settings.PublicHost = publicHost
-	if client.UUID == "" || client.ShortID == "" || client.Revoked {
+	if profile.URI == "" && profile.HysteriaURI == "" {
 		return Profile{}, errors.New("client profile is unavailable")
 	}
-	fingerprint := client.ClientFingerprint
-	if fingerprint == "" {
-		fingerprint = settings.ClientFingerprint
+	return profile, nil
+}
+
+func validateHysteriaProfileSettings(settings Settings) error {
+	if !settings.Hysteria2Enabled {
+		return errors.New("Hysteria 2 is not enabled")
 	}
-	if fingerprint == "" {
-		return Profile{}, errors.New("client fingerprint is required")
+	if settings.PublicPort < 1 || settings.PublicPort > 65535 {
+		return errors.New("Hysteria 2 public port is not configured")
 	}
-	uri := BuildVLESSURI(settings, client, fingerprint)
-	hysteriaURI := ""
-	if settings.Hysteria2Enabled {
-		hysteriaURI = BuildHysteriaURI(settings, client)
+	host := settings.HysteriaHost
+	if host == "" {
+		host = settings.PublicHost
 	}
-	clientJSON, err := buildClientJSON(settings, client, fingerprint)
-	if err != nil {
-		return Profile{}, err
+	if _, err := domain.NormalizePublicHost(host); err != nil {
+		return fmt.Errorf("Hysteria 2 public host: %w", err)
 	}
-	return Profile{URI: uri, HysteriaURI: hysteriaURI, JSON: clientJSON, Name: client.Name, UUID: client.UUID, ShortID: client.ShortID}, nil
+	serverName := settings.HysteriaTLSServerName
+	if serverName != "" {
+		if _, err := domain.NormalizePublicHost(serverName); err != nil {
+			return fmt.Errorf("Hysteria 2 TLS server name: %w", err)
+		}
+	}
+	return nil
+}
+
+func (c Client) protocol() domain.ClientProtocol {
+	if c.Protocol == "" {
+		return domain.ProtocolLegacyDual
+	}
+	return c.Protocol
+}
+
+func (c Client) HasVLESS() bool {
+	protocol := c.protocol()
+	return protocol == domain.ProtocolVLESS || protocol == domain.ProtocolLegacyDual
+}
+
+func (c Client) HasHysteria2() bool {
+	protocol := c.protocol()
+	return protocol == domain.ProtocolHysteria2 || protocol == domain.ProtocolLegacyDual
+}
+
+func (c Client) VLESSCanConnect() bool {
+	if c.Protocol == "" {
+		return c.Enabled && !c.Revoked
+	}
+	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked
+}
+
+func (c Client) Hysteria2CanConnect() bool {
+	if c.Protocol == "" {
+		return c.Enabled && !c.Revoked
+	}
+	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked
+}
+
+func (c Client) VLESSIsRevoked() bool {
+	if c.Protocol == "" {
+		return c.Revoked
+	}
+	return c.VLESSRevoked
+}
+
+func (c Client) HysteriaIsRevoked() bool {
+	if c.Protocol == "" {
+		return c.Revoked
+	}
+	return c.HysteriaRevoked
+}
+
+func (c Client) HysteriaCredential() string {
+	if c.HysteriaAuth != "" {
+		return c.HysteriaAuth
+	}
+	return c.UUID
 }
 
 // BuildHysteriaURI creates the V2RAGE-compatible Hysteria 2 URI for one device.
@@ -332,7 +439,7 @@ func BuildHysteriaURI(settings Settings, client Client) string {
 	if host == "" {
 		host = settings.PublicHost
 	}
-	u := &url.URL{Scheme: "hysteria2", User: url.User(client.UUID), Host: net.JoinHostPort(host, strconv.Itoa(settings.PublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
+	u := &url.URL{Scheme: "hysteria2", User: url.User(client.HysteriaCredential()), Host: net.JoinHostPort(host, strconv.Itoa(settings.PublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
 	return u.String()
 }
 

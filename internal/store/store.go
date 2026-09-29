@@ -922,6 +922,54 @@ func (s *Store) UpdateSettingsAndClientStates(ctx context.Context, settings doma
 	return tx.Commit()
 }
 
+// UpdateSettingsAndClientProtocolStates commits settings and selected inbound
+// state transitions together so key rotation cannot affect Hysteria-only access.
+func (s *Store) UpdateSettingsAndClientProtocolStates(ctx context.Context, settings domain.Settings, states map[string]map[domain.ClientProtocol]domain.ClientState) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, log_level=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		return err
+	}
+	for id, transitions := range states {
+		var protocol string
+		var vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked int
+		if err := tx.QueryRowContext(ctx, `SELECT protocol, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked FROM clients WHERE id=?`, id).Scan(&protocol, &vlessEnabled, &vlessRevoked, &hysteriaEnabled, &hysteriaRevoked); err != nil {
+			return err
+		}
+		clientProtocol := domain.ClientProtocol(protocol)
+		hasVLESS := clientProtocol == domain.ProtocolVLESS || clientProtocol == domain.ProtocolLegacyDual
+		hasHysteria := clientProtocol == domain.ProtocolHysteria2 || clientProtocol == domain.ProtocolLegacyDual
+		for access, state := range transitions {
+			if state.Enabled && state.Revoked {
+				return errors.New("revoked protocol access cannot be enabled")
+			}
+			switch access {
+			case domain.ProtocolVLESS:
+				if !hasVLESS {
+					return errors.New("profile has no VLESS access")
+				}
+				vlessEnabled, vlessRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+			case domain.ProtocolHysteria2:
+				if !hasHysteria {
+					return errors.New("profile has no Hysteria 2 access")
+				}
+				hysteriaEnabled, hysteriaRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+			default:
+				return errors.New("unsupported protocol access")
+			}
+		}
+		enabled := (hasVLESS && vlessEnabled != 0 && vlessRevoked == 0) || (hasHysteria && hysteriaEnabled != 0 && hysteriaRevoked == 0)
+		revoked := (!hasVLESS || vlessRevoked != 0) && (!hasHysteria || hysteriaRevoked != 0)
+		if _, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, updated_at=? WHERE id=?`, boolInt(enabled), boolInt(revoked), vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) CreateClient(ctx context.Context, client domain.Client, uuid, email, shortID string) error {
 	if client.ID == "" {
 		return errors.New("client id is required")
@@ -1223,8 +1271,13 @@ func (s *Store) SetClientState(ctx context.Context, id string, enabled, revoked 
 // SetClientProtocolState changes the lifecycle of one inbound access, keeping the
 // other protocol active for legacy dual-protocol profiles.
 func (s *Store) SetClientProtocolState(ctx context.Context, id string, protocol domain.ClientProtocol, state domain.ClientState) error {
-	if state.Enabled && state.Revoked {
-		return errors.New("revoked protocol access cannot be enabled")
+	return s.SetClientProtocolStates(ctx, id, map[domain.ClientProtocol]domain.ClientState{protocol: state})
+}
+
+// SetClientProtocolStates atomically updates selected accesses on one profile.
+func (s *Store) SetClientProtocolStates(ctx context.Context, id string, states map[domain.ClientProtocol]domain.ClientState) error {
+	if len(states) == 0 {
+		return errors.New("at least one protocol access state is required")
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -1248,13 +1301,24 @@ func (s *Store) SetClientProtocolState(ctx context.Context, id string, protocol 
 	if client.Protocol == "" {
 		client.Protocol = domain.ProtocolLegacyDual
 	}
-	if !((protocol == domain.ProtocolVLESS && client.HasVLESS()) || (protocol == domain.ProtocolHysteria2 && client.HasHysteria2())) {
-		return errors.New("profile has no requested protocol access")
-	}
-	if protocol == domain.ProtocolVLESS {
-		vlessEnabled, vlessRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
-	} else {
-		hysteriaEnabled, hysteriaRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+	for protocol, state := range states {
+		if state.Enabled && state.Revoked {
+			return errors.New("revoked protocol access cannot be enabled")
+		}
+		switch protocol {
+		case domain.ProtocolVLESS:
+			if !client.HasVLESS() {
+				return errors.New("profile has no VLESS access")
+			}
+			vlessEnabled, vlessRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+		case domain.ProtocolHysteria2:
+			if !client.HasHysteria2() {
+				return errors.New("profile has no Hysteria 2 access")
+			}
+			hysteriaEnabled, hysteriaRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+		default:
+			return errors.New("unsupported protocol access")
+		}
 	}
 	anyEnabled := (client.HasVLESS() && vlessEnabled != 0 && vlessRevoked == 0) || (client.HasHysteria2() && hysteriaEnabled != 0 && hysteriaRevoked == 0)
 	allRevoked := (!client.HasVLESS() || vlessRevoked != 0) && (!client.HasHysteria2() || hysteriaRevoked != 0)
