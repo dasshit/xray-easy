@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -21,6 +22,15 @@ import (
 var errCancelled = errors.New("installation cancelled")
 
 const maxInstallerLogLine = 4096
+
+var nonPublicIPv4Prefixes = [...]netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"),
+	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("198.18.0.0/15"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
+}
 
 func installerContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -76,40 +86,42 @@ type keyPress struct {
 }
 
 type wizard struct {
-	out            io.Writer
-	inputFile      *os.File
-	bytes          chan byte
-	done           chan struct{}
-	resize         chan os.Signal
-	resizeDone     chan struct{}
-	mu             sync.Mutex
-	width          int
-	height         int
-	stepNo         int
-	title          string
-	notice         string
-	fields         [2]string
-	configPage     string
-	tlsSelection   int
-	hysteriaFields [3]string
-	focus          int
-	choice         bool
-	choiceRaw      string
-	config         configuration
-	logs           []string
-	partial        string
-	noColor        bool
+	out                 io.Writer
+	inputFile           *os.File
+	bytes               chan byte
+	done                chan struct{}
+	resize              chan os.Signal
+	resizeDone          chan struct{}
+	mu                  sync.Mutex
+	width               int
+	height              int
+	stepNo              int
+	title               string
+	notice              string
+	fields              [2]string
+	configPage          string
+	tlsSelection        int
+	hysteriaFields      [3]string
+	hysteriaSuggestedIP string
+	focus               int
+	choice              bool
+	choiceRaw           string
+	config              configuration
+	logs                []string
+	partial             string
+	noColor             bool
 }
 
 func newWizard(input io.Reader, output io.Writer) *wizard {
 	w := &wizard{
-		out:     output,
-		bytes:   make(chan byte),
-		done:    make(chan struct{}),
-		width:   100,
-		height:  30,
-		choice:  true,
-		noColor: os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb",
+		out:                 output,
+		bytes:               make(chan byte),
+		done:                make(chan struct{}),
+		width:               100,
+		height:              30,
+		choice:              true,
+		hysteriaSuggestedIP: suggestPublicIPv4(),
+		noColor:             os.Getenv("NO_COLOR") != "" || os.Getenv("TERM") == "dumb",
 	}
 	if file, ok := input.(*os.File); ok {
 		w.inputFile = file
@@ -148,6 +160,60 @@ func terminalSize(input *os.File) (int, int) {
 		return 100, 30
 	}
 	return width, height
+}
+
+// Suggest an address only when the host has exactly one public IPv4 address.
+// Private Docker and LAN addresses are never offered as the VPS endpoint.
+func suggestPublicIPv4() string {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return ""
+	}
+	var addresses []netip.Addr
+	for _, device := range interfaces {
+		if device.Flags&net.FlagUp == 0 || device.Flags&net.FlagLoopback != 0 {
+			continue
+		}
+		assigned, err := device.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, value := range assigned {
+			if network, ok := value.(*net.IPNet); ok {
+				if address, ok := netip.AddrFromSlice(network.IP); ok {
+					addresses = append(addresses, address.Unmap())
+				}
+			}
+		}
+	}
+	return uniquePublicIPv4(addresses)
+}
+
+func uniquePublicIPv4(addresses []netip.Addr) string {
+	var result netip.Addr
+	for _, address := range addresses {
+		if !address.Is4() || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLinkLocalUnicast() {
+			continue
+		}
+		excluded := false
+		for _, prefix := range nonPublicIPv4Prefixes {
+			if prefix.Contains(address) {
+				excluded = true
+				break
+			}
+		}
+		if excluded {
+			continue
+		}
+		if result.IsValid() && result != address {
+			return ""
+		}
+		result = address
+	}
+	if !result.IsValid() {
+		return ""
+	}
+	return result.String()
 }
 
 func (w *wizard) watchResize() {
@@ -348,7 +414,11 @@ func (w *wizard) hysteria(ctx context.Context, root string, cfg configuration) (
 					w.hysteriaFields[0] += string(key.char)
 				}
 			case keyEnter:
-				ip, parseErr := netip.ParseAddr(w.hysteriaFields[0])
+				selectedIP := w.hysteriaFields[0]
+				if selectedIP == "" {
+					selectedIP = w.hysteriaSuggestedIP
+				}
+				ip, parseErr := netip.ParseAddr(selectedIP)
 				if parseErr != nil || !ip.Is4() || !ip.IsGlobalUnicast() {
 					w.notice = "Enter the public IPv4 address that you will use in the Web UI."
 					break
@@ -620,7 +690,11 @@ func (w *wizard) renderLocked() {
 				put(15, panelLine("  Changing TLS mode reconnects Hysteria 2 clients.", panelWidth), "dim")
 			case "hysteria-ip":
 				put(10, panelLine("  Public IPv4 for the mkcert certificate", panelWidth), "normal")
-				put(11, panelLine("  "+fieldText(w.hysteriaFields[0], "e.g. 89.169.13.234", true), panelWidth), "selected")
+				placeholder := "Enter your public IPv4"
+				if w.hysteriaSuggestedIP != "" {
+					placeholder = w.hysteriaSuggestedIP + " (Enter to use)"
+				}
+				put(11, panelLine("  "+fieldText(w.hysteriaFields[0], placeholder, true), panelWidth), "selected")
 				put(14, panelLine("  Use this same IPv4 as the public host in the Web UI.", panelWidth), "dim")
 				put(15, panelLine("  Client TLS verification will be disabled in exported links.", panelWidth), "dim")
 			case "hysteria-custom":

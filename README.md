@@ -105,10 +105,12 @@ device is applied.
   choose one of three options:
 
   1. **Off:** VLESS/REALITY only. This is the default.
-  2. **mkcert for public IPv4:** enter the VPS public IPv4. The Web UI suggests
-     this address during first-run setup and requires the public host to match
-     it. The installer builds `mkcert` and
-     generates a certificate with that IP in its SAN. The CA is not installed
+  2. **mkcert for public IPv4:** enter the VPS public IPv4. If the installer
+     finds one public IPv4 on the host, press Enter to accept its suggestion;
+     otherwise type the address. The Web UI suggests the selected address
+     during first-run setup and requires the public host to match it. The
+     installer builds `mkcert` and generates a certificate with that IP in its
+     SAN. The CA is not installed
      into any trust store and its private key is discarded. Generated Hysteria 2
      links include `insecure=1`. This disables server certificate verification
      in the client, so this mode does not authenticate the server against a

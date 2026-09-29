@@ -11,6 +11,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -241,6 +242,77 @@ func TestHysteriaWizardRepromptsInvalidIPv4(t *testing.T) {
 	}
 	if cfg.hysteriaMode != "self-signed" || cfg.hysteriaCertIP != "89.169.13.234" || !strings.Contains(output.String(), "Enter the public IPv4 address") {
 		t.Fatalf("invalid address handling: cfg=%+v", cfg)
+	}
+}
+
+func TestHysteriaWizardAcceptsSuggestedIPv4OnEnter(t *testing.T) {
+	var output bytes.Buffer
+	wizard := newWizard(strings.NewReader("2\n\n"), &output)
+	defer wizard.close()
+	wizard.hysteriaSuggestedIP = "89.169.13.234"
+	wizard.step(2, "Configuration")
+	cfg, err := wizard.hysteria(context.Background(), t.TempDir(), configuration{hysteriaMode: "custom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.hysteriaCertIP != "89.169.13.234" || !strings.Contains(output.String(), "89.169.13.234 (Enter to use)") {
+		t.Fatalf("suggested address was not accepted: %+v", cfg)
+	}
+}
+
+func TestHysteriaWizardManualIPv4OverridesSuggestion(t *testing.T) {
+	var output bytes.Buffer
+	wizard := newWizard(strings.NewReader("2\n8.8.8.8\n"), &output)
+	defer wizard.close()
+	wizard.hysteriaSuggestedIP = "89.169.13.234"
+	wizard.step(2, "Configuration")
+	cfg, err := wizard.hysteria(context.Background(), t.TempDir(), configuration{hysteriaMode: "custom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.hysteriaCertIP != "8.8.8.8" {
+		t.Fatalf("manual address did not override suggestion: %+v", cfg)
+	}
+}
+
+func TestHysteriaWizardRequiresManualIPv4WithoutSuggestion(t *testing.T) {
+	var output bytes.Buffer
+	wizard := newWizard(strings.NewReader("2\n\n89.169.13.234\n"), &output)
+	defer wizard.close()
+	wizard.hysteriaSuggestedIP = ""
+	wizard.step(2, "Configuration")
+	cfg, err := wizard.hysteria(context.Background(), t.TempDir(), configuration{hysteriaMode: "custom"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.hysteriaCertIP != "89.169.13.234" || !strings.Contains(output.String(), "Enter the public IPv4 address") {
+		t.Fatalf("missing suggestion did not require manual input: %+v", cfg)
+	}
+}
+
+func TestUniquePublicIPv4Suggestion(t *testing.T) {
+	parse := func(values ...string) []netip.Addr {
+		addresses := make([]netip.Addr, 0, len(values))
+		for _, value := range values {
+			addresses = append(addresses, netip.MustParseAddr(value))
+		}
+		return addresses
+	}
+	for _, test := range []struct {
+		name      string
+		addresses []netip.Addr
+		want      string
+	}{
+		{"one public address", parse("127.0.0.1", "172.20.0.1", "89.169.13.234", "fe80::1"), "89.169.13.234"},
+		{"duplicate public address", parse("89.169.13.234", "89.169.13.234"), "89.169.13.234"},
+		{"ambiguous public addresses", parse("89.169.13.234", "8.8.8.8"), ""},
+		{"no public address", parse("10.0.0.1", "100.64.0.1", "192.0.2.5", "fe80::1"), ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := uniquePublicIPv4(test.addresses); got != test.want {
+				t.Fatalf("uniquePublicIPv4() = %q, want %q", got, test.want)
+			}
+		})
 	}
 }
 
