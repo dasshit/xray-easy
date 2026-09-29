@@ -107,6 +107,129 @@ func TestMigrationSetupAndSettingsLifecycle(t *testing.T) {
 	}
 }
 
+func TestClientProtocolMigrationPreservesLegacyCredentialsTrafficAndRestoresOldBackup(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "legacy.db")
+	initial, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initial.Close(); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err := sql.Open("sqlite", "file:"+databasePath+"?_pragma=foreign_keys(ON)")
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy.SetMaxOpenConns(1)
+	legacyDDL := []string{
+		`PRAGMA foreign_keys=OFF`,
+		`DROP TABLE traffic_snapshots`,
+		`DROP TABLE clients`,
+		`CREATE TABLE clients (id TEXT PRIMARY KEY, name TEXT NOT NULL, uuid TEXT NOT NULL UNIQUE, email TEXT NOT NULL UNIQUE, short_id TEXT NOT NULL UNIQUE, client_fingerprint TEXT NOT NULL DEFAULT '', enabled INTEGER NOT NULL DEFAULT 1, revoked INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)`,
+		`CREATE TABLE traffic_snapshots (client_id TEXT PRIMARY KEY REFERENCES clients(id) ON DELETE CASCADE, raw_upload INTEGER NOT NULL DEFAULT 0, raw_download INTEGER NOT NULL DEFAULT 0, total_upload INTEGER NOT NULL DEFAULT 0, total_download INTEGER NOT NULL DEFAULT 0, last_seen_at TEXT NOT NULL DEFAULT '', last_polled_at TEXT NOT NULL)`,
+		`INSERT INTO clients VALUES('legacy-phone','phone','preserved-uuid','legacy-email@xray-easy','fedcba9876543210','safari',1,0,'2026-01-01T00:00:00Z','2026-01-02T00:00:00Z')`,
+		`INSERT INTO traffic_snapshots VALUES('legacy-phone',100,200,1000,2000,'2026-01-02T00:00:00Z','2026-01-02T00:00:00Z')`,
+		`DELETE FROM schema_migrations WHERE version=4`,
+	}
+	for _, statement := range legacyDDL {
+		if _, err := legacy.Exec(statement); err != nil {
+			_ = legacy.Close()
+			t.Fatalf("prepare legacy database: %v (%s)", err, statement)
+		}
+	}
+	if err := legacy.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	db, err := Open(ctx, databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	client, err := db.GetClient(ctx, "legacy-phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Protocol != domain.ProtocolLegacyDual || client.UUID != "preserved-uuid" || client.HysteriaAuth != "preserved-uuid" || client.ShortID != "fedcba9876543210" || !client.VLESSCanConnect() || !client.Hysteria2CanConnect() {
+		t.Fatalf("migrated legacy profile = %+v", client)
+	}
+	snapshots, err := db.ListTrafficSnapshots(ctx)
+	if err != nil || snapshots[client.ID].TotalUpload != 1000 || snapshots[client.ID].TotalDownload != 2000 {
+		t.Fatalf("migrated traffic totals = %+v, %v", snapshots[client.ID], err)
+	}
+	foreignKeys, err := db.db.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foreignKeys.Next() {
+		var table, parent string
+		var rowID sql.NullInt64
+		var constraint int
+		_ = foreignKeys.Scan(&table, &rowID, &parent, &constraint)
+		_ = foreignKeys.Close()
+		t.Fatalf("migration broke foreign key table %s -> %s", table, parent)
+	}
+	_ = foreignKeys.Close()
+	snapshotPaths, err := filepath.Glob(databasePath + ".pre-protocol-profiles-*.db")
+	if err != nil || len(snapshotPaths) != 1 {
+		t.Fatalf("pre-migration snapshot paths = %v, %v", snapshotPaths, err)
+	}
+	if err := db.RestoreFrom(snapshotPaths[0]); err != nil {
+		t.Fatalf("restore pre-migration backup: %v", err)
+	}
+	client, err = db.GetClient(ctx, "legacy-phone")
+	if err != nil || client.Protocol != domain.ProtocolLegacyDual || client.UUID != "preserved-uuid" || client.HysteriaAuth != "preserved-uuid" || client.ShortID != "fedcba9876543210" {
+		t.Fatalf("restored legacy profile = %+v, %v", client, err)
+	}
+	snapshots, err = db.ListTrafficSnapshots(ctx)
+	if err != nil || snapshots[client.ID].TotalUpload != 1000 || snapshots[client.ID].TotalDownload != 2000 {
+		t.Fatalf("restored legacy traffic totals = %+v, %v", snapshots[client.ID], err)
+	}
+}
+
+func TestHysteriaOnlyClientStoresNoRealityCredentialsAndUsesIndependentState(t *testing.T) {
+	db, ctx := openTestStore(t, "hysteria-only.db")
+	client, err := domain.NewProtocolClient("hysteria-phone", "phone", domain.ProtocolHysteria2, "", "unique-hysteria-secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Email = "hysteria-phone-hysteria2@xray-easy"
+	if err := db.CreateHysteriaClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetClient(ctx, client.ID)
+	if err != nil || got.Protocol != domain.ProtocolHysteria2 || got.UUID != "" || got.ShortID != "" || got.HysteriaAuth != client.HysteriaAuth || got.HasVLESS() || !got.Hysteria2CanConnect() {
+		t.Fatalf("Hysteria-only client = %+v, %v", got, err)
+	}
+	var uuid, shortID sql.NullString
+	if err := db.db.QueryRowContext(ctx, `SELECT uuid, short_id FROM clients WHERE id=?`, client.ID).Scan(&uuid, &shortID); err != nil {
+		t.Fatal(err)
+	}
+	if uuid.Valid || shortID.Valid {
+		t.Fatalf("Hysteria-only profile persisted fake REALITY credentials: uuid=%+v short_id=%+v", uuid, shortID)
+	}
+	var realityReservations int
+	if err := db.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM reality_short_ids WHERE assigned_client_id=?`, client.ID).Scan(&realityReservations); err != nil || realityReservations != 0 {
+		t.Fatalf("Hysteria-only profile consumed a REALITY short ID: count=%d, err=%v", realityReservations, err)
+	}
+	if err := db.SetClientProtocolState(ctx, "legacy-phone", domain.ProtocolVLESS, domain.ClientState{Revoked: true}); err == nil {
+		t.Fatal("state change for missing client unexpectedly succeeded")
+	}
+	legacy := createTestClient(t, db, ctx, "dual")
+	if err := db.SetClientProtocolState(ctx, legacy.ID, domain.ProtocolVLESS, domain.ClientState{Revoked: true}); err != nil {
+		t.Fatal(err)
+	}
+	legacy, err = db.GetClient(ctx, legacy.ID)
+	if err != nil || legacy.VLESSCanConnect() || !legacy.Hysteria2CanConnect() || !legacy.VLESSRevoked {
+		t.Fatalf("independent legacy state = %+v, %v", legacy, err)
+	}
+	if err := db.SetClientProtocolState(ctx, got.ID, domain.ProtocolVLESS, domain.ClientState{}); err == nil {
+		t.Fatal("Hysteria-only profile accepted VLESS state mutation")
+	}
+}
+
 func TestHysteriaSettingsOneTimeEnvironmentMigration(t *testing.T) {
 	db, ctx := openTestStore(t, "hysteria-settings.db")
 	initial := domain.HysteriaSettings{Enabled: true, TLSMode: domain.HysteriaTLSLegacy, UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff}

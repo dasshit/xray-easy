@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -18,7 +19,8 @@ import (
 )
 
 type Store struct {
-	db *sql.DB
+	db     *sql.DB
+	dbPath string
 }
 
 // ErrSettingsNotInitialized indicates that first-run server settings have not
@@ -71,7 +73,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
-	store := &Store{db: db}
+	store := &Store{db: db, dbPath: path}
 	if err := store.migrate(ctx); err != nil {
 		_ = db.Close()
 		return nil, err
@@ -195,6 +197,45 @@ func restoreSettings(tx *sql.Tx) error {
 	return err
 }
 
+func restoreClients(tx *sql.Tx) error {
+	hasProtocol := false
+	rows, err := tx.Query(`PRAGMA restore_source.table_info(clients)`)
+	if err != nil {
+		return err
+	}
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "protocol" {
+			hasProtocol = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if hasProtocol {
+		_, err = tx.Exec(`INSERT INTO main.clients SELECT * FROM restore_source.clients`)
+		return err
+	}
+	_, err = tx.Exec(`INSERT INTO main.clients(
+		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
+		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
+		hysteria_revoked, created_at, updated_at
+	) SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
+		'legacy_dual', uuid, enabled, revoked, enabled, revoked, created_at, updated_at
+		FROM restore_source.clients`)
+	return err
+}
+
 func (s *Store) RestoreFrom(path string) error {
 	if err := ValidateDatabase(path); err != nil {
 		return err
@@ -243,6 +284,8 @@ func (s *Store) RestoreFrom(path string) error {
 		}
 		if table == "settings" {
 			restoreErr = restoreSettings(tx)
+		} else if table == "clients" {
+			restoreErr = restoreClients(tx)
 		} else {
 			_, restoreErr = tx.Exec(`INSERT INTO main.` + table + ` SELECT * FROM restore_source.` + table)
 		}
@@ -251,9 +294,13 @@ func (s *Store) RestoreFrom(path string) error {
 			return fmt.Errorf("restore table %s: %w", table, restoreErr)
 		}
 	}
-	if _, err := tx.Exec(`INSERT OR IGNORE INTO main.reality_short_ids(short_id, assigned_client_id, created_at) SELECT short_id, id, created_at FROM main.clients`); err != nil {
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO main.reality_short_ids(short_id, assigned_client_id, created_at) SELECT short_id, id, created_at FROM main.clients WHERE short_id IS NOT NULL AND short_id != ''`); err != nil {
 		_ = tx.Rollback()
 		return fmt.Errorf("restore short ID history: %w", err)
+	}
+	if err := insertClientProtocolMigrationMarker(context.Background(), tx); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("restore client protocol migration marker: %w", err)
 	}
 	if err := tx.Commit(); err != nil {
 		return err
@@ -340,12 +387,18 @@ CREATE INDEX IF NOT EXISTS totp_recovery_admin_idx ON totp_recovery_codes(admin_
 CREATE TABLE IF NOT EXISTS clients (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  uuid TEXT NOT NULL UNIQUE,
+  uuid TEXT UNIQUE,
   email TEXT NOT NULL UNIQUE,
-  short_id TEXT NOT NULL UNIQUE,
+  short_id TEXT UNIQUE,
   client_fingerprint TEXT NOT NULL DEFAULT '',
   enabled INTEGER NOT NULL DEFAULT 1,
   revoked INTEGER NOT NULL DEFAULT 0,
+  protocol TEXT NOT NULL DEFAULT 'legacy_dual',
+  hysteria_auth TEXT NOT NULL DEFAULT '',
+  vless_enabled INTEGER NOT NULL DEFAULT 1,
+  vless_revoked INTEGER NOT NULL DEFAULT 0,
+  hysteria_enabled INTEGER NOT NULL DEFAULT 1,
+  hysteria_revoked INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -392,6 +445,9 @@ CREATE TABLE IF NOT EXISTS traffic_snapshots (
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("migrate sqlite: %w", err)
 	}
+	if err := s.migrateClientProtocols(ctx); err != nil {
+		return fmt.Errorf("migrate client protocol model: %w", err)
+	}
 	for _, column := range []string{
 		`ALTER TABLE admin_users ADD COLUMN totp_secret_enc TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE admin_users ADD COLUMN totp_enabled INTEGER NOT NULL DEFAULT 0`,
@@ -413,6 +469,154 @@ CREATE TABLE IF NOT EXISTS traffic_snapshots (
 		return err
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(2, ?)`, now)
+	return err
+}
+
+// migrateClientProtocols snapshots and rebuilds the legacy clients table so
+// protocol-specific credentials can be absent instead of using fake UUIDs.
+func (s *Store) migrateClientProtocols(ctx context.Context) error {
+	rows, err := s.db.QueryContext(ctx, `PRAGMA table_info(clients)`)
+	if err != nil {
+		return err
+	}
+	hasProtocol := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue sql.NullString
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			_ = rows.Close()
+			return err
+		}
+		if name == "protocol" {
+			hasProtocol = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		_ = rows.Close()
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if hasProtocol {
+		return s.markClientProtocolMigration(ctx)
+	}
+	if s.dbPath == "" {
+		return errors.New("database path is required for the pre-migration snapshot")
+	}
+	backupPath := s.dbPath + ".pre-protocol-profiles-" + time.Now().UTC().Format("20060102T150405.000000000") + ".db"
+	if err := s.createProtocolMigrationSnapshot(ctx, backupPath); err != nil {
+		return fmt.Errorf("create pre-migration database snapshot %s: %w", backupPath, err)
+	}
+
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err := conn.ExecContext(ctx, `PRAGMA foreign_keys=OFF`); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), `PRAGMA foreign_keys=ON`)
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	const replacementSchema = `CREATE TABLE clients_protocol_migration (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  uuid TEXT UNIQUE,
+  email TEXT NOT NULL UNIQUE,
+  short_id TEXT UNIQUE,
+  client_fingerprint TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  revoked INTEGER NOT NULL DEFAULT 0,
+  protocol TEXT NOT NULL DEFAULT 'legacy_dual',
+  hysteria_auth TEXT NOT NULL DEFAULT '',
+  vless_enabled INTEGER NOT NULL DEFAULT 1,
+  vless_revoked INTEGER NOT NULL DEFAULT 0,
+  hysteria_enabled INTEGER NOT NULL DEFAULT 1,
+  hysteria_revoked INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+)`
+	if _, err := tx.ExecContext(ctx, replacementSchema); err != nil {
+		return fmt.Errorf("create protocol-aware clients table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO clients_protocol_migration (
+		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
+		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
+		hysteria_revoked, created_at, updated_at
+	) SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
+		'legacy_dual', uuid, enabled, revoked, enabled, revoked, created_at, updated_at
+		FROM clients`); err != nil {
+		return fmt.Errorf("copy existing profiles as legacy dual-protocol profiles: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `DROP TABLE clients`); err != nil {
+		return fmt.Errorf("replace legacy clients table: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `ALTER TABLE clients_protocol_migration RENAME TO clients`); err != nil {
+		return fmt.Errorf("activate protocol-aware clients table: %w", err)
+	}
+	if err := insertClientProtocolMigrationMarker(ctx, tx); err != nil {
+		return err
+	}
+	violations, err := tx.QueryContext(ctx, `PRAGMA foreign_key_check`)
+	if err != nil {
+		return err
+	}
+	if violations.Next() {
+		var table string
+		var rowID sql.NullInt64
+		var parent string
+		var foreignKey int
+		_ = violations.Scan(&table, &rowID, &parent, &foreignKey)
+		_ = violations.Close()
+		return fmt.Errorf("foreign key check failed after clients migration (table %s references %s)", table, parent)
+	}
+	if err := violations.Err(); err != nil {
+		_ = violations.Close()
+		return err
+	}
+	if err := violations.Close(); err != nil {
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit protocol-aware clients table: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) createProtocolMigrationSnapshot(ctx context.Context, backupPath string) error {
+	tempDir, err := os.MkdirTemp(filepath.Dir(backupPath), ".protocol-migration-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(tempDir)
+	if err := os.Chmod(tempDir, 0o700); err != nil {
+		return err
+	}
+	tempSnapshot := filepath.Join(tempDir, "state.db")
+	if _, err := s.db.ExecContext(ctx, `VACUUM INTO ?`, tempSnapshot); err != nil {
+		return err
+	}
+	if err := os.Chmod(tempSnapshot, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tempSnapshot, backupPath)
+}
+
+func (s *Store) markClientProtocolMigration(ctx context.Context) error {
+	return insertClientProtocolMigrationMarker(ctx, s.db)
+}
+
+func insertClientProtocolMigrationMarker(ctx context.Context, exec interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}) error {
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := exec.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(4, ?)`, now)
 	return err
 }
 
@@ -705,7 +909,7 @@ func (s *Store) UpdateSettingsAndClientStates(ctx context.Context, settings doma
 		return err
 	}
 	for id, state := range states {
-		result, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, updated_at=? WHERE id=?`, boolInt(state.Enabled), boolInt(state.Revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
+		result, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, updated_at=? WHERE id=?`, boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
 		if err != nil {
 			return err
 		}
@@ -728,13 +932,71 @@ func (s *Store) CreateClient(ctx context.Context, client domain.Client, uuid, em
 		return err
 	}
 	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, uuid, email, shortID, client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), now, now); err != nil {
+	if client.Protocol == domain.ProtocolHysteria2 {
+		return errors.New("Hysteria 2 profiles must be created without REALITY credentials")
+	}
+	protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked := clientProtocolStorage(client, uuid)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, nullableCredential(uuid), email, nullableCredential(shortID), client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, now, now); err != nil {
 		return err
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO reality_short_ids(short_id, assigned_client_id, created_at) VALUES(?,?,?)`, shortID, client.ID, now); err != nil {
-		return err
+	if shortID != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO reality_short_ids(short_id, assigned_client_id, created_at) VALUES(?,?,?)`, shortID, client.ID, now); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
+}
+
+// CreateHysteriaClient stores a Hysteria-only profile without REALITY credentials or pool allocation.
+func (s *Store) CreateHysteriaClient(ctx context.Context, client domain.Client) error {
+	if client.ID == "" || client.Protocol != domain.ProtocolHysteria2 || client.HysteriaAuth == "" || client.Email == "" {
+		return errors.New("valid Hysteria 2 profile credentials are required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO clients(
+		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
+		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
+		hysteria_revoked, created_at, updated_at
+	) VALUES(?,?,NULL,?,NULL,'',?,?,?,?,0,0,?,?,?,?)`,
+		client.ID, client.Name, client.Email, boolInt(client.Enabled), boolInt(client.Revoked),
+		string(client.Protocol), client.HysteriaAuth, boolInt(client.HysteriaEnabled),
+		boolInt(client.HysteriaRevoked), now, now)
+	return err
+}
+
+func nullableCredential(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+func clientProtocolStorage(client domain.Client, uuid string) (string, string, int, int, int, int) {
+	protocol := client.Protocol
+	if protocol == "" {
+		protocol = domain.ProtocolLegacyDual
+	}
+	hysteriaAuth := client.HysteriaAuth
+	if protocol == domain.ProtocolLegacyDual && hysteriaAuth == "" {
+		hysteriaAuth = uuid
+	}
+	vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked := false, false, false, false
+	switch protocol {
+	case domain.ProtocolLegacyDual:
+		vlessEnabled, vlessRevoked = client.Enabled, client.Revoked
+		hysteriaEnabled, hysteriaRevoked = client.Enabled, client.Revoked
+	case domain.ProtocolVLESS:
+		vlessEnabled, vlessRevoked = client.VLESSEnabled, client.VLESSRevoked
+		if !vlessEnabled && !vlessRevoked && client.Enabled && !client.Revoked {
+			vlessEnabled = true
+		}
+	case domain.ProtocolHysteria2:
+		hysteriaEnabled, hysteriaRevoked = client.HysteriaEnabled, client.HysteriaRevoked
+		if !hysteriaEnabled && !hysteriaRevoked && client.Enabled && !client.Revoked {
+			hysteriaEnabled = true
+		}
+	}
+	return string(protocol), hysteriaAuth, boolInt(vlessEnabled), boolInt(vlessRevoked), boolInt(hysteriaEnabled), boolInt(hysteriaRevoked)
 }
 
 // ListReservedShortIDs returns the durable, unassigned REALITY IDs in issuance order.
@@ -810,6 +1072,9 @@ func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client doma
 	if client.ID == "" || reserveSize < 1 || generate == nil {
 		return "", false, errors.New("client, reserve size and short ID generator are required")
 	}
+	if client.Protocol == domain.ProtocolHysteria2 {
+		return "", false, errors.New("Hysteria 2 profiles do not use REALITY short IDs")
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", false, err
@@ -858,7 +1123,8 @@ func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client doma
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, uuid, email, shortID, client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), now, now); err != nil {
+	protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked := clientProtocolStorage(client, uuid)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, nullableCredential(uuid), email, nullableCredential(shortID), client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, now, now); err != nil {
 		return "", false, err
 	}
 	if err := markShortIDPoolInitialized(ctx, tx); err != nil {
@@ -871,7 +1137,7 @@ func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client doma
 }
 
 func ensureShortIDHistory(ctx context.Context, tx *sql.Tx) error {
-	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO reality_short_ids(short_id, assigned_client_id, created_at) SELECT short_id, id, created_at FROM clients`)
+	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO reality_short_ids(short_id, assigned_client_id, created_at) SELECT short_id, id, created_at FROM clients WHERE short_id IS NOT NULL AND short_id != ''`)
 	return err
 }
 
@@ -921,7 +1187,7 @@ func generateUnusedShortID(ctx context.Context, tx *sql.Tx, generate func() (str
 }
 
 func (s *Store) ListClients(ctx context.Context) ([]domain.Client, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at FROM clients ORDER BY created_at, id`)
+	rows, err := s.db.QueryContext(ctx, `SELECT `+clientSelectColumns+` FROM clients ORDER BY created_at, id`)
 	if err != nil {
 		return nil, err
 	}
@@ -938,12 +1204,12 @@ func (s *Store) ListClients(ctx context.Context) ([]domain.Client, error) {
 }
 
 func (s *Store) GetClient(ctx context.Context, id string) (domain.Client, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, created_at, updated_at FROM clients WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+clientSelectColumns+` FROM clients WHERE id=?`, id)
 	return scanClient(row)
 }
 
 func (s *Store) SetClientState(ctx context.Context, id string, enabled, revoked bool) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, updated_at=? WHERE id=?`, boolInt(enabled), boolInt(revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
+	result, err := s.db.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, updated_at=? WHERE id=?`, boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return err
 	}
@@ -952,6 +1218,56 @@ func (s *Store) SetClientState(ctx context.Context, id string, enabled, revoked 
 		return errors.New("client not found")
 	}
 	return err
+}
+
+// SetClientProtocolState changes the lifecycle of one inbound access, keeping the
+// other protocol active for legacy dual-protocol profiles.
+func (s *Store) SetClientProtocolState(ctx context.Context, id string, protocol domain.ClientProtocol, state domain.ClientState) error {
+	if state.Enabled && state.Revoked {
+		return errors.New("revoked protocol access cannot be enabled")
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	var client domain.Client
+	var uuid, shortID sql.NullString
+	var email, storedProtocol, hysteriaAuth, created, updated string
+	var enabled, revoked, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked int
+	if err := tx.QueryRowContext(ctx, `SELECT `+clientSelectColumns+` FROM clients WHERE id=?`, id).Scan(
+		&client.ID, &client.Name, &uuid, &email, &shortID, &client.ClientFingerprint, &enabled, &revoked,
+		&storedProtocol, &hysteriaAuth, &vlessEnabled, &vlessRevoked, &hysteriaEnabled, &hysteriaRevoked, &created, &updated,
+	); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return errors.New("client not found")
+		}
+		return err
+	}
+	client.Protocol = domain.ClientProtocol(storedProtocol)
+	if client.Protocol == "" {
+		client.Protocol = domain.ProtocolLegacyDual
+	}
+	if !((protocol == domain.ProtocolVLESS && client.HasVLESS()) || (protocol == domain.ProtocolHysteria2 && client.HasHysteria2())) {
+		return errors.New("profile has no requested protocol access")
+	}
+	if protocol == domain.ProtocolVLESS {
+		vlessEnabled, vlessRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+	} else {
+		hysteriaEnabled, hysteriaRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+	}
+	anyEnabled := (client.HasVLESS() && vlessEnabled != 0 && vlessRevoked == 0) || (client.HasHysteria2() && hysteriaEnabled != 0 && hysteriaRevoked == 0)
+	allRevoked := (!client.HasVLESS() || vlessRevoked != 0) && (!client.HasHysteria2() || hysteriaRevoked != 0)
+	result, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, updated_at=? WHERE id=?`, boolInt(anyEnabled), boolInt(allRevoked), vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, time.Now().UTC().Format(time.RFC3339Nano), id)
+	if err != nil {
+		return err
+	}
+	if count, err := result.RowsAffected(); err != nil {
+		return err
+	} else if count != 1 {
+		return errors.New("client not found")
+	}
+	return tx.Commit()
 }
 
 func (s *Store) DeleteClient(ctx context.Context, id string) error {
@@ -1019,20 +1335,37 @@ func (s *Store) AddAudit(ctx context.Context, actorID, action, entity, entityID,
 
 type scanner interface{ Scan(...any) error }
 
+const clientSelectColumns = `id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
+	protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked,
+	created_at, updated_at`
+
 func scanClient(row scanner) (domain.Client, error) {
 	var client domain.Client
-	var uuid, email, shortID string
-	var enabled, revoked int
+	var uuid, shortID sql.NullString
+	var email, protocol, hysteriaAuth string
+	var enabled, revoked, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked int
 	var created, updated string
-	err := row.Scan(&client.ID, &client.Name, &uuid, &email, &shortID, &client.ClientFingerprint, &enabled, &revoked, &created, &updated)
+	err := row.Scan(&client.ID, &client.Name, &uuid, &email, &shortID, &client.ClientFingerprint,
+		&enabled, &revoked, &protocol, &hysteriaAuth, &vlessEnabled, &vlessRevoked,
+		&hysteriaEnabled, &hysteriaRevoked, &created, &updated)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Client{}, errors.New("client not found")
 		}
 		return domain.Client{}, err
 	}
-	client.UUID, client.Email, client.ShortID = uuid, email, shortID
+	client.UUID, client.Email, client.ShortID = uuid.String, email, shortID.String
+	client.Protocol = domain.ClientProtocol(protocol)
+	if client.Protocol == "" {
+		client.Protocol = domain.ProtocolLegacyDual
+	}
+	client.HysteriaAuth = hysteriaAuth
+	if client.HysteriaAuth == "" && client.Protocol == domain.ProtocolLegacyDual {
+		client.HysteriaAuth = client.UUID
+	}
 	client.Enabled, client.Revoked = enabled != 0, revoked != 0
+	client.VLESSEnabled, client.VLESSRevoked = vlessEnabled != 0, vlessRevoked != 0
+	client.HysteriaEnabled, client.HysteriaRevoked = hysteriaEnabled != 0, hysteriaRevoked != 0
 	client.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	client.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	return client, nil

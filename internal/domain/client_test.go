@@ -2,6 +2,7 @@ package domain
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -95,5 +96,47 @@ func TestNewClientTrimsValuesAndAllowsOptionalFingerprint(t *testing.T) {
 	}
 	if _, err := NewClient("device", "phone", ""); err != nil {
 		t.Fatalf("empty fingerprint should use node default: %v", err)
+	}
+}
+
+func TestNewProtocolClientCreatesOneInboundAccess(t *testing.T) {
+	vless, err := NewProtocolClient("vless-id", "phone", ProtocolVLESS, "safari", "")
+	if err != nil || vless.Protocol != ProtocolVLESS || !vless.VLESSCanConnect() || vless.HasHysteria2() || vless.UUID != "" || vless.ShortID != "" {
+		t.Fatalf("VLESS-only profile = %+v, %v", vless, err)
+	}
+	hysteria, err := NewProtocolClient("hysteria-id", "phone", ProtocolHysteria2, "", "device-secret")
+	if err != nil || hysteria.Protocol != ProtocolHysteria2 || !hysteria.Hysteria2CanConnect() || hysteria.HasVLESS() || hysteria.HysteriaAuth != "device-secret" {
+		t.Fatalf("Hysteria-only profile = %+v, %v", hysteria, err)
+	}
+	if _, err := NewProtocolClient("dual-id", "phone", ProtocolLegacyDual, "", "secret"); err == nil {
+		t.Fatal("new dual-protocol profile was accepted")
+	}
+	for _, auth := range []string{"", "bad\nsecret", strings.Repeat("x", 257)} {
+		if _, err := NewProtocolClient("h-id", "phone", ProtocolHysteria2, "", auth); err == nil {
+			t.Errorf("Hysteria auth %q was accepted", auth)
+		}
+	}
+}
+
+func TestClientAccessStateIsIndependentByProtocol(t *testing.T) {
+	client, err := NewClient("dual-id", "phone", "safari")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !client.VLESSCanConnect() || !client.Hysteria2CanConnect() {
+		t.Fatalf("legacy dual profile did not initialize both accesses: %+v", client)
+	}
+	state, err := client.AccessState(ProtocolHysteria2)
+	if err != nil || !state.Enabled || state.Revoked {
+		t.Fatalf("Hysteria access state = %+v, %v", state, err)
+	}
+	if _, err := client.AccessState(ProtocolVLESS); err != nil {
+		t.Fatalf("legacy VLESS access was missing: %v", err)
+	}
+	if _, err := NewProtocolClient("id", "phone", ProtocolHysteria2, "", "secret"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.AccessState("vmess"); err == nil {
+		t.Fatal("unsupported protocol state was returned")
 	}
 }
