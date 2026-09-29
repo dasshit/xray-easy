@@ -90,7 +90,11 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("listen on private AWG control address: %w", err)
 	}
-	server := grpc.NewServer(grpc.UnaryInterceptor(control.AuthInterceptor(token)))
+	server := grpc.NewServer(
+		grpc.UnaryInterceptor(control.AuthInterceptor(token)),
+		grpc.MaxRecvMsgSize(24<<20),
+		grpc.MaxSendMsgSize(24<<20),
+	)
 	control.Register(server, control.NewService(manager, opts))
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()

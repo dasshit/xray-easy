@@ -241,7 +241,7 @@ func TestTerminalSessionRestoresSettingsAndMainRuns(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer input.Close()
-	if _, err := io.WriteString(writer, "\n\n\n\n"); err != nil {
+	if _, err := io.WriteString(writer, "\n\n\n\n\n"); err != nil {
 		t.Fatal(err)
 	}
 	writer.Close()

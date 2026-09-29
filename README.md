@@ -3,9 +3,9 @@
 Xray-easy is a private web panel for one Xray server. It runs Xray and the Go
 control plane in separate Docker containers and helps one administrator create
 VLESS + REALITY + TCP/RAW + XTLS Vision profiles, plus optional VMess + TLS and
-Hysteria 2 inbounds in the same Xray process. VMess uses a separate public TCP
-port; Hysteria 2 uses UDP on the VLESS public port. The panel is bound to the
-server's loopback address; open it through an SSH tunnel.
+Hysteria 2 inbounds in the same Xray process. AmneziaWG is an optional,
+independent container with its own Web UI section and UDP port. The panel is
+bound to the server's loopback address; open it through an SSH tunnel.
 
 The pinned and verified Xray version is **26.7.28**. The panel reports both
 `XRAY_VERSION` from Compose and the version reported by the running binary, and
@@ -26,8 +26,10 @@ public TCP port (443 by default). VMess + TLS also uses TCP port 9443 by
 default. Hysteria 2 requires UDP on the VLESS port. These Docker versions are
 required to choose the correct IPv4/IPv6 egress gateway for Xray. Allow inbound
 TCP on the ports for the protocols you use in the VPS firewall/security group.
-The VPS needs outbound access for Docker images and Xray traffic. Go and Node.js are
-**not required** on the VPS.
+The VPS needs outbound access for Docker images and VPN traffic. AmneziaWG
+additionally needs a Linux Docker host with `/dev/net/tun`, `NET_ADMIN`, IPv4
+and IPv6 forwarding, and working egress for both address families. Go and
+Node.js are **not required** on the VPS.
 
 Run these commands **on the VPS**:
 
@@ -41,8 +43,8 @@ The repository is currently private, so GitHub access is required to clone it.
 The installer builds its terminal UI in a temporary Docker container, then
 opens a full-screen terminal workspace. Use **↑/↓ or Tab** to move between
 fields, **Enter** to continue, **Esc** to cancel, and **Ctrl+C** to stop. It checks
-Docker/Compose, asks for the public and panel ports and the optional Hysteria 2
-TLS mode, generates the master key
+Docker/Compose, asks for the public and panel ports, the optional Hysteria 2
+TLS mode and whether to enable AmneziaWG, generates the master key
 and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
 mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
 services to become healthy, then runs the final `xray-easy doctor` check. A
@@ -349,80 +351,67 @@ If startup fails, inspect `docker compose ps` and
 `docker compose logs --tail=100 xray xray-easy`. Installer failures retain
 `.env` and the token so you can correct the problem and rerun `./install.sh`.
 
-## Experimental AmneziaWG service
+## Optional AmneziaWG transport
 
-The `awg-prototype` Compose profile is an isolated implementation spike. It
-adds an `awg` container that embeds the pinned AmneziaWG Go engine and exposes
-a token-protected gRPC lifecycle API only on the private Compose control
-network. It does not change the Xray services or add an Internet-facing control
-port. The current Web UI and installer do not manage AmneziaWG yet.
+The installer can enable a separate `awg` container. It runs the pinned
+AmneziaWG Go engine, exposes only a token-protected gRPC API on the private
+Compose control network, and publishes the configured UDP port. The API is not
+published to the host. Xray and AmneziaWG remain independent services.
 
-This prototype requires a Linux Docker host with `/dev/net/tun`, the
-`NET_ADMIN` capability, IPv4/IPv6 forwarding, IPv4 and IPv6 outbound routes,
-and an available UDP port. It creates separate NAT rules for the IPv4 and IPv6
-egress interfaces; startup fails with an actionable error when either route is
-missing. The normal Compose deployment does not start the service. After a
-regular Xray-easy installation, set `AWG_PUBLIC_HOST` in `.env` to the IPv4
-address, IPv6 address, or DNS name that clients will use, then build and start
-the optional profile:
+To enable it during initial setup or later, run `./install.sh`, choose
+**Enable for AmneziaWG clients**, and enter the public IP address or DNS name
+that clients will use. The installer stores `COMPOSE_PROFILES=awg`,
+`AWG_PUBLIC_HOST`, and `AWG_PUBLIC_PORT` in `.env` and starts the service.
+The public UDP port defaults to `51820`; the installer rejects a collision
+with the Xray UDP port. Allow inbound UDP `AWG_PUBLIC_PORT` for IPv4 and IPv6
+in the VDS firewall and provider security group.
 
-```sh
-docker compose --profile awg-prototype up -d --build awg
-docker compose --profile awg-prototype exec -T awg awg-service status
-docker compose --profile awg-prototype exec -T awg awg-service peer-add --name iphone
-mkdir -m 700 -p awg-profiles
-docker compose --profile awg-prototype cp awg:/data/profiles/iphone.conf ./awg-profiles/iphone.conf
-```
+AmneziaWG requires a Linux Docker host with `/dev/net/tun`, the `NET_ADMIN`
+capability, IPv4/IPv6 forwarding, and working egress for both address families.
+The service configures separate NAT rules for the IPv4 and IPv6 egress
+interfaces and reports a startup error when either route is unavailable. It
+uses the default client networks `10.88.0.0/24` and `fd88:88:88::/64`, with DNS
+servers `1.1.1.1` and `2606:4700:4700::1111`; do not overlap those networks
+with routes already used by the VPS.
 
-Import `iphone.conf` into the official AmneziaWG client on iOS or macOS. The
-file contains the client's private key: transfer it securely and do not commit
-it or attach it to diagnostics. `peer-add` saves the profile with mode `0600`
-inside the persistent `awg_data` volume. Copy it out before revoking the peer;
-`peer-remove` deletes the saved `/data/profiles/NAME.conf` after revocation.
-If you change shared obfuscation settings, restart the service, refresh the
-saved profile without exposing its private key in command arguments, then copy
-the updated file to the client again:
+When the optional Compose profile is enabled, the Web UI shows an
+**AmneziaWG** section. Create a device there and scan its QR code in the
+official AmneziaWG client on iOS or macOS, or download its `.conf` file. The
+profile contains the client's private key. Treat QR codes, downloads and
+backups as credentials; transfer them securely and do not commit or attach
+them to diagnostics. Revoking a peer creates an automatic backup first,
+removes its saved profile from the volume and records a redacted audit event.
 
-```sh
-docker compose --profile awg-prototype up -d --build awg
-docker compose --profile awg-prototype exec -T awg awg-service profile --name iphone
-docker compose --profile awg-prototype cp awg:/data/profiles/iphone.conf ./awg-profiles/iphone-refreshed.conf
-```
+The service allocates IPv4 and IPv6 addresses, enables full-tunnel routes, and
+applies peer changes to the live engine without restarting the container. It
+persists server state in `awg_data`; the server private key is encrypted using
+`XRAY_EASY_MASTER_KEY`. Backups contain that state and saved client profiles.
+Backups are plaintext with mode `0600`, so protect the VPS and any copies you
+export. Restore requires the AmneziaWG Compose profile to be enabled and a
+backup created while the service was enabled; otherwise the restore command
+stops before changing application state. `doctor` checks the service, peer
+state and warns that public UDP reachability must be verified from outside.
 
-The server private key is encrypted with `XRAY_EASY_MASTER_KEY`; keep that key
-unchanged. The service allocates an IPv4 and an IPv6 address, enables full-tunnel
-routes, and applies the peer to the live engine without restarting the
-container. Revoke a peer with:
+If the public endpoint or shared AWG preset changes, reopen each device profile
+in the Web UI and import the refreshed `.conf` or QR code. The service refreshes
+the saved profile when it is requested; copies already exported to clients keep
+their previous endpoint or obfuscation settings.
 
-```sh
-docker compose --profile awg-prototype exec -T awg awg-service peer-remove --name iphone
-```
-
-The built-in AmneziaWG 3.x obfuscation preset follows the current defaults in
-the [official Amnezia client implementation](https://github.com/amnezia-vpn/amnezia-client/blob/dev/client/core/installers/awgInstaller.cpp):
+The built-in AmneziaWG 3.x preset follows current defaults in the
+[official Amnezia client implementation](https://github.com/amnezia-vpn/amnezia-client/blob/dev/client/core/installers/awgInstaller.cpp):
 `Jc=4`, `Jmin=10`, `Jmax=50`, `S1`–`S4=12`, `H1`–`H4=1`–`4`, header protection,
-content padding, timing ranges, random trailers and disabled cookies. The same
-values are configured on the server and emitted in every client profile; the
-header-protection key is derived from the installation master key. These are
-protocol compatibility defaults, not a guarantee against DPI or blocking. If
-you override any shared obfuscation value in `.env`, restart the service and
-refresh each saved profile with `awg-service profile --name NAME`, then
-re-import the updated profile so its parameters match the server. The service
-README documents the private gRPC API and all lifecycle commands.
+content padding, timing ranges, random trailers and disabled cookies. These
+values provide protocol compatibility, not a guarantee against DPI or
+blocking. Advanced container controls remain in `.env`; if you change shared
+obfuscation values, recreate the `awg` service and re-import profiles so
+client and server parameters match. The lower-level gRPC API and maintenance
+commands are described in [awg-service/README.md](awg-service/README.md).
 
-Allow the configured `AWG_PUBLIC_PORT`/UDP in the VDS firewall. The prototype
-defaults to UDP 51820, client networks `10.88.0.0/24` and `fd88:88:88::/64`,
-and DNS servers `1.1.1.1` and `2606:4700:4700::1111`. Do not overlap these
-client networks with routes already used by the VDS. To stop the optional
-service without affecting Xray, run `docker compose --profile awg-prototype
-stop awg`.
-
-VDS smoke test passed: a peer profile was created and imported into the official
-AmneziaWG client on iOS. After restarting the container, the peer and its
-addresses persisted; the client reconnected and traffic worked. Longer-term
-stability, macOS clients, and IPv6 egress still need separate verification
-before integrating the service with the Xray-easy database, UI, installer,
-backup, and doctor flows.
+VDS smoke test passed with the official AmneziaWG iOS client: the peer profile
+connected, survived a container restart, reconnected, and carried traffic.
+The installer, Web UI, doctor and plaintext backup/restore path now manage the
+service. Longer-term stability, macOS client coverage and IPv6 egress still
+need separate verification.
 
 Backend test coverage and the test plan are documented in
 [docs/backend-test-plan.md](docs/backend-test-plan.md). Run

@@ -324,6 +324,83 @@ func (m *Manager) RemovePeer(name string) error {
 	return nil
 }
 
+// RestorePersistedState validates and applies a state snapshot using the
+// installation master key. The live device and state file are rolled back if
+// applying the restored identity or peer set fails.
+func (m *Manager) RestorePersistedState(data []byte) error {
+	var next persistedState
+	if err := json.Unmarshal(data, &next); err != nil {
+		return fmt.Errorf("decode restored AWG state: %w", err)
+	}
+	if next.Peers == nil {
+		next.Peers = []Peer{}
+	}
+	if err := validateState(next, m.opts); err != nil {
+		return fmt.Errorf("validate restored AWG state: %w", err)
+	}
+	nextPrivateKey, err := openPrivateKey(next.PrivateKeyEnvelope, m.opts.MasterKey)
+	if err != nil {
+		return fmt.Errorf("decrypt restored AWG server key: %w", err)
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return errors.New("AWG manager is closed")
+	}
+	previous := cloneState(m.state)
+	previousPrivateKey := m.serverPrivateKey
+	next = cloneState(next)
+	if err := m.restoreDeviceLocked(next, nextPrivateKey, previous, previousPrivateKey); err != nil {
+		return err
+	}
+	statePath := filepath.Join(m.opts.DataDir, "state.json")
+	if err := writeState(statePath, next); err != nil {
+		rollbackErr := m.restoreDeviceLocked(previous, previousPrivateKey, next, nextPrivateKey)
+		if rollbackErr != nil {
+			return fmt.Errorf("persist restored AWG state: %w; roll back live device: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("persist restored AWG state: %w", err)
+	}
+	m.state, m.serverPrivateKey = next, nextPrivateKey
+	return nil
+}
+
+func (m *Manager) restoreDeviceLocked(next persistedState, nextPrivateKey string, previous persistedState, previousPrivateKey string) error {
+	removePeers := func(states ...persistedState) error {
+		seen := make(map[string]bool)
+		for _, state := range states {
+			for _, peer := range state.Peers {
+				if seen[peer.PublicKey] {
+					continue
+				}
+				seen[peer.PublicKey] = true
+				if err := m.device.Set(removePeerConfig(peer)); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	if err := removePeers(previous, next); err != nil {
+		if rollbackErr := m.applyAllLocked(); rollbackErr != nil {
+			return fmt.Errorf("remove current AWG peers before restore: %w; reapply current state: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("remove current AWG peers before restore: %w", err)
+	}
+	m.state, m.serverPrivateKey = cloneState(next), nextPrivateKey
+	if err := m.applyAllLocked(); err != nil {
+		applyErr := err
+		_ = removePeers(previous, next)
+		m.state, m.serverPrivateKey = cloneState(previous), previousPrivateKey
+		if rollbackErr := m.applyAllLocked(); rollbackErr != nil {
+			return fmt.Errorf("apply restored AWG state: %w; roll back live device: %v", applyErr, rollbackErr)
+		}
+		return fmt.Errorf("apply restored AWG state: %w", applyErr)
+	}
+	return nil
+}
+
 // Peers returns a stable copy of the currently managed peers.
 func (m *Manager) Peers() []Peer {
 	m.mu.Lock()

@@ -14,6 +14,7 @@ import type { Section, Theme } from './presentation/models'
 import HysteriaSettingsPanel from './presentation/HysteriaSettingsPanel.vue'
 import CreateProfileModal from './presentation/CreateProfileModal.vue'
 import ProfileDeliveryModal from './presentation/ProfileDeliveryModal.vue'
+import AmneziaWGPanel from './presentation/AmneziaWGPanel.vue'
 
 const setup = ref<SetupStatus | null>(null)
 const admin = ref<Admin | null>(null)
@@ -544,7 +545,8 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
     </form>
     <section class="card dashboard" v-else>
       <div class="dashboard-header"><div><p class="eyebrow">{{ t().title }}</p><h1>{{ t().profiles }}</h1></div><div class="header-actions"><button class="secondary" @click="logoutAll">{{ t().logoutAll }}</button><button class="secondary" @click="logout">{{ t().logout }}</button></div></div>
-      <nav class="tabs" role="tablist" :aria-label="t().title"><button role="tab" :aria-selected="activeSection === 'profiles'" :class="{ active: activeSection === 'profiles' }" @click="activeSection = 'profiles'">{{ t().profiles }}</button><button role="tab" :aria-selected="activeSection === 'settings'" :class="{ active: activeSection === 'settings' }" @click="activeSection = 'settings'">{{ t().settings }}</button><button role="tab" :aria-selected="activeSection === 'diagnostics'" :class="{ active: activeSection === 'diagnostics' }" @click="activeSection = 'diagnostics'">{{ t().diagnostics }}</button><button role="tab" :aria-selected="activeSection === 'security'" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">{{ t().security }}</button></nav>
+      <nav class="tabs" role="tablist" :aria-label="t().title"><button role="tab" :aria-selected="activeSection === 'profiles'" :class="{ active: activeSection === 'profiles' }" @click="activeSection = 'profiles'">{{ t().profiles }}</button><button role="tab" :aria-selected="activeSection === 'amneziawg'" :class="{ active: activeSection === 'amneziawg' }" @click="activeSection = 'amneziawg'">{{ t().amneziawg }}</button><button role="tab" :aria-selected="activeSection === 'settings'" :class="{ active: activeSection === 'settings' }" @click="activeSection = 'settings'">{{ t().settings }}</button><button role="tab" :aria-selected="activeSection === 'diagnostics'" :class="{ active: activeSection === 'diagnostics' }" @click="activeSection = 'diagnostics'">{{ t().diagnostics }}</button><button role="tab" :aria-selected="activeSection === 'security'" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">{{ t().security }}</button></nav>
+      <AmneziaWGPanel v-if="activeSection === 'amneziawg'" :api="api" :language="language" />
       <section v-if="activeSection === 'profiles'" class="section-panel">
         <div class="section-heading"><div><p class="eyebrow">{{ t().profiles }}</p><h2>{{ clients.length }} {{ t().profileCount }}</h2><p class="muted">{{ t().traffic }} · {{ clients.filter(client => client.online).length }} {{ t().online }}</p></div><button @click="openCreateModal"><span class="button-icon" aria-hidden="true">+</span>{{ t().createProfile }}</button></div>
         <div v-if="!clients.length" class="empty-state"><span class="empty-icon" aria-hidden="true">⌁</span><strong>{{ t().emptyProfiles }}</strong><button @click="openCreateModal">{{ t().createProfile }}</button></div>

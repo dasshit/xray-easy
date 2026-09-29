@@ -17,6 +17,9 @@ function gateway(overrides: GatewayOverrides = {}): XrayEasyGateway {
     hysteria: {
       status: vi.fn(), uploadCertificate: vi.fn(), generateCertificate: vi.fn(), preview: vi.fn(), apply: vi.fn(),
     },
+    amneziawg: {
+      status: vi.fn(), listPeers: vi.fn(), createPeer: vi.fn(), removePeer: vi.fn(), profileUrl: vi.fn(), profileQrUrl: vi.fn(),
+    },
     backups: { create: vi.fn() },
     diagnostics: {
       status: vi.fn().mockResolvedValue({ state: 'running', restartCount: 1 }),
@@ -30,6 +33,7 @@ function gateway(overrides: GatewayOverrides = {}): XrayEasyGateway {
     auth: { ...defaults.auth, ...overrides.auth },
     settings: { ...defaults.settings, ...overrides.settings },
     hysteria: { ...defaults.hysteria, ...overrides.hysteria },
+    amneziawg: { ...defaults.amneziawg, ...overrides.amneziawg },
     backups: { ...defaults.backups, ...overrides.backups },
     diagnostics: { ...defaults.diagnostics, ...overrides.diagnostics },
     events: defaults.events,

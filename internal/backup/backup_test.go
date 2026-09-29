@@ -1,8 +1,10 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +13,28 @@ import (
 	"xray-easy/internal/domain"
 	"xray-easy/internal/store"
 )
+
+type awgBackupStub struct {
+	current       []byte
+	exported      int
+	restored      [][]byte
+	exportErr     error
+	restoreErr    error
+	restoreErrors []error
+}
+
+func (s *awgBackupStub) ExportBackup(context.Context) ([]byte, error) {
+	s.exported++
+	return append([]byte(nil), s.current...), s.exportErr
+}
+
+func (s *awgBackupStub) RestoreBackup(_ context.Context, data []byte) error {
+	s.restored = append(s.restored, append([]byte(nil), data...))
+	if index := len(s.restored) - 1; index < len(s.restoreErrors) {
+		return s.restoreErrors[index]
+	}
+	return s.restoreErr
+}
 
 func newTestManager(t *testing.T) (*Manager, *store.Store) {
 	t.Helper()
@@ -166,6 +190,204 @@ func TestBackupIncludesAndRestoresHysteriaTLSVersions(t *testing.T) {
 	got, err := db.GetHysteriaSettings(context.Background())
 	if err != nil || !got.Enabled || got.CertificateID != id {
 		t.Fatalf("restored Hysteria settings = %+v, %v", got, err)
+	}
+}
+
+func TestBackupIncludesAWGSnapshotAndRestoresThroughService(t *testing.T) {
+	manager, _ := newTestManager(t)
+	awg := &awgBackupStub{current: []byte("snapshot-before")}
+	manager.AWG = awg
+	info, err := manager.CreateContext(context.Background(), "awg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := os.ReadFile(filepath.Join(info.Path, "amneziawg.tar.gz"))
+	if err != nil || !bytes.Equal(archive, awg.current) {
+		t.Fatalf("AWG snapshot in backup = %q, %v", archive, err)
+	}
+	if _, err := manager.Verify(info.Name); err != nil {
+		t.Fatalf("verify AWG backup: %v", err)
+	}
+	awg.current = []byte("snapshot-after")
+	if err := manager.RestoreStateContext(context.Background(), info); err != nil {
+		t.Fatalf("restore AWG snapshot: %v", err)
+	}
+	if len(awg.restored) != 1 || !bytes.Equal(awg.restored[0], []byte("snapshot-before")) {
+		t.Fatalf("AWG restore calls = %q", awg.restored)
+	}
+	if awg.exported != 2 {
+		t.Fatalf("current AWG snapshots = %d, want backup and pre-restore snapshot", awg.exported)
+	}
+}
+
+func TestRestoreRejectsAWGBackupWhenServiceUnavailableBeforeChangingState(t *testing.T) {
+	manager, db := newTestManager(t)
+	awg := &awgBackupStub{current: []byte("snapshot")}
+	manager.AWG = awg
+	info, err := manager.Create("awg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.AWG = nil
+	if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "enable the AmneziaWG Compose profile") {
+		t.Fatalf("restore without AWG service error = %v", err)
+	}
+	settings, err := db.GetSettings(context.Background())
+	if err != nil || settings.PublicHost != "vpn.example.com" {
+		t.Fatalf("failed restore changed SQLite state: settings=%+v error=%v", settings, err)
+	}
+}
+
+func TestCreateRejectsUnavailableOrInvalidAWGBackup(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		data []byte
+		err  error
+	}{
+		{name: "service error", data: []byte("snapshot"), err: errors.New("service unavailable")},
+		{name: "empty snapshot"},
+		{name: "snapshot too large", data: make([]byte, maxAWGSnapshot+1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			manager, _ := newTestManager(t)
+			manager.AWG = &awgBackupStub{current: test.data, exportErr: test.err}
+			if _, err := manager.Create("awg"); err == nil {
+				t.Fatal("created a backup from unavailable or invalid AWG data")
+			}
+			entries, err := os.ReadDir(manager.BackupDir())
+			if err == nil && len(entries) != 0 {
+				t.Fatalf("failed backup left files behind: %v", entries)
+			}
+		})
+	}
+}
+
+func TestRestoreRequiresAWGStateAndRejectsMalformedBackupFile(t *testing.T) {
+	manager, _ := newTestManager(t)
+	withoutAWG, err := manager.Create("without-awg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.AWG = &awgBackupStub{current: []byte("current")}
+	if err := manager.RestoreState(withoutAWG); err == nil || !strings.Contains(err.Error(), "does not contain AmneziaWG state") {
+		t.Fatalf("restore without AWG snapshot error = %v", err)
+	}
+
+	withAWGManager, _ := newTestManager(t)
+	withAWGManager.AWG = &awgBackupStub{current: []byte("snapshot")}
+	withAWG, err := withAWGManager.Create("with-awg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshotPath := filepath.Join(withAWG.Path, "amneziawg.tar.gz")
+	if err := os.Remove(snapshotPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(snapshotPath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := withAWGManager.RestoreState(withAWG); err == nil || !strings.Contains(err.Error(), "not a regular file") {
+		t.Fatalf("restore with directory as AWG snapshot error = %v", err)
+	}
+	if err := os.Remove(snapshotPath); err != nil {
+		t.Fatal(err)
+	}
+	oversized, err := os.Create(snapshotPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oversized.Truncate(maxAWGSnapshot + 1); err != nil {
+		_ = oversized.Close()
+		t.Fatal(err)
+	}
+	if err := oversized.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := withAWGManager.RestoreState(withAWG); err == nil || !strings.Contains(err.Error(), "exceeds the size limit") {
+		t.Fatalf("restore with oversized AWG snapshot error = %v", err)
+	}
+}
+
+func TestRestoreRollsBackSQLiteAndAWGWhenApplyingAWGSnapshotFails(t *testing.T) {
+	manager, db := newTestManager(t)
+	awg := &awgBackupStub{
+		current:       []byte("snapshot-before"),
+		restoreErrors: []error{errors.New("apply failed"), nil},
+	}
+	manager.AWG = awg
+	info, err := manager.Create("rollback")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.PublicHost = "live.example.test"
+	if err := db.UpdateSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "apply failed") {
+		t.Fatalf("restore with injected AWG failure error = %v", err)
+	}
+	current, err := db.GetSettings(context.Background())
+	if err != nil || current.PublicHost != "live.example.test" {
+		t.Fatalf("SQLite state after rollback = %+v, %v", current, err)
+	}
+	if len(awg.restored) != 2 || !bytes.Equal(awg.restored[1], []byte("snapshot-before")) {
+		t.Fatalf("AWG rollback calls = %q", awg.restored)
+	}
+}
+
+func TestRestoreReportsIncompleteRollbackWhenAWGRollbackAlsoFails(t *testing.T) {
+	manager, _ := newTestManager(t)
+	awg := &awgBackupStub{
+		current:       []byte("snapshot-before"),
+		restoreErrors: []error{errors.New("apply failed"), errors.New("rollback failed")},
+	}
+	manager.AWG = awg
+	info, err := manager.Create("rollback-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.RestoreState(info)
+	if err == nil || !strings.Contains(err.Error(), "rollback was incomplete") || !strings.Contains(err.Error(), "AmneziaWG: rollback failed") {
+		t.Fatalf("restore error did not report incomplete AWG rollback: %v", err)
+	}
+	if len(awg.restored) != 2 {
+		t.Fatalf("expected failed restore and rollback attempts, got %d calls", len(awg.restored))
+	}
+}
+
+func TestRestoreStopsBeforeStateChangesWhenCurrentAWGSnapshotFails(t *testing.T) {
+	manager, db := newTestManager(t)
+	awg := &awgBackupStub{current: []byte("before")}
+	manager.AWG = awg
+	info, err := manager.Create("snapshot-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.PublicHost = "live.example.test"
+	if err := db.UpdateSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	awg.exportErr = errors.New("cannot snapshot live state")
+	if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "snapshot current AmneziaWG") {
+		t.Fatalf("restore with current snapshot failure = %v", err)
+	}
+	current, err := db.GetSettings(context.Background())
+	if err != nil || current.PublicHost != "live.example.test" {
+		t.Fatalf("failed preflight changed SQLite state = %+v, %v", current, err)
+	}
+}
+
+func TestRestoreRejectsUninitializedManager(t *testing.T) {
+	if err := (&Manager{}).RestoreStateContext(context.Background(), Info{}); err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("restore with uninitialized manager error = %v", err)
 	}
 }
 

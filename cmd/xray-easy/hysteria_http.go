@@ -13,7 +13,6 @@ import (
 	"strings"
 	"time"
 
-	"xray-easy/internal/backup"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/hysteria"
 	"xray-easy/internal/maintenance"
@@ -389,8 +388,8 @@ func (s *server) hysteriaSettingsApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusConflict, map[string]any{"code": "settings_incomplete", "error": "Xray settings are incomplete"})
 		return
 	}
-	manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
-	backupInfo, err := manager.Create("hysteria-settings")
+	manager := s.backupManager()
+	backupInfo, err := manager.CreateContext(r.Context(), "hysteria-settings")
 	if err != nil {
 		s.recordDiagnostic("error", "automatic Hysteria 2 backup failed: "+err.Error())
 		s.finishHysteriaChange(request.ChangeID, false)

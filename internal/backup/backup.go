@@ -5,6 +5,7 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"database/sql"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,8 +21,9 @@ import (
 )
 
 const (
-	formatVersion = 1
-	retention     = 10
+	formatVersion  = 1
+	retention      = 10
+	maxAWGSnapshot = 16 << 20
 )
 
 type Manager struct {
@@ -29,6 +31,14 @@ type Manager struct {
 	DataDir   string
 	ConfigDir string
 	MasterKey []byte
+	AWG       AWGBackup
+}
+
+// AWGBackup exports and restores the optional AmneziaWG service state,
+// including client private-key profiles.
+type AWGBackup interface {
+	ExportBackup(context.Context) ([]byte, error)
+	RestoreBackup(context.Context, []byte) error
 }
 
 type Info struct {
@@ -43,6 +53,7 @@ type metadata struct {
 	CreatedAt              time.Time `json:"created_at"`
 	ConfigPresent          bool      `json:"config_present"`
 	TLSCertificatesPresent bool      `json:"tls_certificates_present,omitempty"`
+	AWGStatePresent        bool      `json:"awg_state_present,omitempty"`
 }
 
 type manifest struct {
@@ -64,14 +75,26 @@ func NewManager(db *store.Store, dataDir, configDir string, masterKey []byte) *M
 func (m *Manager) BackupDir() string { return filepath.Join(m.DataDir, "backups") }
 
 func (m *Manager) Create(label string) (Info, error) {
-	return m.create(label, nil)
+	return m.CreateContext(context.Background(), label)
+}
+
+// CreateContext creates a consistent control-plane backup and includes an
+// AmneziaWG snapshot whenever the optional service is configured.
+func (m *Manager) CreateContext(ctx context.Context, label string) (Info, error) {
+	return m.create(ctx, label, nil)
 }
 
 func (m *Manager) CreatePreserving(label, preserveName string) (Info, error) {
-	return m.create(label, map[string]struct{}{preserveName: {}})
+	return m.CreatePreservingContext(context.Background(), label, preserveName)
 }
 
-func (m *Manager) create(label string, preserve map[string]struct{}) (Info, error) {
+// CreatePreservingContext creates a backup while retaining the named older
+// snapshot during retention pruning.
+func (m *Manager) CreatePreservingContext(ctx context.Context, label, preserveName string) (Info, error) {
+	return m.create(ctx, label, map[string]struct{}{preserveName: {}})
+}
+
+func (m *Manager) create(ctx context.Context, label string, preserve map[string]struct{}) (Info, error) {
 	if m.Store == nil || len(m.MasterKey) < 32 {
 		return Info{}, errors.New("backup manager is not initialized")
 	}
@@ -110,8 +133,27 @@ func (m *Manager) create(label string, preserve map[string]struct{}) (Info, erro
 	if !tlsPresent {
 		_ = os.RemoveAll(filepath.Join(tmp, "hysteria-tls"))
 	}
+	awgPresent := false
+	if m.AWG != nil {
+		awgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		awgSnapshot, backupErr := m.AWG.ExportBackup(awgCtx)
+		cancel()
+		if backupErr != nil {
+			return Info{}, fmt.Errorf("backup AmneziaWG state: %w", backupErr)
+		}
+		if len(awgSnapshot) == 0 {
+			return Info{}, errors.New("backup AmneziaWG state: service returned an empty snapshot")
+		}
+		if len(awgSnapshot) > maxAWGSnapshot {
+			return Info{}, errors.New("backup AmneziaWG state: snapshot exceeds the size limit")
+		}
+		if err := writeFile(filepath.Join(tmp, "amneziawg.tar.gz"), awgSnapshot, 0o600); err != nil {
+			return Info{}, fmt.Errorf("save AmneziaWG snapshot: %w", err)
+		}
+		awgPresent = true
+	}
 	createdAt := time.Now().UTC()
-	metaBytes, err := json.Marshal(metadata{FormatVersion: formatVersion, CreatedAt: createdAt, ConfigPresent: configPresent, TLSCertificatesPresent: tlsPresent})
+	metaBytes, err := json.Marshal(metadata{FormatVersion: formatVersion, CreatedAt: createdAt, ConfigPresent: configPresent, TLSCertificatesPresent: tlsPresent, AWGStatePresent: awgPresent})
 	if err != nil {
 		return Info{}, err
 	}
@@ -119,6 +161,9 @@ func (m *Manager) create(label string, preserve map[string]struct{}) (Info, erro
 		return Info{}, err
 	}
 	fileNames := []string{"state.db", "config.redacted.json", "metadata.json"}
+	if awgPresent {
+		fileNames = append(fileNames, "amneziawg.tar.gz")
+	}
 	if tlsPresent {
 		tlsFiles, listErr := listRelativeFiles(tmp, "hysteria-tls")
 		if listErr != nil {
@@ -194,14 +239,58 @@ func (m *Manager) Verify(name string) (Info, error) {
 }
 
 func (m *Manager) RestoreState(info Info) error {
+	return m.RestoreStateContext(context.Background(), info)
+}
+
+// RestoreStateContext restores SQLite, Xray-related files and optional
+// AmneziaWG state. It rolls the live components back if one restore step fails.
+func (m *Manager) RestoreStateContext(ctx context.Context, info Info) error {
 	if m.Store == nil {
 		return errors.New("backup manager is not initialized")
 	}
-	stageRoot, err := os.MkdirTemp(m.DataDir, ".hysteria-restore-")
+	backupAWGPath := filepath.Join(info.Path, "amneziawg.tar.gz")
+	var backupAWG []byte
+	awgPresent := false
+	if info, statErr := os.Lstat(backupAWGPath); statErr == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("AmneziaWG backup is not a regular file")
+		}
+		awgPresent = true
+		if info.Size() > maxAWGSnapshot {
+			return errors.New("AmneziaWG backup exceeds the size limit")
+		}
+		backupAWG, statErr = os.ReadFile(backupAWGPath)
+		if statErr != nil {
+			return fmt.Errorf("read AmneziaWG backup: %w", statErr)
+		}
+	} else if !os.IsNotExist(statErr) {
+		return fmt.Errorf("inspect AmneziaWG backup: %w", statErr)
+	}
+	if m.AWG != nil && !awgPresent {
+		return errors.New("backup does not contain AmneziaWG state; restore it with a backup created while AmneziaWG was enabled")
+	}
+	if m.AWG == nil && awgPresent {
+		return errors.New("backup contains AmneziaWG state; enable the AmneziaWG Compose profile before restoring it")
+	}
+	var previousAWG []byte
+	if m.AWG != nil {
+		awgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		snapshot, err := m.AWG.ExportBackup(awgCtx)
+		cancel()
+		if err != nil {
+			return fmt.Errorf("snapshot current AmneziaWG state before restore: %w", err)
+		}
+		previousAWG = snapshot
+	}
+	stageRoot, err := os.MkdirTemp(m.DataDir, ".state-restore-")
 	if err != nil {
 		return err
 	}
 	defer os.RemoveAll(stageRoot)
+	previousStatePath := filepath.Join(stageRoot, "previous-state.db")
+	if err := m.Store.BackupTo(previousStatePath); err != nil {
+		return fmt.Errorf("snapshot current SQLite state before restore: %w", err)
+	}
 	stageTLS := filepath.Join(stageRoot, "hysteria-tls")
 	backupTLS := filepath.Join(info.Path, "hysteria-tls")
 	tlsPresent := false
@@ -220,6 +309,7 @@ func (m *Manager) RestoreState(info Info) error {
 	targetTLS := filepath.Join(m.DataDir, "hysteria-tls")
 	oldTLS := filepath.Join(stageRoot, "previous-hysteria-tls")
 	hadOldTLS := false
+	tlsChanged := false
 	if tlsPresent {
 		if _, err := os.Stat(targetTLS); err == nil {
 			if err := os.Rename(targetTLS, oldTLS); err != nil {
@@ -235,22 +325,71 @@ func (m *Manager) RestoreState(info Info) error {
 			}
 			return fmt.Errorf("install restored Hysteria 2 TLS files: %w", err)
 		}
+		tlsChanged = true
+	}
+	rollback := func(restoreAWG bool) []string {
+		var failures []string
+		if err := m.Store.RestoreFrom(previousStatePath); err != nil {
+			failures = append(failures, "SQLite: "+err.Error())
+		}
+		if tlsChanged {
+			if err := os.RemoveAll(targetTLS); err != nil {
+				failures = append(failures, "Hysteria TLS cleanup: "+err.Error())
+			}
+			if hadOldTLS {
+				if err := os.Rename(oldTLS, targetTLS); err != nil {
+					failures = append(failures, "Hysteria TLS restore: "+err.Error())
+				}
+			}
+		}
+		if restoreAWG && m.AWG != nil {
+			rollbackCtx, rollbackCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			if err := m.AWG.RestoreBackup(rollbackCtx, previousAWG); err != nil {
+				failures = append(failures, "AmneziaWG: "+err.Error())
+			}
+			rollbackCancel()
+		}
+		return failures
 	}
 	if err := m.Store.RestoreFrom(info.StatePath); err != nil {
-		if tlsPresent {
-			_ = os.RemoveAll(targetTLS)
-			if hadOldTLS {
-				_ = os.Rename(oldTLS, targetTLS)
-			}
+		rollbackErrors := rollback(false)
+		if len(rollbackErrors) > 0 {
+			return fmt.Errorf("restore SQLite state: %w; rollback was incomplete (%s)", err, strings.Join(rollbackErrors, "; "))
 		}
 		return err
 	}
+	if m.AWG != nil {
+		awgCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		restoreErr := m.AWG.RestoreBackup(awgCtx, backupAWG)
+		cancel()
+		if restoreErr != nil {
+			rollbackErrors := rollback(true)
+			if len(rollbackErrors) > 0 {
+				return fmt.Errorf("restore AmneziaWG backup: %w; rollback was incomplete (%s)", restoreErr, strings.Join(rollbackErrors, "; "))
+			}
+			return fmt.Errorf("restore AmneziaWG backup: %w", restoreErr)
+		}
+	}
 	if !tlsPresent {
-		settings, getErr := m.Store.GetHysteriaSettings(context.Background())
-		if getErr == nil {
-			settings.Enabled = false
-			settings.CertificateID = ""
-			_ = m.Store.UpdateHysteriaSettings(context.Background(), settings)
+		settings, getErr := m.Store.GetHysteriaSettings(ctx)
+		if errors.Is(getErr, sql.ErrNoRows) {
+			return nil
+		}
+		if getErr != nil {
+			rollbackErrors := rollback(m.AWG != nil)
+			if len(rollbackErrors) > 0 {
+				return fmt.Errorf("read restored Hysteria 2 settings: %w; rollback was incomplete (%s)", getErr, strings.Join(rollbackErrors, "; "))
+			}
+			return fmt.Errorf("read restored Hysteria 2 settings: %w", getErr)
+		}
+		settings.Enabled = false
+		settings.CertificateID = ""
+		if err := m.Store.UpdateHysteriaSettings(ctx, settings); err != nil {
+			rollbackErrors := rollback(m.AWG != nil)
+			if len(rollbackErrors) > 0 {
+				return fmt.Errorf("disable Hysteria 2 after restore: %w; rollback was incomplete (%s)", err, strings.Join(rollbackErrors, "; "))
+			}
+			return fmt.Errorf("disable Hysteria 2 after restore: %w", err)
 		}
 	}
 	return nil
@@ -272,6 +411,11 @@ func (m *Manager) inspect(name string) (Info, error) {
 	var meta metadata
 	if err := json.Unmarshal(metaBytes, &meta); err != nil || meta.FormatVersion != formatVersion {
 		return Info{}, errors.New("unsupported backup metadata")
+	}
+	awgInfo, awgErr := os.Lstat(filepath.Join(path, "amneziawg.tar.gz"))
+	awgPresent := awgErr == nil && awgInfo.Mode().IsRegular()
+	if awgErr != nil && !os.IsNotExist(awgErr) || meta.AWGStatePresent != awgPresent {
+		return Info{}, errors.New("backup AmneziaWG metadata does not match its files")
 	}
 	return Info{Name: name, Path: path, StatePath: filepath.Join(path, "state.db"), CreatedAt: meta.CreatedAt}, nil
 }

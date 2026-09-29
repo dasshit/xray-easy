@@ -1,11 +1,14 @@
-import type { Admin, CreateClientCommand, DiagnosticEntry, HysteriaCertificateInfo, HysteriaCertificateUpload, HysteriaSettings, HysteriaSettingsCommand, HysteriaSettingsPreview, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
+import type { Admin, CreateAmneziaWGPeerCommand, CreateClientCommand, DiagnosticEntry, HysteriaCertificateInfo, HysteriaCertificateUpload, HysteriaSettings, HysteriaSettingsCommand, HysteriaSettingsPreview, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
 import type { XrayEasyGateway } from '../application/ports/xrayEasyGateway'
-import type { Client, ClientActionType, Settings, SettingsChange } from '../domain/models'
+import type { AmneziaWGPeer, AmneziaWGStatus, Client, ClientActionType, Settings, SettingsChange } from '../domain/models'
 import { parseResponse, request } from './api'
 import { connectXrayEvents } from './events'
 import type { ZodType } from 'zod'
 import {
   AdminDtoSchema,
+  AmneziaWGPeerDtoSchema,
+  AmneziaWGPeersDtoSchema,
+  AmneziaWGStatusDtoSchema,
   BackupDtoSchema,
   ClientDtoSchema,
   DiagnosticEntriesDtoSchema,
@@ -22,6 +25,8 @@ import {
 } from './api-contracts'
 import type {
   AdminDto,
+  AmneziaWGPeerDto,
+  AmneziaWGStatusDto,
   BackupDto,
   ClientDto,
   DiagnosticEntryDto,
@@ -176,6 +181,34 @@ function mapHysteriaSettings(dto: HysteriaSettingsDto): HysteriaSettings {
     ...(dto.runtime_error === undefined ? {} : { runtimeError: dto.runtime_error }),
     ...(dto.masquerade_string === undefined ? {} : { masqueradeString: dto.masquerade_string }),
   }
+}
+
+/** Convert an AmneziaWG status response into the application model.
+ * @param dto - The validated status response.
+ * @returns The service availability and listener details.
+ */
+function mapAmneziaWGStatus(dto: AmneziaWGStatusDto): AmneziaWGStatus {
+  return {
+    enabled: dto.enabled,
+    available: dto.available,
+    running: dto.running,
+    ...(dto.public_key === undefined ? {} : { publicKey: dto.public_key }),
+    ...(dto.public_host === undefined ? {} : { publicHost: dto.public_host }),
+    ...(dto.public_port === undefined ? {} : { publicPort: dto.public_port }),
+    ...(dto.listen_port === undefined ? {} : { listenPort: dto.listen_port }),
+    ...(dto.peer_count === undefined ? {} : { peerCount: dto.peer_count }),
+    ...(dto.ipv4_network === undefined ? {} : { ipv4Network: dto.ipv4_network }),
+    ...(dto.ipv6_network === undefined ? {} : { ipv6Network: dto.ipv6_network }),
+    ...(dto.service_version === undefined ? {} : { serviceVersion: dto.service_version }),
+  }
+}
+
+/** Convert a non-secret AmneziaWG peer response into the application model.
+ * @param dto - The validated peer response.
+ * @returns The peer identity and assigned tunnel addresses.
+ */
+function mapAmneziaWGPeer(dto: AmneziaWGPeerDto): AmneziaWGPeer {
+  return { name: dto.name, publicKey: dto.public_key, ipv4: dto.ipv4, ipv6: dto.ipv6, createdAt: dto.created_at }
 }
 
 /**
@@ -380,6 +413,14 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
         masquerade_string: input.masqueradeString,
       }))),
       apply: (changeId: string, confirmation: string): Promise<void> => sendVoid('/api/transports/hysteria2/apply', post({ change_id: changeId, confirmation })),
+    },
+    amneziawg: {
+      status: async (): Promise<AmneziaWGStatus> => mapAmneziaWGStatus(await sendDto(send, '/api/transports/amneziawg', AmneziaWGStatusDtoSchema)),
+      listPeers: async (): Promise<AmneziaWGPeer[]> => (await sendDto(send, '/api/transports/amneziawg/peers', AmneziaWGPeersDtoSchema)).peers.map(mapAmneziaWGPeer),
+      createPeer: async (input: CreateAmneziaWGPeerCommand): Promise<AmneziaWGPeer> => mapAmneziaWGPeer(await sendDto(send, '/api/transports/amneziawg/peers', AmneziaWGPeerDtoSchema, post(input))),
+      removePeer: (name: string): Promise<void> => sendVoid(`/api/transports/amneziawg/peers/${encodeURIComponent(name)}`, { method: 'DELETE' }),
+      profileUrl: (name: string): string => `/api/transports/amneziawg/peers/${encodeURIComponent(name)}/profile`,
+      profileQrUrl: (name: string): string => `/api/transports/amneziawg/peers/${encodeURIComponent(name)}/profile/qr`,
     },
     backups: {
       create: async (): Promise<{ name: string }> => {

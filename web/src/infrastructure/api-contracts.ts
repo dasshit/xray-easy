@@ -155,6 +155,40 @@ export const HysteriaCertificateUploadDtoSchema = z.object({
 /** Wire-format type inferred from {@link HysteriaCertificateUploadDtoSchema}. */
 export type HysteriaCertificateUploadDto = z.infer<typeof HysteriaCertificateUploadDtoSchema>
 
+/** Runtime validator for AmneziaWG service availability and listener metadata. */
+export const AmneziaWGStatusDtoSchema = z.object({
+  enabled: z.boolean(),
+  available: z.boolean(),
+  running: z.boolean(),
+  public_key: z.string().optional(),
+  listen_port: z.number().optional(),
+  public_host: z.string().optional(),
+  public_port: z.number().optional(),
+  peer_count: z.number().optional(),
+  ipv4_network: z.string().optional(),
+  ipv6_network: z.string().optional(),
+  service_version: z.string().optional(),
+  error: z.string().optional(),
+})
+/** Wire-format type inferred from {@link AmneziaWGStatusDtoSchema}. */
+export type AmneziaWGStatusDto = z.infer<typeof AmneziaWGStatusDtoSchema>
+
+/** Runtime validator for a non-secret AmneziaWG peer summary. */
+export const AmneziaWGPeerDtoSchema = z.object({
+  name: z.string(),
+  public_key: z.string(),
+  ipv4: z.string(),
+  ipv6: z.string(),
+  created_at: z.string(),
+})
+/** Wire-format type inferred from {@link AmneziaWGPeerDtoSchema}. */
+export type AmneziaWGPeerDto = z.infer<typeof AmneziaWGPeerDtoSchema>
+
+/** Runtime validator for the AmneziaWG peer-list response. */
+export const AmneziaWGPeersDtoSchema = z.object({ peers: AmneziaWGPeerDtoSchema.array() })
+/** Wire-format type inferred from {@link AmneziaWGPeersDtoSchema}. */
+export type AmneziaWGPeersDto = z.infer<typeof AmneziaWGPeersDtoSchema>
+
 /** Runtime validator for the active server connection settings. */
 export const SettingsDtoSchema = z.object({
   public_host: z.string(),

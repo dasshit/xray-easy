@@ -44,6 +44,9 @@ type configuration struct {
 	hysteriaServerName string
 	hysteriaCertSource string
 	hysteriaKeySource  string
+	awgEnabled         bool
+	awgPublicHost      string
+	awgPublicPort      int
 }
 
 type commandRunner interface {
@@ -103,6 +106,9 @@ func composeEnvironment() []string {
 		"XRAY_HYSTERIA2_TLS_MODE":        true,
 		"XRAY_HYSTERIA2_CERT_IP":         true,
 		"XRAY_HYSTERIA2_TLS_SERVER_NAME": true,
+		"COMPOSE_PROFILES":               true,
+		"AWG_PUBLIC_HOST":                true,
+		"AWG_PUBLIC_PORT":                true,
 	}
 	var env []string
 	for _, entry := range os.Environ() {
@@ -193,7 +199,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		}
 		ui.message("Existing .env and supervisor token found; they will be reused.")
 	} else {
-		cfg = configuration{project: defaultProject, version: defaultVersion, tokenPath: newTokenPath, hysteriaMode: "custom"}
+		cfg = configuration{project: defaultProject, version: defaultVersion, tokenPath: newTokenPath, hysteriaMode: "custom", awgPublicPort: defaultAWGPort}
 		cfg.public, cfg.ui, err = ui.ports(ctx, 443, 8080)
 		if err != nil {
 			if errors.Is(err, errCancelled) {
@@ -205,6 +211,13 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	}
 	previous := cfg
 	cfg, err = ui.hysteria(ctx, root, cfg)
+	if err != nil {
+		if errors.Is(err, errCancelled) {
+			return installResult{}, nil
+		}
+		return installResult{}, err
+	}
+	cfg, err = ui.amneziaWG(ctx, cfg)
 	if err != nil {
 		if errors.Is(err, errCancelled) {
 			return installResult{}, nil
@@ -229,6 +242,9 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	if err := validateHysteriaConfiguration(cfg); err != nil {
 		return installResult{}, err
 	}
+	if err := validateAWGConfiguration(cfg); err != nil {
+		return installResult{}, err
+	}
 	certificateChanged := false
 	if cfg.hysteriaEnabled && cfg.hysteriaMode == "custom" {
 		certificateChanged, err = importHysteriaCertificate(root, cfg)
@@ -247,20 +263,38 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		}
 		ui.message("Updated Hysteria 2 settings in .env; existing keys were preserved")
 	}
+	if existing && previous.awgEnabled && !cfg.awgEnabled {
+		if err := runner.run(ctx, root, false, "compose", "--profile", "awg", "-f", "compose.yaml", "stop", "awg"); err != nil {
+			return installResult{}, fmt.Errorf("stop AmneziaWG before disabling it: %w", err)
+		}
+	}
+	if err := updateAWGConfiguration(root, cfg); err != nil {
+		return installResult{}, fmt.Errorf("save AmneziaWG Compose settings: %w", err)
+	}
+	if existing && awgConfigurationChanged(previous, cfg) && cfg.awgEnabled {
+		ui.message("AmneziaWG settings changed. After startup, open each existing device profile in the Web UI and import the refreshed profile; exported copies keep their old endpoint and preset.")
+	}
 
 	ui.step(4, "Building and starting containers")
 	if err := runner.run(ctx, root, false, "compose", "-f", "compose.yaml", "config", "--quiet"); err != nil {
 		return installResult{}, fmt.Errorf("Compose configuration is invalid: %w", err)
 	}
 	upArgs := []string{"compose", "-f", "compose.yaml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"}
-	if existing && (hysteriaConfigurationChanged(previous, cfg) || certificateChanged || cfg.hysteriaEnabled && cfg.hysteriaMode == "self-signed") {
-		upArgs = append(upArgs, "--force-recreate")
-	}
 	if err := runner.run(ctx, root, true, upArgs...); err != nil {
 		ui.step(4, "Collecting startup diagnostics")
 		ui.message("Compose did not become healthy. Collecting service state and recent logs; containers and configuration are preserved.")
 		collectStartupDiagnostics(ctx, root, runner, ui)
 		return installResult{}, fmt.Errorf("Compose could not start; containers and configuration were kept for troubleshooting: %w%s\n\n%s", err, ui.logTail(12), startupRecoveryCommands)
+	}
+	if existing && (certificateChanged || cfg.hysteriaEnabled && cfg.hysteriaMode == "self-signed") {
+		ui.step(4, "Reloading Xray TLS certificate")
+		reloadArgs := []string{"compose", "-f", "compose.yaml", "up", "-d", "--wait", "--wait-timeout", "180", "--no-deps", "--force-recreate", "xray"}
+		if err := runner.run(ctx, root, true, reloadArgs...); err != nil {
+			ui.step(4, "Collecting startup diagnostics")
+			ui.message("Xray did not become healthy after the TLS certificate reload. Collecting service state and recent logs; containers and configuration are preserved.")
+			collectStartupDiagnostics(ctx, root, runner, ui)
+			return installResult{}, fmt.Errorf("Xray could not reload the Hysteria 2 TLS certificate; containers and configuration were kept for troubleshooting: %w%s\n\n%s", err, ui.logTail(12), startupRecoveryCommands)
+		}
 	}
 	ui.step(4, "Verifying the installation")
 	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "exec", "-T", "xray-easy", "xray-easy", "doctor"); err != nil {
@@ -292,6 +326,9 @@ func printNextSteps(output io.Writer, cfg configuration) {
 	fmt.Fprintf(output, "Xray-easy is running.\n\nOn your computer:\n  ssh -N -L %d:127.0.0.1:%d user@your-vds\n\nOpen http://127.0.0.1:%d to create the admin and first device.\nAllow inbound TCP %d (VLESS) and TCP %d (VMess, if used) through the VDS firewall.\n", cfg.ui, cfg.ui, cfg.ui, cfg.public, cfg.vmess)
 	if cfg.hysteriaEnabled {
 		fmt.Fprintf(output, "Allow inbound UDP %d through the VDS firewall for Hysteria 2.\n", cfg.public)
+	}
+	if cfg.awgEnabled {
+		fmt.Fprintf(output, "Allow inbound UDP %d through the VDS firewall for AmneziaWG.\n", cfg.awgPublicPort)
 	}
 }
 
@@ -479,11 +516,32 @@ func loadConfiguration(root string) (configuration, error) {
 		hysteriaMode:       valueOr(values["XRAY_HYSTERIA2_TLS_MODE"], "legacy"),
 		hysteriaCertIP:     values["XRAY_HYSTERIA2_CERT_IP"],
 		hysteriaServerName: values["XRAY_HYSTERIA2_TLS_SERVER_NAME"],
+		awgEnabled:         composeProfileEnabled(values["COMPOSE_PROFILES"], "awg") || composeProfileEnabled(values["COMPOSE_PROFILES"], "awg-prototype") || strings.TrimSpace(values["AWG_PUBLIC_HOST"]) != "",
+		awgPublicHost:      strings.TrimSpace(values["AWG_PUBLIC_HOST"]),
+		awgPublicPort:      defaultAWGPort,
+	}
+	if value := strings.TrimSpace(values["AWG_PUBLIC_PORT"]); value != "" {
+		cfg.awgPublicPort, err = parsePort(value)
+		if err != nil {
+			return configuration{}, fmt.Errorf("AWG_PUBLIC_PORT: %w", err)
+		}
 	}
 	if err := validateHysteriaConfiguration(cfg); err != nil {
 		return configuration{}, err
 	}
+	if err := validateAWGConfiguration(cfg); err != nil {
+		return configuration{}, err
+	}
 	return cfg, nil
+}
+
+func composeProfileEnabled(value, profile string) bool {
+	for _, current := range strings.Split(value, ",") {
+		if strings.TrimSpace(current) == profile {
+			return true
+		}
+	}
+	return false
 }
 
 func readEnvironmentFile(path string) (map[string]string, error) {

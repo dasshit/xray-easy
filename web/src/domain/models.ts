@@ -36,6 +36,30 @@ export type ClientProtocolAccess = { enabled: boolean; revoked: boolean }
 /** Log verbosity supported by Xray's server log configuration. */
 export type XrayLogLevel = 'debug' | 'info' | 'warning' | 'error' | 'none'
 
+/** Availability and active listener details for the optional AmneziaWG service. */
+export type AmneziaWGStatus = {
+  enabled: boolean
+  available: boolean
+  running: boolean
+  publicKey?: string
+  publicHost?: string
+  publicPort?: number
+  listenPort?: number
+  peerCount?: number
+  ipv4Network?: string
+  ipv6Network?: string
+  serviceVersion?: string
+}
+
+/** Non-secret identity and tunnel addresses for an AmneziaWG device. */
+export type AmneziaWGPeer = {
+  name: string
+  publicKey: string
+  ipv4: string
+  ipv6: string
+  createdAt: string
+}
+
 /** Active public endpoint and VLESS + REALITY connection preset. */
 export type Settings = {
   publicHost: string

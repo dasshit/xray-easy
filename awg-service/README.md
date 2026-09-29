@@ -1,10 +1,11 @@
-# AmneziaWG service prototype
+# AmneziaWG service
 
-This Go module is an isolated prototype for managing AmneziaWG as an optional
-service alongside Xray-easy. It embeds the pinned
+This Go module provides the optional AmneziaWG service alongside Xray-easy. It embeds the pinned
 [`amneziawg-go`](https://github.com/amnezia-vpn/amneziawg-go) engine in a
-userspace TUN device and exposes a small authenticated gRPC API. The production
-Xray-easy backend, Web UI, installer, backup flow and doctor do not manage it.
+userspace TUN device and exposes an authenticated gRPC API. The installer
+enables its Compose profile, the authenticated Web UI manages peers and client
+profiles, `doctor` checks runtime state, and backup/restore includes the
+service's persistent state and private client profiles.
 
 ## Runtime model
 
@@ -26,7 +27,9 @@ Xray-easy backend, Web UI, installer, backup flow and doctor do not manage it.
   the tunnel.
 - Peer changes use the engine UAPI directly and do not restart the container.
   The service writes the peer to persistent state after applying it live and
-  rolls the live change back if persistence fails.
+  rolls the live change back if persistence fails. Restoring a backup validates
+  the server key, peer state and matching private client profiles before it
+  replaces live state; a failed apply restores the old peers and profiles.
 
 ## Persistent data and secrets
 
@@ -42,11 +45,10 @@ files are mode `0600`; treat them as credentials. Peer removal revokes the key
 from the live engine, persists that state, and deletes the corresponding saved
 profile. Copies already exported from the container are not deleted.
 
-The gRPC bearer token is created once at `/data/control.token`, mode `0640`;
-the control network and data volume are private to the Compose deployment. The
-prototype uses plaintext gRPC protected by the token, so do not publish the
-port or attach untrusted containers to the control network. Production
-integration should define its final transport and identity policy explicitly.
+The gRPC bearer token is provisioned once into a dedicated Compose volume with
+mode `0440`; the control network and data volume are private to the deployment.
+The service uses plaintext gRPC protected by the token, so do not publish the
+port or attach untrusted containers to the control network.
 
 ## Commands
 
@@ -63,6 +65,12 @@ docker compose --profile awg-prototype exec -T awg awg-service profile --name ip
 docker compose --profile awg-prototype exec -T awg awg-service peer-remove --name iphone
 ```
 
+In a regular deployment with AmneziaWG enabled by `./install.sh`, the
+control-plane UI is the normal peer management interface. These container CLI
+commands remain available for diagnostics and advanced maintenance. Use the
+configured Compose profile (`awg` for current deployments, `awg-prototype` for
+an older prototype environment).
+
 `peer-add` and `profile` print JSON containing the profile path, not the
 private key. Copy the profile out with `docker compose cp`. `keygen` prints a
 keypair to stdout for advanced/manual use; avoid shell tracing or logging its
@@ -70,7 +78,7 @@ output.
 
 ## gRPC contract
 
-The prototype contract is in [`api/v1/control.proto`](api/v1/control.proto).
+The contract is in [`api/v1/control.proto`](api/v1/control.proto).
 For now every request and response uses `google.protobuf.Struct` to keep the
 surface easy to call from the existing Go control plane while validating the
 lifecycle. The API is registered as
@@ -83,11 +91,16 @@ lifecycle. The API is registered as
 | `ListPeers` | none | `peers[]` with name, client public key, IPv4/IPv6 and creation time |
 | `AddPeer` | `name`, `publicKey` | Created peer metadata; activates it immediately |
 | `RemovePeer` | `name` | `{ "removed": true, "name": ... }` |
+| `CreatePeer` | `name` | Creates a keypair, activates the peer and saves its private profile |
+| `GetClientConfig` | `name` | `{ "config": "..." }`; returns the active peer's saved profile |
+| `ExportBackup` | none | `{ "data": "<base64 gzip tar>" }`; includes `state.json` and saved client profiles |
+| `RestoreBackup` | `data` | `{ "restored": true }`; validates and applies a complete snapshot without restarting the container |
 | `RenderClientConfig` | `name`, `privateKey` | `{ "config": "..." }`; verifies that the private key matches the registered peer |
 
 Names contain 1–32 ASCII letters, digits or hyphens. Keys use standard
 base64-encoded 32-byte Curve25519 values. The control API never stores a client
-private key in the state file.
+private key in the state file. Backup archives include the client profiles, so
+they contain private keys and must be protected as plaintext credentials.
 
 ## Obfuscation settings
 
@@ -109,5 +122,4 @@ configuration validation and a local image build run off-VDS. A VDS smoke test
 succeeded with the official AmneziaWG iOS client: after creating and importing
 a peer profile, the container was restarted, the peer and its addresses
 persisted, and the client reconnected with working traffic. Long-term
-stability, macOS clients, and IPv6 egress still need separate validation before
-product integration.
+stability, macOS clients, and IPv6 egress still need separate validation.

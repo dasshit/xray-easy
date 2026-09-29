@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"xray-easy/internal/awgcontrol"
 	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/secret"
@@ -63,6 +64,11 @@ type doctorStats interface {
 	Poll(context.Context) ([]xrayapi.UserStats, error)
 }
 
+type doctorAWG interface {
+	Status(context.Context) (domain.AmneziaWGStatus, error)
+	ListPeers(context.Context) ([]domain.AmneziaWGPeer, error)
+}
+
 // runDoctorCLI dispatches state-preserving checks or explicitly requested
 // support-bundle generation for the control plane and its Xray dependencies.
 // It returns an error when any check fails so scripts can detect an unhealthy
@@ -79,17 +85,32 @@ func runDoctorCLI(ctx context.Context, args []string, dataDir, configDir string,
 		BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
 		TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
 	}
-	if len(args) == 1 {
-		return runDoctorBundle(ctx, dataDir, configDir, out, sup, handler, stats)
+	var awg doctorAWG
+	var awgErr error
+	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
+		awg, awgErr = awgcontrol.Dial(
+			envOr("AWG_CONTROL_ADDR", "172.31.241.4:10087"),
+			envOr("AWG_CONTROL_TOKEN_FILE", "/run/awg-auth/control.token"),
+		)
+		if client, ok := awg.(*awgcontrol.Client); ok {
+			defer client.Close()
+		}
 	}
-	return runDoctor(ctx, dataDir, configDir, out, sup, handler, stats)
+	if len(args) == 1 {
+		return runDoctorBundleWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, awg, awgErr)
+	}
+	return runDoctorWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, awg, awgErr)
 }
 
 func runDoctor(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorSupervisor, handler doctorHandler, stats doctorStats) error {
+	return runDoctorWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, nil, nil)
+}
+
+func runDoctorWithAWG(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorSupervisor, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	checks := collectDoctorChecks(ctx, dataDir, configDir, sup, handler, stats)
+	checks := collectDoctorChecksWithAWG(ctx, dataDir, configDir, sup, handler, stats, awg, awgErr)
 	failures, warnings := 0, 0
 	writeDoctorHeader(out)
 	if status, err := sup.Status(ctx); err == nil {
@@ -128,6 +149,9 @@ func writeDoctorHeader(out io.Writer) {
 	fmt.Fprintf(out, "  Xray public TCP: %s -> container TCP 8443\n", safeDoctorPort("XRAY_PUBLIC_PORT", "443"))
 	fmt.Fprintf(out, "  VMess TCP: %s -> container TCP 8444\n", safeDoctorPort("XRAY_VMESS_PORT", "9443"))
 	fmt.Fprintf(out, "  Web UI loopback: %s -> container TCP 8080\n", safeDoctorPort("XRAY_EASY_UI_PORT", "8080"))
+	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
+		fmt.Fprintf(out, "  AmneziaWG public UDP: %s -> container UDP 51820\n", safeDoctorPort("AWG_PUBLIC_PORT", "51820"))
+	}
 }
 
 func safeRuntimeXrayVersion(value string) string {
@@ -155,9 +179,21 @@ func safeDoctorPort(name, fallback string) string {
 	return strconv.Itoa(port)
 }
 
+func doctorConfiguredPort(name, fallback string) (int, error) {
+	port, err := strconv.Atoi(envOr(name, fallback))
+	if err != nil || port < 1 || port > 65535 {
+		return 0, fmt.Errorf("%s must be between 1 and 65535", name)
+	}
+	return port, nil
+}
+
 func runDoctorBundle(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorBundleSupervisor, handler doctorHandler, stats doctorStats) error {
+	return runDoctorBundleWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, nil, nil)
+}
+
+func runDoctorBundleWithAWG(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorBundleSupervisor, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) error {
 	var report bytes.Buffer
-	doctorErr := runDoctor(ctx, dataDir, configDir, &report, sup, handler, stats)
+	doctorErr := runDoctorWithAWG(ctx, dataDir, configDir, &report, sup, handler, stats, awg, awgErr)
 	if _, err := io.Copy(out, &report); err != nil {
 		return fmt.Errorf("write doctor report: %w", err)
 	}
@@ -234,6 +270,10 @@ func runDoctorBundle(ctx context.Context, dataDir, configDir string, out io.Writ
 }
 
 func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doctorSupervisor, handler doctorHandler, stats doctorStats) []doctorCheck {
+	return collectDoctorChecksWithAWG(ctx, dataDir, configDir, sup, handler, stats, nil, nil)
+}
+
+func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, sup doctorSupervisor, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) []doctorCheck {
 	checks := make([]doctorCheck, 0, 12)
 	appendCheck := func(level doctorLevel, name, detail, hint string) {
 		checks = append(checks, doctorCheck{level: level, name: name, detail: detail, hint: hint})
@@ -430,6 +470,32 @@ func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doc
 			hint += " The supplied certificate must be trusted and cover the Hysteria 2 TLS server name."
 		}
 		appendCheck(doctorWarn, "Hysteria 2 UDP firewall", "public UDP reachability cannot be checked from inside the Compose network", hint)
+	}
+	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
+		if _, hostErr := domain.NormalizePublicHost(os.Getenv("AWG_PUBLIC_HOST")); hostErr != nil {
+			appendCheck(doctorFail, "AmneziaWG public endpoint", "AWG_PUBLIC_HOST is invalid", "Set AWG_PUBLIC_HOST to the public IP address or DNS name in .env, then rerun the installer.")
+		} else if _, portErr := doctorConfiguredPort("AWG_PUBLIC_PORT", "51820"); portErr != nil {
+			appendCheck(doctorFail, "AmneziaWG public endpoint", "AWG_PUBLIC_PORT is invalid", "Set AWG_PUBLIC_PORT to a UDP port from 1 to 65535 in .env, then rerun the installer.")
+		} else if awgErr != nil {
+			appendCheck(doctorFail, "AmneziaWG control API", "configured service cannot be reached", "Check the awg container, AWG control token volume, and its private control address.")
+		} else if awg == nil {
+			appendCheck(doctorFail, "AmneziaWG control API", "client is not configured", "Check AWG_CONTROL_ADDR and AWG_CONTROL_TOKEN_FILE in the Compose service environment.")
+		} else {
+			status, statusErr := awg.Status(ctx)
+			if statusErr != nil {
+				appendCheck(doctorFail, "AmneziaWG service", "authenticated status request failed", "Check awg container health, its gRPC listener, and the shared control token.")
+			} else if !status.Running {
+				appendCheck(doctorFail, "AmneziaWG service", "AmneziaWG interface is not running", "Inspect awg container logs and verify /dev/net/tun and NET_ADMIN permissions.")
+			} else {
+				peers, peersErr := awg.ListPeers(ctx)
+				if peersErr != nil {
+					appendCheck(doctorFail, "AmneziaWG peers", "peer state could not be read", "Inspect awg service logs and its persistent awg_data volume.")
+				} else {
+					appendCheck(doctorPass, "AmneziaWG service", fmt.Sprintf("interface is running; %d peer(s) are configured", len(peers)), "")
+				}
+			}
+		}
+		appendCheck(doctorWarn, "AmneziaWG UDP firewall", "public UDP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6 in the VDS firewall/security group, then verify an AmneziaWG client connection.", safeDoctorPort("AWG_PUBLIC_PORT", "51820")))
 	}
 
 	return checks

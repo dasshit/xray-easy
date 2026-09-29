@@ -120,6 +120,9 @@ export type CreateClientCommand = {
   auth?: string
 }
 
+/** Name submitted when creating an AmneziaWG peer. */
+export type CreateAmneziaWGPeerCommand = { name: string }
+
 /** Authenticated VLESS delivery with a URI, QR endpoint, and client JSON configuration. */
 export type VLESSProfileDelivery = {
   clientId: string

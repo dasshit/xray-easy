@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -106,6 +107,102 @@ func TestRenderConfigRequiresRegisteredMatchingPrivateKey(t *testing.T) {
 	_, err = service.RenderClientConfig(context.Background(), badRequest)
 	if status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("invalid profile key error = %v", err)
+	}
+}
+
+func TestCreatePeerPersistsProfileAndRemoveDeletesIt(t *testing.T) {
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	service := NewService(manager, opts)
+	request, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	created, err := service.CreatePeer(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.GetFields()["name"].GetStringValue() != "iphone" {
+		t.Fatalf("created peer = %v", created.AsMap())
+	}
+	profilePath := filepath.Join(opts.DataDir, "profiles", "iphone.conf")
+	info, err := os.Stat(profilePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0600 {
+		t.Fatalf("saved client profile mode = %04o, want 0600", got)
+	}
+	loaded, err := service.GetClientConfig(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := loaded.GetFields()["config"].GetStringValue()
+	if !strings.Contains(config, "[Interface]") || !strings.Contains(config, "PrivateKey = ") || !strings.Contains(config, "[Peer]") {
+		t.Fatalf("saved profile is incomplete: %q", config)
+	}
+	if err := os.Remove(profilePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.GetClientConfig(context.Background(), request); status.Code(err) != codes.Internal {
+		t.Fatalf("missing saved profile error = %v", err)
+	}
+	if err := writeClientProfile(opts.DataDir, "iphone", config); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RemovePeer(context.Background(), request); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(profilePath); !os.IsNotExist(err) {
+		t.Fatalf("profile still exists after peer removal: stat error = %v", err)
+	}
+}
+
+func TestAWGBackupRestoresPeersAndPrivateProfiles(t *testing.T) {
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	service := NewService(manager, opts)
+	firstRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	if _, err := service.CreatePeer(context.Background(), firstRequest); err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := service.ExportBackup(context.Background(), &structpb.Struct{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive := snapshot.GetFields()["data"].GetStringValue()
+	secondRequest, _ := structpb.NewStruct(map[string]any{"name": "tablet"})
+	if _, err := service.CreatePeer(context.Background(), secondRequest); err != nil {
+		t.Fatal(err)
+	}
+	if len(manager.Peers()) != 2 {
+		t.Fatalf("created test peers = %v", manager.Peers())
+	}
+	if _, err := service.RestoreBackup(context.Background(), snapshot); err != nil {
+		t.Fatal(err)
+	}
+	peers := manager.Peers()
+	if len(peers) != 1 || peers[0].Name != "iphone" {
+		t.Fatalf("restored peers = %+v", peers)
+	}
+	if _, err := os.Stat(filepath.Join(opts.DataDir, "profiles", "tablet.conf")); !os.IsNotExist(err) {
+		t.Fatalf("removed peer profile survived restore: %v", err)
+	}
+	loaded, err := service.GetClientConfig(context.Background(), firstRequest)
+	if err != nil || !strings.Contains(loaded.GetFields()["config"].GetStringValue(), "PrivateKey = ") {
+		t.Fatalf("restored client credential could not be delivered: response=%v error=%v", loaded, err)
+	}
+	invalid, _ := structpb.NewStruct(map[string]any{"data": archive + "not-base64"})
+	if _, err := service.RestoreBackup(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("invalid backup error = %v", err)
+	}
+	if len(manager.Peers()) != 1 {
+		t.Fatalf("invalid backup changed peers: %+v", manager.Peers())
 	}
 }
 

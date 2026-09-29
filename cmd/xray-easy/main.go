@@ -24,6 +24,7 @@ import (
 
 	"github.com/skip2/go-qrcode"
 	"xray-easy/internal/auth"
+	"xray-easy/internal/awgcontrol"
 	"xray-easy/internal/backup"
 	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/domain"
@@ -52,6 +53,7 @@ type server struct {
 	defaultAPIListen string
 	supervisor       supervisorAPI
 	stats            *stats.Manager
+	awg              awgcontrol.Gateway
 	handler          xrayHandlerAPI
 	applyMu          sync.Mutex
 	settingsMu       sync.Mutex
@@ -306,6 +308,21 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 	defer statsClient.Close()
 	handlerClient := xrayapi.NewHandlerClient(apiListen)
 	defer handlerClient.Close()
+	var awgClient *awgcontrol.Client
+	awgAddress := strings.TrimSpace(os.Getenv("AWG_CONTROL_ADDR"))
+	awgTokenPath := envOr("AWG_CONTROL_TOKEN_FILE", "/run/awg-auth/control.token")
+	if awgAddress != "" && strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
+		if _, statErr := os.Stat(awgTokenPath); statErr == nil {
+			awgClient, err = awgcontrol.Dial(awgAddress, awgTokenPath)
+			if err != nil {
+				_ = db.Close()
+				return nil, nil, fmt.Errorf("initialize AmneziaWG control client: %w", err)
+			}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			_ = db.Close()
+			return nil, nil, fmt.Errorf("inspect AmneziaWG control token: %w", statErr)
+		}
+	}
 	s := &server{
 		store:            db,
 		masterKey:        masterKey,
@@ -320,6 +337,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
 		},
 		handler:          handlerClient,
+		awg:              awgClient,
 		pendingSettings:  make(map[string]pendingSettingsChange),
 		pendingHysteria:  make(map[string]pendingHysteriaChange),
 		eventSubs:        make(map[chan struct{}]struct{}),
@@ -330,6 +348,9 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 	cleanup := func() {
 		_ = statsClient.Close()
 		_ = handlerClient.Close()
+		if awgClient != nil {
+			_ = awgClient.Close()
+		}
 		_ = db.Close()
 	}
 	return s, cleanup, nil
@@ -362,12 +383,23 @@ func newMux(s *server) *http.ServeMux {
 	mux.HandleFunc("/api/transports/hysteria2/certificate/mkcert", s.hysteriaCertificateGenerate)
 	mux.HandleFunc("/api/transports/hysteria2/preview", s.hysteriaSettingsPreview)
 	mux.HandleFunc("/api/transports/hysteria2/apply", s.hysteriaSettingsApply)
+	mux.HandleFunc("/api/transports/amneziawg", s.amneziaWGStatus)
+	mux.HandleFunc("/api/transports/amneziawg/peers", s.amneziaWGPeers)
+	mux.HandleFunc("/api/transports/amneziawg/peers/", s.amneziaWGPeerRoute)
 	mux.HandleFunc("/api/backups", s.backups)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/clients", s.clients)
 	mux.HandleFunc("/api/clients/", s.clientRoute)
 	mux.Handle("/", ui.Handler())
 	return mux
+}
+
+func (s *server) backupManager() *backup.Manager {
+	manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
+	if awgBackup, ok := s.awg.(backup.AWGBackup); ok {
+		manager.AWG = awgBackup
+	}
+	return manager
 }
 
 func loadMasterKey() ([]byte, error) {
@@ -539,7 +571,15 @@ func runBackupCLI(ctx context.Context, dataDir, configDir string, args []string)
 		}
 		return nil
 	}
-	item, err := manager.Create("manual")
+	awgClient, err := dialConfiguredAWGBackup()
+	if err != nil {
+		return err
+	}
+	if awgClient != nil {
+		defer awgClient.Close()
+		manager.AWG = awgClient
+	}
+	item, err := manager.CreateContext(ctx, "manual")
 	if err != nil {
 		return err
 	}
@@ -548,10 +588,21 @@ func runBackupCLI(ctx context.Context, dataDir, configDir string, args []string)
 }
 
 func runRestoreCLI(ctx context.Context, dataDir, configDir string, args []string) error {
-	return runRestoreCLIWithApplier(ctx, dataDir, configDir, args, applyRestoredState)
+	awgClient, err := dialConfiguredAWGBackup()
+	if err != nil {
+		return err
+	}
+	if awgClient != nil {
+		defer awgClient.Close()
+	}
+	return runRestoreCLIWithApplierAndAWG(ctx, dataDir, configDir, args, applyRestoredState, awgClient)
 }
 
 func runRestoreCLIWithApplier(ctx context.Context, dataDir, configDir string, args []string, applyState func(context.Context, *store.Store, []byte, string, int) error) error {
+	return runRestoreCLIWithApplierAndAWG(ctx, dataDir, configDir, args, applyState, nil)
+}
+
+func runRestoreCLIWithApplierAndAWG(ctx context.Context, dataDir, configDir string, args []string, applyState func(context.Context, *store.Store, []byte, string, int) error, awgBackup backup.AWGBackup) error {
 	if len(args) != 2 || args[1] != "RESTORE" {
 		return errors.New("usage: xray-easy restore <backup-name> RESTORE")
 	}
@@ -570,6 +621,7 @@ func runRestoreCLIWithApplier(ctx context.Context, dataDir, configDir string, ar
 	}
 	defer lock.Close()
 	manager := backup.NewManager(db, dataDir, configDir, masterKey)
+	manager.AWG = awgBackup
 	target, err := manager.Verify(args[0])
 	if err != nil {
 		return err
@@ -577,11 +629,11 @@ func runRestoreCLIWithApplier(ctx context.Context, dataDir, configDir string, ar
 	if err := verifyBackupMasterKey(target, masterKey); err != nil {
 		return err
 	}
-	preRestore, err := manager.CreatePreserving("pre-restore", target.Name)
+	preRestore, err := manager.CreatePreservingContext(ctx, "pre-restore", target.Name)
 	if err != nil {
 		return fmt.Errorf("create pre-restore backup: %w", err)
 	}
-	if err := manager.RestoreState(target); err != nil {
+	if err := manager.RestoreStateContext(ctx, target); err != nil {
 		return fmt.Errorf("restore state: %w", err)
 	}
 	publicPort, err := configuredPublicPort()
@@ -589,14 +641,37 @@ func runRestoreCLIWithApplier(ctx context.Context, dataDir, configDir string, ar
 		return err
 	}
 	if err := applyState(ctx, db, masterKey, configDir, publicPort); err != nil {
-		_ = manager.RestoreState(preRestore)
-		_ = applyState(ctx, db, masterKey, configDir, publicPort)
+		rollbackCtx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		var rollbackErrors []string
+		if rollbackErr := manager.RestoreStateContext(rollbackCtx, preRestore); rollbackErr != nil {
+			rollbackErrors = append(rollbackErrors, "restore pre-restore snapshot: "+rollbackErr.Error())
+		} else if applyErr := applyState(rollbackCtx, db, masterKey, configDir, publicPort); applyErr != nil {
+			rollbackErrors = append(rollbackErrors, "apply pre-restore snapshot: "+applyErr.Error())
+		}
+		if len(rollbackErrors) > 0 {
+			return fmt.Errorf("apply restored state: %w; rollback from %s failed: %s", err, preRestore.Name, strings.Join(rollbackErrors, "; "))
+		}
 		return fmt.Errorf("apply restored state: %w (state rolled back from %s)", err, preRestore.Name)
 	}
 	admin, _ := db.FirstAdmin(ctx)
 	_ = db.AddAudit(ctx, admin.ID, "backup.restore", "backup", target.Name, "backup restored and applied")
 	fmt.Printf("restored %s\n", target.Name)
 	return nil
+}
+
+func dialConfiguredAWGBackup() (*awgcontrol.Client, error) {
+	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) == "" {
+		return nil, nil
+	}
+	client, err := awgcontrol.Dial(
+		envOr("AWG_CONTROL_ADDR", "172.31.241.4:10087"),
+		envOr("AWG_CONTROL_TOKEN_FILE", "/run/awg-auth/control.token"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("initialize AmneziaWG backup client: %w", err)
+	}
+	return client, nil
 }
 
 func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
@@ -1655,8 +1730,8 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	}
 	backupName := ""
 	if pending.ExpectedConfirmation != "" {
-		manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
-		backupInfo, backupErr := manager.Create("settings-rotation")
+		manager := s.backupManager()
+		backupInfo, backupErr := manager.CreateContext(r.Context(), "settings-rotation")
 		if backupErr != nil {
 			s.recordDiagnostic("error", "automatic settings backup failed: "+backupErr.Error())
 			s.finishSettingsChange(req.ChangeID, false)
@@ -1795,7 +1870,7 @@ func (s *server) backups(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
 		return
 	}
-	manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
+	manager := s.backupManager()
 	switch r.Method {
 	case http.MethodGet:
 		items, err := manager.List()
@@ -1815,7 +1890,7 @@ func (s *server) backups(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer lock.Close()
-		item, err := manager.Create("manual")
+		item, err := manager.CreateContext(r.Context(), "manual")
 		if err != nil {
 			s.recordDiagnostic("error", "manual backup failed: "+err.Error())
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create backup", "detail": err.Error()})

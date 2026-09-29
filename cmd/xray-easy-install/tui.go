@@ -17,6 +17,8 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
+
+	"xray-easy/internal/domain"
 )
 
 var errCancelled = errors.New("installation cancelled")
@@ -473,6 +475,84 @@ func (w *wizard) hysteria(ctx context.Context, root string, cfg configuration) (
 	}
 }
 
+func (w *wizard) amneziaWG(ctx context.Context, cfg configuration) (configuration, error) {
+	w.mu.Lock()
+	w.configPage = "awg-choice"
+	w.focus = 0
+	w.tlsSelection = 0
+	if cfg.awgEnabled {
+		w.tlsSelection = 1
+	}
+	w.hysteriaFields[0] = cfg.awgPublicHost
+	if w.hysteriaFields[0] == "" {
+		w.hysteriaFields[0] = w.hysteriaSuggestedIP
+	}
+	w.title = "AmneziaWG"
+	w.notice = ""
+	w.renderLocked()
+	w.mu.Unlock()
+
+	for {
+		key, err := w.key(ctx)
+		if err != nil {
+			return configuration{}, err
+		}
+		w.mu.Lock()
+		if (w.width < 64 || w.height < 22) && key.kind != keyEscape {
+			w.notice = "Enlarge the terminal before continuing."
+			w.renderLocked()
+			w.mu.Unlock()
+			continue
+		}
+		if key.kind == keyEscape {
+			w.mu.Unlock()
+			return configuration{}, errCancelled
+		}
+		switch w.configPage {
+		case "awg-choice":
+			switch key.kind {
+			case keyUp, keyLeft:
+				w.tlsSelection = 1 - w.tlsSelection
+			case keyDown, keyRight, keyTab:
+				w.tlsSelection = 1 - w.tlsSelection
+			case keyCharacter:
+				if key.char == '1' || key.char == '2' {
+					w.tlsSelection = int(key.char - '1')
+				}
+			case keyEnter:
+				cfg.awgEnabled = w.tlsSelection == 1
+				if !cfg.awgEnabled {
+					w.mu.Unlock()
+					return cfg, nil
+				}
+				w.configPage = "awg-host"
+			}
+		case "awg-host":
+			switch key.kind {
+			case keyBackspace:
+				w.hysteriaFields[0] = strings.TrimSuffix(w.hysteriaFields[0], lastRune(w.hysteriaFields[0]))
+			case keyCharacter:
+				char := key.char
+				if len(w.hysteriaFields[0]) < 253 && ((char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '.' || char == '-' || char == ':') {
+					w.hysteriaFields[0] += string(char)
+				}
+			case keyEnter:
+				publicHost := strings.TrimSpace(w.hysteriaFields[0])
+				normalized, normalizeErr := domain.NormalizePublicHost(publicHost)
+				if normalizeErr != nil {
+					w.notice = "Enter the public IP address or DNS name clients will use."
+					break
+				}
+				cfg.awgPublicHost = normalized
+				w.mu.Unlock()
+				return cfg, nil
+			}
+		}
+		w.renderLocked()
+		w.mu.Unlock()
+	}
+}
+
 func (w *wizard) ports(ctx context.Context, publicDefault, uiDefault int) (int, int, error) {
 	defaults := [2]int{publicDefault, uiDefault}
 	for {
@@ -668,6 +748,9 @@ func (w *wizard) renderLocked() {
 		put(6, "  One Xray node · Web UI stays on 127.0.0.1 · persistent keys", "dim")
 		panelWidth := min(width-4, 94)
 		panelBottom := 17
+		if w.stepNo == 3 {
+			panelBottom = 18
+		}
 		if w.stepNo == 4 {
 			panelBottom = height - 5
 		}
@@ -705,6 +788,17 @@ func (w *wizard) renderLocked() {
 				put(13, panelLine("  Certificate DNS name or IP address (from SAN)", panelWidth), "normal")
 				put(14, panelLine("  "+fieldText(w.hysteriaFields[2], "required", w.focus == 2), panelWidth), fieldStyle(w.focus == 2))
 				put(16, panelLine("  A custom certificate keeps TLS verification enabled.", panelWidth), "dim")
+			case "awg-choice":
+				put(9, panelLine("  Optional AmneziaWG full-tunnel service", panelWidth), "normal")
+				put(11, panelLine("  "+optionText("Off", w.tlsSelection == 0), panelWidth), fieldStyle(w.tlsSelection == 0))
+				put(12, panelLine("  "+optionText("Enable for AmneziaWG clients", w.tlsSelection == 1), panelWidth), fieldStyle(w.tlsSelection == 1))
+				put(14, panelLine("  Requires Linux TUN, forwarding, and public IPv4/IPv6 egress.", panelWidth), "dim")
+				put(15, panelLine("  Public UDP defaults to 51820.", panelWidth), "dim")
+			case "awg-host":
+				put(10, panelLine("  Public IP address or DNS name clients will use", panelWidth), "normal")
+				put(11, panelLine("  "+fieldText(w.hysteriaFields[0], "IPv4, IPv6 or vpn.example.com", true), panelWidth), "selected")
+				put(14, panelLine("  The public UDP port defaults to 51820.", panelWidth), "dim")
+				put(15, panelLine("  Allow UDP 51820 in the VDS firewall/security group.", panelWidth), "dim")
 			default:
 				put(10, panelLine("  Public Xray TCP / UDP port", panelWidth), "normal")
 				put(11, panelLine("  "+fieldText(w.fields[0], "443", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))
@@ -726,8 +820,13 @@ func (w *wizard) renderLocked() {
 				}
 			}
 			put(14, panelLine("  Hysteria 2 TLS:     "+hysteriaDescription, panelWidth), "normal")
-			put(15, panelLine("  "+optionText("Build and start", w.choice), panelWidth), fieldStyle(w.choice))
-			put(16, panelLine("  "+optionText("Cancel", !w.choice), panelWidth), fieldStyle(!w.choice))
+			awgDescription := "off"
+			if w.config.awgEnabled {
+				awgDescription = fmt.Sprintf("%s · UDP %d", w.config.awgPublicHost, w.config.awgPublicPort)
+			}
+			put(15, panelLine("  AmneziaWG:          "+awgDescription, panelWidth), "normal")
+			put(16, panelLine("  "+optionText("Build and start", w.choice), panelWidth), fieldStyle(w.choice))
+			put(17, panelLine("  "+optionText("Cancel", !w.choice), panelWidth), fieldStyle(!w.choice))
 		case 4:
 			put(9, panelLine("  Docker Compose output", panelWidth), "normal")
 			available := max(0, panelBottom-10)

@@ -20,8 +20,12 @@ const serviceName = "xrayeasy.awg.v1.Control"
 type API interface {
 	GetStatus(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ListPeers(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	CreatePeer(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	AddPeer(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	RemovePeer(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	GetClientConfig(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	ExportBackup(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	RestoreBackup(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	RenderClientConfig(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
@@ -33,8 +37,12 @@ func Register(server grpc.ServiceRegistrar, api API) {
 		Methods: []grpc.MethodDesc{
 			method("GetStatus", api.GetStatus),
 			method("ListPeers", api.ListPeers),
+			method("CreatePeer", api.CreatePeer),
 			method("AddPeer", api.AddPeer),
 			method("RemovePeer", api.RemovePeer),
+			method("GetClientConfig", api.GetClientConfig),
+			method("ExportBackup", api.ExportBackup),
+			method("RestoreBackup", api.RestoreBackup),
 			method("RenderClientConfig", api.RenderClientConfig),
 		},
 	}, api)
@@ -107,7 +115,10 @@ func mapError(err error) error {
 	if errors.Is(err, ErrNotFound) {
 		return status.Error(codes.NotFound, err.Error())
 	}
-	if errors.Is(err, ErrAlreadyExists) || errors.Is(err, ErrInvalid) {
+	if errors.Is(err, ErrAlreadyExists) {
+		return status.Error(codes.AlreadyExists, err.Error())
+	}
+	if errors.Is(err, ErrInvalid) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	return status.Error(codes.Internal, "AWG operation failed")

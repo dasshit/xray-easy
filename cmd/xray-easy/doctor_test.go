@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 
+	"xray-easy/internal/domain"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/supervisor"
@@ -33,6 +34,61 @@ type doctorSupervisorStub struct {
 	ipv6Call     int
 	logs         []string
 	logsErr      error
+}
+
+func TestDoctorAmneziaWGChecksOnlyWhenConfigured(t *testing.T) {
+	dataDir, configDir := t.TempDir(), t.TempDir()
+	t.Setenv("AWG_PUBLIC_HOST", "89.169.13.234")
+	t.Setenv("AWG_PUBLIC_PORT", "51821")
+	checks := collectDoctorChecksWithAWG(
+		context.Background(), dataDir, configDir,
+		&doctorSupervisorStub{status: supervisor.Status{State: "stopped"}},
+		&doctorHandlerStub{}, &doctorStatsStub{},
+		&doctorAWGStub{
+			status: domain.AmneziaWGStatus{Running: true},
+			peers:  []domain.AmneziaWGPeer{{Name: "phone"}},
+		}, nil,
+	)
+	if !hasDoctorCheck(checks, "AmneziaWG service", doctorPass) {
+		t.Fatalf("configured healthy AWG was not reported as passing: %+v", checks)
+	}
+	if check := findDoctorCheck(checks, "AmneziaWG UDP firewall"); check == nil || check.level != doctorWarn || !strings.Contains(check.hint, "UDP 51821") {
+		t.Fatalf("configured AWG firewall warning = %+v", check)
+	}
+
+	checks = collectDoctorChecksWithAWG(
+		context.Background(), dataDir, configDir,
+		&doctorSupervisorStub{status: supervisor.Status{State: "stopped"}},
+		&doctorHandlerStub{}, &doctorStatsStub{}, nil, errors.New("token path unavailable"),
+	)
+	if !hasDoctorCheck(checks, "AmneziaWG control API", doctorFail) {
+		t.Fatalf("missing AWG client was not reported as failure: %+v", checks)
+	}
+}
+
+func TestDoctorOmitsAmneziaWGChecksWhenDisabled(t *testing.T) {
+	t.Setenv("AWG_PUBLIC_HOST", "")
+	checks := collectDoctorChecksWithAWG(
+		context.Background(), t.TempDir(), t.TempDir(),
+		&doctorSupervisorStub{}, &doctorHandlerStub{}, &doctorStatsStub{},
+		&doctorAWGStub{status: domain.AmneziaWGStatus{Running: true}}, nil,
+	)
+	if findDoctorCheck(checks, "AmneziaWG service") != nil || findDoctorCheck(checks, "AmneziaWG UDP firewall") != nil {
+		t.Fatalf("disabled AmneziaWG produced checks: %+v", checks)
+	}
+}
+
+func hasDoctorCheck(checks []doctorCheck, name string, level doctorLevel) bool {
+	return findDoctorCheck(checks, name) != nil && findDoctorCheck(checks, name).level == level
+}
+
+func findDoctorCheck(checks []doctorCheck, name string) *doctorCheck {
+	for index := range checks {
+		if checks[index].name == name {
+			return &checks[index]
+		}
+	}
+	return nil
 }
 
 func (s *doctorSupervisorStub) Health(context.Context) error { return s.healthErr }
@@ -74,6 +130,21 @@ func (s *doctorHandlerStub) Users(context.Context) ([]string, error) {
 type doctorStatsStub struct {
 	err   error
 	calls int
+}
+
+type doctorAWGStub struct {
+	status    domain.AmneziaWGStatus
+	peers     []domain.AmneziaWGPeer
+	statusErr error
+	peersErr  error
+}
+
+func (s *doctorAWGStub) Status(context.Context) (domain.AmneziaWGStatus, error) {
+	return s.status, s.statusErr
+}
+
+func (s *doctorAWGStub) ListPeers(context.Context) ([]domain.AmneziaWGPeer, error) {
+	return s.peers, s.peersErr
 }
 
 func (s *doctorStatsStub) Poll(context.Context) ([]xrayapi.UserStats, error) {

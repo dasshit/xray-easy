@@ -13,13 +13,19 @@ import (
 )
 
 type fakeDevice struct {
-	sets   []string
-	ups    int
-	closed bool
+	sets          []string
+	ups           int
+	closed        bool
+	failPeerApply bool
+	failed        bool
 }
 
 func (d *fakeDevice) Set(config string) error {
 	d.sets = append(d.sets, config)
+	if d.failPeerApply && !d.failed && strings.Contains(config, "allowed_ip=") {
+		d.failed = true
+		return errors.New("injected device set failure")
+	}
 	return nil
 }
 func (d *fakeDevice) Up() error                 { d.ups++; return nil }
