@@ -3,6 +3,7 @@ package xray
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"sort"
 	"strconv"
+	"strings"
 
 	"xray-easy/internal/domain"
 )
@@ -57,6 +59,7 @@ type Settings struct {
 	HysteriaTLSMode          string
 	HysteriaTLSCertIP        string
 	HysteriaTLSServerName    string
+	HysteriaTLSFingerprint   string
 	HysteriaHost             string
 	HysteriaTLSCertPath      string
 	HysteriaTLSKeyPath       string
@@ -418,8 +421,11 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 		if err := validateVMessProfileSettings(settings); err != nil {
 			return Profile{}, err
 		}
-		profile.VMessURI = BuildVMessURI(settings, client)
 		var err error
+		profile.VMessURI, err = BuildVMessURI(settings, client)
+		if err != nil {
+			return Profile{}, err
+		}
 		profile.JSON, err = buildVMessClientJSON(settings, client)
 		if err != nil {
 			return Profile{}, err
@@ -441,7 +447,23 @@ func validateVMessProfileSettings(settings Settings) error {
 	if _, err := domain.NormalizePublicHost(vmessServerName(settings)); err != nil {
 		return fmt.Errorf("VMess TLS server name: %w", err)
 	}
+	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
+		if _, err := normalizeTLSFingerprint(settings.HysteriaTLSFingerprint); err != nil {
+			return fmt.Errorf("VMess TLS certificate fingerprint: %w", err)
+		}
+	}
 	return nil
+}
+
+func normalizeTLSFingerprint(value string) (string, error) {
+	value = strings.NewReplacer(":", "", " ", "").Replace(strings.TrimSpace(value))
+	if len(value) != 64 {
+		return "", errors.New("must be a SHA-256 fingerprint")
+	}
+	if _, err := hex.DecodeString(value); err != nil {
+		return "", errors.New("must be a hexadecimal SHA-256 fingerprint")
+	}
+	return strings.ToUpper(value), nil
 }
 
 func vmessServerName(settings Settings) string {
@@ -571,26 +593,34 @@ func BuildHysteriaURI(settings Settings, client Client) string {
 }
 
 // BuildVMessURI creates a standard VMess v2 share link for one device.
-func BuildVMessURI(settings Settings, client Client) string {
+func BuildVMessURI(settings Settings, client Client) (string, error) {
 	serverName := vmessServerName(settings)
 	value := map[string]any{
 		"v": "2", "ps": client.Name, "add": settings.PublicHost,
 		"port": strconv.Itoa(settings.VMessPublicPort), "id": client.UUID,
 		"aid": "0", "scy": "auto", "net": "tcp", "type": "none",
-		"host": "", "path": "", "tls": "tls", "sni": serverName,
+		"host": "", "path": "", "tls": "tls", "sni": serverName, "insecure": "0",
 	}
 	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
-		value["allowInsecure"] = true
+		fingerprint, err := normalizeTLSFingerprint(settings.HysteriaTLSFingerprint)
+		if err != nil {
+			return "", fmt.Errorf("VMess TLS certificate fingerprint: %w", err)
+		}
+		value["pcs"] = fingerprint
 	}
 	data, _ := json.Marshal(value)
-	return "vmess://" + base64.StdEncoding.EncodeToString(data)
+	return "vmess://" + base64.StdEncoding.EncodeToString(data), nil
 }
 
 func buildVMessClientJSON(settings Settings, client Client) ([]byte, error) {
 	serverName := vmessServerName(settings)
 	tls := map[string]any{"serverName": serverName}
 	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
-		tls["allowInsecure"] = true
+		fingerprint, err := normalizeTLSFingerprint(settings.HysteriaTLSFingerprint)
+		if err != nil {
+			return nil, fmt.Errorf("VMess TLS certificate fingerprint: %w", err)
+		}
+		tls["pinnedPeerCertSha256"] = fingerprint
 	}
 	value := map[string]any{
 		"log":      map[string]any{"loglevel": "warning"},

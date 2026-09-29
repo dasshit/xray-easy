@@ -3131,6 +3131,15 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 	}
 	renderSettings := rendererSettingsWithHysteria(settings, "server-secret-not-exported", hysteriaSettings)
 	renderSettings.VMessPublicPort = s.vmessPort
+	if client.HasVMess() && !client.VMessRevoked && (hysteriaSettings.TLSMode == domain.HysteriaTLSSelfSigned || hysteriaSettings.TLSMode == domain.HysteriaTLSLegacy) {
+		serverName := hysteriaSettings.EffectiveTLSServerName(settings.PublicHost)
+		certificate, inspectErr := hysteria.Inspect(s.hysteriaTLSDir(), hysteriaSettings.CertificateID, serverName, hysteriaSettings.CertificateID == "")
+		if inspectErr != nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "could not read the VMess TLS certificate fingerprint", "detail": inspectErr.Error()})
+			return
+		}
+		renderSettings.HysteriaTLSFingerprint = certificate.Fingerprint
+	}
 	profile, err := xray.BuildProfile(renderSettings, xray.ClientFromDomain(client))
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})

@@ -117,12 +117,14 @@ when the first profile for its protocol is applied.
   default), with `alterId: 0`. VMess reuses the certificate configured under
   **Settings → Hysteria 2**, even when the Hysteria 2 transport is disabled.
   Create or upload a certificate there before creating a VMess profile. For an
-  untrusted self-signed certificate, generated client profiles set
-  `allowInsecure`; trusted custom certificates keep verification enabled. This
-  compatibility option requires server/client clocks within about two minutes
-  and is easier to identify by traffic analysis than VLESS + REALITY or
-  Hysteria 2. It is not presented as a DPI-resistance improvement. Allow inbound
-  TCP at `XRAY_VMESS_PORT` in the VPS firewall/security group.
+  self-signed or legacy certificate, the VMess link pins its SHA-256 certificate
+  fingerprint (`pcs`) and the downloadable Xray JSON uses
+  `pinnedPeerCertSha256`; trusted custom certificates use normal CA validation.
+  Re-import the profile after changing the certificate. This compatibility
+  option requires server/client clocks within about two minutes and is easier to
+  identify by traffic analysis than VLESS + REALITY or Hysteria 2. It is not
+  presented as a DPI-resistance improvement. Allow inbound TCP at
+  `XRAY_VMESS_PORT` in the VPS firewall/security group.
 - The REALITY short-ID reserve holds five free values. While IDs remain in the
   reserve, new VLESS users are added through HandlerService without restarting
   Xray. When it is exhausted, Xray's gRPC API replaces only the VLESS inbound;

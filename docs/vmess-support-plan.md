@@ -14,8 +14,10 @@ V2Rage; it is not presented as a DPI-resistance improvement.
   port distinct from the existing VLESS/REALITY listener.
 - Reuse the certificate versions already managed by the control plane. VMess
   profile creation remains unavailable until a usable certificate exists and
-  covers the advertised TLS server name. A self-signed certificate produces a
-  client profile that explicitly allows its untrusted certificate.
+  covers the advertised TLS server name. For self-signed or legacy certificates,
+  generated profiles pin the leaf certificate's SHA-256 fingerprint using the
+  VMess share-link `pcs` field and Xray's `pinnedPeerCertSha256`; trusted custom
+  certificates use normal CA validation.
 - Add and remove VMess users through Xray HandlerService so profile lifecycle
   changes do not restart Xray.
 - Export the standard `vmess://` Base64 JSON share link, a QR code, and a client
