@@ -35,9 +35,10 @@ describe('HysteriaSettingsPanel', () => {
     expect(wrapper.text()).toContain('Ready to enable')
     expect(wrapper.text()).toContain('443/UDP')
     const reviewButton = wrapper.findAll('button').find(button => button.text() === 'Review Hysteria 2 changes')
-    const enableCheckbox = wrapper.get('input[type="checkbox"]')
+    const lastInput = wrapper.findAll('input').at(-1)
     if (!reviewButton) throw new Error('Expected the Hysteria 2 review button')
-    expect(reviewButton.element.compareDocumentPosition(enableCheckbox.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    if (!lastInput) throw new Error('Expected Hysteria 2 settings inputs')
+    expect(lastInput.element.compareDocumentPosition(reviewButton.element) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 
     await wrapper.get('select').setValue('self-signed')
     await wrapper.get('input[inputmode="decimal"]').setValue('89.169.13.234')
