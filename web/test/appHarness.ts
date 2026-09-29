@@ -28,6 +28,7 @@ export const sampleClient: Client = {
 export const settings: SettingsDto = {
   public_host: 'vpn.example.com',
   public_port: 443,
+  vmess_public_port: 9443,
   reality_target: 'www.example.com:443',
   reality_sni: 'www.example.com',
   client_fingerprint: 'chrome',

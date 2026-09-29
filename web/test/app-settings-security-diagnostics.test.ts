@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { VueWrapper } from '@vue/test-utils'
-import { defaultHandler, flushPromises, itemAt, mountApp, openTab, settings, sampleClient, type RequestRecord } from './appHarness'
+import { defaultHandler, flushPromises, itemAt, mountApp, openTab, settings, hysteriaStatus, sampleClient, type RequestRecord } from './appHarness'
 
 const preview = {
   change_id: 'change-123',
@@ -10,11 +10,29 @@ const preview = {
   diff: [{ field: 'public_host', from: 'old.example.com', to: 'new.example.com' }],
   consequences: ['All profiles will be revoked'],
   revoked_clients: 2,
-    settings: { ...settings, public_host: 'new.example.com', log_level: 'debug' },
+    settings: { ...settings, public_host: 'new.example.com', log_level: 'warning' },
 }
 
 describe('connection settings', () => {
-  it('reviews, confirms, applies settings, and reloads the current state', async () => {
+  it('shows the configured VMess port and its shared TLS certificate', async () => {
+    const certificate = {
+      subject: 'CN=vpn.example.com', issuer: 'CN=Example CA', dns_names: ['vpn.example.com'], ip_addresses: [],
+      not_before: '2026-09-01T00:00:00Z', not_after: '2027-09-01T00:00:00Z', fingerprint: 'AABBCC',
+    }
+    const { wrapper } = await mountApp(request => {
+      if (request.url === '/api/transports/hysteria2') return { body: { ...hysteriaStatus, certificate } }
+      return defaultHandler({ authenticated: true, clients: [sampleClient] })(request)
+    })
+    await openTab(wrapper, 'Settings')
+    const vmessCard = wrapper.get('.settings-vmess-card')
+    expect(vmessCard.text()).toContain('9443/TCP')
+    expect(vmessCard.text()).toContain('vpn.example.com')
+    expect(vmessCard.text()).toContain('AABBCC')
+    expect(vmessCard.find('a').attributes('href')).toBe('#hysteria-settings')
+    expect(vmessCard.findAll('input')).toHaveLength(0)
+  })
+
+  it('reviews VLESS changes independently, confirms them, and reloads the current state', async () => {
     const requests: RequestRecord[] = []
     let applied = false
     const { wrapper } = await mountApp(request => {
@@ -25,14 +43,15 @@ describe('connection settings', () => {
       return defaultHandler({ authenticated: true, clients: [sampleClient] })(request)
     })
     await openTab(wrapper, 'Settings')
-    const inputs = wrapper.findAll('.settings-card input')
+    const vlessCard = wrapper.get('.settings-vless-card')
+    const inputs = vlessCard.findAll('input')
     await itemAt(inputs, 0).setValue('new.example.com')
     await itemAt(inputs, 1).setValue('target.example.com:443')
     await itemAt(inputs, 2).setValue('target.example.com')
-    await wrapper.get('.settings-card select').setValue('safari')
-    await wrapper.findAll('.settings-card select')[1]!.setValue('debug')
-    await wrapper.get('.settings-card-danger input[type="checkbox"]').setValue(true)
-    await wrapper.get('.section-panel > .section-actions button').trigger('click')
+    await vlessCard.get('select').setValue('safari')
+    await wrapper.get('.settings-logging-card select').setValue('debug')
+    await vlessCard.get('.settings-danger-inline input[type="checkbox"]').setValue(true)
+    await vlessCard.findAll('button').find(button => button.text() === 'Review VLESS changes')?.trigger('click')
     await flushPromises()
 
     expect(requests.find(request => request.url === '/api/settings' && request.method === 'PATCH')?.body).toEqual({
@@ -40,7 +59,7 @@ describe('connection settings', () => {
       reality_target: 'target.example.com:443',
       reality_sni: 'target.example.com',
       client_fingerprint: 'safari',
-      log_level: 'debug',
+      log_level: 'warning',
       rotate_private_key: true,
     })
     const dialog = wrapper.get('[role="dialog"]')
@@ -56,7 +75,8 @@ describe('connection settings', () => {
 
     expect(requests.find(request => request.url === '/api/settings/apply')?.body).toEqual({ change_id: 'change-123', confirmation: 'REVOKE' })
     expect(wrapper.findAll('[role="dialog"]')).toHaveLength(0)
-    expect((itemAt(wrapper.findAll('.settings-card input'), 0).element as HTMLInputElement).value).toBe('new.example.com')
+    expect((itemAt(vlessCard.findAll('input'), 0).element as HTMLInputElement).value).toBe('new.example.com')
+    expect((wrapper.get('.settings-logging-card select').element as HTMLSelectElement).value).toBe('debug')
     expect(wrapper.get('[role="status"]').text()).toContain('Changes saved')
   })
 
@@ -78,9 +98,18 @@ describe('connection settings', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Settings')
-    await wrapper.findAll('.settings-card select')[1]!.setValue('debug')
-    await wrapper.get('.section-panel > .section-actions button').trigger('click')
+    await wrapper.get('.settings-vless-card input').setValue('draft.example.com')
+    await wrapper.get('.settings-logging-card select').setValue('debug')
+    await wrapper.get('.settings-logging-card button').trigger('click')
     await flushPromises()
+    expect(requests.find(request => request.url === '/api/settings' && request.method === 'PATCH')?.body).toEqual({
+      public_host: 'vpn.example.com',
+      reality_target: 'www.example.com:443',
+      reality_sni: 'www.example.com',
+      client_fingerprint: 'chrome',
+      log_level: 'debug',
+      rotate_private_key: false,
+    })
     expect(wrapper.findAll('[role="dialog"] input')).toHaveLength(0)
     expect(wrapper.get('[role="dialog"]').text()).toContain('Log level: warning → debug')
     expect(wrapper.get('[role="dialog"]').text()).toContain('active connections will be briefly interrupted')
@@ -88,6 +117,7 @@ describe('connection settings', () => {
     await wrapper.findAll('[role="dialog"] button').find(button => button.text() === 'Apply settings')!.trigger('click')
     await flushPromises()
     expect(requests.find(request => request.url === '/api/settings/apply')?.body).toEqual({ change_id: 'change-123', confirmation: '' })
+    expect((wrapper.get('.settings-vless-card input').element as HTMLInputElement).value).toBe('draft.example.com')
   })
 
   it('keeps the confirmation review open if apply fails', async () => {
@@ -97,7 +127,8 @@ describe('connection settings', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Settings')
-    await wrapper.get('.section-panel > .section-actions button').trigger('click')
+    await wrapper.get('.settings-vless-card input').setValue('new.example.com')
+    await wrapper.get('.settings-vless-card .section-actions button').trigger('click')
     await flushPromises()
     const dialog = wrapper.get('[role="dialog"]')
     await dialog.get('input').setValue('REVOKE')
@@ -116,7 +147,8 @@ describe('connection settings', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Settings')
-    await wrapper.get('.section-panel > .section-actions button').trigger('click')
+    await wrapper.get('.settings-vless-card input').setValue('new.example.com')
+    await wrapper.get('.settings-vless-card .section-actions button').trigger('click')
     await flushPromises()
     await wrapper.get('[role="dialog"] .modal-actions .secondary').trigger('click')
     expect(wrapper.findAll('[role="dialog"]')).toHaveLength(0)
@@ -129,11 +161,12 @@ describe('connection settings', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Settings')
-    await wrapper.get('.section-panel > .section-actions button').trigger('click')
+    await wrapper.get('.settings-vless-card input').setValue('new.example.com')
+    await wrapper.get('.settings-vless-card .section-actions button').trigger('click')
     await flushPromises()
     expect(wrapper.get('[role="alert"]').text()).toContain('Invalid REALITY target')
     expect(wrapper.findAll('[role="dialog"]')).toHaveLength(0)
-    expect(wrapper.findAll('.settings-card:not(.hysteria-settings-card) input')).toHaveLength(4)
+    expect((wrapper.get('.settings-vless-card input').element as HTMLInputElement).value).toBe('new.example.com')
   })
 })
 

@@ -133,8 +133,19 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .device-id { color: var(--muted); font: .72rem ui-monospace, monospace; overflow-wrap: anywhere; }
 .device-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 14px; }
 .settings-grid, .security-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.settings-stack { display: grid; gap: 14px; }
+.settings-fields-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 .settings-card, .security-card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
 .settings-grid .hysteria-settings-card { grid-column: 1 / -1; }
+.settings-card h4 { margin: 0 0 6px; }
+.settings-danger-inline { margin-top: 18px; padding: 15px 16px; border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--error-surface) 35%, var(--surface)); }
+.settings-danger-inline > .hint { margin-bottom: 0; }
+.vmess-settings-list { display: grid; gap: 0; margin: 18px 0 12px; border-top: 1px solid var(--border); }
+.vmess-settings-list > div { display: grid; grid-template-columns: minmax(150px, .7fr) minmax(0, 1.3fr); gap: 14px; padding: 10px 0; border-bottom: 1px solid var(--border); }
+.vmess-settings-list dt { color: var(--muted); }
+.vmess-settings-list dd { min-width: 0; margin: 0; overflow-wrap: anywhere; color: var(--text); }
+.settings-inline-link { display: inline-block; margin-top: 3px; color: var(--primary); font-weight: 650; text-decoration: none; }
+.settings-inline-link:hover { text-decoration: underline; }
 .hysteria-status-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 18px; }
 .hysteria-enable-row { margin: 20px 0 8px; color: var(--text); font-weight: 650; }
 .hysteria-enable-row input { accent-color: var(--primary); }
@@ -149,7 +160,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .hysteria-fingerprint { font: .72rem ui-monospace, monospace; }
 .hysteria-advanced { margin-top: 20px; padding-top: 14px; border-top: 1px solid var(--border); }
 .hysteria-advanced summary { color: var(--primary); font-weight: 650; cursor: pointer; }
-.hysteria-save-row { justify-content: flex-start; margin-top: 16px; }
+.hysteria-save-row { justify-content: flex-start; margin: 14px 0 18px; }
 .settings-card-danger { border-color: color-mix(in srgb, var(--error) 35%, var(--border)); background: color-mix(in srgb, var(--error-surface) 35%, var(--surface)); }
 .card-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .card-heading h3 { margin: 0 0 7px; }
@@ -244,8 +255,9 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .device-card-footer { align-items: flex-start; flex-direction: column; }
   .device-actions { width: 100%; flex-wrap: wrap; gap: 12px 18px; }
   .header-actions { gap: 12px; }
-  .settings-grid, .security-grid, .diagnostics-overview { grid-template-columns: 1fr; }
+  .settings-grid, .settings-fields-grid, .security-grid, .diagnostics-overview { grid-template-columns: 1fr; }
   .hysteria-file-grid { grid-template-columns: 1fr; gap: 0; }
+  .vmess-settings-list > div { grid-template-columns: 1fr; gap: 4px; }
   .totp-setup-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 480px) {

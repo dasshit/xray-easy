@@ -40,8 +40,10 @@ const disableTOTPForm = ref({ password: '', code: '' })
 const changePasswordForm = ref({ currentPassword: '', newPassword: '', confirmation: '' })
 const lastBackup = ref('')
 const settings = ref<Settings | null>(null)
-const settingsForm = ref<{ publicHost: string; realityTarget: string; realitySNI: string; clientFingerprint: string; logLevel: XrayLogLevel; rotatePrivateKey: boolean }>({ publicHost: '', realityTarget: '', realitySNI: '', clientFingerprint: 'chrome', logLevel: 'warning', rotatePrivateKey: false })
+const settingsForm = ref<{ publicHost: string; realityTarget: string; realitySNI: string; clientFingerprint: string; rotatePrivateKey: boolean }>({ publicHost: '', realityTarget: '', realitySNI: '', clientFingerprint: 'chrome', rotatePrivateKey: false })
+const logLevelForm = ref<XrayLogLevel>('warning')
 const pendingSettings = ref<SettingsChange | null>(null)
+const pendingSettingsKind = ref<'vless' | 'logging'>('vless')
 const nodeStatus = ref<NodeStatus | null>(null)
 const diagnostics = ref<DiagnosticEntry[]>([])
 const loginNeedsTOTP = ref(false)
@@ -55,6 +57,14 @@ const vmessAvailable = computed(() => {
   const status = hysteriaStatus.value
   return status !== null && status.certificate !== undefined && (status.certificateError === undefined || status.certificateError === '')
 })
+const vlessSettingsChanged = computed(() => settings.value !== null && (
+  settingsForm.value.publicHost !== settings.value.publicHost
+  || settingsForm.value.realityTarget !== settings.value.realityTarget
+  || settingsForm.value.realitySNI !== settings.value.realitySni
+  || settingsForm.value.clientFingerprint !== settings.value.clientFingerprint
+  || settingsForm.value.rotatePrivateKey
+))
+const loggingSettingsChanged = computed(() => settings.value !== null && logLevelForm.value !== settings.value.logLevel)
 let events: EventSubscription | null = null
 let reconnectTimer: number | null = null
 let disposed = false
@@ -170,9 +180,9 @@ async function loadAuthenticated() {
     realityTarget: dashboard.settings.realityTarget,
     realitySNI: dashboard.settings.realitySni,
     clientFingerprint: dashboard.settings.clientFingerprint,
-    logLevel: dashboard.settings.logLevel,
     rotatePrivateKey: false,
   }
+  logLevelForm.value = dashboard.settings.logLevel
   nodeStatus.value = dashboard.nodeStatus
   diagnostics.value = dashboard.diagnostics
   await refreshHysteriaStatus()
@@ -215,7 +225,8 @@ async function loadDiagnostics() { diagnostics.value = await loadDiagnosticsSnap
  */
 async function loadSettings() {
   settings.value = await api.settings.get()
-  settingsForm.value = { publicHost: settings.value.publicHost, realityTarget: settings.value.realityTarget, realitySNI: settings.value.realitySni, clientFingerprint: settings.value.clientFingerprint, logLevel: settings.value.logLevel, rotatePrivateKey: false }
+  settingsForm.value = { publicHost: settings.value.publicHost, realityTarget: settings.value.realityTarget, realitySNI: settings.value.realitySni, clientFingerprint: settings.value.clientFingerprint, rotatePrivateKey: false }
+  logLevelForm.value = settings.value.logLevel
 }
 /**
  * Open the authenticated server event stream once and refresh UI data as events arrive.
@@ -423,10 +434,24 @@ async function confirmClientAction() {
 async function createBackup() { busy.value = true; error.value = ''; try { const result = await api.backups.create(); lastBackup.value = result.name; showSuccess(t().backupReady) } catch (cause) { showError(cause) } finally { busy.value = false } }
 /**
  * Request a settings preview and open the confirmation step.
+ * @param kind - The settings group being reviewed.
  */
-async function reviewSettings() {
+async function reviewSettings(kind: 'vless' | 'logging') {
+  if (!settings.value) return
   busy.value = true; error.value = ''; pendingSettings.value = null
-  try { const result = await api.settings.preview({ publicHost: settingsForm.value.publicHost, realityTarget: settingsForm.value.realityTarget, realitySni: settingsForm.value.realitySNI, clientFingerprint: settingsForm.value.clientFingerprint, logLevel: settingsForm.value.logLevel, rotatePrivateKey: settingsForm.value.rotatePrivateKey }); pendingSettings.value = { ...result, confirmation: '' } }
+  const isVless = kind === 'vless'
+  try {
+    const result = await api.settings.preview({
+      publicHost: isVless ? settingsForm.value.publicHost : settings.value.publicHost,
+      realityTarget: isVless ? settingsForm.value.realityTarget : settings.value.realityTarget,
+      realitySni: isVless ? settingsForm.value.realitySNI : settings.value.realitySni,
+      clientFingerprint: isVless ? settingsForm.value.clientFingerprint : settings.value.clientFingerprint,
+      logLevel: isVless ? settings.value.logLevel : logLevelForm.value,
+      rotatePrivateKey: isVless && settingsForm.value.rotatePrivateKey,
+    })
+    pendingSettingsKind.value = kind
+    pendingSettings.value = { ...result, confirmation: '' }
+  }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 /**
@@ -434,8 +459,19 @@ async function reviewSettings() {
  */
 async function applySettings() {
   if (!pendingSettings.value) return
+  const appliedKind = pendingSettingsKind.value
+  const otherVlessDraft = appliedKind === 'logging' ? { ...settingsForm.value } : null
+  const otherLoggingDraft = appliedKind === 'vless' ? logLevelForm.value : null
   busy.value = true; error.value = ''
-  try { await api.settings.apply(pendingSettings.value.changeId, pendingSettings.value.confirmation); pendingSettings.value = null; await loadSettings(); await loadClients(); showSuccess(t().saved) }
+  try {
+    await api.settings.apply(pendingSettings.value.changeId, pendingSettings.value.confirmation)
+    pendingSettings.value = null
+    await loadSettings()
+    if (otherVlessDraft) settingsForm.value = otherVlessDraft
+    if (otherLoggingDraft !== null) logLevelForm.value = otherLoggingDraft
+    await loadClients()
+    showSuccess(t().saved)
+  }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 /**
@@ -521,30 +557,45 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         </ul>
       </section>
       <section v-if="activeSection === 'settings' && settings" class="section-panel">
-        <div class="section-heading"><div><p class="eyebrow">{{ t().settings }}</p><h2>{{ t().connectionSettings }}</h2><p class="muted">{{ settings.protocol.toUpperCase() }} · {{ settings.security.toUpperCase() }} · {{ settings.flow }}</p></div></div>
-        <div class="settings-grid">
-          <article class="settings-card">
-            <div class="card-heading"><div><h3>{{ t().connectionSettings }}</h3><p class="hint">{{ t().connectionHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌁</span></div>
-            <label>{{ t().host }}<input v-model="settingsForm.publicHost" /><small class="hint">{{ t().hostHint }}</small></label>
-            <label>{{ t().target }}<input v-model="settingsForm.realityTarget" /></label>
-            <label>{{ t().sni }}<input v-model="settingsForm.realitySNI" /></label>
+        <div class="section-heading"><div><p class="eyebrow">{{ t().settings }}</p><h2>{{ t().settings }}</h2><p class="muted">{{ t().settingsPageHelp }}</p></div></div>
+        <div class="settings-stack">
+          <article class="settings-card settings-vless-card">
+            <div class="card-heading"><div><h3>{{ t().vlessSettingsTitle }}</h3><p class="hint">{{ t().vlessSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌁</span></div>
+            <div class="settings-fields-grid">
+              <label>{{ t().host }}<input v-model="settingsForm.publicHost" /><small class="hint">{{ t().hostHint }}</small></label>
+              <label>{{ t().target }}<input v-model="settingsForm.realityTarget" /></label>
+              <label>{{ t().sni }}<input v-model="settingsForm.realitySNI" /></label>
+              <label>{{ t().fingerprint }}<select v-model="settingsForm.clientFingerprint"><option value="chrome">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option><option value="android">android</option><option value="random">random</option></select></label>
+            </div>
+            <div class="settings-card-danger settings-danger-inline">
+              <div class="card-heading"><div><h4>{{ t().dangerousSettings }}</h4><p class="hint">{{ t().rotationHelp }}</p></div><span class="settings-icon" aria-hidden="true">!</span></div>
+              <label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label>
+              <p class="hint">{{ t().settingsWarning }}</p>
+            </div>
+            <div class="section-actions"><button :disabled="busy || !vlessSettingsChanged" @click="reviewSettings('vless')">{{ t().reviewVlessChanges }}</button></div>
           </article>
-          <article class="settings-card">
-            <div class="card-heading"><div><h3>{{ t().profileDefaults }}</h3><p class="hint">{{ t().profileDefaultsHelp }}</p></div><span class="settings-icon" aria-hidden="true">✦</span></div>
-            <label>{{ t().fingerprint }}<select v-model="settingsForm.clientFingerprint"><option value="chrome">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option><option value="android">android</option><option value="random">random</option></select></label>
+
+          <article class="settings-card settings-vmess-card">
+            <div class="card-heading"><div><h3>{{ t().vmessSettingsTitle }}</h3><p class="hint">{{ t().vmessSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
+            <p class="status-badge" :class="vmessAvailable ? 'positive' : 'muted'">{{ vmessAvailable ? t().vmessReady : t().vmessNeedsCertificate }}</p>
+            <dl class="vmess-settings-list">
+              <div><dt>{{ t().vmessHost }}</dt><dd>{{ settings.publicHost }}</dd></div>
+              <div><dt>{{ t().vmessPort }}</dt><dd>{{ settings.vmessPublicPort }}/TCP</dd></div>
+              <div><dt>{{ t().vmessServerName }}</dt><dd>{{ hysteriaStatus?.tlsServerName || '—' }}</dd></div>
+              <div><dt>{{ t().vmessCertificate }}</dt><dd class="hysteria-fingerprint">{{ hysteriaStatus?.certificate?.fingerprint || '—' }}</dd></div>
+            </dl>
+            <p class="hint">{{ t().vmessPortHelp }}</p>
+            <a class="settings-inline-link" href="#hysteria-settings">{{ t().vmessCertificateLink }}</a>
           </article>
-          <article class="settings-card">
-            <div class="card-heading"><div><h3>{{ t().xrayLogging }}</h3><p class="hint">{{ t().xrayLoggingHelp }}</p></div><span class="settings-icon" aria-hidden="true">≋</span></div>
-            <label>{{ t().logLevel }}<select v-model="settingsForm.logLevel"><option value="debug">{{ t().logLevelDebug }}</option><option value="info">{{ t().logLevelInfo }}</option><option value="warning">{{ t().logLevelWarning }}</option><option value="error">{{ t().logLevelError }}</option><option value="none">{{ t().logLevelNone }}</option></select></label>
+
+          <article class="settings-card settings-logging-card">
+            <div class="card-heading"><div><h3>{{ t().xrayLogging }}</h3><p class="hint">{{ t().loggingHelp }}</p></div><span class="settings-icon" aria-hidden="true">≋</span></div>
+            <label>{{ t().logLevel }}<select v-model="logLevelForm"><option value="debug">{{ t().logLevelDebug }}</option><option value="info">{{ t().logLevelInfo }}</option><option value="warning">{{ t().logLevelWarning }}</option><option value="error">{{ t().logLevelError }}</option><option value="none">{{ t().logLevelNone }}</option></select></label>
+            <div class="section-actions"><button :disabled="busy || !loggingSettingsChanged" @click="reviewSettings('logging')">{{ t().reviewLoggingChanges }}</button></div>
           </article>
-          <article class="settings-card settings-card-danger">
-            <div class="card-heading"><div><h3>{{ t().dangerousSettings }}</h3><p class="hint">{{ t().rotationHelp }}</p></div><span class="settings-icon" aria-hidden="true">!</span></div>
-            <label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label>
-            <p class="hint">{{ t().settingsWarning }}</p>
-          </article>
+
           <HysteriaSettingsPanel :api="api" :language="language" @error="showError" @saved="handleHysteriaSettingsSaved" />
         </div>
-        <div class="section-actions"><button :disabled="busy" @click="reviewSettings">{{ t().saveSettings }}</button></div>
       </section>
       <section v-if="activeSection === 'diagnostics'" class="section-panel">
         <div class="section-heading"><div><p class="eyebrow">{{ t().diagnostics }}</p><h2>{{ t().diagnostics }}</h2><p class="muted">{{ t().configuredXrayVersion }}: {{ nodeStatus?.configuredXrayVersion || '—' }} · {{ t().runtimeXrayVersion }}: {{ nodeStatus?.xrayVersion || '—' }}</p><p class="muted">{{ t().restarts }}: {{ nodeStatus?.restartCount || 0 }}</p></div><button class="secondary" :disabled="busy" @click="loadStatus(); loadDiagnostics()">{{ t().refreshDiagnostics }}</button></div>
@@ -587,7 +638,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" :vmess-available="vmessAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
       <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p><p v-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ actionLabel(clientAction.action) }}</button></div></div></div>
       <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :vmess-qr-url="api.clients.profileVMessQrUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" :copied-vmess="copiedVMess" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" @copy-vmess="copyVMessUri" />
-      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ t().settings }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
+      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
     </section>
   </main>
 </template>

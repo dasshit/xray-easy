@@ -106,6 +106,7 @@ function mapSettings(dto: SettingsDto): Settings {
   return {
     publicHost: dto.public_host,
     publicPort: dto.public_port,
+    vmessPublicPort: dto.vmess_public_port,
     realityTarget: dto.reality_target,
     realitySni: dto.reality_sni,
     clientFingerprint: dto.client_fingerprint,

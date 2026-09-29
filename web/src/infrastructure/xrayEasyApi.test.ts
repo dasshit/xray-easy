@@ -154,7 +154,7 @@ describe('Xray-easy API adapter', () => {
 
   it('maps settings preview, serializes apply, and preserves TOTP wire contracts', async () => {
     const settingsDto = {
-      public_host: 'vpn.example.test', public_port: 443, reality_target: 'target.example.test:443', reality_sni: 'target.example.test',
+      public_host: 'vpn.example.test', public_port: 443, vmess_public_port: 9443, reality_target: 'target.example.test:443', reality_sni: 'target.example.test',
       client_fingerprint: 'chrome', log_level: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
     }
     const previewDto = {
@@ -176,7 +176,7 @@ describe('Xray-easy API adapter', () => {
     })
     const api = createXrayEasyApi(send)
     const settings = {
-      publicHost: 'vpn.example.test', publicPort: 443, realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
+      publicHost: 'vpn.example.test', publicPort: 443, vmessPublicPort: 9443, realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
       clientFingerprint: 'chrome', logLevel: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
     }
 

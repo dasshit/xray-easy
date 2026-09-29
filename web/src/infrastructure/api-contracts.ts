@@ -159,6 +159,7 @@ export type HysteriaCertificateUploadDto = z.infer<typeof HysteriaCertificateUpl
 export const SettingsDtoSchema = z.object({
   public_host: z.string(),
   public_port: z.number(),
+  vmess_public_port: z.number(),
   reality_target: z.string(),
   reality_sni: z.string(),
   client_fingerprint: z.string(),

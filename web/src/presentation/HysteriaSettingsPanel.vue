@@ -175,7 +175,7 @@ onMounted(() => { void loadSettings() })
 </script>
 
 <template>
-  <article class="settings-card hysteria-settings-card">
+  <article id="hysteria-settings" class="settings-card hysteria-settings-card">
     <div class="card-heading">
       <div>
         <h3>{{ text.hysteriaTitle }}</h3>
@@ -183,6 +183,7 @@ onMounted(() => { void loadSettings() })
       </div>
       <span class="settings-icon" aria-hidden="true">↗</span>
     </div>
+    <div class="section-actions hysteria-save-row"><button :disabled="busy" @click="reviewSettings">{{ text.hysteriaReview }}</button></div>
     <div v-if="status" class="hysteria-status-row">
       <span class="status-badge" :class="status.state === 'on' || status.state === 'ready' ? 'positive' : status.state === 'error' ? 'negative' : 'muted'">{{ stateLabel() }}</span>
       <span class="muted">{{ text.hysteriaPublicPort }}: {{ status.udpPort }}/UDP</span>
@@ -230,7 +231,6 @@ onMounted(() => { void loadSettings() })
       <label>{{ text.hysteriaMasquerade }}<select v-model="form.masqueradeType"><option value="off">{{ text.hysteriaMasqueradeOff }}</option><option value="string">{{ text.hysteriaMasqueradeText }}</option></select></label>
       <label v-if="form.masqueradeType === 'string'">{{ text.hysteriaMasqueradeBody }}<textarea v-model="form.masqueradeString" maxlength="4096" required /></label>
     </details>
-    <div class="section-actions hysteria-save-row"><button :disabled="busy" @click="reviewSettings">{{ text.hysteriaReview }}</button></div>
   </article>
 
   <div v-if="pending" class="modal-backdrop" role="presentation" @click.self="pending = null">

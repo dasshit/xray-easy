@@ -53,7 +53,7 @@ func TestSettingsReadValidationAndFingerprintApply(t *testing.T) {
 		t.Fatalf("unauthenticated settings status = %d", got)
 	}
 	response := requestJSON(t, app, http.MethodGet, "/api/settings", nil, true)
-	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), "reality_private_key") || strings.Contains(response.Body.String(), "RealityPrivateKeyEnc") {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"vmess_public_port":9443`) || strings.Contains(response.Body.String(), "reality_private_key") || strings.Contains(response.Body.String(), "RealityPrivateKeyEnc") {
 		t.Fatalf("settings response exposed secret or failed: %d %s", response.Code, response.Body.String())
 	}
 	if got := requestJSON(t, app, http.MethodDelete, "/api/settings", nil, true).Code; got != http.StatusMethodNotAllowed {

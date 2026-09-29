@@ -1382,7 +1382,7 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 	}
 	settings.PublicPort = s.publicPort
 	if r.Method == http.MethodGet {
-		writeJSON(w, http.StatusOK, publicSettings(settings))
+		writeJSON(w, http.StatusOK, publicSettings(settings, s.vmessPort))
 		return
 	}
 	if r.Method == http.MethodPatch {
@@ -1462,7 +1462,7 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	logLevelChanged := candidate.LogLevel != current.LogLevel
 	dangerous := hostChanged || targetChanged || sniChanged || privateKeyChanged
 	if !dangerous && candidate.ClientFingerprint == current.ClientFingerprint && !logLevelChanged {
-		writeJSON(w, http.StatusOK, map[string]any{"changed": false, "settings": publicSettings(current)})
+		writeJSON(w, http.StatusOK, map[string]any{"changed": false, "settings": publicSettings(current, s.vmessPort)})
 		return
 	}
 
@@ -1567,7 +1567,7 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 		"diff":                  diff,
 		"consequences":          consequences,
 		"revoked_clients":       revokedClients,
-		"settings":              publicSettings(candidate),
+		"settings":              publicSettings(candidate, s.vmessPort),
 	})
 }
 
@@ -1631,7 +1631,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		}
 		_ = s.store.AddAudit(r.Context(), admin.ID, "settings.update", "settings", "node", fmt.Sprintf("client fingerprint default changed from %s to %s", current.ClientFingerprint, pending.Settings.ClientFingerprint))
 		s.finishSettingsChange(req.ChangeID, true)
-		writeJSON(w, http.StatusOK, map[string]any{"applied": true, "settings": publicSettings(pending.Settings), "revoked_clients": 0})
+		writeJSON(w, http.StatusOK, map[string]any{"applied": true, "settings": publicSettings(pending.Settings, s.vmessPort), "revoked_clients": 0})
 		return
 	}
 	if pending.ExpectedConfirmation != "" {
@@ -1732,7 +1732,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = s.store.AddAudit(r.Context(), admin.ID, auditAction, "settings", "node", auditDetail)
 	s.finishSettingsChange(req.ChangeID, true)
-	response := map[string]any{"applied": true, "settings": publicSettings(pending.Settings), "revoked_clients": len(states)}
+	response := map[string]any{"applied": true, "settings": publicSettings(pending.Settings, s.vmessPort), "revoked_clients": len(states)}
 	if backupName != "" {
 		response["backup"] = backupName
 	}
@@ -3280,8 +3280,8 @@ func fatal(err error) {
 	os.Exit(1)
 }
 
-func publicSettings(settings domain.Settings) map[string]any {
-	return map[string]any{"public_host": settings.PublicHost, "public_port": settings.PublicPort, "reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint, "log_level": settings.LogLevel, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow}
+func publicSettings(settings domain.Settings, vmessPublicPort int) map[string]any {
+	return map[string]any{"public_host": settings.PublicHost, "public_port": settings.PublicPort, "vmess_public_port": vmessPublicPort, "reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint, "log_level": settings.LogLevel, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow}
 }
 
 func randomID() (string, error) {

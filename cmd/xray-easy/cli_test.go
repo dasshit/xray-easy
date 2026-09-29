@@ -394,7 +394,7 @@ func TestAtomicWriteDecodeJSONAndSmallHelpers(t *testing.T) {
 	if got := sessionToken(request); got != "session" {
 		t.Fatalf("session token = %q", got)
 	}
-	if got := publicSettings(domain.Settings{PublicHost: "node.test", PublicPort: 443}); got["public_host"] != "node.test" || got["protocol"] == "" {
+	if got := publicSettings(domain.Settings{PublicHost: "node.test", PublicPort: 443}, 9443); got["public_host"] != "node.test" || got["protocol"] == "" || got["vmess_public_port"] != 9443 {
 		t.Fatalf("public settings = %+v", got)
 	}
 	first, err := randomID()

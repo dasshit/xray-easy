@@ -40,6 +40,8 @@ export type XrayLogLevel = 'debug' | 'info' | 'warning' | 'error' | 'none'
 export type Settings = {
   publicHost: string
   publicPort: number
+  /** VMess + TLS public TCP port from the active Compose environment. */
+  vmessPublicPort: number
   realityTarget: string
   realitySni: string
   clientFingerprint: string
