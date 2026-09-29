@@ -20,6 +20,7 @@ const serviceName = "xrayeasy.awg.v1.Control"
 type API interface {
 	GetStatus(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ListPeers(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	GetPeerStats(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	CreatePeer(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	AddPeer(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	RemovePeer(context.Context, *structpb.Struct) (*structpb.Struct, error)
@@ -37,6 +38,7 @@ func Register(server grpc.ServiceRegistrar, api API) {
 		Methods: []grpc.MethodDesc{
 			method("GetStatus", api.GetStatus),
 			method("ListPeers", api.ListPeers),
+			method("GetPeerStats", api.GetPeerStats),
 			method("CreatePeer", api.CreatePeer),
 			method("AddPeer", api.AddPeer),
 			method("RemovePeer", api.RemovePeer),

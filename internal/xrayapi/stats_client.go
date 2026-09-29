@@ -3,6 +3,7 @@ package xrayapi
 import (
 	"context"
 	"fmt"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -20,6 +21,13 @@ type UserStats struct {
 	UploadBytes   int64
 	DownloadBytes int64
 	LastSeen      time.Time
+	SourceIPs     []IPObservation
+}
+
+// IPObservation is one client source address and its latest Xray timestamp.
+type IPObservation struct {
+	Address  string
+	LastSeen time.Time
 }
 
 type StatsClient struct {
@@ -51,20 +59,35 @@ func (c *StatsClient) Poll(ctx context.Context) ([]UserStats, error) {
 			continue
 		}
 		var lastSeen time.Time
+		sourceIPs := make([]IPObservation, 0, len(user.GetIps()))
+		seenIPs := make(map[string]int, len(user.GetIps()))
 		for _, ip := range user.GetIps() {
 			if ip == nil || ip.GetLastSeen() <= 0 {
+				continue
+			}
+			address, err := netip.ParseAddr(ip.GetIp())
+			if err != nil {
 				continue
 			}
 			candidate := time.Unix(ip.GetLastSeen(), 0).UTC()
 			if candidate.After(lastSeen) {
 				lastSeen = candidate
 			}
+			canonical := address.WithZone("").String()
+			if index, exists := seenIPs[canonical]; exists {
+				if candidate.After(sourceIPs[index].LastSeen) {
+					sourceIPs[index].LastSeen = candidate
+				}
+			} else {
+				seenIPs[canonical] = len(sourceIPs)
+				sourceIPs = append(sourceIPs, IPObservation{Address: canonical, LastSeen: candidate})
+			}
 		}
 		var upload, download int64
 		if traffic := user.GetTraffic(); traffic != nil {
 			upload, download = traffic.GetUplink(), traffic.GetDownlink()
 		}
-		result = append(result, UserStats{Email: user.GetEmail(), UploadBytes: nonNegative(upload), DownloadBytes: nonNegative(download), LastSeen: lastSeen})
+		result = append(result, UserStats{Email: user.GetEmail(), UploadBytes: nonNegative(upload), DownloadBytes: nonNegative(download), LastSeen: lastSeen, SourceIPs: sourceIPs})
 	}
 	return result, nil
 }

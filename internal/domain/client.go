@@ -28,6 +28,7 @@ const (
 	ProtocolVLESS      ClientProtocol = "vless"
 	ProtocolHysteria2  ClientProtocol = "hysteria2"
 	ProtocolVMess      ClientProtocol = "vmess"
+	ProtocolAmneziaWG  ClientProtocol = "amneziawg"
 )
 
 const (

@@ -31,6 +31,15 @@ type AmneziaWGPeer struct {
 	CreatedAt time.Time
 }
 
+// AmneziaWGPeerStats is the runtime telemetry observable for one peer.
+type AmneziaWGPeerStats struct {
+	Name          string
+	SourceIP      string
+	LastSeen      time.Time
+	UploadBytes   int64
+	DownloadBytes int64
+}
+
 // ValidateAmneziaWGPeerName checks the restricted name used in profile paths
 // and AmneziaWG UAPI state.
 func ValidateAmneziaWGPeerName(name string) error {

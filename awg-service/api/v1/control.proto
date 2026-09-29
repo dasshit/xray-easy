@@ -12,6 +12,7 @@ import "google/protobuf/struct.proto";
 service Control {
   rpc GetStatus(google.protobuf.Struct) returns (google.protobuf.Struct);
   rpc ListPeers(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetPeerStats(google.protobuf.Struct) returns (google.protobuf.Struct);
   rpc CreatePeer(google.protobuf.Struct) returns (google.protobuf.Struct);
   rpc AddPeer(google.protobuf.Struct) returns (google.protobuf.Struct);
   rpc RemovePeer(google.protobuf.Struct) returns (google.protobuf.Struct);

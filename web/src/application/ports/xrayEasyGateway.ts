@@ -154,7 +154,7 @@ export interface XrayEasyGateway {
      * @returns The updated device state.
      * @rejects {Error} When the action cannot be applied to the device.
      */
-    setAction(clientId: string, action: ClientActionType): Promise<Client>
+    setAction(clientId: string, action: ClientActionType): Promise<Client | undefined>
     /**
      * Build the authenticated URL for a device’s QR code.
      * @param clientId - The internal ID of the device.

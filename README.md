@@ -375,13 +375,25 @@ uses the default client networks `10.88.0.0/24` and `fd88:88:88::/64`, with DNS
 servers `1.1.1.1` and `2606:4700:4700::1111`; do not overlap those networks
 with routes already used by the VPS.
 
-When the optional Compose profile is enabled, the Web UI shows an
-**AmneziaWG** section. Create a device there and scan its QR code in the
-official AmneziaWG client on iOS or macOS, or download its `.conf` file. The
-profile contains the client's private key. Treat QR codes, downloads and
-backups as credentials; transfer them securely and do not commit or attach
-them to diagnostics. Revoking a peer creates an automatic backup first,
-removes its saved profile from the volume and records a redacted audit event.
+When the optional Compose profile is enabled, create an AmneziaWG device from
+the shared **Profiles** screen by choosing **AmneziaWG** in the protocol list.
+It appears alongside VLESS, VMess and Hysteria 2 profiles. Open its profile to
+scan the QR code in the official AmneziaWG client on iOS or macOS, or download
+the `.conf` file. The profile contains the client's private key. Treat QR
+codes, downloads and backups as credentials; transfer them securely and do not
+commit or attach them to diagnostics. Revoking a peer creates an automatic
+backup first, removes its saved profile from the volume and records a redacted
+audit event. AmneziaWG is read-only in **Settings**, where the active endpoint,
+ports, networks, peer count, server public key and service version are shown.
+
+The shared profile list shows online/offline state, last seen, cumulative
+upload/download, current sampled upload/download rates and observed source IPs.
+Xray source addresses come from StatsService IP observations; AmneziaWG uses
+the remote endpoint from its latest handshake. Online is a five-minute
+freshness estimate, not a live socket count. Speeds are averages over the
+control plane's ten-second polling interval, not link limits; they are zeroed
+when a device is offline or a sample becomes stale. Source IP is omitted when
+the protocol has not reported a recent address.
 
 The service allocates IPv4 and IPv6 addresses, enables full-tunnel routes, and
 applies peer changes to the live engine without restarting the container. It
@@ -392,6 +404,8 @@ export. Restore requires the AmneziaWG Compose profile to be enabled and a
 backup created while the service was enabled; otherwise the restore command
 stops before changing application state. `doctor` checks the service, peer
 state and warns that public UDP reachability must be verified from outside.
+Deleting or recreating `awg_data` loses the server identity and peer state;
+previously exported profiles will no longer connect and must be reissued.
 
 If the public endpoint or shared AWG preset changes, reopen each device profile
 in the Web UI and import the refreshed `.conf` or QR code. The service refreshes
@@ -407,11 +421,15 @@ blocking. Advanced container controls remain in `.env`; if you change shared
 obfuscation values, recreate the `awg` service and re-import profiles so
 client and server parameters match. The lower-level gRPC API and maintenance
 commands are described in [awg-service/README.md](awg-service/README.md).
+The unified profiles and telemetry implementation plan is recorded in
+[docs/amneziawg-unified-profiles-plan.md](docs/amneziawg-unified-profiles-plan.md).
 
-VDS smoke test passed with the official AmneziaWG iOS client: the peer profile
-connected, survived a container restart, reconnected, and carried traffic.
-The installer, Web UI, doctor and plaintext backup/restore path now manage the
-service. Longer-term stability, macOS client coverage and IPv6 egress still
+VDS checks passed with the official AmneziaWG iOS client: a clean AWG volume
+connected and carried traffic; peer state survived a container restart and VDS
+reboot; backup/restore recovered a revoked test peer and its profile, and the
+client connected again. The previous volume failed key authentication and was
+reinitialized, so upgrade/recovery from that existing encrypted state remains
+unverified. Longer-term stability, macOS client coverage and IPv6 egress still
 need separate verification.
 
 Backend test coverage and the test plan are documented in

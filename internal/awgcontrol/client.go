@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -120,6 +121,48 @@ func (c *Client) ListPeers(ctx context.Context) ([]domain.AmneziaWGPeer, error) 
 	return peers, nil
 }
 
+// PeerStats reads live per-peer counters and endpoint metadata. Empty handshake
+// and source fields mean that no peer connection has been observed yet.
+func (c *Client) PeerStats(ctx context.Context) ([]domain.AmneziaWGPeerStats, error) {
+	response, err := c.call(ctx, "GetPeerStats", nil)
+	if err != nil {
+		return nil, err
+	}
+	value := response.GetFields()["peers"]
+	if value == nil || value.GetListValue() == nil {
+		return nil, errors.New("AWG response field peers is missing or invalid")
+	}
+	peers := make([]domain.AmneziaWGPeerStats, 0, len(value.GetListValue().GetValues()))
+	for _, item := range value.GetListValue().GetValues() {
+		if item.GetStructValue() == nil {
+			return nil, errors.New("AWG response contains an invalid peer stats entry")
+		}
+		fields := item.GetStructValue().GetFields()
+		name, err := stringField(fields, "name")
+		if err != nil {
+			return nil, err
+		}
+		sourceIP := optionalStringField(fields, "sourceIp")
+		lastSeen := time.Time{}
+		if value := optionalStringField(fields, "lastHandshake"); value != "" {
+			lastSeen, err = time.Parse(time.RFC3339Nano, value)
+			if err != nil {
+				return nil, fmt.Errorf("AWG response field lastHandshake is invalid: %w", err)
+			}
+		}
+		upload, err := parseCounterField(fields, "uploadBytes")
+		if err != nil {
+			return nil, err
+		}
+		download, err := parseCounterField(fields, "downloadBytes")
+		if err != nil {
+			return nil, err
+		}
+		peers = append(peers, domain.AmneziaWGPeerStats{Name: name, SourceIP: sourceIP, LastSeen: lastSeen, UploadBytes: upload, DownloadBytes: download})
+	}
+	return peers, nil
+}
+
 // CreatePeer generates the device keypair and registers a persistent peer.
 func (c *Client) CreatePeer(ctx context.Context, name string) (domain.AmneziaWGPeer, error) {
 	response, err := c.call(ctx, "CreatePeer", map[string]any{"name": name})
@@ -217,6 +260,32 @@ func stringField(fields map[string]*structpb.Value, key string) (string, error) 
 		return "", fmt.Errorf("AWG response field %s is not a string", key)
 	}
 	return value.GetStringValue(), nil
+}
+
+func optionalStringField(fields map[string]*structpb.Value, key string) string {
+	value := fields[key]
+	if value == nil || value.GetStringValue() == "" {
+		return ""
+	}
+	if _, ok := value.GetKind().(*structpb.Value_StringValue); !ok {
+		return ""
+	}
+	return value.GetStringValue()
+}
+
+func parseCounterField(fields map[string]*structpb.Value, key string) (int64, error) {
+	value := fields[key]
+	if value == nil || value.GetStringValue() == "" {
+		return 0, fmt.Errorf("AWG response field %s is missing or empty", key)
+	}
+	if _, ok := value.GetKind().(*structpb.Value_StringValue); !ok {
+		return 0, fmt.Errorf("AWG response field %s is not a string", key)
+	}
+	counter, err := strconv.ParseInt(value.GetStringValue(), 10, 64)
+	if err != nil || counter < 0 {
+		return 0, fmt.Errorf("AWG response field %s is invalid", key)
+	}
+	return counter, nil
 }
 
 func boolField(fields map[string]*structpb.Value, key string) (bool, error) {

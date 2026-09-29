@@ -67,6 +67,9 @@ export function clientDto(client: Client): ClientDto {
     online: client.online,
     upload_bytes: client.uploadBytes,
     download_bytes: client.downloadBytes,
+    upload_bytes_per_second: client.uploadBytesPerSecond ?? 0,
+    download_bytes_per_second: client.downloadBytesPerSecond ?? 0,
+    ...(client.sourceIPs === undefined ? {} : { source_ips: client.sourceIPs }),
     ...(client.fingerprint === undefined ? {} : { fingerprint: client.fingerprint }),
     ...(client.lastSeen === undefined ? {} : { last_seen: client.lastSeen }),
   }
@@ -169,6 +172,7 @@ export function defaultHandler({ initialized = true, authenticated = false, clie
     if (method === 'GET' && url === '/api/auth/totp/status') return { body: totpData }
     if (method === 'GET' && url === '/api/settings') return { body: settingsData }
     if (method === 'GET' && url === '/api/transports/hysteria2') return { body: hysteriaStatus }
+    if (method === 'GET' && url === '/api/transports/amneziawg') return { body: { enabled: false, available: false, running: false } }
     if (method === 'GET' && url === '/api/status') return { body: statusData }
     if (method === 'GET' && url === '/api/logs?component=xray&limit=100') return { body: { entries: xrayEntries } }
     if (method === 'GET' && url === '/api/logs?component=app&limit=100') return { body: { entries: appEntries } }

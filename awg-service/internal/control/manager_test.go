@@ -18,6 +18,8 @@ type fakeDevice struct {
 	closed        bool
 	failPeerApply bool
 	failed        bool
+	snapshot      string
+	snapshotErr   error
 }
 
 func (d *fakeDevice) Set(config string) error {
@@ -29,7 +31,7 @@ func (d *fakeDevice) Set(config string) error {
 	return nil
 }
 func (d *fakeDevice) Up() error                 { d.ups++; return nil }
-func (d *fakeDevice) Snapshot() (string, error) { return "", nil }
+func (d *fakeDevice) Snapshot() (string, error) { return d.snapshot, d.snapshotErr }
 func (d *fakeDevice) Close()                    { d.closed = true }
 
 type fakeFactory struct{ device *fakeDevice }
@@ -117,6 +119,31 @@ func TestAddPeerAppliesLiveAndPersistsAllocatedAddresses(t *testing.T) {
 	}
 	if strings.Contains(string(mustRead(t, filepath.Join(opts.DataDir, "state.json"))), manager.serverPrivateKey) {
 		t.Fatal("server private key was not encrypted in persistent state")
+	}
+}
+
+func TestPeerTelemetryJoinsLiveUAPICountersToManagedPeer(t *testing.T) {
+	device := &fakeDevice{}
+	manager, err := Open(testOptions(t), fakeFactory{device: device})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddPeer("iphone", publicKey); err != nil {
+		t.Fatal(err)
+	}
+	device.snapshot = "private_key=must-not-be-returned\n\npublic_key=" + publicKey + "\nendpoint=198.51.100.23:53122\nlast_handshake_time_sec=1790798400\nlast_handshake_time_nsec=0\nrx_bytes=420\ntx_bytes=840\n"
+	rows, err := manager.PeerTelemetry()
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("PeerTelemetry() = %+v, %v", rows, err)
+	}
+	got := rows[0]
+	if got.Name != "iphone" || got.SourceIP != "198.51.100.23" || got.UploadBytes != 420 || got.DownloadBytes != 840 || got.LastHandshake.IsZero() {
+		t.Fatalf("peer runtime stats = %+v", got)
 	}
 }
 

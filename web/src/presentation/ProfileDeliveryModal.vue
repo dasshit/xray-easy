@@ -13,6 +13,8 @@ const props = defineProps<{
   vlessQrUrl: string
   hysteriaQrUrl: string
   vmessQrUrl: string
+  awgQrUrl?: string
+  awgProfileUrl?: string
   jsonUrl: string
   copiedVless: boolean
   copiedHysteria: boolean
@@ -23,6 +25,7 @@ const text = computed(() => translations[props.language])
 const vlessUri = computed(() => props.profile.protocol === 'vless' || props.profile.protocol === 'legacy_dual' ? props.profile.uri : undefined)
 const hysteriaUri = computed(() => props.profile.protocol === 'hysteria2' || props.profile.protocol === 'legacy_dual' ? props.profile.hysteriaUri : undefined)
 const vmessUri = computed(() => props.profile.protocol === 'vmess' ? props.profile.vmessUri : undefined)
+const isAmneziaWG = computed(() => props.profile.protocol === 'amneziawg')
 const hasJsonProfile = computed(() => props.profile.protocol === 'vless' || props.profile.protocol === 'vmess' || (props.profile.protocol === 'legacy_dual' && props.profile.json !== undefined))
 
 /**
@@ -33,6 +36,7 @@ function profileLabel(): string {
   if (props.profile.protocol === 'legacy_dual') return text.value.legacyDual
   if (props.profile.protocol === 'hysteria2') return text.value.hysteria2Profile
   if (props.profile.protocol === 'vmess') return text.value.vmessProfile
+  if (props.profile.protocol === 'amneziawg') return text.value.amneziawg
   return 'VLESS + REALITY'
 }
 </script>
@@ -73,6 +77,13 @@ function profileLabel(): string {
           <button class="secondary copy-button" type="button" @click="emit('copyVmess')"><span aria-hidden="true">⧉</span>{{ copiedVmess ? text.copied : text.copyVMess }}</button>
           <a v-if="hasJsonProfile" class="download-link" :href="jsonUrl"><span aria-hidden="true">↓</span>{{ text.jsonFile }}</a>
           <p class="hint">{{ text.profileCreateSummaryVMess }}</p>
+        </div>
+      </div>
+      <div v-if="isAmneziaWG" class="profile-delivery hysteria-delivery">
+        <div class="qr-panel"><span class="qr-label">AmneziaWG</span><img class="qr" :src="awgQrUrl" :alt="text.qr" /></div>
+        <div class="profile-link-panel">
+          <p class="hint">{{ text.awgProfileHelp }}</p>
+          <a class="download-link" :href="awgProfileUrl" download><span aria-hidden="true">↓</span>{{ text.awgDownloadProfile }}</a>
         </div>
       </div>
     </div>

@@ -55,4 +55,18 @@ describe('ProfileDeliveryModal', () => {
     await wrapper.findAll('button').find(button => button.text().includes('Copy VMess link'))?.trigger('click')
     expect(wrapper.emitted('copyVmess')).toHaveLength(1)
   })
+
+  it('shows AmneziaWG QR and downloads its private profile from the AWG service', () => {
+    const wrapper = mount(ProfileDeliveryModal, { props: {
+      profile: { clientId: 'awg:iphone', protocol: 'amneziawg', name: 'iphone' },
+      client: { ...client, id: 'awg:iphone', protocol: 'amneziawg', protocols: ['amneziawg'] },
+      language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr',
+      awgQrUrl: '/awg-qr', awgProfileUrl: '/awg-profile.conf', jsonUrl: '/json', copiedVless: false, copiedHysteria: false, copiedVmess: false,
+    } })
+
+    expect(wrapper.text()).toContain('The QR code and file contain the device private key')
+    expect(wrapper.find('img').attributes('src')).toBe('/awg-qr')
+    expect(wrapper.get('a.download-link').attributes('href')).toBe('/awg-profile.conf')
+    expect(wrapper.text()).not.toContain('JSON file')
+  })
 })

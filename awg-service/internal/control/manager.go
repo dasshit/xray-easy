@@ -410,6 +410,36 @@ func (m *Manager) Peers() []Peer {
 	return peers
 }
 
+// PeerTelemetry reads current endpoint, handshake, and traffic counters from
+// the live engine and returns them joined to managed peers by public key.
+func (m *Manager) PeerTelemetry() ([]PeerTelemetry, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, errors.New("AWG manager is closed")
+	}
+	snapshot, err := m.device.Snapshot()
+	if err != nil {
+		return nil, fmt.Errorf("read AWG peer telemetry: %w", err)
+	}
+	observed, err := ParsePeerTelemetry(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	managed := make(map[string]string, len(m.state.Peers))
+	for _, peer := range m.state.Peers {
+		managed[peer.PublicKey] = peer.Name
+	}
+	result := make([]PeerTelemetry, 0, len(observed))
+	for _, peer := range observed {
+		if name, ok := managed[peer.PublicKey]; ok {
+			peer.Name = name
+			result = append(result, peer)
+		}
+	}
+	return result, nil
+}
+
 // Status reports server public identity and current peer count.
 func (m *Manager) Status() (publicKey string, peers int, err error) {
 	m.mu.Lock()

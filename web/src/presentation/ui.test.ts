@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatBytes, formatTimestamp } from './format'
+import { formatBytes, formatRate, formatTimestamp } from './format'
 import { persistLanguage, readLanguage, useI18n } from './i18n'
 import { persistTheme, readTheme } from './theme'
 import { translations } from './i18n/messages'
@@ -90,6 +90,14 @@ describe('formatBytes', () => {
     expect(formatBytes(1024 ** 3)).toBe('1.0 GB')
     expect(formatBytes(1024 ** 4)).toBe('1.0 TB')
     expect(formatBytes(2 * 1024 ** 5)).toBe('2048 TB')
+  })
+})
+
+describe('formatRate', () => {
+  it('formats sampled traffic in bytes per second and clamps negative values', () => {
+    expect(formatRate(0)).toBe('0 B/s')
+    expect(formatRate(1024)).toBe('1.0 KB/s')
+    expect(formatRate(-5)).toBe('0 B/s')
   })
 })
 

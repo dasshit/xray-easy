@@ -90,7 +90,11 @@ func TestClientStatusAndPeerLifecycleCallsAuthenticatedAPI(t *testing.T) {
 			"running": true, "publicKey": "server-key", "publicHost": "vpn.example.test", "ipv4Network": "10.88.0.0/24",
 			"ipv6Network": "fd88:88:88::/64", "serviceVersion": "prototype-v1", "listenPort": float64(51820), "publicPort": float64(51820), "peerCount": float64(1),
 		},
-		serviceName + "ListPeers":       {"peers": []any{peer}},
+		serviceName + "ListPeers": {"peers": []any{peer}},
+		serviceName + "GetPeerStats": {"peers": []any{map[string]any{
+			"name": "iphone", "sourceIp": "203.0.113.8", "lastHandshake": "2026-09-30T12:00:00.123Z",
+			"uploadBytes": "9007199254740993", "downloadBytes": "45",
+		}}},
 		serviceName + "CreatePeer":      peer,
 		serviceName + "GetClientConfig": {"config": "[Interface]\nPrivateKey = private-key\n"},
 	})
@@ -118,8 +122,12 @@ func TestClientStatusAndPeerLifecycleCallsAuthenticatedAPI(t *testing.T) {
 	if err := client.RemovePeer(context.Background(), "iphone"); err != nil {
 		t.Fatal(err)
 	}
+	peerStats, err := client.PeerStats(context.Background())
+	if err != nil || len(peerStats) != 1 || peerStats[0].Name != "iphone" || peerStats[0].SourceIP != "203.0.113.8" || peerStats[0].UploadBytes != 9007199254740993 || peerStats[0].DownloadBytes != 45 {
+		t.Fatalf("PeerStats() = %+v, %v", peerStats, err)
+	}
 	if got := strings.Join(connection.calls, ","); got != strings.Join([]string{
-		serviceName + "GetStatus", serviceName + "ListPeers", serviceName + "CreatePeer", serviceName + "GetClientConfig", serviceName + "RemovePeer",
+		serviceName + "GetStatus", serviceName + "ListPeers", serviceName + "CreatePeer", serviceName + "GetClientConfig", serviceName + "RemovePeer", serviceName + "GetPeerStats",
 	}, ",") {
 		t.Fatalf("AWG RPC calls = %s", got)
 	}
@@ -159,6 +167,7 @@ func TestClientRejectsMalformedUpstreamResponses(t *testing.T) {
 		{"peers missing", "ListPeers", map[string]any{}, func(c *Client) error { _, err := c.ListPeers(context.Background()); return err }},
 		{"peer item wrong type", "ListPeers", map[string]any{"peers": []any{"wrong"}}, func(c *Client) error { _, err := c.ListPeers(context.Background()); return err }},
 		{"peer incomplete", "ListPeers", map[string]any{"peers": []any{map[string]any{"name": "phone"}}}, func(c *Client) error { _, err := c.ListPeers(context.Background()); return err }},
+		{"peer stats invalid counter", "GetPeerStats", map[string]any{"peers": []any{map[string]any{"name": "phone", "uploadBytes": "-1", "downloadBytes": "0"}}}, func(c *Client) error { _, err := c.PeerStats(context.Background()); return err }},
 		{"profile missing", "GetClientConfig", map[string]any{}, func(c *Client) error { _, err := c.ClientConfig(context.Background(), "phone"); return err }},
 		{"backup invalid base64", "ExportBackup", map[string]any{"data": "%%%"}, func(c *Client) error { _, err := c.ExportBackup(context.Background()); return err }},
 	}

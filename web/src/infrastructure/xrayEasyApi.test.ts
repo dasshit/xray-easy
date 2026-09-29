@@ -34,7 +34,7 @@ describe('Xray-easy API adapter', () => {
     await expect(api.setup.status()).resolves.toEqual({ initialized: true })
     await expect(api.auth.current()).resolves.toEqual({ username: 'admin' })
     await expect(api.clients.list()).resolves.toEqual([{
-      id: 'client-1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, online: false, uploadBytes: 0, downloadBytes: 0,
+      id: 'client-1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, online: false, uploadBytes: 0, downloadBytes: 0, uploadBytesPerSecond: 0, downloadBytesPerSecond: 0,
     }])
     await expect(api.auth.beginTOTPSetup()).resolves.toEqual({
       setupToken: 'setup-token', secret: 'secret', otpauthUri: 'otpauth://totp/test', recoveryCodes: [], expiresIn: 300,
@@ -110,7 +110,7 @@ describe('Xray-easy API adapter', () => {
     const api = createXrayEasyApi(send)
     const expected = {
       id: 'device/1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, fingerprint: 'safari', online: false,
-      lastSeen: '2026-09-28T12:00:00Z', uploadBytes: 22, downloadBytes: 33,
+      lastSeen: '2026-09-28T12:00:00Z', uploadBytes: 22, downloadBytes: 33, uploadBytesPerSecond: 0, downloadBytesPerSecond: 0,
     }
 
     await expect(api.clients.list()).resolves.toEqual([expected])
@@ -141,6 +141,27 @@ describe('Xray-easy API adapter', () => {
     await expect(api.clients.profile('hyst-1')).resolves.toEqual({
       clientId: 'hyst-1', protocol: 'hysteria2', hysteriaUri: 'hysteria2://password@vpn.test:443',
     })
+  })
+
+  it('creates, delivers, and revokes AmneziaWG profiles through the shared client gateway', async () => {
+    const clientDto = {
+      id: 'awg:iphone', name: 'iphone', protocol: 'amneziawg', protocols: ['amneziawg'],
+      enabled: true, revoked: false, online: true, last_seen: '2026-09-30T12:00:00Z',
+      upload_bytes: 100, download_bytes: 250, source_ips: ['203.0.113.7'],
+      upload_bytes_per_second: 4.5, download_bytes_per_second: 8,
+    }
+    const { send, calls } = requester({
+      '/api/clients': sequence(clientDto, clientDto),
+      '/api/clients/awg%3Aiphone/profile?format=uri': { client_id: 'awg:iphone', protocol: 'amneziawg', name: 'iphone' },
+      '/api/clients/awg%3Aiphone/revoke': { removed: true, name: 'iphone' },
+    })
+    const api = createXrayEasyApi(send)
+
+    await expect(api.clients.create({ name: 'iphone', protocol: 'amneziawg' })).resolves.toMatchObject({ protocol: 'amneziawg', id: 'awg:iphone' })
+    await expect(api.clients.profile('awg:iphone')).resolves.toEqual({ clientId: 'awg:iphone', protocol: 'amneziawg', name: 'iphone' })
+    await expect(api.clients.setAction('awg:iphone', 'revoke')).resolves.toBeUndefined()
+    expect(calls[0]?.options?.body).toBe(JSON.stringify({ name: 'iphone', protocol: 'amneziawg' }))
+    expect(calls[2]).toEqual({ url: '/api/clients/awg%3Aiphone/revoke', options: { method: 'POST', body: undefined } })
   })
 
   it('creates a VMess profile and validates its link, JSON export, and QR URL', async () => {

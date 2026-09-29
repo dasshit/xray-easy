@@ -129,6 +129,60 @@ func TestAmneziaWGPeerLifecycleAndSecretProfileDelivery(t *testing.T) {
 	}
 }
 
+func TestAmneziaWGUsesUnifiedProfileAPIAndKeepsSecretsInAWGService(t *testing.T) {
+	app := newTestApp(t, true)
+	gateway := &fakeAmneziaWGGateway{
+		status: domain.AmneziaWGStatus{Running: true, PublicHost: "vpn.example.test", PublicPort: 1234, ListenPort: 1234},
+		peers:  make(map[string]domain.AmneziaWGPeer), profiles: make(map[string]string),
+	}
+	app.server.awg = gateway
+
+	created := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "iphone", Protocol: string(domain.ProtocolAmneziaWG)}, true)
+	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"awg:iphone"`) || !strings.Contains(created.Body.String(), `"protocol":"amneziawg"`) || strings.Contains(created.Body.String(), "client-private") {
+		t.Fatalf("unified AWG create = %d %s", created.Code, created.Body.String())
+	}
+	listed := requestJSON(t, app, http.MethodGet, "/api/clients", nil, true)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"id":"awg:iphone"`) || !strings.Contains(listed.Body.String(), `"protocols":["amneziawg"]`) {
+		t.Fatalf("unified profile list = %d %s", listed.Code, listed.Body.String())
+	}
+
+	delivery := requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aiphone/profile?format=uri", nil, true)
+	if delivery.Code != http.StatusOK || !strings.Contains(delivery.Body.String(), `"name":"iphone"`) || strings.Contains(delivery.Body.String(), "client-private") {
+		t.Fatalf("AWG profile reference leaked material: %d %s", delivery.Code, delivery.Body.String())
+	}
+	qr := requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aiphone/profile?format=qr", nil, true)
+	if qr.Code != http.StatusOK || qr.Header().Get("Content-Type") != "image/png" || qr.Header().Get("Cache-Control") != "no-store, private" {
+		t.Fatalf("unified AWG QR = %d headers=%v", qr.Code, qr.Header())
+	}
+	file := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers/iphone/profile", nil, true)
+	if file.Code != http.StatusOK || !strings.Contains(file.Body.String(), "client-private") || file.Header().Get("Cache-Control") != "no-store, private" {
+		t.Fatalf("AWG config delivery = %d %s", file.Code, file.Body.String())
+	}
+
+	revoked := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aiphone/revoke", nil, true)
+	if revoked.Code != http.StatusOK || len(gateway.peers) != 0 || len(gateway.profiles) != 0 {
+		t.Fatalf("unified AWG revoke = %d %s peers=%d", revoked.Code, revoked.Body.String(), len(gateway.peers))
+	}
+}
+
+func TestUnifiedAWGCreationValidatesProtocolSpecificInputAndAvailability(t *testing.T) {
+	app := newTestApp(t, true)
+	invalid := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "bad_name", Protocol: string(domain.ProtocolAmneziaWG)}, true)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("invalid AWG profile name = %d %s", invalid.Code, invalid.Body.String())
+	}
+	unavailable := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "phone", Protocol: string(domain.ProtocolAmneziaWG)}, true)
+	if unavailable.Code != http.StatusServiceUnavailable {
+		t.Fatalf("AWG creation without service = %d %s", unavailable.Code, unavailable.Body.String())
+	}
+	gateway := &fakeAmneziaWGGateway{peers: make(map[string]domain.AmneziaWGPeer), profiles: make(map[string]string)}
+	app.server.awg = gateway
+	invalidOption := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "phone", Protocol: string(domain.ProtocolAmneziaWG), Fingerprint: "chrome"}, true)
+	if invalidOption.Code != http.StatusBadRequest {
+		t.Fatalf("AWG unsupported create option = %d %s", invalidOption.Code, invalidOption.Body.String())
+	}
+}
+
 func TestAmneziaWGUnavailableErrorsAreRedacted(t *testing.T) {
 	app := newTestApp(t, true)
 	app.server.awg = &fakeAmneziaWGGateway{

@@ -241,6 +241,9 @@ type clientResponse struct {
 	LastSeen          *time.Time            `json:"last_seen,omitempty"`
 	UploadBytes       int64                 `json:"upload_bytes"`
 	DownloadBytes     int64                 `json:"download_bytes"`
+	SourceIPs         []string              `json:"source_ips,omitempty"`
+	UploadRate        float64               `json:"upload_bytes_per_second"`
+	DownloadRate      float64               `json:"download_bytes_per_second"`
 }
 
 type clientAccessResponse struct {
@@ -344,7 +347,11 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		diagnosticBuffer: diagnostics.NewBuffer(200),
 		pendingTOTP:      make(map[string]pendingTOTP),
 	}
-	s.stats = stats.NewManager(db, statsClient)
+	if awgClient != nil {
+		s.stats = stats.NewManager(db, statsClient, awgClient)
+	} else {
+		s.stats = stats.NewManager(db, statsClient)
+	}
 	cleanup := func() {
 		_ = statsClient.Close()
 		_ = handlerClient.Close()
@@ -1915,7 +1922,22 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not list clients"})
 			return
 		}
-		writeJSON(w, http.StatusOK, s.withStats(clients))
+		response := s.withStats(clients)
+		if s.awg != nil {
+			ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
+			peers, peerErr := s.awg.ListPeers(ctx)
+			cancel()
+			if peerErr == nil {
+				response = append(response, s.withAWGStats(peers)...)
+			}
+		}
+		sort.SliceStable(response, func(left, right int) bool {
+			if response[left].Name == response[right].Name {
+				return response[left].CreatedAt.Before(response[right].CreatedAt)
+			}
+			return strings.ToLower(response[left].Name) < strings.ToLower(response[right].Name)
+		})
+		writeJSON(w, http.StatusOK, response)
 		return
 	}
 	if r.Method != http.MethodPost {
@@ -1934,8 +1956,12 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	if protocol == "" {
 		protocol = domain.ProtocolVLESS
 	}
-	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 && protocol != domain.ProtocolVMess {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless, vmess, or hysteria2"})
+	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 && protocol != domain.ProtocolVMess && protocol != domain.ProtocolAmneziaWG {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless, vmess, hysteria2, or amneziawg"})
+		return
+	}
+	if protocol == domain.ProtocolAmneziaWG {
+		s.createAWGClient(w, r, admin, name, fingerprint, authValue)
 		return
 	}
 	if protocol == domain.ProtocolVLESS && authValue != "" {
@@ -2011,6 +2037,10 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	id := parts[0]
+	if strings.HasPrefix(id, "awg:") {
+		s.amneziaWGClientRoute(w, r, admin, parts, strings.TrimPrefix(id, "awg:"))
+		return
+	}
 	client, err := s.store.GetClient(r.Context(), id)
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
@@ -2525,7 +2555,9 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 			Protocol: client.Protocol,
 			ID:       client.ID, Name: client.Name, ClientFingerprint: client.ClientFingerprint,
 			Enabled: client.Enabled, Revoked: client.Revoked, CreatedAt: client.CreatedAt, UpdatedAt: client.UpdatedAt,
-			Online: current.Online, LastSeen: current.LastSeen, UploadBytes: current.UploadBytes, DownloadBytes: current.DownloadBytes,
+			Online: current.Online, LastSeen: current.LastSeen, SourceIPs: current.SourceIPs,
+			UploadBytes: current.UploadBytes, DownloadBytes: current.DownloadBytes,
+			UploadRate: current.UploadBytesPerSecond, DownloadRate: current.DownloadBytesPerSecond,
 		}
 		if client.HasVLESS() {
 			response.Protocols = append(response.Protocols, string(domain.ProtocolVLESS))

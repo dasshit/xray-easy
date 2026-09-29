@@ -69,6 +69,20 @@ func TestGRPCLifecycleRequiresTokenAndChangesPeerWithoutRestart(t *testing.T) {
 	if engine.ups != 1 {
 		t.Fatalf("adding peer restarted the engine %d times", engine.ups-1)
 	}
+	engine.snapshot = "public_key=" + clientPublicKey + "\nendpoint=203.0.113.9:4567\nlast_handshake_time_sec=1790798400\nlast_handshake_time_nsec=0\nrx_bytes=11\ntx_bytes=22\n"
+	statsRequest, _ := structpb.NewStruct(nil)
+	statsResponse := new(structpb.Struct)
+	if err := connection.Invoke(ctx, "/xrayeasy.awg.v1.Control/GetPeerStats", statsRequest, statsResponse); status.Code(err) != codes.Unauthenticated {
+		t.Fatalf("unauthenticated peer stats error = %v", err)
+	}
+	statsResponse = new(structpb.Struct)
+	if err := connection.Invoke(authCtx, "/xrayeasy.awg.v1.Control/GetPeerStats", statsRequest, statsResponse); err != nil {
+		t.Fatal(err)
+	}
+	entries := statsResponse.GetFields()["peers"].GetListValue().GetValues()
+	if len(entries) != 1 || entries[0].GetStructValue().GetFields()["name"].GetStringValue() != "ios" || entries[0].GetStructValue().GetFields()["uploadBytes"].GetStringValue() != "11" {
+		t.Fatalf("peer stats response = %v", statsResponse.AsMap())
+	}
 
 	removeRequest, _ := structpb.NewStruct(map[string]any{"name": "ios"})
 	removeResponse := new(structpb.Struct)

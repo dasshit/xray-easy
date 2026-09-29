@@ -21,7 +21,7 @@ export const AdminDtoSchema = z.object({
 export type AdminDto = z.infer<typeof AdminDtoSchema>
 
 /** Runtime validator for the protocol variants accepted from the server. */
-export const ClientProtocolDtoSchema = z.enum(['vless', 'vmess', 'hysteria2', 'legacy_dual'])
+export const ClientProtocolDtoSchema = z.enum(['vless', 'vmess', 'hysteria2', 'amneziawg', 'legacy_dual'])
 /** Wire-format protocol access state. */
 export const ClientProtocolAccessDtoSchema = z.object({ enabled: z.boolean(), revoked: z.boolean() })
 
@@ -44,6 +44,9 @@ export const ClientDtoSchema = z.object({
   upload_bytes: z.number(),
   /** Cumulative downloaded traffic measured in bytes. */
   download_bytes: z.number(),
+  source_ips: z.array(z.string()).optional(),
+  upload_bytes_per_second: z.number().default(0),
+  download_bytes_per_second: z.number().default(0),
 })
 /** Wire-format type inferred from {@link ClientDtoSchema}. */
 export type ClientDto = z.infer<typeof ClientDtoSchema>
@@ -83,6 +86,10 @@ const HysteriaProfileDeliveryDtoSchema = z.object({
 const VMessProfileDeliveryDtoSchema = z.object({
   client_id: z.string(), protocol: z.literal('vmess'), vmess_uri: z.string(), json: z.json(),
 })
+/** Runtime validator for an AmneziaWG profile reference; secret config is fetched separately. */
+const AmneziaWGProfileDeliveryDtoSchema = z.object({
+  client_id: z.string(), protocol: z.literal('amneziawg'), name: z.string(),
+})
 /** Runtime validator for migrated combined profiles; revoked protocols may be omitted. */
 const LegacyProfileDeliveryDtoSchema = z.object({
   client_id: z.string(), protocol: z.literal('legacy_dual'), uri: z.string().optional(),
@@ -91,7 +98,7 @@ const LegacyProfileDeliveryDtoSchema = z.object({
 /** Runtime validator for a protocol-discriminated profile delivery response. */
 export const ProfileDeliveryDtoSchema = z.discriminatedUnion('protocol', [
   VLESSProfileDeliveryDtoSchema, HysteriaProfileDeliveryDtoSchema, LegacyProfileDeliveryDtoSchema,
-  VMessProfileDeliveryDtoSchema,
+  VMessProfileDeliveryDtoSchema, AmneziaWGProfileDeliveryDtoSchema,
 ])
 /** Wire-format type inferred from {@link ProfileDeliveryDtoSchema}. */
 export type ProfileDeliveryDto = z.infer<typeof ProfileDeliveryDtoSchema>

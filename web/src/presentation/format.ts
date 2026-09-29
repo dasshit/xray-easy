@@ -15,6 +15,14 @@ export function formatBytes(value: number): string {
   return `${amount.toFixed(amount >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`
 }
 
+/** Format a sampled transfer rate in binary bytes per second.
+ * @param value - The measured number of bytes transferred per second.
+ * @returns A compact value suffixed with `/s`.
+ */
+export function formatRate(value: number): string {
+  return `${formatBytes(Math.max(0, value))}/s`
+}
+
 /**
  * Format a timestamp using the selected interface locale.
  * @param value - The timestamp to format, when one is available.

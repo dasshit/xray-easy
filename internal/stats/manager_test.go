@@ -22,6 +22,15 @@ type fakeStatsAPI struct {
 	calls int
 }
 
+type fakeAWGStatsAPI struct {
+	peers []domain.AmneziaWGPeerStats
+	err   error
+}
+
+func (f *fakeAWGStatsAPI) PeerStats(context.Context) ([]domain.AmneziaWGPeerStats, error) {
+	return append([]domain.AmneziaWGPeerStats(nil), f.peers...), f.err
+}
+
 func (f *fakeStatsAPI) Poll(context.Context) ([]xrayapi.UserStats, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -73,7 +82,7 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 	manager.now = func() time.Time { return now }
 	lastSeen := now.Add(-4 * time.Minute)
 	api.set([]xrayapi.UserStats{
-		{Email: "phone@example.test", UploadBytes: 100, DownloadBytes: 200, LastSeen: lastSeen},
+		{Email: "phone@example.test", UploadBytes: 100, DownloadBytes: 200, LastSeen: lastSeen, SourceIPs: []xrayapi.IPObservation{{Address: "198.51.100.12", LastSeen: lastSeen}}},
 		{Email: "unknown@example.test", UploadBytes: 500, DownloadBytes: 900},
 	}, nil)
 	if err := manager.Poll(context.Background()); err != nil {
@@ -82,6 +91,9 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 	first := manager.Snapshot()
 	if got := first["phone"]; !got.Online || got.UploadBytes != 100 || got.DownloadBytes != 200 || got.LastSeen == nil || !got.LastSeen.Equal(lastSeen) {
 		t.Fatalf("first phone stats = %+v", got)
+	}
+	if len(first["phone"].SourceIPs) != 1 || first["phone"].SourceIPs[0] != "198.51.100.12" || first["phone"].UploadBytesPerSecond != 0 {
+		t.Fatalf("first phone source/rate = %+v", first["phone"])
 	}
 	if got := first["tablet"]; got.Online || got.UploadBytes != 0 || got.DownloadBytes != 0 || got.LastSeen != nil {
 		t.Fatalf("device without traffic stats = %+v", got)
@@ -92,13 +104,16 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 	}
 
 	now = now.Add(10 * time.Second)
-	api.set([]xrayapi.UserStats{{Email: "phone@example.test", UploadBytes: 120, DownloadBytes: 250, LastSeen: lastSeen.Add(-time.Second)}}, nil)
+	api.set([]xrayapi.UserStats{{Email: "phone@example.test", UploadBytes: 120, DownloadBytes: 250, LastSeen: lastSeen.Add(-time.Second), SourceIPs: []xrayapi.IPObservation{{Address: "198.51.100.12", LastSeen: lastSeen}}}}, nil)
 	if err := manager.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	second := manager.Snapshot()["phone"]
 	if second.UploadBytes != 120 || second.DownloadBytes != 250 || second.LastSeen == nil || !second.LastSeen.Equal(lastSeen) {
 		t.Fatalf("monotonic snapshot = %+v", second)
+	}
+	if second.UploadBytesPerSecond != 2 || second.DownloadBytesPerSecond != 5 || len(second.SourceIPs) != 1 {
+		t.Fatalf("sampled traffic/source IP = %+v", second)
 	}
 
 	// Xray's process-local counters have restarted and are now lower than the
@@ -132,6 +147,96 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 	}
 	if snapshots["phone"].RawUpload != 5 || snapshots["phone"].TotalUpload != 125 || !snapshots["phone"].LastPolledAt.Equal(now) {
 		t.Fatalf("durable snapshot = %+v", snapshots["phone"])
+	}
+}
+
+func TestAWGStatsAreComposedPersistedAndRateLimitedToFreshPolls(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	xray := &fakeStatsAPI{}
+	awg := &fakeAWGStatsAPI{}
+	manager := NewManager(db, xray, awg)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	awg.peers = []domain.AmneziaWGPeerStats{{Name: "iphone", SourceIP: "203.0.113.7", LastSeen: now.Add(-30 * time.Second), UploadBytes: 100, DownloadBytes: 250}}
+	if err := manager.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	first := manager.Snapshot()["awg:iphone"]
+	if !first.Online || first.UploadBytes != 100 || first.DownloadBytes != 250 || first.LastSeen == nil || first.SourceIPs[0] != "203.0.113.7" {
+		t.Fatalf("initial AWG telemetry = %+v", first)
+	}
+	if first.UploadBytesPerSecond != 0 || first.DownloadBytesPerSecond != 0 {
+		t.Fatalf("initial sample should not infer a rate: %+v", first)
+	}
+
+	now = now.Add(10 * time.Second)
+	awg.peers[0] = domain.AmneziaWGPeerStats{Name: "iphone", SourceIP: "203.0.113.7", LastSeen: now.Add(-time.Second), UploadBytes: 150, DownloadBytes: 310}
+	if err := manager.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	second := manager.Snapshot()["awg:iphone"]
+	if second.UploadBytes != 150 || second.DownloadBytes != 310 || second.UploadBytesPerSecond != 5 || second.DownloadBytesPerSecond != 6 {
+		t.Fatalf("second AWG sample = %+v", second)
+	}
+
+	// A fresh control-plane manager detects the engine counter reset while
+	// preserving the cumulative counters in SQLite.
+	now = now.Add(10 * time.Second)
+	awg.peers[0] = domain.AmneziaWGPeerStats{Name: "iphone", SourceIP: "203.0.113.8", LastSeen: now.Add(-time.Second), UploadBytes: 10, DownloadBytes: 20}
+	restarted := NewManager(db, xray, awg)
+	restarted.now = func() time.Time { return now }
+	if err := restarted.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	third := restarted.Snapshot()["awg:iphone"]
+	if third.UploadBytes != 160 || third.DownloadBytes != 330 || third.SourceIPs[0] != "203.0.113.8" || third.UploadBytesPerSecond != 1 || third.DownloadBytesPerSecond != 2 {
+		t.Fatalf("post-restart AWG sample = %+v", third)
+	}
+	if err := db.DeleteAWGTrafficSnapshot(context.Background(), "iphone"); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints, err := db.ListAWGTrafficSnapshots(context.Background())
+	if err != nil || len(checkpoints) != 0 {
+		t.Fatalf("revoked AWG stats checkpoints = %+v, %v", checkpoints, err)
+	}
+}
+
+func TestAWGStatsFailureDoesNotBlockXrayAndStalePeersLoseSourceIP(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	createStatsClient(t, db, "phone", "phone@example.test")
+	xray := &fakeStatsAPI{}
+	awg := &fakeAWGStatsAPI{peers: []domain.AmneziaWGPeerStats{{
+		Name: "iphone", SourceIP: "203.0.113.7", LastSeen: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), UploadBytes: 10, DownloadBytes: 20,
+	}}}
+	manager := NewManager(db, xray, awg)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	xray.set([]xrayapi.UserStats{{Email: "phone@example.test", UploadBytes: 100, LastSeen: now}}, nil)
+	if err := manager.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(10 * time.Second)
+	xray.set([]xrayapi.UserStats{{Email: "phone@example.test", UploadBytes: 125, LastSeen: now}}, nil)
+	awg.err = errors.New("AWG telemetry unavailable")
+	if err := manager.Poll(context.Background()); err == nil || !strings.Contains(err.Error(), "AWG telemetry unavailable") {
+		t.Fatalf("AWG failure poll error = %v", err)
+	}
+	current := manager.Snapshot()
+	if current["phone"].UploadBytes != 125 || current["phone"].UploadBytesPerSecond != 2.5 {
+		t.Fatalf("Xray stats were lost after AWG failure: %+v", current["phone"])
+	}
+	if !current["awg:iphone"].Online || current["awg:iphone"].UploadBytesPerSecond != 0 || current["awg:iphone"].SourceIPs[0] != "203.0.113.7" {
+		t.Fatalf("AWG failure should retain fresh status, clear rates, and preserve source IP: %+v", current["awg:iphone"])
+	}
+
+	now = now.Add(onlineWindow + time.Second)
+	if err := manager.Poll(context.Background()); err == nil {
+		t.Fatal("persistent AWG failure was not returned")
+	}
+	stale := manager.Snapshot()["awg:iphone"]
+	if stale.Online || len(stale.SourceIPs) != 0 || stale.UploadBytesPerSecond != 0 {
+		t.Fatalf("stale AWG status retained active connection details: %+v", stale)
 	}
 }
 

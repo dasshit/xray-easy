@@ -59,6 +59,18 @@ type TrafficSnapshot struct {
 	LastPolledAt  time.Time
 }
 
+// AWGTrafficSnapshot checkpoints process-local AmneziaWG counters by peer name.
+type AWGTrafficSnapshot struct {
+	PeerName      string
+	RawUpload     int64
+	RawDownload   int64
+	TotalUpload   int64
+	TotalDownload int64
+	SourceIP      string
+	LastSeenAt    time.Time
+	LastPolledAt  time.Time
+}
+
 type ApplyOperation struct {
 	ID        string
 	Revision  int64
@@ -465,6 +477,16 @@ CREATE TABLE IF NOT EXISTS traffic_snapshots (
   raw_download INTEGER NOT NULL DEFAULT 0,
   total_upload INTEGER NOT NULL DEFAULT 0,
   total_download INTEGER NOT NULL DEFAULT 0,
+  last_seen_at TEXT NOT NULL DEFAULT '',
+  last_polled_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS awg_traffic_snapshots (
+  peer_name TEXT PRIMARY KEY,
+  raw_upload INTEGER NOT NULL DEFAULT 0,
+  raw_download INTEGER NOT NULL DEFAULT 0,
+  total_upload INTEGER NOT NULL DEFAULT 0,
+  total_download INTEGER NOT NULL DEFAULT 0,
+  source_ip TEXT NOT NULL DEFAULT '',
   last_seen_at TEXT NOT NULL DEFAULT '',
   last_polled_at TEXT NOT NULL
 );
@@ -1441,6 +1463,53 @@ func (s *Store) UpsertTrafficSnapshot(ctx context.Context, snapshot TrafficSnaps
 	}
 	_, err := s.db.ExecContext(ctx, `INSERT INTO traffic_snapshots(client_id, raw_upload, raw_download, total_upload, total_download, last_seen_at, last_polled_at) VALUES(?,?,?,?,?,?,?)
 ON CONFLICT(client_id) DO UPDATE SET raw_upload=excluded.raw_upload, raw_download=excluded.raw_download, total_upload=excluded.total_upload, total_download=excluded.total_download, last_seen_at=excluded.last_seen_at, last_polled_at=excluded.last_polled_at`, snapshot.ClientID, snapshot.RawUpload, snapshot.RawDownload, snapshot.TotalUpload, snapshot.TotalDownload, lastSeen, lastPolled.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// ListAWGTrafficSnapshots loads durable counters for AmneziaWG peers.
+func (s *Store) ListAWGTrafficSnapshots(ctx context.Context) (map[string]AWGTrafficSnapshot, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT peer_name, raw_upload, raw_download, total_upload, total_download, source_ip, last_seen_at, last_polled_at FROM awg_traffic_snapshots`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]AWGTrafficSnapshot)
+	for rows.Next() {
+		var snapshot AWGTrafficSnapshot
+		var lastSeen, lastPolled string
+		if err := rows.Scan(&snapshot.PeerName, &snapshot.RawUpload, &snapshot.RawDownload, &snapshot.TotalUpload, &snapshot.TotalDownload, &snapshot.SourceIP, &lastSeen, &lastPolled); err != nil {
+			return nil, err
+		}
+		if lastSeen != "" {
+			snapshot.LastSeenAt, _ = time.Parse(time.RFC3339Nano, lastSeen)
+		}
+		snapshot.LastPolledAt, _ = time.Parse(time.RFC3339Nano, lastPolled)
+		result[snapshot.PeerName] = snapshot
+	}
+	return result, rows.Err()
+}
+
+// UpsertAWGTrafficSnapshot saves current counters and cumulative totals.
+func (s *Store) UpsertAWGTrafficSnapshot(ctx context.Context, snapshot AWGTrafficSnapshot) error {
+	if snapshot.PeerName == "" {
+		return errors.New("AWG peer name is required")
+	}
+	lastSeen := ""
+	if !snapshot.LastSeenAt.IsZero() {
+		lastSeen = snapshot.LastSeenAt.UTC().Format(time.RFC3339Nano)
+	}
+	lastPolled := snapshot.LastPolledAt
+	if lastPolled.IsZero() {
+		lastPolled = time.Now().UTC()
+	}
+	_, err := s.db.ExecContext(ctx, `INSERT INTO awg_traffic_snapshots(peer_name, raw_upload, raw_download, total_upload, total_download, source_ip, last_seen_at, last_polled_at) VALUES(?,?,?,?,?,?,?,?)
+ON CONFLICT(peer_name) DO UPDATE SET raw_upload=excluded.raw_upload, raw_download=excluded.raw_download, total_upload=excluded.total_upload, total_download=excluded.total_download, source_ip=excluded.source_ip, last_seen_at=excluded.last_seen_at, last_polled_at=excluded.last_polled_at`, snapshot.PeerName, snapshot.RawUpload, snapshot.RawDownload, snapshot.TotalUpload, snapshot.TotalDownload, snapshot.SourceIP, lastSeen, lastPolled.UTC().Format(time.RFC3339Nano))
+	return err
+}
+
+// DeleteAWGTrafficSnapshot removes the checkpoint when an AWG peer is revoked.
+func (s *Store) DeleteAWGTrafficSnapshot(ctx context.Context, name string) error {
+	_, err := s.db.ExecContext(ctx, `DELETE FROM awg_traffic_snapshots WHERE peer_name=?`, name)
 	return err
 }
 

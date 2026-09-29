@@ -146,6 +146,13 @@ export type VMessProfileDelivery = {
   json: unknown
 }
 
+/** AmneziaWG profile reference; its private `.conf` stays in the AWG service. */
+export type AmneziaWGProfileDelivery = {
+  clientId: string
+  protocol: 'amneziawg'
+  name: string
+}
+
 /** Existing combined profile, retained for compatibility with migrated records. */
 export type LegacyProfileDelivery = {
   clientId: string
@@ -156,7 +163,7 @@ export type LegacyProfileDelivery = {
 }
 
 /** Delivery payload discriminated by the protocol credentials on the profile. */
-export type ProfileDelivery = VLESSProfileDelivery | VMessProfileDelivery | HysteriaProfileDelivery | LegacyProfileDelivery
+export type ProfileDelivery = VLESSProfileDelivery | VMessProfileDelivery | HysteriaProfileDelivery | AmneziaWGProfileDelivery | LegacyProfileDelivery
 
 /** Proposed server settings submitted for preview before applying changes. */
 export type SettingsPreviewCommand = {

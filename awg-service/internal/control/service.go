@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -56,6 +57,29 @@ func (s *Service) ListPeers(context.Context, *structpb.Struct) (*structpb.Struct
 	items := make([]any, 0, len(peers))
 	for _, peer := range peers {
 		items = append(items, peerMap(peer))
+	}
+	return response(map[string]any{"peers": items})
+}
+
+// GetPeerStats returns the live endpoint, handshake, and counters for each
+// managed peer without returning any private configuration material.
+func (s *Service) GetPeerStats(context.Context, *structpb.Struct) (*structpb.Struct, error) {
+	peers, err := s.manager.PeerTelemetry()
+	if err != nil {
+		return nil, mapError(err)
+	}
+	items := make([]any, 0, len(peers))
+	for _, peer := range peers {
+		lastHandshake := ""
+		if !peer.LastHandshake.IsZero() {
+			lastHandshake = peer.LastHandshake.UTC().Format(time.RFC3339Nano)
+		}
+		items = append(items, map[string]any{
+			"name": peer.Name, "sourceIp": peer.SourceIP,
+			"lastHandshake": lastHandshake,
+			"uploadBytes":   strconv.FormatInt(peer.UploadBytes, 10),
+			"downloadBytes": strconv.FormatInt(peer.DownloadBytes, 10),
+		})
 	}
 	return response(map[string]any{"peers": items})
 }

@@ -97,6 +97,9 @@ function mapClient(dto: ClientDto): Client {
     online: dto.online,
     uploadBytes: dto.upload_bytes,
     downloadBytes: dto.download_bytes,
+    ...(dto.source_ips === undefined ? {} : { sourceIPs: dto.source_ips }),
+    uploadBytesPerSecond: dto.upload_bytes_per_second,
+    downloadBytesPerSecond: dto.download_bytes_per_second,
     ...(dto.fingerprint === undefined ? {} : { fingerprint: dto.fingerprint }),
     ...(dto.last_seen === undefined ? {} : { lastSeen: dto.last_seen }),
   }
@@ -359,6 +362,7 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
         if (dto.protocol === 'vless') return { clientId: dto.client_id, protocol: dto.protocol, uri: dto.uri, json: dto.json }
         if (dto.protocol === 'hysteria2') return { clientId: dto.client_id, protocol: dto.protocol, hysteriaUri: dto.hysteria_uri }
         if (dto.protocol === 'vmess') return { clientId: dto.client_id, protocol: dto.protocol, vmessUri: dto.vmess_uri, json: dto.json }
+        if (dto.protocol === 'amneziawg') return { clientId: dto.client_id, protocol: dto.protocol, name: dto.name }
         return {
           clientId: dto.client_id, protocol: dto.protocol,
           ...(dto.uri === undefined ? {} : { uri: dto.uri }),
@@ -366,9 +370,14 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
           ...(dto.json === undefined ? {} : { json: dto.json }),
         }
       },
-      setAction: async (clientId: string, action: ClientActionType): Promise<Client> => mapClient(
-        await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/${action}`, ClientDtoSchema, post()),
-      ),
+      setAction: async (clientId: string, action: ClientActionType): Promise<Client | undefined> => {
+        if (clientId.startsWith('awg:')) {
+          if (action !== 'revoke') throw new Error('AmneziaWG profiles support revoke only')
+          await sendVoid(`/api/clients/${encodeURIComponent(clientId)}/revoke`, post())
+          return undefined
+        }
+        return mapClient(await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/${action}`, ClientDtoSchema, post()))
+      },
       profileQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=qr`,
       profileHysteriaQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=hysteria-qr`,
       profileVMessQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=vmess-qr`,

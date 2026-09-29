@@ -25,10 +25,16 @@ export type Client = {
   uploadBytes: number
   /** Cumulative downloaded traffic in bytes; totals are retained across Xray restarts. */
   downloadBytes: number
+  /** Source addresses observed recently by the protocol, when available. */
+  sourceIPs?: string[]
+  /** Sampled upload rate in bytes per second, averaged over the last poll window. */
+  uploadBytesPerSecond?: number
+  /** Sampled download rate in bytes per second, averaged over the last poll window. */
+  downloadBytesPerSecond?: number
 }
 
 /** Protocols supported by a device profile, including migrated combined profiles. */
-export type ClientProtocol = 'vless' | 'vmess' | 'hysteria2' | 'legacy_dual'
+export type ClientProtocol = 'vless' | 'vmess' | 'hysteria2' | 'amneziawg' | 'legacy_dual'
 
 /** Enabled and revoked state for one protocol access. */
 export type ClientProtocolAccess = { enabled: boolean; revoked: boolean }

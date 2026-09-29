@@ -89,6 +89,7 @@ lifecycle. The API is registered as
 | --- | --- | --- |
 | `GetStatus` | none | Running state, server public key, public/listen endpoints, peer count and client networks |
 | `ListPeers` | none | `peers[]` with name, client public key, IPv4/IPv6 and creation time |
+| `GetPeerStats` | none | `peers[]` with name, observed source IP, last handshake, upload bytes and download bytes; no private profile data |
 | `AddPeer` | `name`, `publicKey` | Created peer metadata; activates it immediately |
 | `RemovePeer` | `name` | `{ "removed": true, "name": ... }` |
 | `CreatePeer` | `name` | Creates a keypair, activates the peer and saves its private profile |
@@ -118,8 +119,11 @@ particular profile will evade DPI or work through every network.
 ## Validation boundary
 
 Unit tests, race checks, `go vet`, Linux amd64/arm64 cross-builds, Compose
-configuration validation and a local image build run off-VDS. A VDS smoke test
-succeeded with the official AmneziaWG iOS client: after creating and importing
-a peer profile, the container was restarted, the peer and its addresses
-persisted, and the client reconnected with working traffic. Long-term
-stability, macOS clients, and IPv6 egress still need separate validation.
+configuration validation and a local image build run off-VDS. On a VDS, a clean
+AWG volume passed checks with the official AmneziaWG iOS client: a new profile
+connected and carried traffic; peer state survived an AWG container restart and
+a VDS reboot; backup/restore recovered a revoked test peer and its profile, and
+the client connected again. The earlier AWG volume failed AES-GCM key
+authentication and was reinitialized, so migration and recovery of that old
+encrypted state remain unverified. Long-term stability, macOS clients and IPv6
+egress still need separate validation.

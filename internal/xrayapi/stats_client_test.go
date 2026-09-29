@@ -61,6 +61,8 @@ func TestStatsClientPollMapsAndSanitizesUserStats(t *testing.T) {
 			{Ip: "192.0.2.2", LastSeen: 100},
 			{Ip: "192.0.2.3", LastSeen: 200},
 			{Ip: "192.0.2.4", LastSeen: 150},
+			{Ip: "not-an-ip", LastSeen: 250},
+			{Ip: "192.0.2.3", LastSeen: 300},
 		}, Traffic: &statscommand.TrafficUserStat{Uplink: 1234, Downlink: 5678}},
 		{Email: "legacy@example.test", Ips: []*statscommand.OnlineIPEntry{{Ip: "192.0.2.5", LastSeen: 0}}, Traffic: nil},
 		{Email: "negative@example.test", Traffic: &statscommand.TrafficUserStat{Uplink: -10, Downlink: -20}},
@@ -73,8 +75,11 @@ func TestStatsClientPollMapsAndSanitizesUserStats(t *testing.T) {
 	if len(users) != 3 {
 		t.Fatalf("Poll returned %d users: %+v", len(users), users)
 	}
-	if users[0].Email != "phone@example.test" || users[0].UploadBytes != 1234 || users[0].DownloadBytes != 5678 || !users[0].LastSeen.Equal(time.Unix(200, 0).UTC()) {
+	if users[0].Email != "phone@example.test" || users[0].UploadBytes != 1234 || users[0].DownloadBytes != 5678 || !users[0].LastSeen.Equal(time.Unix(300, 0).UTC()) {
 		t.Fatalf("mapped traffic stats = %+v", users[0])
+	}
+	if len(users[0].SourceIPs) != 3 || users[0].SourceIPs[0].Address != "192.0.2.2" || users[0].SourceIPs[1].LastSeen.Unix() != 300 {
+		t.Fatalf("mapped source IP observations = %+v", users[0].SourceIPs)
 	}
 	if users[1].Email != "legacy@example.test" || users[1].UploadBytes != 0 || users[1].DownloadBytes != 0 || !users[1].LastSeen.IsZero() {
 		t.Fatalf("missing traffic/IP stats = %+v", users[1])

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { Client } from '../src/domain/models'
-import { clientDto, defaultHandler, flushPromises, hysteriaStatus, mountApp, sampleClient, type RequestRecord } from './appHarness'
+import { clientDto, defaultHandler, flushPromises, hysteriaStatus, mountApp, openTab, sampleClient, type RequestRecord } from './appHarness'
 
 type ButtonFinder = { text(): string; trigger(event: string): Promise<unknown> }
 function findButton(wrapper: { findAll(selector: string): ButtonFinder[] }, label: string) {
@@ -101,6 +101,60 @@ describe('profile list and creation', () => {
     await flushPromises()
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith('hysteria2://custom-secret@vpn.example.com:443?insecure=1')
     expect(wrapper.get('[role="status"]').text()).toContain('Profile link copied')
+  })
+
+  it('creates and manages AmneziaWG inside the shared profile screen', async () => {
+    const requests: RequestRecord[] = []
+    const awgClient: Client = {
+      id: 'awg:iphone', name: 'iphone', protocol: 'amneziawg', protocols: ['amneziawg'],
+      enabled: true, revoked: false, online: true, lastSeen: '2026-09-30T12:00:00Z',
+      uploadBytes: 4096, downloadBytes: 8192, sourceIPs: ['203.0.113.9'],
+      uploadBytesPerSecond: 12.5, downloadBytesPerSecond: 1024,
+    }
+    const awgStatus = {
+      enabled: true, available: true, running: true, public_key: 'server-public-key',
+      public_host: 'vpn.example.test', public_port: 1234, listen_port: 1234,
+      peer_count: 1, ipv4_network: '10.88.0.0/24', ipv6_network: 'fd88:88:88::/64', service_version: 'prototype-v1',
+    }
+    const { wrapper } = await mountApp(request => {
+      requests.push(request)
+      if (request.method === 'GET' && request.url === '/api/clients') return { body: [] }
+      if (request.url === '/api/transports/amneziawg') return { body: awgStatus }
+      if (request.method === 'POST' && request.url === '/api/clients') return { status: 201, body: clientDto(awgClient) }
+      if (request.url === '/api/clients/awg%3Aiphone/profile?format=uri') return { body: { client_id: awgClient.id, protocol: 'amneziawg', name: 'iphone' } }
+      if (request.method === 'POST' && request.url === '/api/clients/awg%3Aiphone/revoke') return { body: { removed: true, name: 'iphone' } }
+      return defaultHandler({ authenticated: true })(request)
+    })
+
+    expect(wrapper.findAll('[role="tab"]').map(tab => tab.text())).not.toContain('AmneziaWG')
+    await findButton(wrapper, 'Create profile').trigger('click')
+    const createDialog = wrapper.get('[role="dialog"]')
+    await createDialog.get('input.device-name-input').setValue('iphone')
+    await createDialog.get('[data-testid="profile-protocol"]').setValue('amneziawg')
+    await createDialog.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(requests.find(request => request.method === 'POST' && request.url === '/api/clients')?.body).toEqual({ name: 'iphone', protocol: 'amneziawg' })
+    expect(wrapper.get('.profile-modal img.qr').attributes('src')).toBe('/api/transports/amneziawg/peers/iphone/profile/qr')
+    expect(wrapper.get('.profile-modal a.download-link').attributes('href')).toBe('/api/transports/amneziawg/peers/iphone/profile')
+    await wrapper.get('.profile-modal .icon-button').trigger('click')
+
+    const device = wrapper.get('.device-card')
+    expect(device.text()).toContain('203.0.113.9')
+    expect(device.text()).toContain('13 B/s')
+    expect(device.text()).toContain('1.0 KB/s')
+    expect(device.text()).toContain('4.0 KB')
+    await openTab(wrapper, 'Settings')
+    expect(wrapper.text()).toContain('vpn.example.test:1234/UDP')
+    expect(wrapper.text()).toContain('10.88.0.0/24')
+    await openTab(wrapper, 'Profiles')
+    await findButton(wrapper, 'Revoke').trigger('click')
+    const revokeDialog = wrapper.get('.modal-small')
+    expect(revokeDialog.text()).toContain('Its saved profile will be deleted')
+    await findButton(revokeDialog, 'Revoke').trigger('click')
+    await flushPromises()
+    expect(wrapper.findAll('.device-card')).toHaveLength(0)
+    expect(requests.some(request => request.method === 'POST' && request.url === '/api/clients/awg%3Aiphone/revoke')).toBe(true)
   })
 
   it('keeps VLESS available when Hysteria status cannot be loaded and opens Settings from the notice', async () => {
