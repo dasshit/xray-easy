@@ -95,7 +95,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .header-actions { display: flex; align-items: center; gap: 18px; white-space: nowrap; }
 .eyebrow { margin-bottom: 5px; color: var(--muted); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .tabs { display: flex; gap: 4px; padding: 0 30px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-.tabs.diagnostics-tabs { margin: 0 0 22px; padding: 0; }
+.tabs.diagnostics-tabs { margin: 0 0 22px; padding: 0; overflow-y: hidden; }
 .tabs button { position: relative; border-radius: 0; padding: 13px 14px; background: transparent; color: var(--muted); white-space: nowrap; }
 .tabs button:hover:not(:disabled) { background: var(--surface-muted); color: var(--primary); }
 .tabs button.active { color: var(--primary); font-weight: 700; }
