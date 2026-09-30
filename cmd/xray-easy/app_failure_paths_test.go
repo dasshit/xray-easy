@@ -157,9 +157,9 @@ func TestApplyClientsLockedReportsMaintenanceApplyAndPromotionFailures(t *testin
 		t.Fatal(err)
 	}
 
-	app.sup.applyErrors = []error{errors.New("supervisor apply failed")}
-	if err := app.server.applyClientsLocked(context.Background(), settings, privateKey, []domain.Client{client}, app.admin.ID, "test.apply", client.ID); err == nil || !strings.Contains(err.Error(), "supervisor apply failed") {
-		t.Fatalf("supervisor apply failure = %v", err)
+	app.sup.applyErrors = []error{errors.New("Xray runtime apply failed")}
+	if err := app.server.applyClientsLocked(context.Background(), settings, privateKey, []domain.Client{client}, app.admin.ID, "test.apply", client.ID); err == nil || !strings.Contains(err.Error(), "Xray runtime apply failed") {
+		t.Fatalf("Xray runtime apply failure = %v", err)
 	}
 
 	if err := os.Mkdir(filepath.Join(app.server.configDir, "active.json"), 0o700); err != nil {
@@ -395,16 +395,16 @@ func TestIssueSessionAndHealthHandlersReportClosedStore(t *testing.T) {
 
 func TestApplyRestoredStateReportsValidationAndPromotionFailures(t *testing.T) {
 	app := newTestApp(t, true)
-	if err := applyRestoredStateWithSupervisor(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, &fakeSupervisor{validateErr: errors.New("invalid Xray config")}); err == nil || !strings.Contains(err.Error(), "invalid Xray config") {
+	if err := applyRestoredStateWithRuntime(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, &fakeXrayRuntime{validateErr: errors.New("invalid Xray config")}); err == nil || !strings.Contains(err.Error(), "invalid Xray config") {
 		t.Fatalf("restored-state validation failure = %v", err)
 	}
-	if err := applyRestoredStateWithSupervisor(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, &fakeSupervisor{applyErrors: []error{errors.New("apply failed")}}); err == nil || !strings.Contains(err.Error(), "apply failed") {
+	if err := applyRestoredStateWithRuntime(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, &fakeXrayRuntime{applyErrors: []error{errors.New("apply failed")}}); err == nil || !strings.Contains(err.Error(), "apply failed") {
 		t.Fatalf("restored-state apply failure = %v", err)
 	}
 	if err := os.Mkdir(filepath.Join(app.server.configDir, "active.json"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRestoredStateWithSupervisor(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, &fakeSupervisor{}); err == nil {
+	if err := applyRestoredStateWithRuntime(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, &fakeXrayRuntime{}); err == nil {
 		t.Fatal("restored-state promotion failure ignored")
 	}
 }

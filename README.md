@@ -246,17 +246,6 @@ currently pins Xray-core **26.7.28**; changing **XRAY_VERSION** to another value
 causes the image build to stop until that embedded version has been deliberately
 updated and verified.
 
-During the embedded runtime rollout, the previous supervisor Compose file is
-available for rollback. It uses the same project name and persistent data
-volumes as the default file. Run only one Compose variant at a time:
-
-~~~sh
-docker compose -f compose.supervisor-rollback.yaml up -d --build --wait --wait-timeout 180
-~~~
-
-Return to the embedded runtime with `docker compose up -d --build --wait` after
-the cause is resolved.
-
 ### Backups and restore
 
 The Security page can create a manual backup. The application also creates
@@ -333,8 +322,7 @@ IPv6 connectivity from the Xray container, not public inbound reachability.
   is through SSH port forwarding, with password login and optional TOTP.
 - Backend, Controller, the embedded Xray runtime and optional AmneziaWG use
   separate containers and private Compose networks. Runtime gRPC ports are not
-  published to the VPS. A temporary `compose.supervisor-rollback.yaml` is kept
-  for rollback during the embedded runtime rollout.
+  published to the VPS.
 - Internal RPC links use authentication but are not encrypted; keep them on
   the private Docker networks and do not attach untrusted containers.
 - **XRAY_EASY_MASTER_KEY** must be base64 encoding at least 32 bytes. The

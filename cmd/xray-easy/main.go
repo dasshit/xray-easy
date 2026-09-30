@@ -36,7 +36,6 @@ import (
 	"xray-easy/internal/secret"
 	"xray-easy/internal/stats"
 	"xray-easy/internal/store"
-	"xray-easy/internal/supervisor"
 	"xray-easy/internal/totp"
 	"xray-easy/internal/ui"
 	"xray-easy/internal/xray"
@@ -53,7 +52,7 @@ type server struct {
 	dataDir          string
 	maintenancePath  string
 	defaultAPIListen string
-	supervisor       supervisorAPI
+	xrayRuntime      xrayRuntimeAPI
 	stats            *stats.Manager
 	awg              awgcontrol.Gateway
 	handler          xrayHandlerAPI
@@ -69,16 +68,16 @@ type server struct {
 	pendingTOTP      map[string]pendingTOTP
 }
 
-type supervisorAPI interface {
+type xrayRuntimeAPI interface {
 	Validate(context.Context, string, string) error
 	Apply(context.Context, string, string) error
 	ProbeTarget(context.Context, string, string) error
-	Status(context.Context) (supervisor.Status, error)
+	Status(context.Context) (domain.XrayRuntimeStatus, error)
 	Logs(context.Context) ([]string, error)
 }
 
 type runtimeControl interface {
-	supervisorAPI
+	xrayRuntimeAPI
 	Health(context.Context) error
 	ProbeIPv6(context.Context) error
 	ReplaceInbound(context.Context, string, string, string, string) error
@@ -348,7 +347,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		dataDir:          dataDir,
 		maintenancePath:  filepath.Join(dataDir, "maintenance.lock"),
 		defaultAPIListen: apiListen,
-		supervisor:       controllerClient,
+		xrayRuntime:      controllerClient,
 		handler:          controllerClient,
 		awg:              awgGateway,
 		pendingSettings:  make(map[string]pendingSettingsChange),
@@ -713,15 +712,15 @@ func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
 }
 
 func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int) error {
-	sup, closeRuntime, err := dialRuntimeControl()
+	runtime, closeRuntime, err := dialRuntimeControl()
 	if err != nil {
 		return err
 	}
 	defer closeRuntime()
-	return applyRestoredStateWithSupervisor(ctx, db, masterKey, configDir, publicPort, sup)
+	return applyRestoredStateWithRuntime(ctx, db, masterKey, configDir, publicPort, runtime)
 }
 
-func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int, sup supervisorAPI) error {
+func applyRestoredStateWithRuntime(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int, runtime xrayRuntimeAPI) error {
 	settings, err := db.GetSettings(ctx)
 	if err != nil {
 		return err
@@ -773,17 +772,17 @@ func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, mast
 		_ = db.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
-	if err := sup.Validate(applyContext, candidate, operationID); err != nil {
+	if err := runtime.Validate(applyContext, candidate, operationID); err != nil {
 		_ = db.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
 	_ = db.UpdateApplyOperation(ctx, operationID, "applying", "")
-	if err := sup.Apply(applyContext, candidate, operationID); err != nil {
+	if err := runtime.Apply(applyContext, candidate, operationID); err != nil {
 		_ = db.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
 	if err := os.Rename(candidate, filepath.Join(configDir, "active.json")); err != nil {
-		rollbackErr := sup.Apply(applyContext, filepath.Join(configDir, "active.json"), operationID+"-rollback")
+		rollbackErr := runtime.Apply(applyContext, filepath.Join(configDir, "active.json"), operationID+"-rollback")
 		_ = db.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		if rollbackErr != nil {
 			return fmt.Errorf("promote restored Xray config: %w; rollback failed: %v", err, rollbackErr)
@@ -898,7 +897,7 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	if err := s.supervisor.ProbeTarget(r.Context(), req.RealityTarget, req.RealitySNI); err != nil {
+	if err := s.xrayRuntime.ProbeTarget(r.Context(), req.RealityTarget, req.RealitySNI); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "REALITY target probe failed", "detail": err.Error()})
 		return
 	}
@@ -1124,17 +1123,14 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
 		return
 	}
-	status, err := s.supervisor.Status(r.Context())
+	status, err := s.xrayRuntime.Status(r.Context())
 	response := map[string]any{
 		"state":                   status.State,
 		"xray_version":            status.XrayVersion,
 		"configured_xray_version": envOr("XRAY_VERSION", "unknown"),
 		"xray_version_verified":   xrayVersionVerified(status.XrayVersion, envOr("XRAY_VERSION", "unknown")),
-		"pid":                     status.PID,
-		"restart_count":           status.RestartCount,
 		"started_at":              status.StartedAt,
 		"last_error":              diagnostics.Redact(status.LastError),
-		"last_exit":               diagnostics.Redact(status.LastExit),
 		"stats_last_error":        "",
 	}
 	if s.stats != nil {
@@ -1142,7 +1138,7 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		response["state"] = "unavailable"
-		response["supervisor_error"] = diagnostics.Redact(err.Error())
+		response["xray_runtime_error"] = diagnostics.Redact(err.Error())
 	}
 	writeJSON(w, http.StatusOK, response)
 }
@@ -1177,9 +1173,9 @@ func (s *server) logs(w http.ResponseWriter, r *http.Request) {
 	if component == "app" {
 		entries = append(entries, s.diagnosticBuffer.Snapshot(limit)...)
 	} else {
-		lines, err := s.supervisor.Logs(r.Context())
+		lines, err := s.xrayRuntime.Logs(r.Context())
 		if err != nil {
-			s.recordDiagnostic("warn", "could not read supervisor logs: "+err.Error())
+			s.recordDiagnostic("warn", "could not read Xray runtime logs: "+err.Error())
 			writeJSON(w, http.StatusBadGateway, map[string]any{"code": "diagnostics_unavailable", "error": "could not read Xray diagnostics"})
 			return
 		}
@@ -1435,15 +1431,15 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		if _, err := s.authenticated(r); err != nil {
 			return err
 		}
-		status, err := s.supervisor.Status(r.Context())
+		status, err := s.xrayRuntime.Status(r.Context())
 		configuredVersion := envOr("XRAY_VERSION", "unknown")
-		payload := map[string]any{"type": "status", "at": time.Now().UTC(), "state": status.State, "xray_version": status.XrayVersion, "configured_xray_version": configuredVersion, "xray_version_verified": xrayVersionVerified(status.XrayVersion, configuredVersion), "restart_count": status.RestartCount, "last_error": diagnostics.Redact(status.LastError), "stats_last_error": ""}
+		payload := map[string]any{"type": "status", "at": time.Now().UTC(), "state": status.State, "xray_version": status.XrayVersion, "configured_xray_version": configuredVersion, "xray_version_verified": xrayVersionVerified(status.XrayVersion, configuredVersion), "last_error": diagnostics.Redact(status.LastError), "stats_last_error": ""}
 		if s.stats != nil {
 			payload["stats_last_error"] = diagnostics.Redact(s.stats.LastError())
 		}
 		if err != nil {
 			payload["state"] = "unavailable"
-			payload["supervisor_error"] = diagnostics.Redact(err.Error())
+			payload["xray_runtime_error"] = diagnostics.Redact(err.Error())
 		}
 		data, marshalErr := json.Marshal(payload)
 		if marshalErr != nil {
@@ -1576,7 +1572,7 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if dangerous && (targetChanged || sniChanged) {
-		if err := s.supervisor.ProbeTarget(r.Context(), candidate.RealityTarget, candidate.RealitySNI); err != nil {
+		if err := s.xrayRuntime.ProbeTarget(r.Context(), candidate.RealityTarget, candidate.RealitySNI); err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"code": "validation_error", "error": "REALITY target probe failed", "detail": err.Error()})
 			return
 		}
@@ -1744,7 +1740,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if pending.ExpectedConfirmation != "" {
-		if err := s.supervisor.ProbeTarget(r.Context(), pending.Settings.RealityTarget, pending.Settings.RealitySNI); err != nil {
+		if err := s.xrayRuntime.ProbeTarget(r.Context(), pending.Settings.RealityTarget, pending.Settings.RealitySNI); err != nil {
 			s.recordDiagnostic("warn", "settings target re-probe failed: "+err.Error())
 			s.finishSettingsChange(req.ChangeID, false)
 			writeJSON(w, http.StatusBadGateway, map[string]any{"code": "validation_error", "error": "REALITY target probe failed", "detail": err.Error()})
@@ -1809,7 +1805,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": err.Error()})
 		return
 	}
-	if err := s.supervisor.Apply(r.Context(), path, operationID); err != nil {
+	if err := s.xrayRuntime.Apply(r.Context(), path, operationID); err != nil {
 		s.recordDiagnostic("error", "settings candidate apply failed: "+err.Error())
 		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
 		_ = os.Remove(path)
@@ -1819,7 +1815,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.UpdateSettingsAndClientProtocolStates(r.Context(), pending.Settings, states); err != nil {
 		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
-		_ = s.supervisor.Apply(r.Context(), filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+		_ = s.xrayRuntime.Apply(r.Context(), filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 		_ = os.Remove(path)
 		s.finishSettingsChange(req.ChangeID, false)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "persist settings rotation: " + err.Error()})
@@ -1828,7 +1824,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	if err := os.Rename(path, filepath.Join(s.configDir, "active.json")); err != nil {
 		_ = s.store.UpdateSettingsAndClientProtocolStates(r.Context(), current, clientProtocolStates(oldClients))
 		_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
-		_ = s.supervisor.Apply(r.Context(), filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+		_ = s.xrayRuntime.Apply(r.Context(), filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 		s.finishSettingsChange(req.ChangeID, false)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "promote Xray config: " + err.Error()})
 		return
@@ -2172,11 +2168,11 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	fullApply, vlessReplaced, vlessAdded, hysteriaAdded, vmessReplaced, vmessAdded := false, false, false, false, false, false
 	rollbackRuntime := func() {
 		if fullApply {
-			_ = s.supervisor.Apply(ctx, activePath, operationID+"-rollback")
+			_ = s.xrayRuntime.Apply(ctx, activePath, operationID+"-rollback")
 			return
 		}
 		if vlessReplaced {
-			if replacer, ok := s.supervisor.(inboundReplacer); ok {
+			if replacer, ok := s.xrayRuntime.(inboundReplacer); ok {
 				_ = replacer.ReplaceInbound(ctx, activePath, path, "vless-reality", operationID+"-rollback")
 			}
 		}
@@ -2186,7 +2182,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 			}
 		}
 		if vmessReplaced {
-			if replacer, ok := s.supervisor.(inboundReplacer); ok {
+			if replacer, ok := s.xrayRuntime.(inboundReplacer); ok {
 				_ = replacer.ReplaceInbound(ctx, activePath, path, xray.VMessInboundTag, operationID+"-rollback")
 			}
 		}
@@ -2209,33 +2205,33 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	if !hasInboundTag(activePath, "vless-reality") || (s.hysteriaEnabled(ctx) && !hasInboundTag(activePath, xray.HysteriaInboundTag)) {
 		usedReplace = false
 		// First enablement of an optional inbound changes the process-level
-		// topology, so use the normal validated supervisor apply once.
-		if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+		// topology, so use the normal validated Xray runtime apply once.
+		if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
 			return failCreate(err)
 		}
 		fullApply = true
 	} else if usedReplace {
-		replacer, ok := s.supervisor.(inboundReplacer)
+		replacer, ok := s.xrayRuntime.(inboundReplacer)
 		if ok {
 			if err := replacer.ReplaceInbound(ctx, path, activePath, "vless-reality", operationID); err != nil {
 				return failCreate(err)
 			}
 			vlessReplaced = true
 		} else {
-			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+			if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
 				return failCreate(err)
 			}
 			fullApply = true
 		}
 	} else if protocol == domain.ProtocolVLESS {
 		if s.handler == nil {
-			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+			if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
 				return failCreate(err)
 			}
 			fullApply = true
 		} else if err := s.handler.AddUser(ctx, client.Email, client.UUID, xray.Flow); err != nil {
 			// If Xray has no live inbound yet, a normal first start is needed.
-			if applyErr := s.supervisor.Apply(ctx, path, operationID); applyErr != nil {
+			if applyErr := s.xrayRuntime.Apply(ctx, path, operationID); applyErr != nil {
 				return failCreate(err)
 			}
 			fullApply = true
@@ -2245,12 +2241,12 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	} else if protocol == domain.ProtocolHysteria2 {
 		hysteria, ok := s.handler.(hysteriaHandlerAPI)
 		if !ok {
-			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+			if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
 				return failCreate(err)
 			}
 			fullApply = true
 		} else if err := hysteria.AddHysteriaUser(ctx, client.Email, client.HysteriaAuth); err != nil {
-			if applyErr := s.supervisor.Apply(ctx, path, operationID); applyErr != nil {
+			if applyErr := s.xrayRuntime.Apply(ctx, path, operationID); applyErr != nil {
 				return failCreate(err)
 			}
 			fullApply = true
@@ -2259,9 +2255,9 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		}
 	} else {
 		if !hasInboundTag(activePath, xray.VMessInboundTag) {
-			replacer, ok := s.supervisor.(inboundReplacer)
+			replacer, ok := s.xrayRuntime.(inboundReplacer)
 			if !ok {
-				if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+				if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
 					return failCreate(err)
 				}
 				fullApply = true
@@ -2271,7 +2267,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 				vmessReplaced = true
 			}
 		} else if vmess, ok := s.handler.(vmessHandlerAPI); !ok {
-			if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+			if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
 				return failCreate(err)
 			}
 			fullApply = true
@@ -2368,7 +2364,7 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 			needsFullApply = true
 		}
 	}
-	replacer, canReplace := s.supervisor.(inboundReplacer)
+	replacer, canReplace := s.xrayRuntime.(inboundReplacer)
 	if (vlessRevoked || vmessInboundChanged) && !canReplace {
 		needsFullApply = true
 	}
@@ -2376,7 +2372,7 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 	vlessAdded, vlessRemoved, hysteriaAdded, hysteriaRemoved, vmessAdded, vmessRemoved, vmessReplaced := false, false, false, false, false, false, false
 	rollbackRuntime := func() {
 		if fullApplied {
-			if rollbackErr := s.supervisor.Apply(r.Context(), activePath, operationID+"-rollback"); rollbackErr != nil {
+			if rollbackErr := s.xrayRuntime.Apply(r.Context(), activePath, operationID+"-rollback"); rollbackErr != nil {
 				s.recordDiagnostic("error", "client state rollback failed: "+rollbackErr.Error())
 			}
 			return
@@ -2424,7 +2420,7 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": cause.Error()})
 	}
 	if needsFullApply {
-		if err := s.supervisor.Apply(r.Context(), path, operationID); err != nil {
+		if err := s.xrayRuntime.Apply(r.Context(), path, operationID); err != nil {
 			_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", err.Error())
 			_ = os.Remove(path)
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -2943,7 +2939,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	ctx = s.traceApplyOperation(ctx, operationID)
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	fullApply := false
-	replacer, canReplace := s.supervisor.(inboundReplacer)
+	replacer, canReplace := s.xrayRuntime.(inboundReplacer)
 	changedTags := make([]string, 0, 2)
 	if vlessIDsChanged {
 		changedTags = append(changedTags, "vless-reality")
@@ -2953,7 +2949,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	}
 	if !hasInboundTag(activePath, "vless-reality") || hysteriaTopologyChanged || !canReplace {
 		fullApply = true
-		err = s.supervisor.Apply(ctx, path, operationID)
+		err = s.xrayRuntime.Apply(ctx, path, operationID)
 	} else {
 		replacedTags := make([]string, 0, len(changedTags))
 		for _, tag := range changedTags {
@@ -2976,7 +2972,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	}
 	if err := os.Rename(path, activePath); err != nil {
 		if fullApply {
-			_ = s.supervisor.Apply(ctx, activePath, operationID+"-rollback")
+			_ = s.xrayRuntime.Apply(ctx, activePath, operationID+"-rollback")
 		} else if canReplace {
 			for i := len(changedTags) - 1; i >= 0; i-- {
 				_ = replacer.ReplaceInbound(ctx, activePath, path, changedTags[i], operationID+"-rollback")
@@ -3042,14 +3038,14 @@ func (s *server) applyClientsLocked(ctx context.Context, settings domain.Setting
 	ctx = s.traceApplyOperation(ctx, operationID)
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "validated", "")
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
-	if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+	if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
 	if err := s.promoteCandidateLocked(ctx, path, operationID, actorID, action, entityID); err != nil {
 		// The candidate is running, but it was not promoted to the durable
-		// active path. Ask the supervisor to restore the previous active file.
-		_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+		// active path. Ask the runtime to restore the previous active file.
+		_ = s.xrayRuntime.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 		return err
 	}
 	return nil
@@ -3071,15 +3067,15 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Set
 
 	// A complete candidate is needed whenever the client set changes: the
 	// HandlerService can add/remove VLESS users, but it cannot update the
-	// REALITY shortIds list. Apply the candidate through supervisor so the
-	// child Xray process starts with both lists in sync.
-	if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
+	// REALITY shortIds list. Apply the candidate through the embedded runtime so
+	// core starts with both lists in sync.
+	if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
 	if persist != nil {
 		if err := persist(); err != nil {
-			_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+			_ = s.xrayRuntime.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 			_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 			return fmt.Errorf("persist client change: %w", err)
 		}
@@ -3088,7 +3084,7 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Set
 		if rollbackPersist != nil {
 			_ = rollbackPersist()
 		}
-		_ = s.supervisor.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
+		_ = s.xrayRuntime.Apply(ctx, filepath.Join(s.configDir, "active.json"), operationID+"-rollback")
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return fmt.Errorf("promote Xray config: %w", err)
 	}
@@ -3138,7 +3134,7 @@ func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, setting
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return "", "", err
 	}
-	if err := s.supervisor.Validate(s.traceApplyOperation(ctx, operationID), path, operationID); err != nil {
+	if err := s.xrayRuntime.Validate(s.traceApplyOperation(ctx, operationID), path, operationID); err != nil {
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		_ = os.Remove(path)
 		return "", "", err

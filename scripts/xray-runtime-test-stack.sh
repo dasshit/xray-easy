@@ -21,15 +21,7 @@ export XRAY_EASY_CONTROLLER_CONTROL_IP="${XRAY_EASY_RUNTIME_CONTROLLER_CONTROL_I
 export XRAY_EASY_CONTROLLER_BACKEND_IP="${XRAY_EASY_RUNTIME_CONTROLLER_BACKEND_IP:-172.31.244.2}"
 export XRAY_EASY_BACKEND_IP="${XRAY_EASY_RUNTIME_BACKEND_IP:-172.31.244.3}"
 
-compose_file="$repo_root/compose.yaml"
-if [ "${XRAY_EASY_RUNTIME_ADAPTER:-embedded}" = "supervisor" ]; then
-  compose_file="$repo_root/compose.supervisor-rollback.yaml"
-elif [ "${XRAY_EASY_RUNTIME_ADAPTER:-embedded}" != "embedded" ]; then
-  echo "XRAY_EASY_RUNTIME_ADAPTER must be embedded or supervisor" >&2
-  exit 2
-fi
-
 exec docker compose \
   --project-directory "$repo_root" \
-  -f "$compose_file" \
+  -f "$repo_root/compose.yaml" \
   "$@"

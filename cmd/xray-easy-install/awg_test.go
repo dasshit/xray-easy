@@ -113,7 +113,7 @@ func TestUpdateAWGConfigurationDisablesProfileAndRejectsDuplicateKeys(t *testing
 
 func TestLoadConfigurationReadsAWGComposeSettings(t *testing.T) {
 	root := t.TempDir()
-	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080, tokenPath: newTokenPath}); err != nil {
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080}); err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, ".env")

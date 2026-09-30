@@ -173,9 +173,9 @@ export type SettingsPreviewCommand = {
   rotatePrivateKey: boolean
 }
 
-/** Health and recent failure details for the supervised Xray node. */
+/** Health and recent failure details for the embedded Xray runtime. */
 export type NodeStatus = {
-  /** Supervisor state, including `unavailable` when status cannot be read. */
+  /** Runtime state, including `unavailable` when status cannot be read. */
   state: string
   /** Exact Xray binary version reported by the running container. */
   xrayVersion?: string
@@ -183,12 +183,9 @@ export type NodeStatus = {
   configuredXrayVersion?: string
   /** True only when configured and running Xray both match the verified version. */
   xrayVersionVerified?: boolean
-  /** Number of Xray process restarts reported by the supervisor. */
-  restartCount: number
   lastError?: string
-  lastExit?: string
   statsLastError?: string
-  supervisorError?: string
+  xrayRuntimeError?: string
 }
 
 /** Recent diagnostic event with secrets removed by the server. */

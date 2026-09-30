@@ -2,8 +2,6 @@ version: v2
 modules:
   - path: internal/controller/api/v1
     name: buf.build/xray-easy/controller
-  - path: internal/supervisor
-    name: buf.build/xray-easy/supervisor
   - path: internal/xrayruntime/api/v1
     name: buf.build/xray-easy/xray-runtime
   - path: awg-contract

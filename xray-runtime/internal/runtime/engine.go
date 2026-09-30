@@ -151,10 +151,10 @@ func parseConfig(configuration []byte) (*core.Config, error) {
 }
 
 // stripExternalAPIServer removes the top-level Xray API app from configs
-// rendered for the supervisor. The embedded runtime owns the Xray instance
+// rendered for the Controller. The embedded runtime owns the Xray instance
 // directly and uses its in-process features, so starting this legacy listener
 // is unnecessary and can fail when its configured address belongs to the
-// supervisor container's network namespace.
+// runtime container's network namespace.
 func stripExternalAPIServer(configuration []byte) ([]byte, error) {
 	var document map[string]json.RawMessage
 	if err := json.Unmarshal(configuration, &document); err != nil || document == nil {

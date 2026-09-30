@@ -11,7 +11,6 @@ import (
 	"xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
-	"xray-easy/internal/supervisor"
 	"xray-easy/internal/xrayapi"
 
 	"google.golang.org/grpc/codes"
@@ -23,7 +22,7 @@ import (
 // HTTP/UI and persistence concerns owned by the backend.
 type XrayRuntime interface {
 	Health(context.Context) error
-	Status(context.Context) (supervisor.Status, error)
+	Status(context.Context) (domain.XrayRuntimeStatus, error)
 	Logs(context.Context) ([]string, error)
 	Validate(context.Context, string, string) error
 	Apply(context.Context, string, string) error
@@ -109,8 +108,7 @@ func (s *Service) GetStatus(ctx context.Context, _ *controllerv1.EmptyRequest) (
 	}
 	return &controllerv1.StatusResponse{
 		Protocol: value.Protocol, XrayVersion: value.XrayVersion, State: value.State,
-		Pid: int32(value.PID), ConfigPath: value.ConfigPath, LastError: value.LastError,
-		LastExit: value.LastExit, RestartCount: int32(value.RestartCount), StartedAt: protobufTime(value.StartedAt),
+		LastError: value.LastError, StartedAt: protobufTime(value.StartedAt),
 		ActiveRevision: value.ActiveRevision, InboundTags: append([]string(nil), value.InboundTags...), StatsAvailable: value.StatsAvailable,
 	}, nil
 }

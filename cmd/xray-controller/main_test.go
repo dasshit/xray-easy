@@ -11,7 +11,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
 	"xray-easy/internal/controller"
-	"xray-easy/internal/supervisor"
 )
 
 type fakeHealthClient struct{ err error }
@@ -101,9 +100,9 @@ func TestServeValidationListenerAndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
-	t.Setenv("XRAY_ADAPTER", "supervisor")
-	t.Setenv("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086")
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", filepath.Join(dir, "supervisor-token"))
+	t.Setenv("XRAY_RUNTIME_ADDR", "127.0.0.1:10086")
+	t.Setenv("XRAY_RUNTIME_TOKEN_FILE", filepath.Join(dir, "runtime-token"))
+	t.Setenv("XRAY_CONFIG_DIR", dir)
 	t.Setenv("XRAY_CONTROLLER_LISTEN", "127.0.0.1:0")
 	oldListener, oldSignals, oldServe := listenController, controllerSignalContext, serveController
 	defer func() { listenController, controllerSignalContext, serveController = oldListener, oldSignals, oldServe }()
@@ -131,18 +130,18 @@ func TestServeValidationListenerAndShutdown(t *testing.T) {
 	}
 }
 
-func TestServeRejectsInvalidSupervisorAddress(t *testing.T) {
+func TestServeRejectsInvalidRuntimeAddress(t *testing.T) {
 	dir := t.TempDir()
 	token := filepath.Join(dir, "controller-token")
 	if err := os.WriteFile(token, []byte("controller-secret"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", token)
-	t.Setenv("XRAY_ADAPTER", "supervisor")
-	t.Setenv("XRAY_SUPERVISOR_ADDR", "invalid")
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", filepath.Join(dir, "supervisor-token"))
+	t.Setenv("XRAY_RUNTIME_ADDR", "invalid")
+	t.Setenv("XRAY_RUNTIME_TOKEN_FILE", filepath.Join(dir, "runtime-token"))
+	t.Setenv("XRAY_CONFIG_DIR", dir)
 	if err := serve(); err == nil {
-		t.Fatal("invalid supervisor address accepted")
+		t.Fatal("invalid embedded runtime address accepted")
 	}
 }
 
@@ -153,26 +152,28 @@ func TestServeRejectsMissingControllerToken(t *testing.T) {
 	}
 }
 
-func TestServeRejectsSupervisorAndAWGAdapterFailures(t *testing.T) {
+func TestServeRejectsRuntimeAndAWGAdapterFailures(t *testing.T) {
 	dir := t.TempDir()
 	controllerToken := filepath.Join(dir, "controller-token")
-	supervisorToken := filepath.Join(dir, "supervisor-token")
-	for path, value := range map[string]string{controllerToken: "controller-secret", supervisorToken: "supervisor-secret"} {
+	runtimeToken := filepath.Join(dir, "runtime-token")
+	for path, value := range map[string]string{controllerToken: "controller-secret", runtimeToken: "runtime-secret"} {
 		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
-	t.Setenv("XRAY_ADAPTER", "supervisor")
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", supervisorToken)
-	t.Setenv("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086")
-	oldDialSupervisor, oldDialAWG := dialSupervisor, dialAWG
-	defer func() { dialSupervisor, dialAWG = oldDialSupervisor, oldDialAWG }()
-	dialSupervisor = func(string, string) (*supervisor.Client, error) { return nil, errors.New("supervisor unavailable") }
-	if err := serve(); err == nil {
-		t.Fatal("supervisor adapter failure was ignored")
+	t.Setenv("XRAY_RUNTIME_TOKEN_FILE", runtimeToken)
+	t.Setenv("XRAY_RUNTIME_ADDR", "127.0.0.1:10086")
+	t.Setenv("XRAY_CONFIG_DIR", dir)
+	oldDialRuntime, oldDialAWG := dialEmbeddedXray, dialAWG
+	defer func() { dialEmbeddedXray, dialAWG = oldDialRuntime, oldDialAWG }()
+	dialEmbeddedXray = func(string, string, string) (closeableXrayRuntime, error) {
+		return nil, errors.New("runtime unavailable")
 	}
-	dialSupervisor = oldDialSupervisor
+	if err := serve(); err == nil {
+		t.Fatal("runtime adapter failure was ignored")
+	}
+	dialEmbeddedXray = oldDialRuntime
 	dialAWG = func(string, string) (closeableAWGRuntime, error) { return nil, errors.New("AWG unavailable") }
 	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
 	if err := serve(); err == nil {
@@ -183,16 +184,16 @@ func TestServeRejectsSupervisorAndAWGAdapterFailures(t *testing.T) {
 func TestServeClosesConfiguredAWGAdapterOnShutdown(t *testing.T) {
 	dir := t.TempDir()
 	controllerToken := filepath.Join(dir, "controller-token")
-	supervisorToken := filepath.Join(dir, "supervisor-token")
-	for path, value := range map[string]string{controllerToken: "controller-secret", supervisorToken: "supervisor-secret"} {
+	runtimeToken := filepath.Join(dir, "runtime-token")
+	for path, value := range map[string]string{controllerToken: "controller-secret", runtimeToken: "runtime-secret"} {
 		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
-	t.Setenv("XRAY_ADAPTER", "supervisor")
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", supervisorToken)
-	t.Setenv("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086")
+	t.Setenv("XRAY_RUNTIME_ADDR", "127.0.0.1:10086")
+	t.Setenv("XRAY_RUNTIME_TOKEN_FILE", runtimeToken)
+	t.Setenv("XRAY_CONFIG_DIR", dir)
 	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
 	oldListener, oldSignals, oldAWG := listenController, controllerSignalContext, dialAWG
 	defer func() { listenController, controllerSignalContext, dialAWG = oldListener, oldSignals, oldAWG }()
@@ -223,7 +224,6 @@ func TestServeUsesEmbeddedXrayAdapterAndClosesItOnShutdown(t *testing.T) {
 		}
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
-	t.Setenv("XRAY_ADAPTER", "embedded")
 	t.Setenv("XRAY_RUNTIME_ADDR", "127.0.0.1:10086")
 	t.Setenv("XRAY_RUNTIME_TOKEN_FILE", runtimeToken)
 	t.Setenv("XRAY_CONFIG_DIR", filepath.Join(dir, "config"))
@@ -247,18 +247,6 @@ func TestServeUsesEmbeddedXrayAdapterAndClosesItOnShutdown(t *testing.T) {
 	}
 	if !adapter.closed {
 		t.Fatal("Controller did not close the embedded Xray adapter")
-	}
-}
-
-func TestServeRejectsUnknownXrayAdapter(t *testing.T) {
-	token := filepath.Join(t.TempDir(), "controller-token")
-	if err := os.WriteFile(token, []byte("controller-secret"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", token)
-	t.Setenv("XRAY_ADAPTER", "unknown")
-	if err := serve(); err == nil {
-		t.Fatal("unknown Xray adapter was accepted")
 	}
 }
 

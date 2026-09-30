@@ -117,7 +117,7 @@ describe('SSE updates and recovery', () => {
       ['stopped', 'Stopped', 'negative'],
       ['restarting', 'Unknown', 'neutral'],
     ] as const) {
-      const { wrapper } = await mountApp(defaultHandler({ authenticated: true, statusData: { state, restart_count: 0 } }))
+      const { wrapper } = await mountApp(defaultHandler({ authenticated: true, statusData: { state } }))
       expect(wrapper.get('.node-pill').text()).toContain(label)
       expect(wrapper.get('.node-pill').classes()).toContain(`node-pill-${tone}`)
       wrapper.unmount()

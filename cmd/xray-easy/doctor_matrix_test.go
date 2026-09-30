@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
+	"xray-easy/internal/domain"
 	"xray-easy/internal/store"
-	"xray-easy/internal/supervisor"
 )
 
 func doctorCheckContains(checks []doctorCheck, name, detail string) bool {
@@ -27,62 +27,62 @@ func TestDoctorChecksExplainVolumeDatabaseTokenAndRuntimeFailures(t *testing.T) 
 		name       string
 		checkName  string
 		wantDetail string
-		mutate     func(*testing.T, *string, *string, *doctorSupervisorStub, *doctorHandlerStub)
+		mutate     func(*testing.T, *string, *string, *doctorXrayRuntimeStub, *doctorHandlerStub)
 	}{
-		{"missing data volume", "Data volume", "not accessible", func(t *testing.T, data, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"missing data volume", "Data volume", "not accessible", func(t *testing.T, data, _ *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			*data = filepath.Join(t.TempDir(), "missing")
 		}},
-		{"missing config volume", "Xray config volume", "not accessible", func(t *testing.T, _, config *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"missing config volume", "Xray config volume", "not accessible", func(t *testing.T, _, config *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			*config = filepath.Join(t.TempDir(), "missing")
 		}},
-		{"missing candidates", "Candidate config directory", "not accessible", func(t *testing.T, _, config *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"missing candidates", "Candidate config directory", "not accessible", func(t *testing.T, _, config *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			if err := os.RemoveAll(filepath.Join(*config, "candidates")); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"missing database", "SQLite database", "missing, unreadable", func(t *testing.T, data, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"missing database", "SQLite database", "missing, unreadable", func(t *testing.T, data, _ *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			if err := os.Remove(filepath.Join(*data, "state.db")); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"missing token", "Controller secret", "missing or inaccessible", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"missing token", "Controller secret", "missing or inaccessible", func(t *testing.T, _, _ *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
 		}},
-		{"token directory", "Controller secret", "not a regular file", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"token directory", "Controller secret", "not a regular file", func(t *testing.T, _, _ *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", t.TempDir())
 		}},
-		{"empty token", "Controller secret", "unreadable or empty", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"empty token", "Controller secret", "unreadable or empty", func(t *testing.T, _, _ *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			path := filepath.Join(t.TempDir(), "empty-token")
 			if err := os.WriteFile(path, nil, 0o400); err != nil {
 				t.Fatal(err)
 			}
 			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", path)
 		}},
-		{"health failure", "Controller connection", "health check failed", func(_ *testing.T, _, _ *string, sup *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"health failure", "Controller connection", "health check failed", func(_ *testing.T, _, _ *string, sup *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			sup.healthErr = errors.New("offline")
 		}},
-		{"no config state", "Supervisor status", "waiting for its first", func(_ *testing.T, _, _ *string, sup *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"no config state", "Embedded Xray runtime", "waiting for its first", func(_ *testing.T, _, _ *string, sup *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			sup.status.State = "no-config"
 		}},
-		{"version mismatch", "Xray compatibility", "Compose selects", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"version mismatch", "Xray compatibility", "Compose selects", func(t *testing.T, _, _ *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			t.Setenv("XRAY_VERSION", "26.9.8")
 		}},
-		{"unverified version", "Xray compatibility", "outside the project's verified", func(t *testing.T, _, _ *string, sup *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"unverified version", "Xray compatibility", "outside the project's verified", func(t *testing.T, _, _ *string, sup *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			t.Setenv("XRAY_VERSION", "26.9.8")
 			sup.status.XrayVersion = "Xray 26.9.8"
 		}},
-		{"missing active config", "Active Xray config", "active.json is missing", func(t *testing.T, _, config *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"missing active config", "Active Xray config", "active.json is missing", func(t *testing.T, _, config *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			if err := os.Remove(filepath.Join(*config, "active.json")); err != nil {
 				t.Fatal(err)
 			}
 		}},
-		{"validation failure", "Active Xray config", "Xray rejected", func(_ *testing.T, _, _ *string, sup *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"validation failure", "Active Xray config", "Xray rejected", func(_ *testing.T, _, _ *string, sup *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			sup.validateErr = errors.New("invalid config")
 		}},
-		{"handler failure", "Xray Handler API", "could not be read", func(_ *testing.T, _, _ *string, _ *doctorSupervisorStub, handler *doctorHandlerStub) {
+		{"handler failure", "Xray Handler API", "could not be read", func(_ *testing.T, _, _ *string, _ *doctorXrayRuntimeStub, handler *doctorHandlerStub) {
 			handler.err = errors.New("inbound unavailable")
 		}},
-		{"UDP firewall", "Hysteria 2 UDP firewall", "public UDP reachability", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"UDP firewall", "Hysteria 2 UDP firewall", "public UDP reachability", func(t *testing.T, _, _ *string, _ *doctorXrayRuntimeStub, _ *doctorHandlerStub) {
 			t.Setenv("XRAY_HYSTERIA2_ENABLED", "true")
 		}},
 	} {
@@ -93,7 +93,7 @@ func TestDoctorChecksExplainVolumeDatabaseTokenAndRuntimeFailures(t *testing.T) 
 			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 			t.Setenv("XRAY_VERSION", "26.7.28")
 			t.Setenv("XRAY_HYSTERIA2_ENABLED", "false")
-			sup := &doctorSupervisorStub{status: supervisor.Status{State: "running", XrayVersion: "Xray 26.7.28"}}
+			sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running", XrayVersion: "Xray 26.7.28"}}
 			handler := &doctorHandlerStub{}
 			testcase.mutate(t, &dataDir, &configDir, sup, handler)
 			checks := collectDoctorChecks(context.Background(), dataDir, configDir, sup, handler, &doctorStatsStub{})
@@ -152,7 +152,7 @@ func TestDoctorChecksExplainIncompleteSettingsAndWrongMasterKey(t *testing.T) {
 			t.Setenv("XRAY_CONTROLLER_ADDR", "controller.test:10088")
 			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 			testcase.mutate(t, dataDir)
-			checks := collectDoctorChecks(context.Background(), dataDir, configDir, &doctorSupervisorStub{status: supervisor.Status{State: "running"}}, &doctorHandlerStub{}, &doctorStatsStub{})
+			checks := collectDoctorChecks(context.Background(), dataDir, configDir, &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running"}}, &doctorHandlerStub{}, &doctorStatsStub{})
 			if !doctorCheckContains(checks, testcase.wantCheck, testcase.wantDetail) {
 				t.Fatalf("missing %s (%q) check: %+v", testcase.wantCheck, testcase.wantDetail, checks)
 			}

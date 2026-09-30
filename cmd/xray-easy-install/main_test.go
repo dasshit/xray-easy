@@ -64,9 +64,10 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 		t.Fatal("installer did not show the completed doctor stage")
 	}
 	envPath := filepath.Join(root, ".env")
-	tokenPath := filepath.Join(root, "secrets", "xray_supervisor_token")
 	firstEnv := readPrivateFile(t, envPath)
-	firstToken := readPrivateFile(t, tokenPath)
+	if _, err := os.Stat(filepath.Join(root, "secrets", "xray_supervisor_token")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("installer created a legacy supervisor token: %v", err)
+	}
 	values, err := readEnvironmentFile(envPath)
 	if err != nil {
 		t.Fatal(err)
@@ -75,10 +76,10 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 	if err != nil || len(key) != 32 {
 		t.Fatalf("invalid generated master key: len=%d err=%v", len(key), err)
 	}
-	if values["XRAY_EASY_PROJECT_NAME"] != defaultProject || values["XRAY_SUPERVISOR_TOKEN_SOURCE"] != newTokenPath {
+	if values["XRAY_EASY_PROJECT_NAME"] != defaultProject || values["XRAY_SUPERVISOR_TOKEN_SOURCE"] != "" {
 		t.Fatalf("unexpected configuration: %#v", values)
 	}
-	if strings.Contains(output.String(), values["XRAY_EASY_MASTER_KEY"]) || strings.Contains(output.String(), strings.TrimSpace(firstToken)) {
+	if strings.Contains(output.String(), values["XRAY_EASY_MASTER_KEY"]) {
 		t.Fatal("installation output leaked a secret")
 	}
 
@@ -90,9 +91,6 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 	if got := readPrivateFile(t, envPath); got != firstEnv {
 		t.Fatal("retry replaced .env")
 	}
-	if got := readPrivateFile(t, tokenPath); got != firstToken {
-		t.Fatal("retry replaced the supervisor token")
-	}
 	if !strings.Contains(output.String(), "Existing .env") {
 		t.Fatal("retry did not show existing configuration")
 	}
@@ -102,7 +100,7 @@ func TestChangingAmneziaWGEndpointDoesNotForceRecreateXray(t *testing.T) {
 	root := t.TempDir()
 	cfg := configuration{
 		project: defaultProject, version: defaultVersion, public: 443, vmess: 9443, ui: 8080,
-		tokenPath: newTokenPath, hysteriaMode: "custom", awgEnabled: true,
+		hysteriaMode: "custom", awgEnabled: true,
 		awgPublicHost: "vpn.old.example.test", awgPublicPort: defaultAWGPort,
 	}
 	if err := createConfiguration(root, cfg); err != nil {
@@ -203,24 +201,17 @@ func TestInvalidExistingKeyIsNeverReplaced(t *testing.T) {
 	}
 }
 
-func TestLegacyConfigurationKeepsProjectAndToken(t *testing.T) {
+func TestLegacyConfigurationKeepsProjectAndIgnoresSupervisorToken(t *testing.T) {
 	root := t.TempDir()
-	token := filepath.Join(root, "prototype", "secrets", "xray_supervisor_token")
-	if err := os.MkdirAll(filepath.Dir(token), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(token, []byte("legacy-token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{42}, 32))
-	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("XRAY_EASY_MASTER_KEY="+key+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("XRAY_EASY_MASTER_KEY="+key+"\nXRAY_SUPERVISOR_TOKEN_SOURCE=./prototype/secrets/old\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := loadConfiguration(root)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.project != legacyProject || cfg.tokenPath != oldTokenPath || cfg.public != 443 {
+	if cfg.project != legacyProject || cfg.public != 443 {
 		t.Fatalf("legacy config changed: %+v", cfg)
 	}
 }
@@ -245,7 +236,6 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 		t.Fatalf("startup diagnostics were not collected: %v", runner.calls)
 	}
 	firstEnv := readPrivateFile(t, filepath.Join(root, ".env"))
-	firstToken := readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token"))
 	runner.failOn = ""
 	runner.calls = nil
 	if err := run(context.Background(), root, strings.NewReader("\n\n\n"), &output, runner); err != nil {
@@ -253,9 +243,6 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 	}
 	if got := readPrivateFile(t, filepath.Join(root, ".env")); got != firstEnv {
 		t.Fatal("retry after Compose failure replaced the master key")
-	}
-	if got := readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token")); got != firstToken {
-		t.Fatal("retry after Compose failure replaced the token")
 	}
 }
 
@@ -419,68 +406,40 @@ func TestComposeValidationFailureKeepsSecrets(t *testing.T) {
 		t.Fatal("invalid confirmation was not handled")
 	}
 	readPrivateFile(t, filepath.Join(root, ".env"))
-	readPrivateFile(t, filepath.Join(root, "secrets", "xray_supervisor_token"))
+	if _, err := os.Stat(filepath.Join(root, "secrets", "xray_supervisor_token")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("installer created a legacy supervisor token: %v", err)
+	}
 	if len(runner.calls) != 3 {
 		t.Fatalf("invalid Compose config proceeded to up: %v", runner.calls)
 	}
 }
 
-func TestPartialInstallReusesTokenAndDoesNotReplaceEnv(t *testing.T) {
+func TestConfigurationDoesNotCreateSupervisorTokenOrReplaceEnv(t *testing.T) {
 	root := t.TempDir()
 	secretPath := filepath.Join(root, "secrets", "xray_supervisor_token")
-	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080}); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(secretPath, []byte("existing-token\n"), 0o600); err != nil {
-		t.Fatal(err)
+	if _, err := os.Stat(secretPath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("configuration created a legacy supervisor token: %v", err)
 	}
-	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080, tokenPath: newTokenPath}); err != nil {
-		t.Fatal(err)
+	firstEnv := readPrivateFile(t, filepath.Join(root, ".env"))
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080}); err == nil {
+		t.Fatal("second configuration write replaced .env")
 	}
-	if got := readPrivateFile(t, secretPath); got != "existing-token\n" {
-		t.Fatal("partial installation replaced the token")
-	}
-	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080, tokenPath: newTokenPath}); err == nil {
+	if got := readPrivateFile(t, filepath.Join(root, ".env")); got != firstEnv {
 		t.Fatal("second configuration write replaced .env")
 	}
 }
 
-func TestInvalidTokenAndEnvironmentAreRejected(t *testing.T) {
+func TestInvalidEnvironmentIsRejected(t *testing.T) {
 	root := t.TempDir()
-	secretPath := filepath.Join(root, "secrets", "xray_supervisor_token")
-	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(secretPath, nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateToken(secretPath); err == nil {
-		t.Fatal("empty token accepted")
-	}
-	if err := createConfiguration(root, configuration{}); err == nil {
-		t.Fatal("empty existing token accepted during setup")
-	}
-	if err := os.Remove(secretPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateToken(secretPath); err == nil {
-		t.Fatal("missing token accepted")
-	}
-	if err := os.Mkdir(secretPath, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := validateToken(secretPath); err == nil {
-		t.Fatal("directory accepted as a token")
-	}
-	if err := os.Remove(secretPath); err != nil {
-		t.Fatal(err)
-	}
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{42}, 32))
 	for _, line := range []string{
 		"XRAY_PUBLIC_PORT=65536",
 		"XRAY_EASY_UI_PORT=0",
-		"XRAY_PUBLIC_PORT=8080",
-		"XRAY_PUBLIC_PORT=443",
+		"XRAY_PUBLIC_PORT=8080\nXRAY_EASY_UI_PORT=8080",
+		"XRAY_PUBLIC_PORT=443\nXRAY_VMESS_PORT=443",
 	} {
 		env := "XRAY_EASY_MASTER_KEY=" + key + "\n" + line + "\n"
 		if err := os.WriteFile(filepath.Join(root, ".env"), []byte(env), 0o600); err != nil {
@@ -527,8 +486,8 @@ func TestSetupRejectsUnusableSecretsDirectory(t *testing.T) {
 	}
 	var output bytes.Buffer
 	err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n"), &output, &fakeRunner{})
-	if err == nil || !strings.Contains(err.Error(), "secrets directory") {
-		t.Fatalf("expected secrets directory error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "Hysteria TLS directory") {
+		t.Fatalf("expected TLS directory error, got %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(root, ".env")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("failed setup wrote .env: %v", err)

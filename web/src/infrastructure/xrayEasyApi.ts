@@ -259,11 +259,9 @@ function mapNodeStatus(dto: NodeStatusDto): NodeStatus {
     ...(dto.xray_version === undefined ? {} : { xrayVersion: dto.xray_version }),
     ...(dto.configured_xray_version === undefined ? {} : { configuredXrayVersion: dto.configured_xray_version }),
     ...(dto.xray_version_verified === undefined ? {} : { xrayVersionVerified: dto.xray_version_verified }),
-    restartCount: dto.restart_count,
     ...(dto.last_error === undefined ? {} : { lastError: dto.last_error }),
-    ...(dto.last_exit === undefined ? {} : { lastExit: dto.last_exit }),
     ...(dto.stats_last_error === undefined ? {} : { statsLastError: dto.stats_last_error }),
-    ...(dto.supervisor_error === undefined ? {} : { supervisorError: dto.supervisor_error }),
+    ...(dto.xray_runtime_error === undefined ? {} : { xrayRuntimeError: dto.xray_runtime_error }),
   }
 }
 

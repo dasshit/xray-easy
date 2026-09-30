@@ -27,7 +27,7 @@ describe('Xray-easy API adapter', () => {
       '/api/auth/totp/setup': {
         setup_token: 'setup-token', secret: 'secret', otpauth_uri: 'otpauth://totp/test', recovery_codes: [], expires_in: 300,
       },
-      '/api/status': { state: 'running', restart_count: 0 },
+      '/api/status': { state: 'running' },
     })
     const api = createXrayEasyApi(send)
 
@@ -39,7 +39,7 @@ describe('Xray-easy API adapter', () => {
     await expect(api.auth.beginTOTPSetup()).resolves.toEqual({
       setupToken: 'setup-token', secret: 'secret', otpauthUri: 'otpauth://totp/test', recoveryCodes: [], expiresIn: 300,
     })
-    await expect(api.diagnostics.status()).resolves.toEqual({ state: 'running', restartCount: 0 })
+    await expect(api.diagnostics.status()).resolves.toEqual({ state: 'running' })
   })
 
   it('maps setup and administrator wire values and sends setup fields in API format', async () => {
@@ -302,8 +302,8 @@ describe('Xray-easy API adapter', () => {
   it('maps diagnostics and exposes backup and authentication requests', async () => {
     const { send, calls } = requester({
       '/api/status': {
-        state: 'running', restart_count: 2, last_error: 'xray failing', last_exit: 'exited (1)',
-        stats_last_error: 'stats offline', supervisor_error: 'supervisor warning',
+        state: 'running', last_error: 'xray failing',
+        stats_last_error: 'stats offline', xray_runtime_error: 'runtime warning',
       },
       '/api/logs?component=xray&limit=50': { entries: [{ at: '2026-09-28T12:00:00Z', component: 'xray', level: 'warn', message: 'warning' }] },
       '/api/backups': { name: 'backup.tar' },
@@ -316,8 +316,8 @@ describe('Xray-easy API adapter', () => {
     const api = createXrayEasyApi(send)
 
     await expect(api.diagnostics.status()).resolves.toEqual({
-      state: 'running', restartCount: 2, lastError: 'xray failing', lastExit: 'exited (1)',
-      statsLastError: 'stats offline', supervisorError: 'supervisor warning',
+      state: 'running', lastError: 'xray failing',
+      statsLastError: 'stats offline', xrayRuntimeError: 'runtime warning',
     })
     await expect(api.diagnostics.logs('xray', 50)).resolves.toEqual([{ at: '2026-09-28T12:00:00Z', component: 'xray', level: 'warn', message: 'warning' }])
     await expect(api.backups.create()).resolves.toEqual({ name: 'backup.tar' })

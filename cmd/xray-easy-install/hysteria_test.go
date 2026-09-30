@@ -74,7 +74,7 @@ func TestInstallerCanSwitchExistingHysteriaModeWithoutChangingMasterKey(t *testi
 
 func TestLegacyHysteriaRequiresExplicitCertificateChoice(t *testing.T) {
 	root := t.TempDir()
-	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080, tokenPath: newTokenPath, hysteriaMode: "custom"}); err != nil {
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080, hysteriaMode: "custom"}); err != nil {
 		t.Fatal(err)
 	}
 	envPath := filepath.Join(root, ".env")

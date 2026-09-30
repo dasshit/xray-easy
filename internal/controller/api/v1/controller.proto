@@ -59,11 +59,9 @@ message StatusResponse {
   string protocol = 1;
   string xray_version = 2;
   string state = 3;
-  int32 pid = 4;
-  string config_path = 5;
+  reserved 4, 5, 7, 8;
+  reserved "pid", "config_path", "last_exit", "restart_count";
   string last_error = 6;
-  string last_exit = 7;
-  int32 restart_count = 8;
   google.protobuf.Timestamp started_at = 9;
   int64 active_revision = 10;
   repeated string inbound_tags = 11;

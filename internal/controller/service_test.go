@@ -7,15 +7,15 @@ import (
 	"time"
 
 	"xray-easy/internal/controller/api/v1"
+	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
-	"xray-easy/internal/supervisor"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type fakeRuntime struct {
-	status        supervisor.Status
+	status        domain.XrayRuntimeStatus
 	logs          []string
 	err           error
 	called        string
@@ -34,7 +34,7 @@ func (f *fakeRuntime) Health(ctx context.Context) error {
 	f.stateRevision = interaction.StateRevision(ctx)
 	return f.err
 }
-func (f *fakeRuntime) Status(context.Context) (supervisor.Status, error) {
+func (f *fakeRuntime) Status(context.Context) (domain.XrayRuntimeStatus, error) {
 	f.called = "Status"
 	return f.status, f.err
 }
@@ -72,7 +72,7 @@ func (f *fakeRuntime) ProbeIPv6(context.Context) error { f.called = "ProbeIPv6";
 
 func TestServiceHealthStatusAndLogs(t *testing.T) {
 	runtime := &fakeRuntime{
-		status: supervisor.Status{Protocol: "embedded-core", XrayVersion: "26.7.28", State: "running", PID: 33, ConfigPath: "/etc/xray/active.json", RestartCount: 2, StartedAt: time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), ActiveRevision: 17, InboundTags: []string{"vless-reality", "vmess-tls"}, StatsAvailable: true},
+		status: domain.XrayRuntimeStatus{Protocol: "embedded-core", XrayVersion: "26.7.28", State: "running", StartedAt: time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), ActiveRevision: 17, InboundTags: []string{"vless-reality", "vmess-tls"}, StatsAvailable: true},
 		logs:   []string{"warn: sanitized"},
 	}
 	service := NewService(runtime)
@@ -81,7 +81,7 @@ func TestServiceHealthStatusAndLogs(t *testing.T) {
 		t.Fatalf("Health() = %v, %v", health, err)
 	}
 	result, err := service.GetStatus(context.Background(), &controllerv1.EmptyRequest{})
-	if err != nil || result.GetXrayVersion() != "26.7.28" || result.GetRestartCount() != 2 || result.GetStartedAt().AsTime() != runtime.status.StartedAt || result.GetActiveRevision() != 17 || len(result.GetInboundTags()) != 2 || !result.GetStatsAvailable() {
+	if err != nil || result.GetXrayVersion() != "26.7.28" || result.GetStartedAt().AsTime() != runtime.status.StartedAt || result.GetActiveRevision() != 17 || len(result.GetInboundTags()) != 2 || !result.GetStatsAvailable() {
 		t.Fatalf("GetStatus() = %v, %v", result, err)
 	}
 	logs, err := service.GetLogs(context.Background(), &controllerv1.EmptyRequest{})

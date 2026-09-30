@@ -287,11 +287,7 @@ type StatusResponse struct {
 	Protocol       string                 `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`
 	XrayVersion    string                 `protobuf:"bytes,2,opt,name=xray_version,json=xrayVersion,proto3" json:"xray_version,omitempty"`
 	State          string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	Pid            int32                  `protobuf:"varint,4,opt,name=pid,proto3" json:"pid,omitempty"`
-	ConfigPath     string                 `protobuf:"bytes,5,opt,name=config_path,json=configPath,proto3" json:"config_path,omitempty"`
 	LastError      string                 `protobuf:"bytes,6,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
-	LastExit       string                 `protobuf:"bytes,7,opt,name=last_exit,json=lastExit,proto3" json:"last_exit,omitempty"`
-	RestartCount   int32                  `protobuf:"varint,8,opt,name=restart_count,json=restartCount,proto3" json:"restart_count,omitempty"`
 	StartedAt      *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	ActiveRevision int64                  `protobuf:"varint,10,opt,name=active_revision,json=activeRevision,proto3" json:"active_revision,omitempty"`
 	InboundTags    []string               `protobuf:"bytes,11,rep,name=inbound_tags,json=inboundTags,proto3" json:"inbound_tags,omitempty"`
@@ -351,39 +347,11 @@ func (x *StatusResponse) GetState() string {
 	return ""
 }
 
-func (x *StatusResponse) GetPid() int32 {
-	if x != nil {
-		return x.Pid
-	}
-	return 0
-}
-
-func (x *StatusResponse) GetConfigPath() string {
-	if x != nil {
-		return x.ConfigPath
-	}
-	return ""
-}
-
 func (x *StatusResponse) GetLastError() string {
 	if x != nil {
 		return x.LastError
 	}
 	return ""
-}
-
-func (x *StatusResponse) GetLastExit() string {
-	if x != nil {
-		return x.LastExit
-	}
-	return ""
-}
-
-func (x *StatusResponse) GetRestartCount() int32 {
-	if x != nil {
-		return x.RestartCount
-	}
-	return 0
 }
 
 func (x *StatusResponse) GetStartedAt() *timestamppb.Timestamp {
@@ -1771,24 +1739,19 @@ const file_controller_proto_rawDesc = "" +
 	"\tprotocols\x18\x02 \x03(\tR\tprotocols\"\xa0\x01\n" +
 	"\x14CapabilitiesResponse\x12>\n" +
 	"\x04xray\x18\x01 \x01(\v2*.xrayeasy.controller.v1.ProtocolCapabilityR\x04xray\x12H\n" +
-	"\tamneziawg\x18\x02 \x01(\v2*.xrayeasy.controller.v1.ProtocolCapabilityR\tamneziawg\"\xa9\x03\n" +
+	"\tamneziawg\x18\x02 \x01(\v2*.xrayeasy.controller.v1.ProtocolCapabilityR\tamneziawg\"\xf8\x02\n" +
 	"\x0eStatusResponse\x12\x1a\n" +
 	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12!\n" +
 	"\fxray_version\x18\x02 \x01(\tR\vxrayVersion\x12\x14\n" +
-	"\x05state\x18\x03 \x01(\tR\x05state\x12\x10\n" +
-	"\x03pid\x18\x04 \x01(\x05R\x03pid\x12\x1f\n" +
-	"\vconfig_path\x18\x05 \x01(\tR\n" +
-	"configPath\x12\x1d\n" +
+	"\x05state\x18\x03 \x01(\tR\x05state\x12\x1d\n" +
 	"\n" +
-	"last_error\x18\x06 \x01(\tR\tlastError\x12\x1b\n" +
-	"\tlast_exit\x18\a \x01(\tR\blastExit\x12#\n" +
-	"\rrestart_count\x18\b \x01(\x05R\frestartCount\x129\n" +
+	"last_error\x18\x06 \x01(\tR\tlastError\x129\n" +
 	"\n" +
 	"started_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12'\n" +
 	"\x0factive_revision\x18\n" +
 	" \x01(\x03R\x0eactiveRevision\x12!\n" +
 	"\finbound_tags\x18\v \x03(\tR\vinboundTags\x12'\n" +
-	"\x0fstats_available\x18\f \x01(\bR\x0estatsAvailable\"$\n" +
+	"\x0fstats_available\x18\f \x01(\bR\x0estatsAvailableJ\x04\b\x04\x10\x05J\x04\b\x05\x10\x06J\x04\b\a\x10\bJ\x04\b\b\x10\tR\x03pidR\vconfig_pathR\tlast_exitR\rrestart_count\"$\n" +
 	"\fLogsResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\"u\n" +
 	"\x15ValidateConfigRequest\x12\x12\n" +

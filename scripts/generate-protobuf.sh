@@ -15,13 +15,6 @@ docker run --rm \
   -v "$repo_root:/workspace" \
   -w /workspace \
   bufbuild/buf:1.57.2 \
-  generate internal/supervisor/api/v1/supervisor.proto \
-  --template buf.gen.supervisor.yaml
-
-docker run --rm \
-  -v "$repo_root:/workspace" \
-  -w /workspace \
-  bufbuild/buf:1.57.2 \
   generate internal/xrayruntime/api/v1/runtime.proto \
   --template buf.gen.xray-runtime.yaml
 

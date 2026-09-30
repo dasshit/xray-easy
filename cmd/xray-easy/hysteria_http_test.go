@@ -228,8 +228,8 @@ func TestHysteriaSettingsPreviewAndApplyEnablesInboundWithRuntimeReplacement(t *
 	if err := app.server.store.InitializeHysteriaSettings(context.Background(), initial); err != nil {
 		t.Fatal(err)
 	}
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
-	app.server.supervisor = replacer
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
+	app.server.xrayRuntime = replacer
 	request := hysteriaSettingsRequest{
 		Enabled: true, Host: "vpn.example.test", TLSMode: domain.HysteriaTLSCustom,
 		TLSServerName: "vpn.example.test", CertificateID: certificateID,
@@ -261,9 +261,9 @@ func TestHysteriaSettingsPreviewAndApplyEnablesInboundWithRuntimeReplacement(t *
 func TestHysteriaApplyRequiresInboundReplacementWhenTopologyChanges(t *testing.T) {
 	app := newTestApp(t, true)
 	changeID := prepareEnabledHysteriaChange(t, app)
-	// The basic supervisor interface can validate a full config, but cannot
+	// The basic runtime interface can validate a full config, but cannot
 	// atomically switch an optional inbound while it is live.
-	app.server.supervisor = app.sup
+	app.server.xrayRuntime = app.sup
 	response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/apply", hysteriaApplyRequest{ChangeID: changeID, Confirmation: "APPLY"}, true)
 	if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "inbound replacement is unavailable") {
 		t.Fatalf("apply without inbound replacement = %d %s", response.Code, response.Body.String())
@@ -281,7 +281,7 @@ func TestHysteriaApplyRollsBackWhenCandidateConfigCannotBePromoted(t *testing.T)
 		t.Fatal(err)
 	}
 	var mutateErr error
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
 	replacer.hook = func() {
 		if err := os.Remove(activePath); err != nil {
 			mutateErr = err
@@ -289,7 +289,7 @@ func TestHysteriaApplyRollsBackWhenCandidateConfigCannotBePromoted(t *testing.T)
 		}
 		mutateErr = os.Mkdir(activePath, 0o700)
 	}
-	app.server.supervisor = replacer
+	app.server.xrayRuntime = replacer
 	changeID := prepareEnabledHysteriaChange(t, app)
 	response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/apply", hysteriaApplyRequest{ChangeID: changeID, Confirmation: "APPLY"}, true)
 	if mutateErr != nil {
@@ -347,8 +347,8 @@ func TestHysteriaApplyFailurePathsRemainExplicitAndRetryable(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			app := newTestApp(t, true)
-			replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
-			app.server.supervisor = replacer
+			replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
+			app.server.xrayRuntime = replacer
 			changeID := prepareEnabledHysteriaChange(t, app)
 			test.prepare(t, app, replacer)
 			response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/apply", hysteriaApplyRequest{ChangeID: changeID, Confirmation: "APPLY"}, true)
@@ -467,8 +467,8 @@ func TestTLSSettingsApplyUpdatesExistingVMessInboundWhenHysteriaIsOff(t *testing
 	t.Setenv("XRAY_HYSTERIA2_TLS_SERVER_NAME", "cert.example.test")
 	app := newTestApp(t, true)
 	createRuntimeVMessClient(t, app, "macbook")
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
-	app.server.supervisor = replacer
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
+	app.server.xrayRuntime = replacer
 
 	invalid := hysteriaSettingsRequest{
 		TLSMode: domain.HysteriaTLSCustom, TLSServerName: "missing.example.test",

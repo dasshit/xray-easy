@@ -1,5 +1,9 @@
 # Xray supervisor gRPC migration plan
 
+> Исторический документ. Supervisor был промежуточной архитектурой и удалён
+> после приёмки встроенного Xray runtime на VDS. Текущее устройство, контракт и
+> порядок проверки описаны в [`xray-runtime-service-plan.md`](xray-runtime-service-plan.md).
+
 > Status: the private Supervisor gRPC migration is complete. Its API now uses
 > generated, typed Protobuf messages. The later typed Controller contract is
 > separate, and its types do not replace the runtime service contracts.

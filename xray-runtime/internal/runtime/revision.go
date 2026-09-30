@@ -171,7 +171,7 @@ func (f *RevisionFence) Begin(revision int64, operationID, key, fingerprint stri
 }
 
 // Commit marks a reserved mutation complete. A completed compensation makes
-// its original mutation replayable in the same way as the supervisor fence.
+// its original mutation replayable in the same way as the runtime revision fence.
 func (f *RevisionFence) Commit(revision int64, operationID, key, fingerprint string) error {
 	if f == nil {
 		return errors.New("Xray revision fence is unavailable")

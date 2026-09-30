@@ -209,7 +209,7 @@ func TestRunBackupCLIAndApplyRestoredStateValidation(t *testing.T) {
 	if err := runBackupCLI(context.Background(), app.server.dataDir, app.server.configDir, []string{"create"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRestoredStateWithSupervisor(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, app.sup); err != nil {
+	if err := applyRestoredStateWithRuntime(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, app.sup); err != nil {
 		t.Fatalf("apply restored state with usable settings: %v", err)
 	}
 	_ = os.Remove(filepath.Join(app.server.configDir, "active.json"))
@@ -221,11 +221,11 @@ func TestRunBackupCLIAndApplyRestoredStateValidation(t *testing.T) {
 	if err := app.server.store.UpdateSettings(context.Background(), settings); err != nil {
 		t.Fatal(err)
 	}
-	if err := applyRestoredStateWithSupervisor(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, app.sup); err == nil || !strings.Contains(err.Error(), "decrypt restored REALITY key") {
+	if err := applyRestoredStateWithRuntime(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, app.sup); err == nil || !strings.Contains(err.Error(), "decrypt restored REALITY key") {
 		t.Fatalf("missing encrypted key error = %v", err)
 	}
 	missing := newTestApp(t, false)
-	if err := applyRestoredStateWithSupervisor(context.Background(), missing.server.store, missing.server.masterKey, missing.server.configDir, 443, missing.sup); err == nil || !strings.Contains(err.Error(), "settings are not initialized") {
+	if err := applyRestoredStateWithRuntime(context.Background(), missing.server.store, missing.server.masterKey, missing.server.configDir, 443, missing.sup); err == nil || !strings.Contains(err.Error(), "settings are not initialized") {
 		t.Fatalf("uninitialized restored state error = %v", err)
 	}
 }

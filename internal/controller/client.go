@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"xray-easy/internal/controller/api/v1"
+	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
-	"xray-easy/internal/supervisor"
 	"xray-easy/internal/xrayapi"
 
 	"google.golang.org/grpc"
@@ -79,29 +79,28 @@ func (c *Client) Capabilities(ctx context.Context) (*controllerv1.CapabilitiesRe
 	return response.(*controllerv1.CapabilitiesResponse), nil
 }
 
-// Status returns the current Xray process state.
-func (c *Client) Status(ctx context.Context) (supervisor.Status, error) {
+// Status returns the current embedded Xray runtime state.
+func (c *Client) Status(ctx context.Context) (domain.XrayRuntimeStatus, error) {
 	result, err := c.call(ctx, "GetStatus", &controllerv1.EmptyRequest{})
 	if err != nil {
-		return supervisor.Status{}, err
+		return domain.XrayRuntimeStatus{}, err
 	}
 	value := result.(*controllerv1.StatusResponse)
-	if value.Protocol == "" || value.XrayVersion == "" || value.State == "" || value.Pid < 0 || value.RestartCount < 0 || value.ActiveRevision < 0 {
-		return supervisor.Status{}, errors.New("decode Controller status: required fields are invalid")
+	if value.Protocol == "" || value.XrayVersion == "" || value.State == "" || value.ActiveRevision < 0 {
+		return domain.XrayRuntimeStatus{}, errors.New("decode Controller status: required fields are invalid")
 	}
 	startedAt, err := protobufTimeToTime("started_at", value.StartedAt)
 	if err != nil {
-		return supervisor.Status{}, err
+		return domain.XrayRuntimeStatus{}, err
 	}
-	return supervisor.Status{
-		Protocol: value.Protocol, XrayVersion: value.XrayVersion, State: value.State, PID: int(value.Pid),
-		ConfigPath: value.ConfigPath, LastError: value.LastError, LastExit: value.LastExit,
-		RestartCount: int(value.RestartCount), StartedAt: startedAt, ActiveRevision: value.ActiveRevision,
+	return domain.XrayRuntimeStatus{
+		Protocol: value.Protocol, XrayVersion: value.XrayVersion, State: value.State,
+		LastError: value.LastError, StartedAt: startedAt, ActiveRevision: value.ActiveRevision,
 		InboundTags: append([]string(nil), value.InboundTags...), StatsAvailable: value.StatsAvailable,
 	}, nil
 }
 
-// Logs returns the supervisor's redacted recent log lines.
+// Logs returns the embedded runtime's redacted recent log lines.
 func (c *Client) Logs(ctx context.Context) ([]string, error) {
 	result, err := c.call(ctx, "GetLogs", &controllerv1.EmptyRequest{})
 	if err != nil {

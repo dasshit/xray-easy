@@ -82,11 +82,6 @@ jobs:
           BACKEND_COVERAGE_MIN: "90"
           BACKEND_PACKAGE_COVERAGE_MIN: "80"
 
-      - name: Enforce per-file Xray supervisor coverage
-        run: bash scripts/xray-supervisor-coverage.sh
-        env:
-          SUPERVISOR_FILE_COVERAGE_MIN: "90"
-
   awg-prototype:
     name: AmneziaWG prototype tests and Linux builds
     runs-on: ubuntu-latest

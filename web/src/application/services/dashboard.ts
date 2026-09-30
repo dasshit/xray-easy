@@ -19,7 +19,7 @@ async function loadNodeStatus(api: XrayEasyGateway): Promise<NodeStatus> {
   try {
     return await api.diagnostics.status()
   } catch {
-    return { state: 'unavailable', restartCount: 0 }
+    return { state: 'unavailable' }
   }
 }
 

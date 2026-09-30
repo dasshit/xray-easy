@@ -1,5 +1,9 @@
 # План перехода от Xray supervisor к встроенному Xray runtime service
 
+> План выполнен 30 сентября 2026 года. Этап 9 завершён после успешной
+> VDS-приёмки embedded Compose: supervisor, его протокол и rollback Compose
+> удалены; теперь штатный путь установки использует только встроенный runtime.
+
 ## Цель
 
 Заменить запуск внешнего Xray-бинарника под управлением `xray-supervisor` на
@@ -577,34 +581,32 @@ Web UI будет доступен через SSH tunnel на `http://127.0.0.1:
 запускается на embedded runtime, а supervisor rollback остаётся доступен до
 ручной приёмки.
 
-### Этап 9. Удалить supervisor после VDS-приёмки embedded default
+### Этап 9. Удалить supervisor после VDS-приёмки embedded default — выполнен
 
-- VDS-приёмка default Compose успешно завершена: владелец подтвердил установку
-  и проверки. Проверки backup/restore в эту приёмку не входили.
-- Перенести используемую Controller/backend модель состояния из пакета
-  `internal/supervisor` в доменный пакет и переименовать интерфейсы, поля,
-  события, HTTP DTO и Doctor labels в runtime-термины. Убрать UI-метрику
-  `restart_count`, которую embedded runtime не предоставляет.
-- Удалить selector старого Controller adapter, supervisor gRPC client/server и
-  protobuf contract, `cmd/xray-supervisor`, `Dockerfile.xray`, отдельную
-  supervisor coverage-обвязку и временный rollback Compose. Оставить только
-  embedded runtime service и его версионируемый контракт.
-- Удалить создание/проверку supervisor token из installer, `XRAY_ADAPTER` и
-  `XRAY_SUPERVISOR_*` из активных конфигураций, а также ненужные Buf-модули и
-  генераторы. Не удалять уже существующие данные пользователя; прежние
-  supervisor named volumes и локальный secret Compose автоматически не удаляет.
-- Обновить README, `.env.example`, support bundle, troubleshooting и старые
-  архитектурные планы: пометить описание supervisor как историческое и
-  сослаться на актуальную embedded архитектуру.
-- Проверить `go test ./...`, `go vet ./...`, backend coverage gate, runtime
-  race/coverage gates, protobuf generation/check, Compose config для обычной
-  установки, Docker multiarch build и отсутствие supervisor-ссылок в активном
-  коде/сборке. Затем сделать отдельный cleanup-коммит и push.
+- Владелец подтвердил успешную установку и проверки default Compose на VDS.
+- Состояние перенесено в `internal/domain.XrayRuntimeStatus`; Controller и
+  backend используют runtime-терминологию. Поля PID/config path/last exit и
+  restart count удалены из status contract; старые номера и имена зарезервированы.
+- Удалены selector, supervisor gRPC client/server и protobuf contract,
+  `cmd/xray-supervisor`, `Dockerfile.xray`, отдельная coverage-обвязка и
+  rollback Compose. Оставлены embedded runtime service и его typed contract.
+- Installer больше не генерирует и не валидирует supervisor token; переменные
+  `XRAY_ADAPTER` и `XRAY_SUPERVISOR_*` убраны из активной конфигурации. Старые
+  token-файлы и Docker volumes установщик не трогает и сам не удаляет.
+- README и `.env.example` обновлены, а планы прежней архитектуры помечены как
+  исторические. Backend/frontend fixtures больше не содержат restart counter.
+- Подтверждены `go test ./cmd/... ./internal/...`, общий Go `-race` и `go vet`;
+  handwritten Go coverage — 90,1%, AWG module — 90,05%, web — 93,34%
+  statements, embedded runtime — не ниже 90% в каждом handwritten-файле.
+- Успешно прошли web lint, typecheck, coverage и production build; Compose
+  конфигурация проверена, все образы стандартного Compose stack собраны.
+- Installer tests подтверждают, что новый запуск не генерирует legacy token и
+  принимает старую переменную token source в существующем `.env` без требования
+  этого файла. Установщик не удаляет старые token-файлы и Docker volumes.
 
-**Готово, когда:** чистая установка и upgrade на VDS используют только embedded
-runtime; backend и Controller не содержат supervisor пути и ранее проверенные
-сценарии проходят. Исторические планы могут содержать термин supervisor только
-в контексте описания прежней архитектуры.
+**Результат:** чистая установка и upgrade используют только embedded runtime;
+backend и Controller не содержат supervisor пути. Исторические планы сохраняют
+название только для объяснения прежней архитектуры.
 
 ## Требования к безопасности и наблюдаемости
 

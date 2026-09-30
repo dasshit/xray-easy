@@ -16,9 +16,9 @@ import (
 	"strings"
 	"time"
 
+	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/runtimeauth"
-	"xray-easy/internal/supervisor"
 	"xray-easy/internal/xrayapi"
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 
@@ -34,8 +34,8 @@ const (
 	maxRuntimeConfigSnapshot = 16 << 20
 )
 
-// EmbeddedXrayClient adapts the embedded runtime's product-level API to the
-// legacy Controller runtime interfaces while migration is opt-in.
+// EmbeddedXrayClient adapts the embedded runtime's gRPC API to the Controller
+// protocol interfaces.
 type EmbeddedXrayClient struct {
 	TokenFile string
 	ConfigDir string
@@ -110,34 +110,34 @@ func (c *EmbeddedXrayClient) Health(ctx context.Context) error {
 }
 
 // Status normalizes embedded runtime state to the status shape used by the UI.
-func (c *EmbeddedXrayClient) Status(ctx context.Context) (supervisor.Status, error) {
+func (c *EmbeddedXrayClient) Status(ctx context.Context) (domain.XrayRuntimeStatus, error) {
 	response, err := c.call(ctx, embeddedControlIdentity, xrayruntimev1.Runtime_GetStatus_FullMethodName, &xrayruntimev1.EmptyRequest{}, func(ctx context.Context, request proto.Message) (proto.Message, error) {
 		return c.rpc.GetStatus(ctx, request.(*xrayruntimev1.EmptyRequest))
 	})
 	if err != nil {
-		return supervisor.Status{}, err
+		return domain.XrayRuntimeStatus{}, err
 	}
 	value := response.(*xrayruntimev1.RuntimeStatus)
 	state, ok := embeddedRuntimeState(value.GetState())
 	if !ok || strings.TrimSpace(value.GetXrayCoreVersion()) == "" {
-		return supervisor.Status{}, errors.New("decode embedded Xray status: required fields are invalid")
+		return domain.XrayRuntimeStatus{}, errors.New("decode embedded Xray status: required fields are invalid")
 	}
 	capabilityResponse, err := c.call(ctx, embeddedControlIdentity, xrayruntimev1.Runtime_GetCapabilities_FullMethodName, &xrayruntimev1.EmptyRequest{}, func(ctx context.Context, request proto.Message) (proto.Message, error) {
 		return c.rpc.GetCapabilities(ctx, request.(*xrayruntimev1.EmptyRequest))
 	})
 	if err != nil {
-		return supervisor.Status{}, err
+		return domain.XrayRuntimeStatus{}, err
 	}
 	inboundTags := make([]string, 0, len(capabilityResponse.(*xrayruntimev1.CapabilitiesResponse).GetProtocols()))
 	seenTags := make(map[string]struct{}, cap(inboundTags))
 	statsAvailable := false
 	for index, capability := range capabilityResponse.(*xrayruntimev1.CapabilitiesResponse).GetProtocols() {
 		if capability == nil || !capability.GetConfigured() || strings.TrimSpace(capability.GetInboundTag()) == "" {
-			return supervisor.Status{}, fmt.Errorf("decode embedded Xray capabilities: protocol %d is invalid", index)
+			return domain.XrayRuntimeStatus{}, fmt.Errorf("decode embedded Xray capabilities: protocol %d is invalid", index)
 		}
 		tag := strings.TrimSpace(capability.GetInboundTag())
 		if _, exists := seenTags[tag]; exists {
-			return supervisor.Status{}, fmt.Errorf("decode embedded Xray capabilities: inbound tag %q is duplicated", tag)
+			return domain.XrayRuntimeStatus{}, fmt.Errorf("decode embedded Xray capabilities: inbound tag %q is duplicated", tag)
 		}
 		seenTags[tag] = struct{}{}
 		inboundTags = append(inboundTags, tag)
@@ -146,11 +146,11 @@ func (c *EmbeddedXrayClient) Status(ctx context.Context) (supervisor.Status, err
 	sort.Strings(inboundTags)
 	startedAt, err := embeddedTimestamp("started_at", value.GetStartedAt())
 	if err != nil {
-		return supervisor.Status{}, err
+		return domain.XrayRuntimeStatus{}, err
 	}
-	return supervisor.Status{
+	return domain.XrayRuntimeStatus{
 		Protocol: "embedded-core", XrayVersion: value.GetXrayCoreVersion(), State: state,
-		ConfigPath: filepath.Join(c.ConfigDir, "active.json"), LastError: value.GetLastError(), StartedAt: startedAt,
+		LastError: value.GetLastError(), StartedAt: startedAt,
 		ActiveRevision: value.GetActiveRevision(), InboundTags: inboundTags, StatsAvailable: statsAvailable,
 	}, nil
 }

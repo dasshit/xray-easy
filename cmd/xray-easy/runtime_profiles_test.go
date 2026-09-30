@@ -18,7 +18,7 @@ import (
 )
 
 type recordingInboundReplacer struct {
-	*fakeSupervisor
+	*fakeXrayRuntime
 	calls [][4]string
 	err   error
 	hook  func()
@@ -211,8 +211,8 @@ func createRuntimeVMessClient(t *testing.T, app testApp, name string) domain.Cli
 
 func TestVLESSShortIDReserveAddsUsersThenReplacesInbound(t *testing.T) {
 	app := newTestApp(t, true)
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
-	app.server.supervisor = replacer
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
+	app.server.xrayRuntime = replacer
 	for i := 1; i <= 6; i++ {
 		createRuntimeTestClient(t, app, fmt.Sprintf("phone-%d", i))
 	}
@@ -323,8 +323,8 @@ func TestVMessProfilesUseCertificateAndLiveUserLifecycle(t *testing.T) {
 	app := newTestApp(t, true)
 	handler := &recordingVMessHandler{fakeXrayHandler: app.handler}
 	app.server.handler = handler
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
-	app.server.supervisor = replacer
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
+	app.server.xrayRuntime = replacer
 
 	first := createRuntimeVMessClient(t, app, "macbook")
 	if first.UUID == "" || first.ShortID != "" || !first.VMessCanConnect() || len(app.sup.applyCalls) != 1 || len(replacer.calls) != 0 || len(handler.added) != 0 || !hasInboundTag(filepath.Join(app.server.configDir, "active.json"), xray.VMessInboundTag) {
@@ -557,8 +557,8 @@ func TestProtocolSpecificClientStateTransitionsUseLiveHandlerAPIs(t *testing.T) 
 	app := newTestApp(t, true)
 	handler := &reconcilingProtocolHandler{fakeXrayHandler: app.handler}
 	app.server.handler = handler
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
-	app.server.supervisor = replacer
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
+	app.server.xrayRuntime = replacer
 	hysteria := createRuntimeHysteriaClient(t, app, "hysteria-state")
 	vmess := createRuntimeVMessClient(t, app, "vmess-state")
 
@@ -764,8 +764,8 @@ func TestProtocolClientCreationRollsBackFailedVMessAndCandidateValidation(t *tes
 
 func TestVLESSInboundReplacementFailureLeavesExistingClientsAndRuntimeIntact(t *testing.T) {
 	app := newTestApp(t, true)
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
-	app.server.supervisor = replacer
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
+	app.server.xrayRuntime = replacer
 	for i := 1; i <= 5; i++ {
 		createRuntimeTestClient(t, app, fmt.Sprintf("phone-%d", i))
 	}
@@ -824,8 +824,8 @@ func TestPersistedClientReconciliationRepairsDriftAndReportsFailures(t *testing.
 func TestRealityShortIDReconciliationUsesInboundReplacementAndPreservesActiveOnFailure(t *testing.T) {
 	app := newTestApp(t, true)
 	client := createRuntimeTestClient(t, app, "phone")
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
-	app.server.supervisor = replacer
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
+	app.server.xrayRuntime = replacer
 	active := filepath.Join(app.server.configDir, "active.json")
 	if err := app.server.reconcileRealityShortIDsLocked(t.Context(), []domain.Client{client}); err != nil {
 		t.Fatalf("matching REALITY short IDs should not be replaced: %v", err)
@@ -895,7 +895,7 @@ func TestClientCreateFallsBackToValidatedApplyWhenLiveAPIIsUnavailable(t *testin
 		app.server.handler = nil
 		createRuntimeTestClient(t, app, "second")
 		if len(app.sup.applyCalls) != 2 {
-			t.Fatalf("missing live handler did not use supervisor apply: %v", app.sup.applyCalls)
+			t.Fatalf("missing live handler did not use Xray runtime apply: %v", app.sup.applyCalls)
 		}
 	})
 	t.Run("AddUser failure", func(t *testing.T) {
@@ -904,7 +904,7 @@ func TestClientCreateFallsBackToValidatedApplyWhenLiveAPIIsUnavailable(t *testin
 		app.handler.addErr = errors.New("live AddUser unavailable")
 		createRuntimeTestClient(t, app, "second")
 		if len(app.sup.applyCalls) != 2 {
-			t.Fatalf("AddUser failure did not use supervisor apply: %v", app.sup.applyCalls)
+			t.Fatalf("AddUser failure did not use Xray runtime apply: %v", app.sup.applyCalls)
 		}
 	})
 	t.Run("reserve exhaustion without replacer", func(t *testing.T) {
@@ -913,7 +913,7 @@ func TestClientCreateFallsBackToValidatedApplyWhenLiveAPIIsUnavailable(t *testin
 			createRuntimeTestClient(t, app, fmt.Sprintf("phone-%d", i))
 		}
 		if len(app.sup.applyCalls) != 2 {
-			t.Fatalf("reserve exhaustion did not fall back to supervisor apply: %v", app.sup.applyCalls)
+			t.Fatalf("reserve exhaustion did not fall back to Xray runtime apply: %v", app.sup.applyCalls)
 		}
 	})
 	t.Run("missing Hysteria handler", func(t *testing.T) {
@@ -980,7 +980,7 @@ func TestRealityShortIDReconciliationRollsBackInboundWhenPromotionFails(t *testi
 	if err := os.WriteFile(active, stale, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
+	replacer := &recordingInboundReplacer{fakeXrayRuntime: app.sup}
 	changed := false
 	replacer.hook = func() {
 		if changed {
@@ -994,7 +994,7 @@ func TestRealityShortIDReconciliationRollsBackInboundWhenPromotionFails(t *testi
 			t.Fatal(err)
 		}
 	}
-	app.server.supervisor = replacer
+	app.server.xrayRuntime = replacer
 	if err := app.server.reconcileRealityShortIDsLocked(t.Context(), []domain.Client{client}); err == nil || !strings.Contains(err.Error(), "promote reconciled") {
 		t.Fatalf("failed promotion = %v", err)
 	}

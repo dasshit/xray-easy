@@ -149,7 +149,7 @@ func TestSettingsLogLevelApplyRestartsXrayWithoutRevokingProfiles(t *testing.T) 
 		t.Fatalf("active config did not update log level while retaining profile: %v %s", err, activeConfig)
 	}
 	if len(app.sup.applyCalls) != 1 {
-		t.Fatalf("supervisor apply count = %d, want one Xray apply", len(app.sup.applyCalls))
+		t.Fatalf("Xray runtime apply count = %d, want one Xray apply", len(app.sup.applyCalls))
 	}
 	if entries, err := os.ReadDir(filepath.Join(app.server.dataDir, "backups")); (err == nil && len(entries) != 0) || (err != nil && !os.IsNotExist(err)) {
 		t.Fatalf("non-destructive log-level update created backups: %d, %v", len(entries), err)
@@ -363,7 +363,7 @@ func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
 	app.sup.statusErr = errors.New(`connection password="hidden"`)
 	status = requestJSON(t, app, http.MethodGet, "/api/status", nil, true)
 	if !strings.Contains(status.Body.String(), `"state":"unavailable"`) || strings.Contains(status.Body.String(), "hidden") {
-		t.Fatalf("supervisor failure was not safely reported: %s", status.Body.String())
+		t.Fatalf("runtime failure was not safely reported: %s", status.Body.String())
 	}
 	logs := requestJSON(t, app, http.MethodGet, "/api/logs?component=xray&limit=1", nil, true)
 	if logs.Code != http.StatusOK || strings.Contains(logs.Body.String(), "hidden") {

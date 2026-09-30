@@ -108,7 +108,7 @@ func TestEventSubscriptionsCoalesceAndCanUnsubscribeTwice(t *testing.T) {
 	}
 }
 
-func TestSSEStopsWhenSessionExpiresAndRedactsSupervisorError(t *testing.T) {
+func TestSSEStopsWhenSessionExpiresAndRedactsRuntimeError(t *testing.T) {
 	app := newTestApp(t, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	response := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
@@ -145,7 +145,7 @@ func TestSSEStopsWhenSessionExpiresAndRedactsSupervisorError(t *testing.T) {
 	newMux(app.server).ServeHTTP(response, request)
 	defer cancel2()
 	if !strings.Contains(response.Body.String(), `"state":"unavailable"`) || strings.Contains(response.Body.String(), "hidden") {
-		t.Fatalf("SSE supervisor error not redacted: %s", response.Body.String())
+		t.Fatalf("SSE Xray runtime error not redacted: %s", response.Body.String())
 	}
 }
 

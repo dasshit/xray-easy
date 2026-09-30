@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"xray-easy/internal/supervisor"
+	"xray-easy/internal/domain"
 )
 
 type rejectingDoctorWriter struct{}
@@ -61,7 +61,7 @@ func bundleNotes(t *testing.T, output string) string {
 	return bundleEntry(t, output, "bundle-notes.txt")
 }
 
-func TestDoctorBundleRecordsUnavailableSupervisorAndInvalidConfig(t *testing.T) {
+func TestDoctorBundleRecordsUnavailableRuntimeAndInvalidConfig(t *testing.T) {
 	for _, testcase := range []struct {
 		name       string
 		content    []byte
@@ -69,7 +69,7 @@ func TestDoctorBundleRecordsUnavailableSupervisorAndInvalidConfig(t *testing.T) 
 		logsErr    error
 		wantNotice string
 	}{
-		{"supervisor unavailable", []byte(`{"inbounds":[]}`), errors.New("token=hidden-status"), errors.New("logs unavailable"), "supervisor status could not be collected"},
+		{"runtime unavailable", []byte(`{"inbounds":[]}`), errors.New("token=hidden-status"), errors.New("logs unavailable"), "Xray runtime status could not be collected"},
 		{"invalid active config", []byte(`{"inbounds":`), nil, nil, "not valid JSON"},
 		{"oversized active config", bytes.Repeat([]byte(" "), (2<<20)+1), nil, nil, "exceeds 2 MiB"},
 	} {
@@ -80,11 +80,11 @@ func TestDoctorBundleRecordsUnavailableSupervisorAndInvalidConfig(t *testing.T) 
 			if err := os.WriteFile(filepath.Join(configDir, "active.json"), testcase.content, 0o600); err != nil {
 				t.Fatal(err)
 			}
-			sup := &doctorSupervisorStub{status: supervisor.Status{State: "running", XrayVersion: "Xray 26.7.28"}, statusErr: testcase.statusErr, logsErr: testcase.logsErr}
+			sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running", XrayVersion: "Xray 26.7.28"}, statusErr: testcase.statusErr, logsErr: testcase.logsErr}
 			var output bytes.Buffer
 			_ = runDoctorBundle(context.Background(), dataDir, configDir, &output, sup, &doctorHandlerStub{}, &doctorStatsStub{})
 			if strings.Contains(output.String(), "hidden-status") {
-				t.Fatalf("supervisor secret leaked in report: %s", output.String())
+				t.Fatalf("runtime secret leaked in report: %s", output.String())
 			}
 			if notes := bundleNotes(t, output.String()); !strings.Contains(notes, testcase.wantNotice) {
 				t.Fatalf("bundle notes = %q, want %q", notes, testcase.wantNotice)
@@ -97,7 +97,7 @@ func TestDoctorBundleReportsOutputAndFilesystemFailures(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
-	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}}
+	sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running"}}
 	if err := runDoctorBundle(context.Background(), dataDir, configDir, rejectingDoctorWriter{}, sup, &doctorHandlerStub{}, &doctorStatsStub{}); err == nil || !strings.Contains(err.Error(), "write doctor report") {
 		t.Fatalf("output failure = %v", err)
 	}
@@ -138,7 +138,7 @@ func TestDoctorBundleKeepsOnlyRecentBoundedLogs(t *testing.T) {
 		logs[i] = "recent entry"
 	}
 	logs[len(logs)-1] = strings.Repeat("X", 4200)
-	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}, logs: logs}
+	sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running"}, logs: logs}
 	var output bytes.Buffer
 	if err := runDoctorBundle(context.Background(), dataDir, configDir, &output, sup, &doctorHandlerStub{}, &doctorStatsStub{}); err != nil {
 		t.Fatal(err)

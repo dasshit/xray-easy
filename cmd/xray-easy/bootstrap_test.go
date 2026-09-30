@@ -33,7 +33,7 @@ func TestInitializeControlPlaneBuildsConfiguredDependenciesAndCleanup(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if s.store == nil || len(s.masterKey) != 32 || s.configDir != filepath.Join(root, "xray") || s.publicPort != 8443 || s.vmessPort != 9443 || s.dataDir != filepath.Join(root, "data") || s.maintenancePath != filepath.Join(root, "data", "maintenance.lock") || s.defaultAPIListen != "127.0.0.1:10100" || s.stats == nil || s.supervisor == nil || s.handler == nil {
+	if s.store == nil || len(s.masterKey) != 32 || s.configDir != filepath.Join(root, "xray") || s.publicPort != 8443 || s.vmessPort != 9443 || s.dataDir != filepath.Join(root, "data") || s.maintenancePath != filepath.Join(root, "data", "maintenance.lock") || s.defaultAPIListen != "127.0.0.1:10100" || s.stats == nil || s.xrayRuntime == nil || s.handler == nil {
 		t.Fatalf("initialized control plane dependencies incomplete: %+v", s)
 	}
 	if info, err := os.Stat(filepath.Join(root, "xray", "candidates")); err != nil || !info.IsDir() {

@@ -118,14 +118,14 @@ func TestStripExternalAPIServer(t *testing.T) {
 	configuration := []byte(`{"api":{"listen":"192.0.2.123:10085"},"inbounds":[{"tag":"client-inbound"}],"outbounds":[{"protocol":"freedom"}]}`)
 	stripped, err := stripExternalAPIServer(configuration)
 	if err != nil {
-		t.Fatalf("strip supervisor API app: %v", err)
+		t.Fatalf("strip legacy API app: %v", err)
 	}
 	var document map[string]json.RawMessage
 	if err := json.Unmarshal(stripped, &document); err != nil {
 		t.Fatalf("decode stripped config: %v", err)
 	}
 	if _, exists := document["api"]; exists {
-		t.Fatal("supervisor API app remained in embedded config")
+		t.Fatal("legacy API app remained in embedded config")
 	}
 	if string(document["inbounds"]) != `[{"tag":"client-inbound"}]` || string(document["outbounds"]) != `[{"protocol":"freedom"}]` {
 		t.Fatalf("stripping API changed other Xray config: %s", stripped)

@@ -50,7 +50,7 @@ export const hysteriaStatus = {
   masquerade_type: 'off',
   insecure_uri: false,
 }
-export const nodeStatus: NodeStatusDto = { state: 'running', restart_count: 2 }
+export const nodeStatus: NodeStatusDto = { state: 'running' }
 export const xrayEntries: DiagnosticEntry[] = []
 export const appEntries: DiagnosticEntry[] = []
 

@@ -253,7 +253,7 @@ func TestEmbeddedXrayAdapterCoversControllerRuntimeInterfaces(t *testing.T) {
 		t.Fatalf("Health() = %v", err)
 	}
 	statusValue, err := client.Status(context.Background())
-	if err != nil || statusValue.State != "running" || statusValue.Protocol != "embedded-core" || statusValue.XrayVersion != "Xray 26.7.28" || statusValue.PID != 0 || statusValue.ConfigPath != filepath.Join(configDir, "active.json") || statusValue.ActiveRevision != 8 || !statusValue.StatsAvailable || strings.Join(statusValue.InboundTags, ",") != "vless-reality,vmess-tls" {
+	if err != nil || statusValue.State != "running" || statusValue.Protocol != "embedded-core" || statusValue.XrayVersion != "Xray 26.7.28" || statusValue.ActiveRevision != 8 || !statusValue.StatsAvailable || strings.Join(statusValue.InboundTags, ",") != "vless-reality,vmess-tls" {
 		t.Fatalf("Status() = %+v, %v", statusValue, err)
 	}
 	logs, err := client.Logs(context.Background())

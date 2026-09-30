@@ -446,7 +446,7 @@ func (s *server) hysteriaSettingsApply(w http.ResponseWriter, r *http.Request) {
 	var replacer inboundReplacer
 	if needsRuntimeChange {
 		var ok bool
-		replacer, ok = s.supervisor.(inboundReplacer)
+		replacer, ok = s.xrayRuntime.(inboundReplacer)
 		if !ok {
 			_ = os.Remove(path)
 			_ = s.store.UpdateApplyOperation(r.Context(), operationID, "failed", "inbound replacement is unavailable")

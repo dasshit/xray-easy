@@ -1533,7 +1533,7 @@ func (s *Store) CreateApplyOperation(ctx context.Context, operation ApplyOperati
 // CreateApplyOperationWithNextRevision allocates a durable monotonically
 // increasing revision and records the operation atomically. The sequence row
 // is deliberately preserved by RestoreFrom so restoring an older backup does
-// not lower the revision high-water mark held by xray-supervisor.
+// not lower the revision high-water mark held by the embedded Xray runtime.
 func (s *Store) CreateApplyOperationWithNextRevision(ctx context.Context, operation ApplyOperation) (int64, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {

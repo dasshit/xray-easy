@@ -10,8 +10,8 @@ import (
 	"time"
 
 	"xray-easy/internal/controller/api/v1"
+	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
-	"xray-easy/internal/supervisor"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -38,7 +38,7 @@ func controllerTestClient(t *testing.T, runtime *fakeRuntime, token string) (*Cl
 }
 
 func TestClientInvokesControllerAndForwardsRequestID(t *testing.T) {
-	runtime := &fakeRuntime{status: supervisor.Status{Protocol: "embedded-core", XrayVersion: "26.7.28", State: "running", PID: 5, RestartCount: 1, StartedAt: time.Date(2026, 9, 30, 11, 0, 0, 0, time.UTC), ActiveRevision: 42, InboundTags: []string{"vless-reality"}, StatsAvailable: true}, logs: []string{"line"}}
+	runtime := &fakeRuntime{status: domain.XrayRuntimeStatus{Protocol: "embedded-core", XrayVersion: "26.7.28", State: "running", StartedAt: time.Date(2026, 9, 30, 11, 0, 0, 0, time.UTC), ActiveRevision: 42, InboundTags: []string{"vless-reality"}, StatsAvailable: true}, logs: []string{"line"}}
 	client, _ := controllerTestClient(t, runtime, "test-token")
 	wantID := "abcdef0123456789abcdef0123456789"
 	wantOperationID := "0123456789abcdef0123456789abcdef"
@@ -49,7 +49,7 @@ func TestClientInvokesControllerAndForwardsRequestID(t *testing.T) {
 		t.Fatalf("Health() trace=%q/%q/%d/%d, err=%v", runtime.requestID, runtime.operationID, runtime.attempt, runtime.stateRevision, err)
 	}
 	statusValue, err := client.Status(ctx)
-	if err != nil || statusValue.XrayVersion != "26.7.28" || statusValue.PID != 5 || !statusValue.StartedAt.Equal(runtime.status.StartedAt) || statusValue.ActiveRevision != 42 || len(statusValue.InboundTags) != 1 || !statusValue.StatsAvailable {
+	if err != nil || statusValue.XrayVersion != "26.7.28" || !statusValue.StartedAt.Equal(runtime.status.StartedAt) || statusValue.ActiveRevision != 42 || len(statusValue.InboundTags) != 1 || !statusValue.StatsAvailable {
 		t.Fatalf("Status() = %+v, %v", statusValue, err)
 	}
 	lines, err := client.Logs(ctx)
@@ -204,8 +204,7 @@ func (*staticInvoker) Close() error { return nil }
 func TestClientStatusValidatesRequiredCountersAndTimestamp(t *testing.T) {
 	for _, response := range []*controllerv1.StatusResponse{
 		{Protocol: "v1", State: "running"},
-		{Protocol: "v1", XrayVersion: "x", State: "running", Pid: -1},
-		{Protocol: "v1", XrayVersion: "x", State: "running", RestartCount: -1},
+		{Protocol: "v1", XrayVersion: "x", State: "running", ActiveRevision: -1},
 		{Protocol: "v1", XrayVersion: "x", State: "running", StartedAt: &timestamppb.Timestamp{Seconds: 999999999999}},
 	} {
 		client := NewClientWithConn(&staticInvoker{value: response}, "token")

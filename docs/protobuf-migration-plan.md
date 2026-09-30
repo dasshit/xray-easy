@@ -1,5 +1,9 @@
 # Protobuf migration plan: Supervisor and AmneziaWG
 
+> Историческая часть про Supervisor завершена и удалена после VDS-приёмки
+> встроенного Xray runtime. Общий Controller/AWG protobuf контракт остаётся;
+> текущее состояние runtime описано в [`xray-runtime-service-plan.md`](xray-runtime-service-plan.md).
+
 ## Goal
 
 Replace dynamic `google.protobuf.Struct` payloads in the private gRPC links to

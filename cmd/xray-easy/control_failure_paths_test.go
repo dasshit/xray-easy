@@ -12,7 +12,7 @@ import (
 )
 
 func TestControlPlaneReportsDiagnosticProfileAndBackupFailures(t *testing.T) {
-	t.Run("status redacts supervisor errors", func(t *testing.T) {
+	t.Run("status redacts Xray runtime errors", func(t *testing.T) {
 		app := newTestApp(t, true)
 		if got := requestJSON(t, app, http.MethodGet, "/api/status", nil, false).Code; got != http.StatusUnauthorized {
 			t.Fatalf("unauthenticated status endpoint = %d", got)
@@ -24,20 +24,20 @@ func TestControlPlaneReportsDiagnosticProfileAndBackupFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("supervisor logs unavailable", func(t *testing.T) {
+	t.Run("Xray runtime logs unavailable", func(t *testing.T) {
 		app := newTestApp(t, true)
 		for _, path := range []string{"/api/logs?component=other", "/api/logs?limit=nope", "/api/logs?limit=201"} {
 			if got := requestJSON(t, app, http.MethodGet, path, nil, true).Code; got != http.StatusBadRequest {
 				t.Errorf("invalid diagnostics query %s status = %d", path, got)
 			}
 		}
-		app.sup.logsErr = errors.New("supervisor offline")
+		app.sup.logsErr = errors.New("runtime offline")
 		response := requestJSON(t, app, http.MethodGet, "/api/logs", nil, true)
 		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "diagnostics_unavailable") {
 			t.Fatalf("logs error response = %d %s", response.Code, response.Body.String())
 		}
 		entries := app.server.diagnosticBuffer.Snapshot(10)
-		if len(entries) != 1 || !strings.Contains(entries[0].Message, "supervisor offline") {
+		if len(entries) != 1 || !strings.Contains(entries[0].Message, "runtime offline") {
 			t.Fatalf("diagnostic entry after logs error = %+v", entries)
 		}
 	})

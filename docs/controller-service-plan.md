@@ -1,5 +1,10 @@
 # Controller service and gradual runtime migration plan
 
+> Исторический план перехода. Xray supervisor был заменён встроенным Xray
+> runtime service и удалён после VDS-приёмки. Controller по-прежнему соединяет
+> backend с embedded runtime и AmneziaWG; актуальная Xray-архитектура описана в
+> [`xray-runtime-service-plan.md`](xray-runtime-service-plan.md).
+
 ## Goal
 
 Introduce a private gRPC Controller between the HTTP control plane and the

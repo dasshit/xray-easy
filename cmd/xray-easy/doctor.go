@@ -22,7 +22,6 @@ import (
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
-	"xray-easy/internal/supervisor"
 	"xray-easy/internal/xray"
 	"xray-easy/internal/xrayapi"
 )
@@ -45,16 +44,16 @@ type doctorCheck struct {
 var doctorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$`)
 var xrayReleasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
-type doctorSupervisor interface {
+type doctorXrayRuntime interface {
 	Health(context.Context) error
-	Status(context.Context) (supervisor.Status, error)
+	Status(context.Context) (domain.XrayRuntimeStatus, error)
 	Validate(context.Context, string, string) error
 	ProbeTarget(context.Context, string, string) error
 	ProbeIPv6(context.Context) error
 }
 
-type doctorBundleSupervisor interface {
-	doctorSupervisor
+type doctorBundleRuntime interface {
+	doctorXrayRuntime
 	Logs(context.Context) ([]string, error)
 }
 
@@ -81,7 +80,7 @@ func runDoctorCLI(ctx context.Context, args []string, dataDir, configDir string,
 	}
 	var handler doctorHandler
 	var stats doctorStats
-	var sup doctorBundleSupervisor
+	var runtime doctorBundleRuntime
 	var closeRuntime func()
 	var awg doctorAWG
 	var awgErr error
@@ -93,29 +92,29 @@ func runDoctorCLI(ctx context.Context, args []string, dataDir, configDir string,
 	if err != nil {
 		return fmt.Errorf("initialize Controller gRPC client: %w", err)
 	}
-	sup, handler, stats, closeRuntime = client, client, client, func() { _ = client.Close() }
+	runtime, handler, stats, closeRuntime = client, client, client, func() { _ = client.Close() }
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
 		awg = client.AWG()
 	}
 	defer closeRuntime()
 	if len(args) == 1 {
-		return runDoctorBundleWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, awg, awgErr)
+		return runDoctorBundleWithAWG(ctx, dataDir, configDir, out, runtime, handler, stats, awg, awgErr)
 	}
-	return runDoctorWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, awg, awgErr)
+	return runDoctorWithAWG(ctx, dataDir, configDir, out, runtime, handler, stats, awg, awgErr)
 }
 
-func runDoctor(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorSupervisor, handler doctorHandler, stats doctorStats) error {
-	return runDoctorWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, nil, nil)
+func runDoctor(ctx context.Context, dataDir, configDir string, out io.Writer, runtime doctorXrayRuntime, handler doctorHandler, stats doctorStats) error {
+	return runDoctorWithAWG(ctx, dataDir, configDir, out, runtime, handler, stats, nil, nil)
 }
 
-func runDoctorWithAWG(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorSupervisor, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) error {
+func runDoctorWithAWG(ctx context.Context, dataDir, configDir string, out io.Writer, runtime doctorXrayRuntime, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
 
-	checks := collectDoctorChecksWithAWG(ctx, dataDir, configDir, sup, handler, stats, awg, awgErr)
+	checks := collectDoctorChecksWithAWG(ctx, dataDir, configDir, runtime, handler, stats, awg, awgErr)
 	failures, warnings := 0, 0
 	writeDoctorHeader(out)
-	if status, err := sup.Status(ctx); err == nil {
+	if status, err := runtime.Status(ctx); err == nil {
 		fmt.Fprintf(out, "  Running Xray binary: %s\n", safeRuntimeXrayVersion(status.XrayVersion))
 	} else {
 		fmt.Fprintln(out, "  Running Xray binary: unavailable")
@@ -189,13 +188,13 @@ func doctorConfiguredPort(name, fallback string) (int, error) {
 	return port, nil
 }
 
-func runDoctorBundle(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorBundleSupervisor, handler doctorHandler, stats doctorStats) error {
-	return runDoctorBundleWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, nil, nil)
+func runDoctorBundle(ctx context.Context, dataDir, configDir string, out io.Writer, runtime doctorBundleRuntime, handler doctorHandler, stats doctorStats) error {
+	return runDoctorBundleWithAWG(ctx, dataDir, configDir, out, runtime, handler, stats, nil, nil)
 }
 
-func runDoctorBundleWithAWG(ctx context.Context, dataDir, configDir string, out io.Writer, sup doctorBundleSupervisor, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) error {
+func runDoctorBundleWithAWG(ctx context.Context, dataDir, configDir string, out io.Writer, runtime doctorBundleRuntime, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) error {
 	var report bytes.Buffer
-	doctorErr := runDoctorWithAWG(ctx, dataDir, configDir, &report, sup, handler, stats, awg, awgErr)
+	doctorErr := runDoctorWithAWG(ctx, dataDir, configDir, &report, runtime, handler, stats, awg, awgErr)
 	if _, err := io.Copy(out, &report); err != nil {
 		return fmt.Errorf("write doctor report: %w", err)
 	}
@@ -204,24 +203,23 @@ func runDoctorBundleWithAWG(ctx context.Context, dataDir, configDir string, out 
 	var notes []string
 	extraCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	status, err := sup.Status(extraCtx)
+	status, err := runtime.Status(extraCtx)
 	if err != nil {
 		statusJSON, marshalErr := json.MarshalIndent(map[string]any{"available": false, "error": diagnostics.Redact(err.Error())}, "", "  ")
 		if marshalErr != nil {
 			return fmt.Errorf("encode unavailable Xray status: %w", marshalErr)
 		}
 		files["xray-status.json"] = append(statusJSON, '\n')
-		notes = append(notes, "Xray supervisor status could not be collected.")
+		notes = append(notes, "Xray Xray runtime status could not be collected.")
 	} else {
 		status.LastError = diagnostics.Redact(status.LastError)
-		status.LastExit = diagnostics.Redact(status.LastExit)
 		statusJSON, marshalErr := json.MarshalIndent(status, "", "  ")
 		if marshalErr != nil {
 			return fmt.Errorf("encode Xray status: %w", marshalErr)
 		}
 		files["xray-status.json"] = append(statusJSON, '\n')
 	}
-	logs, logsErr := sup.Logs(extraCtx)
+	logs, logsErr := runtime.Logs(extraCtx)
 	if logsErr != nil {
 		files["xray-errors.log"] = []byte("Could not collect Xray logs.\n")
 		notes = append(notes, "Recent Xray logs could not be collected.")
@@ -271,11 +269,11 @@ func runDoctorBundleWithAWG(ctx context.Context, dataDir, configDir string, out 
 	return nil
 }
 
-func collectDoctorChecks(ctx context.Context, dataDir, configDir string, sup doctorSupervisor, handler doctorHandler, stats doctorStats) []doctorCheck {
-	return collectDoctorChecksWithAWG(ctx, dataDir, configDir, sup, handler, stats, nil, nil)
+func collectDoctorChecks(ctx context.Context, dataDir, configDir string, runtime doctorXrayRuntime, handler doctorHandler, stats doctorStats) []doctorCheck {
+	return collectDoctorChecksWithAWG(ctx, dataDir, configDir, runtime, handler, stats, nil, nil)
 }
 
-func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, sup doctorSupervisor, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) []doctorCheck {
+func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, runtime doctorXrayRuntime, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) []doctorCheck {
 	checks := make([]doctorCheck, 0, 12)
 	appendCheck := func(level doctorLevel, name, detail, hint string) {
 		checks = append(checks, doctorCheck{level: level, name: name, detail: detail, hint: hint})
@@ -385,33 +383,30 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		}
 	}
 
-	var supervisorStatus supervisor.Status
-	supervisorReady := false
+	var runtimeStatus domain.XrayRuntimeStatus
+	runtimeReady := false
 	if !controllerTokenReady {
 		appendCheck(doctorFail, "Controller connection", "not checked because the secret file is unavailable", "Fix the Controller secret check above.")
-	} else if err := sup.Health(ctx); err != nil {
+	} else if err := runtime.Health(ctx); err != nil {
 		appendCheck(doctorFail, "Controller connection", "authenticated health check failed", "Check controller container health, its private address/token, and the Xray runtime dependency.")
 	} else {
 		appendCheck(doctorPass, "Controller connection", "authenticated runtime health check succeeded", "")
-		supervisorStatus, err = sup.Status(ctx)
+		runtimeStatus, err = runtime.Status(ctx)
 		if err != nil {
 			appendCheck(doctorFail, "Xray runtime status", "status request failed", "Inspect xray and Controller container logs, then verify the private runtime API is healthy.")
 		} else {
-			statusCheckName := "Supervisor status"
-			if supervisorStatus.Protocol == "embedded-core" {
-				statusCheckName = "Embedded Xray runtime"
-			}
-			switch supervisorStatus.State {
+			statusCheckName := "Embedded Xray runtime"
+			switch runtimeStatus.State {
 			case "running":
-				supervisorReady = true
+				runtimeReady = true
 				appendCheck(doctorPass, statusCheckName, "Xray core is running", "")
 			case "no-config":
-				supervisorReady = true
+				runtimeReady = true
 				appendCheck(doctorWarn, statusCheckName, "Xray is waiting for its first active configuration", "Complete the first-run setup in the Web UI.")
 			default:
 				appendCheck(doctorFail, statusCheckName, "Xray core is not running", "Inspect xray container logs and the active Xray configuration.")
 			}
-			runtimeVersion := safeRuntimeXrayVersion(supervisorStatus.XrayVersion)
+			runtimeVersion := safeRuntimeXrayVersion(runtimeStatus.XrayVersion)
 			configuredVersion := safeRuntimeXrayVersion(envOr("XRAY_VERSION", ""))
 			switch {
 			case runtimeVersion == "unknown":
@@ -423,29 +418,27 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 			default:
 				appendCheck(doctorPass, "Xray compatibility", fmt.Sprintf("runtime binary matches the verified Xray %s compatibility entry", xray.VerifiedCoreVersion), "")
 			}
-			if supervisorStatus.Protocol == "embedded-core" {
-				if supervisorStatus.ActiveRevision > 0 {
-					appendCheck(doctorPass, "Embedded config revision", fmt.Sprintf("runtime has applied revision %d", supervisorStatus.ActiveRevision), "")
-				} else {
-					appendCheck(doctorWarn, "Embedded config revision", "runtime has not applied a persisted configuration revision yet", "Complete first-run setup in the Web UI, then refresh diagnostics.")
-				}
-				if err := matchEmbeddedInboundTags(filepath.Join(configDir, "active.json"), supervisorStatus.InboundTags); err != nil {
-					appendCheck(doctorFail, "Embedded inbound tags", "runtime inbound tags do not match active.json", "Apply the active configuration again and inspect Controller/Xray runtime logs.")
-				} else {
-					appendCheck(doctorPass, "Embedded inbound tags", "runtime reports the same supported inbound tags as active.json", "")
-				}
-				if supervisorStatus.StatsAvailable {
-					appendCheck(doctorPass, "Embedded statistics capability", "runtime reports per-user statistics support", "")
-				} else {
-					appendCheck(doctorWarn, "Embedded statistics capability", "runtime reports per-user statistics as unavailable", "Verify the active Xray stats and policy configuration, then rebuild with the verified Xray version.")
-				}
+			if runtimeStatus.ActiveRevision > 0 {
+				appendCheck(doctorPass, "Embedded config revision", fmt.Sprintf("runtime has applied revision %d", runtimeStatus.ActiveRevision), "")
+			} else {
+				appendCheck(doctorWarn, "Embedded config revision", "runtime has not applied a persisted configuration revision yet", "Complete first-run setup in the Web UI, then refresh diagnostics.")
+			}
+			if err := matchEmbeddedInboundTags(filepath.Join(configDir, "active.json"), runtimeStatus.InboundTags); err != nil {
+				appendCheck(doctorFail, "Embedded inbound tags", "runtime inbound tags do not match active.json", "Apply the active configuration again and inspect Controller/Xray runtime logs.")
+			} else {
+				appendCheck(doctorPass, "Embedded inbound tags", "runtime reports the same supported inbound tags as active.json", "")
+			}
+			if runtimeStatus.StatsAvailable {
+				appendCheck(doctorPass, "Embedded statistics capability", "runtime reports per-user statistics support", "")
+			} else {
+				appendCheck(doctorWarn, "Embedded statistics capability", "runtime reports per-user statistics as unavailable", "Verify the active Xray stats and policy configuration, then rebuild with the verified Xray version.")
 			}
 		}
 	}
 
-	if !supervisorReady {
-		appendCheck(doctorWarn, "IPv6 egress", "probe skipped because Xray is unavailable", "Fix the supervisor and Xray status checks above.")
-	} else if err := sup.ProbeIPv6(ctx); err != nil {
+	if !runtimeReady {
+		appendCheck(doctorWarn, "IPv6 egress", "probe skipped because Xray is unavailable", "Fix the Xray runtime checks above.")
+	} else if err := runtime.ProbeIPv6(ctx); err != nil {
 		appendCheck(doctorWarn, "IPv6 egress", "outbound IPv6 TCP probe failed", "Check IPv6 routing and firewall rules for the Docker host and egress network. IPv4 traffic can still work.")
 	} else {
 		appendCheck(doctorPass, "IPv6 egress", "outbound IPv6 TCP connection succeeded from the Xray container", "")
@@ -462,23 +455,23 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		appendCheck(level, "Active Xray config", "active.json is missing", hint)
 	} else if err != nil {
 		appendCheck(doctorFail, "Active Xray config", "active.json cannot be inspected", "Check the xray_config volume permissions.")
-	} else if !supervisorReady {
+	} else if !runtimeReady {
 		appendCheck(doctorWarn, "Active Xray config", "validation skipped because the Xray runtime is unavailable", "Fix the runtime checks above.")
-	} else if supervisorStatus.State == "no-config" {
-		appendCheck(doctorWarn, "Active Xray config", "supervisor has no active configuration", "Complete the first-run setup in the Web UI.")
+	} else if runtimeStatus.State == "no-config" {
+		appendCheck(doctorWarn, "Active Xray config", "Xray runtime has no active configuration", "Complete the first-run setup in the Web UI.")
 	} else {
 		operationID, operationErr := interaction.NewRequestID()
 		if operationErr != nil {
 			appendCheck(doctorFail, "Active Xray config", "could not create a validation operation ID", "Check system entropy and rerun doctor.")
 		} else {
-			revision := supervisorStatus.ActiveRevision
+			revision := runtimeStatus.ActiveRevision
 			if revision < 1 {
 				// Config validation is read-only. A positive sentinel keeps older
 				// runtimes with no persisted revision compatible with Controller.
 				revision = 1
 			}
 			validationContext := interaction.WithStateRevision(ctx, revision)
-			if err := sup.Validate(validationContext, activeConfig, operationID); err != nil {
+			if err := runtime.Validate(validationContext, activeConfig, operationID); err != nil {
 				appendCheck(doctorFail, "Active Xray config", "Xray rejected the active configuration", "Review xray container logs and correct the configuration in the Web UI.")
 			} else {
 				appendCheck(doctorPass, "Active Xray config", "Xray config test passed", "")
@@ -489,10 +482,10 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 	if !settingsReady {
 		appendCheck(doctorWarn, "Xray Handler API", "inbound check skipped until server setup is complete", "Complete the first-run setup in the Web UI.")
 		appendCheck(doctorWarn, "Xray statistics API", "stats check skipped until server setup is complete", "Complete the first-run setup in the Web UI.")
-	} else if !supervisorReady {
-		appendCheck(doctorWarn, "Xray API", "gRPC checks skipped because Xray is unavailable", "Fix the supervisor and Xray status checks above.")
+	} else if !runtimeReady {
+		appendCheck(doctorWarn, "Xray API", "gRPC checks skipped because Xray is unavailable", "Fix the Xray runtime checks above.")
 	} else {
-		if err := sup.ProbeTarget(ctx, settings.RealityTarget, settings.RealitySNI); err != nil {
+		if err := runtime.ProbeTarget(ctx, settings.RealityTarget, settings.RealitySNI); err != nil {
 			appendCheck(doctorFail, "REALITY target", "DNS/TLS probe from the Xray network failed", "Verify the configured target and SNI, DNS resolution, outbound TCP access, and the VDS system clock.")
 		} else {
 			appendCheck(doctorPass, "REALITY target", "DNS resolution and TLS connection from the Xray network succeeded", "")

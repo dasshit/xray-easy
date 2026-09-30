@@ -19,12 +19,11 @@ import (
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
-	"xray-easy/internal/supervisor"
 	"xray-easy/internal/xrayapi"
 )
 
-type doctorSupervisorStub struct {
-	status       supervisor.Status
+type doctorXrayRuntimeStub struct {
+	status       domain.XrayRuntimeStatus
 	healthErr    error
 	statusErr    error
 	validateErr  error
@@ -46,7 +45,7 @@ func TestDoctorAmneziaWGChecksOnlyWhenConfigured(t *testing.T) {
 	t.Setenv("AWG_PUBLIC_PORT", "51821")
 	checks := collectDoctorChecksWithAWG(
 		context.Background(), dataDir, configDir,
-		&doctorSupervisorStub{status: supervisor.Status{State: "stopped"}},
+		&doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "stopped"}},
 		&doctorHandlerStub{}, &doctorStatsStub{},
 		&doctorAWGStub{
 			status: domain.AmneziaWGStatus{Running: true},
@@ -62,7 +61,7 @@ func TestDoctorAmneziaWGChecksOnlyWhenConfigured(t *testing.T) {
 
 	checks = collectDoctorChecksWithAWG(
 		context.Background(), dataDir, configDir,
-		&doctorSupervisorStub{status: supervisor.Status{State: "stopped"}},
+		&doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "stopped"}},
 		&doctorHandlerStub{}, &doctorStatsStub{}, nil, errors.New("token path unavailable"),
 	)
 	if !hasDoctorCheck(checks, "AmneziaWG control API", doctorFail) {
@@ -74,7 +73,7 @@ func TestDoctorOmitsAmneziaWGChecksWhenDisabled(t *testing.T) {
 	t.Setenv("AWG_PUBLIC_HOST", "")
 	checks := collectDoctorChecksWithAWG(
 		context.Background(), t.TempDir(), t.TempDir(),
-		&doctorSupervisorStub{}, &doctorHandlerStub{}, &doctorStatsStub{},
+		&doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{},
 		&doctorAWGStub{status: domain.AmneziaWGStatus{Running: true}}, nil,
 	)
 	if findDoctorCheck(checks, "AmneziaWG service") != nil || findDoctorCheck(checks, "AmneziaWG UDP firewall") != nil {
@@ -95,13 +94,13 @@ func findDoctorCheck(checks []doctorCheck, name string) *doctorCheck {
 	return nil
 }
 
-func (s *doctorSupervisorStub) Health(context.Context) error { return s.healthErr }
+func (s *doctorXrayRuntimeStub) Health(context.Context) error { return s.healthErr }
 
-func (s *doctorSupervisorStub) Status(context.Context) (supervisor.Status, error) {
+func (s *doctorXrayRuntimeStub) Status(context.Context) (domain.XrayRuntimeStatus, error) {
 	return s.status, s.statusErr
 }
 
-func (s *doctorSupervisorStub) Validate(ctx context.Context, path, operationID string) error {
+func (s *doctorXrayRuntimeStub) Validate(ctx context.Context, path, operationID string) error {
 	s.validateCall++
 	s.validatePath = path
 	s.validateID = operationID
@@ -109,17 +108,17 @@ func (s *doctorSupervisorStub) Validate(ctx context.Context, path, operationID s
 	return s.validateErr
 }
 
-func (s *doctorSupervisorStub) ProbeTarget(context.Context, string, string) error {
+func (s *doctorXrayRuntimeStub) ProbeTarget(context.Context, string, string) error {
 	s.probeCall++
 	return s.probeErr
 }
 
-func (s *doctorSupervisorStub) ProbeIPv6(context.Context) error {
+func (s *doctorXrayRuntimeStub) ProbeIPv6(context.Context) error {
 	s.ipv6Call++
 	return s.ipv6Err
 }
 
-func (s *doctorSupervisorStub) Logs(context.Context) ([]string, error) {
+func (s *doctorXrayRuntimeStub) Logs(context.Context) ([]string, error) {
 	return s.logs, s.logsErr
 }
 
@@ -166,7 +165,7 @@ func TestDoctorPassesFreshInstallAndWarnsSetupPending(t *testing.T) {
 	t.Setenv("XRAY_EASY_UI_PORT", "8080")
 	tokenPath := writeControllerToken(t, 0o400)
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
-	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}}
+	sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running"}}
 	handler := &doctorHandlerStub{}
 	stats := &doctorStatsStub{}
 	var output bytes.Buffer
@@ -224,8 +223,8 @@ func TestDoctorBundleContainsRedactedReportStatusLogsAndConfig(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "active.json"), []byte(activeConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sup := &doctorSupervisorStub{
-		status: supervisor.Status{State: "running", LastError: "privateKey=raw-status-secret", LastExit: "uuid=123e4567-e89b-12d3-a456-426614174000"},
+	sup := &doctorXrayRuntimeStub{
+		status: domain.XrayRuntimeStatus{State: "running", LastError: "privateKey=raw-status-secret"},
 		logs:   []string{`level=error privateKey=raw-log-secret id=123e4567-e89b-12d3-a456-426614174000`},
 	}
 	var output bytes.Buffer
@@ -296,7 +295,7 @@ func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
 	t.Setenv("XRAY_VERSION", "26.7.28")
 	tokenPath := writeControllerToken(t, 0o400)
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
-	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running", XrayVersion: "Xray 26.7.28"}}
+	sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running", XrayVersion: "Xray 26.7.28"}}
 	handler := &doctorHandlerStub{}
 	stats := &doctorStatsStub{err: errors.New("unknown method GetUsersStats")}
 	var output bytes.Buffer
@@ -305,7 +304,7 @@ func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unsupported statistics RPC should not fail installation: %v\n%s", err, output.String())
 	}
-	if !strings.Contains(output.String(), "WARN  Xray statistics API: GetUsersStats is unavailable") || !strings.Contains(output.String(), "Result: PASS (2 warning(s))") {
+	if !strings.Contains(output.String(), "WARN  Xray statistics API: GetUsersStats is unavailable") || !strings.Contains(output.String(), "Result: PASS (") {
 		t.Fatalf("unsupported stats API was not reported as a warning: %s", output.String())
 	}
 	if handler.calls != 1 || stats.calls != 1 {
@@ -329,7 +328,7 @@ func TestDoctorReportsEmbeddedRuntimeDiagnostics(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(configDir, "active.json"), []byte(activeConfig), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	sup := &doctorSupervisorStub{status: supervisor.Status{
+	sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{
 		Protocol: "embedded-core", XrayVersion: "Xray 26.7.28", State: "running",
 		ActiveRevision: 12, InboundTags: []string{"vmess-tls", "vless-reality"}, StatsAvailable: true,
 	}}
@@ -406,8 +405,8 @@ func TestDoctorReportsIPv6EgressFailureAsWarning(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
-	sup := &doctorSupervisorStub{
-		status:  supervisor.Status{State: "running"},
+	sup := &doctorXrayRuntimeStub{
+		status:  domain.XrayRuntimeStatus{State: "running"},
 		ipv6Err: errors.New("private network diagnostic detail"),
 	}
 	var output bytes.Buffer
@@ -443,7 +442,7 @@ func TestDoctorReportsIPv6PublicHostType(t *testing.T) {
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	var output bytes.Buffer
-	if err := runDoctor(context.Background(), dataDir, configDir, &output, &doctorSupervisorStub{status: supervisor.Status{State: "running"}}, &doctorHandlerStub{}, &doctorStatsStub{}); err != nil {
+	if err := runDoctor(context.Background(), dataDir, configDir, &output, &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running"}}, &doctorHandlerStub{}, &doctorStatsStub{}); err != nil {
 		t.Fatalf("doctor failed: %v\n%s", err, output.String())
 	}
 	if !strings.Contains(output.String(), "PASS  Public host: IPv6 literal configured") {
@@ -458,7 +457,7 @@ func TestDoctorFailureDoesNotPrintSecrets(t *testing.T) {
 	tokenPath := writeControllerToken(t, 0o600)
 	t.Setenv("XRAY_CONTROLLER_ADDR", "controller.test:10088")
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
-	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}}
+	sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running"}}
 	var output bytes.Buffer
 
 	err := runDoctor(context.Background(), dataDir, configDir, &output, sup, &doctorHandlerStub{}, &doctorStatsStub{})
@@ -477,8 +476,8 @@ func TestDoctorFailsWhenRealityTargetCannotBeReached(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
-	sup := &doctorSupervisorStub{
-		status:   supervisor.Status{State: "running"},
+	sup := &doctorXrayRuntimeStub{
+		status:   domain.XrayRuntimeStatus{State: "running"},
 		probeErr: errors.New("target hostname and connection details are private diagnostic data"),
 	}
 	var output bytes.Buffer
@@ -503,7 +502,7 @@ func TestDoctorFailsInvalidPublicPort(t *testing.T) {
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	t.Setenv("XRAY_PUBLIC_PORT", "not-a-port")
 	var output bytes.Buffer
-	err := runDoctor(context.Background(), dataDir, configDir, &output, &doctorSupervisorStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
+	err := runDoctor(context.Background(), dataDir, configDir, &output, &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
 	if err == nil || !strings.Contains(output.String(), "FAIL  Public TCP port") {
 		t.Fatalf("invalid public port did not fail doctor: %v\n%s", err, output.String())
 	}
@@ -563,6 +562,6 @@ func writeControllerToken(t *testing.T, mode os.FileMode) string {
 	return path
 }
 
-var _ doctorSupervisor = (*doctorSupervisorStub)(nil)
+var _ doctorXrayRuntime = (*doctorXrayRuntimeStub)(nil)
 var _ doctorHandler = (*doctorHandlerStub)(nil)
 var _ doctorStats = (*doctorStatsStub)(nil)

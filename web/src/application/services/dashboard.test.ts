@@ -22,7 +22,7 @@ function gateway(overrides: GatewayOverrides = {}): XrayEasyGateway {
     },
     backups: { create: vi.fn() },
     diagnostics: {
-      status: vi.fn().mockResolvedValue({ state: 'running', restartCount: 1 }),
+      status: vi.fn().mockResolvedValue({ state: 'running' }),
       logs: vi.fn().mockResolvedValue([]),
     },
     events: { connect: vi.fn() },
@@ -47,7 +47,7 @@ describe('authenticated dashboard service', () => {
       auth: { totpStatus: vi.fn().mockResolvedValue({ enabled: true, recoveryCodesRemaining: 2 }) },
       settings: { get: vi.fn().mockResolvedValue({ publicHost: 'vpn.example.test' }) },
       diagnostics: {
-        status: vi.fn().mockResolvedValue({ state: 'running', restartCount: 3 }),
+        status: vi.fn().mockResolvedValue({ state: 'running' }),
         logs: vi.fn().mockImplementation(component => Promise.resolve(component === 'xray'
           ? [{ at: '2026-09-28T12:00:02Z', component, level: 'error', message: 'second' }]
           : [{ at: '2026-09-28T12:00:01Z', component, level: 'warn', message: 'first' }])),
@@ -58,7 +58,7 @@ describe('authenticated dashboard service', () => {
       clients: [{ id: 'client-1' }],
       totpStatus: { enabled: true, recoveryCodesRemaining: 2 },
       settings: { publicHost: 'vpn.example.test' },
-      nodeStatus: { state: 'running', restartCount: 3 },
+      nodeStatus: { state: 'running' },
       diagnostics: [
         { at: '2026-09-28T12:00:01Z', component: 'app', level: 'warn', message: 'first' },
         { at: '2026-09-28T12:00:02Z', component: 'xray', level: 'error', message: 'second' },
@@ -76,7 +76,7 @@ describe('authenticated dashboard service', () => {
       },
     })
 
-    await expect(loadNodeStatusSnapshot(api)).resolves.toEqual({ state: 'unavailable', restartCount: 0 })
+    await expect(loadNodeStatusSnapshot(api)).resolves.toEqual({ state: 'unavailable' })
     await expect(loadDiagnosticsSnapshot(api)).resolves.toEqual([
       { at: '2026-09-28T12:00:00Z', component: 'xray', level: 'error', message: 'kept' },
     ])
