@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { VueWrapper } from '@vue/test-utils'
 import type { Client } from '../src/domain/models'
 import { defaultHandler, flushPromises, itemAt, mountApp, openTab, settings, hysteriaStatus, sampleClient, type RequestRecord } from './appHarness'
@@ -354,6 +354,8 @@ describe('diagnostics', () => {
       return defaultHandler({ authenticated: true, clients: [awgClient] })(request)
     })
     await openTab(wrapper, 'Diagnostics')
+    expect(wrapper.find('.section-panel > .section-heading').exists()).toBe(false)
+    expect(wrapper.find('.diagnostics-toolbar .diagnostics-tabs').exists()).toBe(true)
     expect(wrapper.get('[data-testid="diagnostics-tab-xray"]').attributes('aria-selected')).toBe('true')
     expect(wrapper.get('[data-testid="awg-diagnostics"]').isVisible()).toBe(false)
     await wrapper.get('[data-testid="diagnostics-tab-awg"]').trigger('click')
@@ -367,8 +369,6 @@ describe('diagnostics', () => {
     expect(section.text()).toContain('prototype-v1')
     expect(section.text()).toContain('iphone')
     expect(section.text()).toContain('198.51.100.24')
-    expect(wrapper.get('.section-heading').findAll('.eyebrow')).toHaveLength(0)
-    expect(wrapper.get('.section-heading h2').text()).toBe('Diagnostics')
   })
 
   it('reports an unreachable AmneziaWG status endpoint as unavailable', async () => {
@@ -460,8 +460,11 @@ describe('diagnostics', () => {
     })
     await openTab(wrapper, 'Diagnostics')
     const before = requests.length
-    await findButton(wrapper, 'Refresh diagnostics').trigger('click')
+    vi.useFakeTimers()
+    const refreshButton = wrapper.get('[aria-label="Refresh diagnostics"]')
+    await refreshButton.trigger('click')
     await flushPromises()
+    expect(refreshButton.get('svg').classes()).toContain('spinning')
     const refreshed = requests.slice(before).map(request => request.url)
     expect(refreshed).toEqual(expect.arrayContaining([
       '/api/status',
@@ -469,6 +472,8 @@ describe('diagnostics', () => {
       '/api/logs?component=app&limit=100',
       '/api/transports/amneziawg',
     ]))
+    await vi.advanceTimersByTimeAsync(2500)
+    expect(refreshButton.get('svg').classes()).not.toContain('spinning')
   })
 })
 

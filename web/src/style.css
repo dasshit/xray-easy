@@ -94,11 +94,20 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .header-actions { display: flex; align-items: center; gap: 18px; white-space: nowrap; }
 .eyebrow { margin-bottom: 5px; color: var(--muted); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .tabs { display: flex; gap: 4px; padding: 0 30px; border-bottom: 1px solid var(--border); overflow-x: auto; }
-.tabs.diagnostics-tabs { margin: 0 0 22px; padding: 0; overflow-y: hidden; }
+.diagnostics-toolbar { display: flex; align-items: center; gap: 14px; margin-bottom: 22px; }
+.tabs.diagnostics-tabs { flex: 1 1 auto; min-width: 0; margin: 0; padding: 0; overflow-y: hidden; border-bottom: 0; }
 .tabs button { position: relative; border-radius: 0; padding: 13px 14px; background: transparent; color: var(--muted); white-space: nowrap; }
 .tabs button:hover:not(:disabled) { background: var(--surface-muted); color: var(--primary); }
 .tabs button.active { color: var(--primary); font-weight: 700; }
 .tabs button.active::after { position: absolute; right: 10px; bottom: -1px; left: 10px; height: 3px; border-radius: 3px 3px 0 0; background: var(--primary); content: ''; }
+.tabs.diagnostics-tabs button.active::after { bottom: 0; }
+.diagnostics-refresh-button { display: grid; place-items: center; }
+.diagnostics-refresh-icon { width: 18px; height: 18px; }
+.diagnostics-refresh-icon.spinning { animation: diagnostics-refresh-spin .8s linear infinite; }
+@keyframes diagnostics-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .diagnostics-refresh-icon.spinning { animation: none; }
+}
 .section-panel { padding: 28px 30px 32px; }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 26px; }
 .section-heading h2 { font-size: 1.45rem; letter-spacing: -.025em; }
@@ -179,7 +188,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .diagnostics-list { list-style: none; padding: 0; margin: 20px 0 0; border-top: 1px solid var(--border); }
 .diagnostics-list li { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .diagnostics-list small { color: var(--muted); font: 11px ui-monospace, monospace; }
-.diagnostics-subsection { margin-top: 28px; padding-top: 24px; }
+.diagnostics-subsection { margin: 0; padding: 0; }
 .diagnostics-xray-version { margin: 0 0 16px; }
 .diagnostics-subsection .diagnostics-feed { margin-top: 20px; }
 .diagnostics-control-plane .diagnostics-list { margin-top: 0; }

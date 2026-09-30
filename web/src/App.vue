@@ -30,6 +30,7 @@ const api = requireGateway(inject(xrayEasyGatewayKey))
 const theme = ref<Theme>(readTheme())
 const activeSection = ref<Section>('profiles')
 const activeDiagnosticsSection = ref<'xray' | 'amneziawg' | 'control-plane'>('xray')
+const refreshingDiagnostics = ref(false)
 const createModalOpen = ref(false)
 const hysteriaStatus = ref<HysteriaSettings | null>(null)
 const amneziaWGStatus = ref<AmneziaWGStatus | null>(null)
@@ -249,7 +250,16 @@ async function loadStatus() { nodeStatus.value = await loadNodeStatusSnapshot(ap
 async function loadDiagnostics() { diagnostics.value = await loadDiagnosticsSnapshot(api) }
 /** Refresh Xray status, recent events, and AmneziaWG service status together. */
 async function refreshDiagnostics() {
-  await Promise.all([loadStatus(), loadDiagnostics(), refreshAmneziaWGStatus()])
+  if (refreshingDiagnostics.value) return
+  const startedAt = Date.now()
+  refreshingDiagnostics.value = true
+  try {
+    await Promise.all([loadStatus(), loadDiagnostics(), refreshAmneziaWGStatus()])
+  } finally {
+    const remainingDuration = Math.max(0, 2500 - (Date.now() - startedAt))
+    if (remainingDuration > 0) await new Promise<void>(resolve => window.setTimeout(resolve, remainingDuration))
+    refreshingDiagnostics.value = false
+  }
 }
 /**
  * Load current server settings and reset the editable form to those values.
@@ -654,12 +664,16 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         </div>
       </section>
       <section v-if="activeSection === 'diagnostics'" class="section-panel">
-        <div class="section-heading"><h2>{{ t().diagnostics }}</h2><button class="secondary" :disabled="busy" @click="refreshDiagnostics">{{ t().refreshDiagnostics }}</button></div>
-        <nav class="tabs diagnostics-tabs" role="tablist" :aria-label="t().diagnosticsComponents">
-          <button data-testid="diagnostics-tab-xray" role="tab" :aria-selected="activeDiagnosticsSection === 'xray'" :class="{ active: activeDiagnosticsSection === 'xray' }" aria-controls="diagnostics-panel-xray" @click="activeDiagnosticsSection = 'xray'">{{ t().xrayDiagnostics }}</button>
-          <button data-testid="diagnostics-tab-awg" role="tab" :aria-selected="activeDiagnosticsSection === 'amneziawg'" :class="{ active: activeDiagnosticsSection === 'amneziawg' }" aria-controls="diagnostics-panel-awg" @click="activeDiagnosticsSection = 'amneziawg'">{{ t().amneziawg }}</button>
-          <button data-testid="diagnostics-tab-control-plane" role="tab" :aria-selected="activeDiagnosticsSection === 'control-plane'" :class="{ active: activeDiagnosticsSection === 'control-plane' }" aria-controls="diagnostics-panel-control-plane" @click="activeDiagnosticsSection = 'control-plane'">{{ t().controlPlaneDiagnostics }}</button>
-        </nav>
+        <div class="diagnostics-toolbar">
+          <nav class="tabs diagnostics-tabs" role="tablist" :aria-label="t().diagnosticsComponents">
+            <button data-testid="diagnostics-tab-xray" role="tab" :aria-selected="activeDiagnosticsSection === 'xray'" :class="{ active: activeDiagnosticsSection === 'xray' }" aria-controls="diagnostics-panel-xray" @click="activeDiagnosticsSection = 'xray'">{{ t().xrayDiagnostics }}</button>
+            <button data-testid="diagnostics-tab-awg" role="tab" :aria-selected="activeDiagnosticsSection === 'amneziawg'" :class="{ active: activeDiagnosticsSection === 'amneziawg' }" aria-controls="diagnostics-panel-awg" @click="activeDiagnosticsSection = 'amneziawg'">{{ t().amneziawg }}</button>
+            <button data-testid="diagnostics-tab-control-plane" role="tab" :aria-selected="activeDiagnosticsSection === 'control-plane'" :class="{ active: activeDiagnosticsSection === 'control-plane' }" aria-controls="diagnostics-panel-control-plane" @click="activeDiagnosticsSection = 'control-plane'">{{ t().controlPlaneDiagnostics }}</button>
+          </nav>
+          <button class="icon-button diagnostics-refresh-button" type="button" :disabled="busy || refreshingDiagnostics" :aria-label="t().refreshDiagnostics" :title="t().refreshDiagnostics" @click="refreshDiagnostics">
+            <svg class="diagnostics-refresh-icon" :class="{ spinning: refreshingDiagnostics }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5" /><path d="M4 17v-5h5" /><path d="M5.5 8A7 7 0 0 1 18 6l2 6" /><path d="M18.5 16A7 7 0 0 1 6 18l-2-6" /></svg>
+          </button>
+        </div>
         <section v-show="activeDiagnosticsSection === 'xray'" id="diagnostics-panel-xray" class="diagnostics-subsection diagnostics-xray" data-testid="xray-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-xray">
           <p class="muted diagnostics-xray-version">{{ t().configuredXrayVersion }}: {{ nodeStatus?.configuredXrayVersion || '—' }} · {{ t().runtimeXrayVersion }}: {{ nodeStatus?.xrayVersion || '—' }}</p>
           <p v-if="nodeStatus?.state === 'running' && nodeStatus.xrayVersion && nodeStatus.xrayVersionVerified === false" class="diagnostic-version-warning" role="status">{{ t().xrayVersionUnverified }}</p>
