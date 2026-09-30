@@ -5,7 +5,9 @@ FROM ghcr.io/xtls/xray-core:${XRAY_VERSION} AS xray
 
 FROM golang:1.24-alpine AS supervisor-build
 WORKDIR /src
-COPY go.mod ./
+COPY go.mod go.sum ./
+COPY third_party ./third_party
+RUN go mod download
 COPY cmd ./cmd
 COPY internal ./internal
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags='-s -w' -o /out/xray-supervisor ./cmd/xray-supervisor
