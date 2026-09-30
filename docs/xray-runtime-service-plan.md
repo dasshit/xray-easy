@@ -139,6 +139,35 @@ Controller и runtime adapters — в
 перечислены ограничения по протоколам. При блокирующем ограничении пересмотреть
 дизайн до замены production-пути.
 
+**Результат spike от 2026-09-30:**
+
+- Создан изолированный модуль `xray-runtime/`. Go не принимает upstream tag
+  `v26.7.28` как module version для модуля без `/v26`, поэтому зависимость
+  закреплена pseudo-version
+  `v1.260327.1-0.20260728075948-5ca6f4b7d4dc`, построенной по release commit
+  `5ca6f4b7d4dc`. Она соответствует Xray-core 26.7.28.
+- У upstream модуля указано `go 1.26.0`; корневой backend-модуль остаётся на
+  своей текущей версии Go. Встроенный runtime собирается отдельно новым
+  toolchain, чтобы не повышать требование для всего приложения.
+- Тест `xray-runtime/internal/spike` сформировал конфигурацию с используемыми
+  проектом VLESS + REALITY, VMess + TLS и Hysteria 2, успешно прошёл её через
+  `infra/conf/serial.LoadJSONConfig`, `core.New` и `Instance.Start`.
+- Для трёх inbound’ов публичная цепочка
+  `inbound.Manager.GetHandler` → `proxy.GetInbound` → `proxy.UserManager`
+  позволяет напрямую читать roster и выполнять add/remove пользователей без
+  вызова Xray HandlerService. `stats.Manager` напрямую предоставляет traffic
+  counters и online maps. Тест подтвердил их доступность и работу интерфейсов;
+  сбор реального трафика и online IP отдельно проверяется на следующем этапе.
+- В исходнике закреплённой версии `Instance.Start` документирован как
+  однократный запуск; после `Close` повторный старт не гарантируется. Поэтому
+  production recovery после неудачной полной замены runtime должен полагаться
+  на restart процесса/контейнера и прежний durable `active.json`, а не на
+  повторный `Start` того же `Instance`.
+- Не подтверждены этим spike: фактическая telemetry на пользовательском
+  трафике для каждого протокола, безопасный preflight без bind портов,
+  multiarch Docker build и стоимость образа. Эти проверки остаются в этапах
+  4–6 до переключения Controller.
+
 ### Этап 2. Спроектировать собственный typed gRPC контракт
 
 - Добавить новую версионируемую службу, например
