@@ -1,0 +1,363 @@
+# Existing installations without XRAY_EASY_PROJECT_NAME keep their named volumes.
+name: ${XRAY_EASY_PROJECT_NAME:-xray-easy-stage1}
+
+services:
+  init-volumes:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        # The TLS volume is mounted beneath read-only /etc/xray in the Xray
+        # container. Its mountpoint must already exist in xray_config.
+        mkdir -p /data /config/hysteria-tls /tls /supervisor-state
+        if [ ! -f /config/active.json ]; then cp /bootstrap/active.json /config/active.json; fi
+        chown -R 10001:10001 /data /config /tls /supervisor-state
+        chmod 0700 /supervisor-state
+    volumes:
+      - app_data:/data
+      - xray_config:/config
+      - hysteria_tls_data:/tls
+      - ./prototype/config-stage1:/bootstrap:ro
+
+  init-supervisor-secret:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /target
+        install -m 0400 -o 10001 -g 10001 /source/xray_supervisor_token /target/xray_supervisor_token
+    volumes:
+      - xray_supervisor_token_data:/target
+    secrets:
+      - source: xray_supervisor_token
+        target: /source/xray_supervisor_token
+
+  init-controller-token:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        if [ ! -s /target/controller.token ]; then
+          head -c 48 /dev/urandom | base64 | tr -d '\n' > /target/controller.token
+          printf '\n' >> /target/controller.token
+        fi
+        chown 10001:10001 /target/controller.token
+        chmod 0400 /target/controller.token
+    volumes:
+      - controller_token:/target
+
+  init-awg-control-token:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        if [ ! -s /target/control.token ]; then
+          head -c 48 /dev/urandom | base64 | tr -d '\n' > /target/control.token
+          printf '\n' >> /target/control.token
+        fi
+        chown 10001:10001 /target/control.token
+        chmod 0440 /target/control.token
+    volumes:
+      - awg_control_token:/target
+
+  init-hysteria-tls:
+    build:
+      context: .
+      dockerfile: Dockerfile.hysteria-tls
+    restart: "no"
+    user: "0:0"
+    tmpfs:
+      - /tmp
+    environment:
+      XRAY_HYSTERIA2_ENABLED: ${XRAY_HYSTERIA2_ENABLED:-false}
+      XRAY_HYSTERIA2_TLS_MODE: ${XRAY_HYSTERIA2_TLS_MODE:-legacy}
+      XRAY_HYSTERIA2_CERT_IP: ${XRAY_HYSTERIA2_CERT_IP:-}
+      XRAY_HYSTERIA2_TLS_SERVER_NAME: ${XRAY_HYSTERIA2_TLS_SERVER_NAME:-}
+    volumes:
+      - ./secrets/hysteria:/source:ro
+      - hysteria_tls_data:/target
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+
+  xray:
+    build:
+      context: .
+      dockerfile: Dockerfile.xray
+      args:
+        XRAY_VERSION: ${XRAY_VERSION:-26.7.28}
+    restart: unless-stopped
+    user: "10001:10001"
+    command:
+      - --config-dir
+      - /etc/xray
+      - --revision-state
+      - /var/lib/xray-supervisor/revision.json
+      - --xray-bin
+      - /usr/local/bin/xray
+      - --xray-api
+      - ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10085
+      - --token-file
+      - /run/secrets/xray_supervisor_token
+      - --listen
+      - ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
+    ports:
+      - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
+      - "${XRAY_PUBLIC_PORT:-443}:8443/udp"
+      - "${XRAY_VMESS_PORT:-9443}:8444/tcp"
+    volumes:
+      - xray_config:/etc/xray:ro
+      - xray_supervisor_state:/var/lib/xray-supervisor
+      - xray_supervisor_token_data:/run/secrets:ro
+      - hysteria_tls_data:/etc/xray/hysteria-tls:ro
+    networks:
+      control:
+        ipv4_address: ${XRAY_EASY_XRAY_IP:-172.31.241.2}
+      egress:
+        gw_priority: 1
+    depends_on:
+      init-volumes:
+        condition: service_completed_successfully
+      init-supervisor-secret:
+        condition: service_completed_successfully
+      init-hysteria-tls:
+        condition: service_completed_successfully
+    healthcheck:
+      test:
+        - CMD
+        - /usr/local/bin/xray-supervisor
+        - healthcheck
+        - --addr
+        - ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
+        - --token-file
+        - /run/secrets/xray_supervisor_token
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  controller:
+    build:
+      context: .
+      dockerfile: Dockerfile.controller
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      XRAY_CONTROLLER_LISTEN: 0.0.0.0:10088
+      XRAY_CONTROLLER_TOKEN_FILE: /run/controller-auth/controller.token
+      XRAY_SUPERVISOR_ADDR: ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
+      XRAY_SUPERVISOR_TOKEN_FILE: /run/secrets/xray_supervisor_token
+      AWG_PUBLIC_HOST: ${AWG_PUBLIC_HOST:-}
+      AWG_CONTROL_ADDR: ${XRAY_EASY_AWG_IP:-172.31.241.4}:10087
+      AWG_CONTROL_TOKEN_FILE: /run/awg-auth/control.token
+    volumes:
+      - controller_token:/run/controller-auth:ro
+      - xray_supervisor_token_data:/run/secrets:ro
+      - awg_control_token:/run/awg-auth:ro
+    networks:
+      control:
+        ipv4_address: ${XRAY_EASY_CONTROLLER_CONTROL_IP:-172.31.241.5}
+      backend:
+        ipv4_address: ${XRAY_EASY_CONTROLLER_BACKEND_IP:-172.31.242.2}
+    depends_on:
+      xray:
+        condition: service_healthy
+      init-supervisor-secret:
+        condition: service_completed_successfully
+      init-controller-token:
+        condition: service_completed_successfully
+      init-awg-control-token:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/xray-controller", "healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  xray-easy:
+    build:
+      context: .
+      dockerfile: Dockerfile.control
+    restart: unless-stopped
+    user: "10001:10001"
+    environment:
+      XRAY_EASY_DATA_DIR: /data
+      XRAY_EASY_LISTEN: 0.0.0.0:8080
+      XRAY_EASY_VERSION: ${XRAY_EASY_BUILD_VERSION:-dev}
+      XRAY_EASY_MASTER_KEY: ${XRAY_EASY_MASTER_KEY:?set XRAY_EASY_MASTER_KEY in .env}
+      XRAY_PUBLIC_PORT: ${XRAY_PUBLIC_PORT:-443}
+      XRAY_VMESS_PORT: ${XRAY_VMESS_PORT:-9443}
+      XRAY_VERSION: ${XRAY_VERSION:-26.7.28}
+      XRAY_HYSTERIA2_ENABLED: ${XRAY_HYSTERIA2_ENABLED:-false}
+      XRAY_HYSTERIA2_TLS_MODE: ${XRAY_HYSTERIA2_TLS_MODE:-legacy}
+      XRAY_HYSTERIA2_CERT_IP: ${XRAY_HYSTERIA2_CERT_IP:-}
+      XRAY_HYSTERIA2_TLS_SERVER_NAME: ${XRAY_HYSTERIA2_TLS_SERVER_NAME:-}
+      AWG_PUBLIC_HOST: ${AWG_PUBLIC_HOST:-}
+      AWG_PUBLIC_PORT: ${AWG_PUBLIC_PORT:-1234}
+      XRAY_EASY_UI_PORT: ${XRAY_EASY_UI_PORT:-8080}
+      XRAY_CONTROLLER_ADDR: ${XRAY_EASY_CONTROLLER_BACKEND_IP:-172.31.242.2}:10088
+      XRAY_CONTROLLER_TOKEN_FILE: /run/controller-auth/controller.token
+      XRAY_EASY_CONFIG_DIR: /etc/xray
+    ports:
+      - "127.0.0.1:${XRAY_EASY_UI_PORT:-8080}:8080/tcp"
+    volumes:
+      - app_data:/data
+      - hysteria_tls_data:/data/hysteria-tls
+      - xray_config:/etc/xray
+      - controller_token:/run/controller-auth:ro
+    networks:
+      backend:
+        ipv4_address: ${XRAY_EASY_BACKEND_IP:-172.31.242.3}
+      ui: {}
+    depends_on:
+      xray:
+        condition: service_healthy
+      controller:
+        condition: service_healthy
+      init-awg-control-token:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  init-awg-data:
+    profiles: ["awg", "awg-prototype"]
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /data
+        chown -R 0:10001 /data
+        chmod 0750 /data
+    volumes:
+      - awg_data:/data
+
+  awg:
+    profiles: ["awg", "awg-prototype"]
+    build:
+      context: .
+      dockerfile: Dockerfile.awg
+    restart: unless-stopped
+    user: "0:10001"
+    read_only: true
+    init: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    tmpfs:
+      - /tmp
+      - /run
+    sysctls:
+      net.ipv4.ip_forward: "1"
+      net.ipv6.conf.all.forwarding: "1"
+      net.ipv6.conf.default.forwarding: "1"
+    environment:
+      AWG_DATA_DIR: /data
+      AWG_MASTER_KEY: ${XRAY_EASY_MASTER_KEY:?set XRAY_EASY_MASTER_KEY in .env}
+      AWG_PUBLIC_HOST: ${AWG_PUBLIC_HOST:-}
+      AWG_PUBLIC_PORT: ${AWG_PUBLIC_PORT:-1234}
+      AWG_LISTEN_PORT: ${AWG_LISTEN_PORT:-51820}
+      AWG_CONTROL_ADDR: ${XRAY_EASY_AWG_IP:-172.31.241.4}:10087
+      AWG_GRPC_LISTEN: ${XRAY_EASY_AWG_IP:-172.31.241.4}:10087
+      AWG_CONTROL_TOKEN_FILE: /run/awg-auth/control.token
+      AWG_IPV4_POOL: ${AWG_IPV4_POOL:-10.88.0.0/24}
+      AWG_IPV6_POOL: ${AWG_IPV6_POOL:-fd88:88:88::/64}
+      AWG_DNS_SERVERS: ${AWG_DNS_SERVERS:-1.1.1.1,2606:4700:4700::1111}
+      AWG_INTERFACE: ${AWG_INTERFACE:-awg0}
+      AWG_JC: ${AWG_JC:-}
+      AWG_JMIN: ${AWG_JMIN:-}
+      AWG_JMAX: ${AWG_JMAX:-}
+      AWG_S1: ${AWG_S1:-}
+      AWG_S2: ${AWG_S2:-}
+      AWG_S3: ${AWG_S3:-}
+      AWG_S4: ${AWG_S4:-}
+      AWG_H1: ${AWG_H1:-}
+      AWG_H2: ${AWG_H2:-}
+      AWG_H3: ${AWG_H3:-}
+      AWG_H4: ${AWG_H4:-}
+      AWG_I1: ${AWG_I1:-}
+      AWG_I2: ${AWG_I2:-}
+      AWG_I3: ${AWG_I3:-}
+      AWG_I4: ${AWG_I4:-}
+      AWG_I5: ${AWG_I5:-}
+      AWG_HEADER_PROTECTION_KEY: ${AWG_HEADER_PROTECTION_KEY:-}
+      AWG_CONTENT_PADDING_ADDITION: ${AWG_CONTENT_PADDING_ADDITION:-}
+      AWG_REKEY_AFTER_TIME: ${AWG_REKEY_AFTER_TIME:-}
+      AWG_REKEY_TIMEOUT: ${AWG_REKEY_TIMEOUT:-}
+      AWG_REJECT_AFTER_TIME: ${AWG_REJECT_AFTER_TIME:-}
+      AWG_KEEPALIVE_TIMEOUT: ${AWG_KEEPALIVE_TIMEOUT:-}
+      AWG_MAX_HANDSHAKE_ATTEMPTS: ${AWG_MAX_HANDSHAKE_ATTEMPTS:-}
+      AWG_RANDOM_TRAILERS: ${AWG_RANDOM_TRAILERS:-}
+      AWG_DISABLE_COOKIES: ${AWG_DISABLE_COOKIES:-}
+    ports:
+      - "${AWG_PUBLIC_PORT:-1234}:51820/udp"
+    volumes:
+      - awg_data:/data
+      - awg_control_token:/run/awg-auth:ro
+    networks:
+      control:
+        ipv4_address: ${XRAY_EASY_AWG_IP:-172.31.241.4}
+      egress:
+        gw_priority: 1
+    depends_on:
+      init-awg-data:
+        condition: service_completed_successfully
+      init-awg-control-token:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "awg-service", "health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+secrets:
+  xray_supervisor_token:
+    file: ${XRAY_SUPERVISOR_TOKEN_SOURCE:-./prototype/secrets/xray_supervisor_token}
+
+volumes:
+  app_data:
+  xray_config:
+  xray_supervisor_state:
+  xray_supervisor_token_data:
+  controller_token:
+  hysteria_tls_data:
+  awg_data:
+  awg_control_token:
+
+networks:
+  control:
+    enable_ipv6: true
+    internal: true
+    ipam:
+      config:
+        - subnet: ${XRAY_EASY_CONTROL_SUBNET:-172.31.241.0/24}
+  backend:
+    internal: true
+    ipam:
+      config:
+        - subnet: ${XRAY_EASY_BACKEND_SUBNET:-172.31.242.0/24}
+  egress:
+    enable_ipv6: true
+  ui: {}

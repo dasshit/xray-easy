@@ -104,9 +104,9 @@ and **XRAY_VMESS_PORT** for VMess TCP. AmneziaWG uses **AWG_PUBLIC_PORT**.
 
 ## Protocol guide: Xray
 
-The Xray core runs in its own container. The project pins Xray **26.7.28** as
-the currently verified version for its API integration and VLESS + REALITY
-profile workflow.
+The `xray` container runs the project runtime service with Xray-core embedded
+as a Go library. The project pins Xray **26.7.28** as the currently verified
+version for its API integration and VLESS + REALITY profile workflow.
 The UI and doctor report when the configured or running version differs from
 the verified compatibility record at
 [versions/xray-compatibility.json](versions/xray-compatibility.json). Treat
@@ -241,9 +241,21 @@ git pull
 
 The installer keeps the existing **.env**, secret and Docker volumes. Keep
 **XRAY_EASY_MASTER_KEY** unchanged: it encrypts the persisted Xray and
-AmneziaWG server keys and is required to restore backups. Changing
-**XRAY_VERSION** is a separate, advanced change: back up first, rebuild the
-Xray image and run doctor before relying on that version.
+AmneziaWG server keys and is required to restore backups. The embedded runtime
+currently pins Xray-core **26.7.28**; changing **XRAY_VERSION** to another value
+causes the image build to stop until that embedded version has been deliberately
+updated and verified.
+
+During the embedded runtime rollout, the previous supervisor Compose file is
+available for rollback. It uses the same project name and persistent data
+volumes as the default file. Run only one Compose variant at a time:
+
+~~~sh
+docker compose -f compose.supervisor-rollback.yaml up -d --build --wait --wait-timeout 180
+~~~
+
+Return to the embedded runtime with `docker compose up -d --build --wait` after
+the cause is resolved.
 
 ### Backups and restore
 
@@ -290,7 +302,7 @@ docker compose exec -T xray-easy xray-easy doctor bundle
 docker compose cp xray-easy:/data/diagnostics ./doctor-reports
 ~~~
 
-The bundle contains the doctor report, Xray supervisor status, recent Xray
+The bundle contains the doctor report, Xray runtime status, recent Xray
 logs and a redacted active config. It omits database contents, keys, tokens,
 UUIDs, device names and REALITY short IDs. The selected REALITY target and SNI
 remain in the report; review the archive before sharing it.
@@ -319,9 +331,10 @@ IPv6 connectivity from the Xray container, not public inbound reachability.
 
 - The web panel is published only on the VPS loopback interface. Admin access
   is through SSH port forwarding, with password login and optional TOTP.
-- Backend, Controller, Xray supervisor, Xray and optional AmneziaWG use
+- Backend, Controller, the embedded Xray runtime and optional AmneziaWG use
   separate containers and private Compose networks. Runtime gRPC ports are not
-  published to the VPS.
+  published to the VPS. A temporary `compose.supervisor-rollback.yaml` is kept
+  for rollback during the embedded runtime rollout.
 - Internal RPC links use authentication but are not encrypted; keep them on
   the private Docker networks and do not attach untrusted containers.
 - **XRAY_EASY_MASTER_KEY** must be base64 encoding at least 32 bytes. The
@@ -335,7 +348,7 @@ IPv6 connectivity from the Xray container, not public inbound reachability.
 
 ## Development
 
-The backend, Controller, Xray supervisor and AmneziaWG service are Go
+The backend, Controller, embedded Xray runtime and AmneziaWG service are Go
 components; the web UI uses TypeScript, Vue and Vite. Local development tools
 are not required on the VPS.
 

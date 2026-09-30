@@ -482,8 +482,8 @@ Docker multiarch build и Compose validation выполняются перед o
 
 **Реализация opt-in пути:**
 
-- `XRAY_ADAPTER=embedded` подключает Controller к типизированному runtime API;
-  штатное значение остаётся `supervisor`.
+- `XRAY_ADAPTER=embedded` подключал Controller к типизированному runtime API;
+  на момент реализации этапа 7 штатным значением оставался `supervisor`.
 - Controller монтирует Xray snapshots только для чтения, проверяет, что путь
   остаётся внутри `/etc/xray`, и передаёт runtime содержимое файла. Пути и JSON
   конфигурации в RPC-логи не попадают.
@@ -491,9 +491,9 @@ Docker multiarch build и Compose validation выполняются перед o
   backend и связана с persisted apply-operation. Нулевая revision разрешена
   только для идемпотентной сверки roster после запуска Controller и не меняет
   config revision fence.
-- `compose.xray-runtime.yaml` заменяет процесс в сервисе `xray` на embedded
-  runtime, создаёт отдельные token/state volumes и оставляет обычный Compose
-  stack без изменений.
+- `compose.xray-runtime.yaml` заменял процесс в сервисе `xray` на embedded
+  runtime, создавал отдельные token/state volumes и сохранял supervisor как
+  production default на время opt-in проверки.
 - Embedded core пока закреплён на проверенной версии Xray `26.7.28` из
   `xray-runtime/go.mod`. Build проверяет `XRAY_VERSION` и останавливается при
   несовпадении, чтобы backend не сообщал версию, отличающуюся от встроенного
@@ -501,10 +501,9 @@ Docker multiarch build и Compose validation выполняются перед o
 - `scripts/xray-runtime-test-stack.sh` задаёт отдельные project name, host ports
   и private subnets по умолчанию. Тестовый стек использует данные из локального
   `.env`, но не использует production named volumes или опубликованные порты.
-- До ручного принятия embedded runtime на VDS штатный путь через supervisor и
-  этап 8 остаются без изменений.
+- До VDS-приёмки embedded runtime штатный путь оставался на supervisor.
 
-Для ручной проверки opt-in стека после отправки изменений:
+Для локальной проверки изолированного embedded стека:
 
 ```sh
 ./scripts/xray-runtime-test-stack.sh up -d --build --wait --wait-timeout 180
@@ -526,7 +525,7 @@ Web UI будет доступен через SSH tunnel на `http://127.0.0.1:
 свободные непересекающиеся сети. Тестовые host ports и project name можно
 переопределить переменными `XRAY_EASY_RUNTIME_*` из launcher.
 
-**Результат локальной реализации от 2026-09-30:**
+**Результат реализации этапа 7 от 2026-09-30:**
 
 - Добавлены adapter и тесты Controller ↔ embedded runtime. Проверены
   authentication, runtime failures, path traversal/symlink rejection, ответы
@@ -544,36 +543,55 @@ Web UI будет доступен через SSH tunnel на `http://127.0.0.1:
   read-only snapshot mount и writable `/etc/xray` volume embedded runtime.
 - Docker Buildx собрал runtime и Controller для `linux/amd64` и `linux/arm64`;
   образы не публиковались в registry. Тестовые контейнеры локально не запускались.
-- Production Compose остаётся на supervisor по умолчанию. Opt-in конфигурация
-  и все результаты зафиксированы отдельным stage-коммитом до ручного VDS теста.
+- Тогда production Compose оставался на supervisor по умолчанию. Embedded
+  проверка была отдельным opt-in стеком.
 
-**Текущий статус:** локальная реализация этапа 7 готова; проверка реального
-подключения, создания/отзыва профилей, статистики и restart recovery на VDS
-остаётся ручным шагом владельца. К этапу 8 переходить только после этой приёмки.
+**VDS-приёмка этапа 7:** владелец VDS подтвердил, что создание, удаление,
+блокировка и разблокировка профилей работают, онлайн-статус и статистика
+передаются, а Doctor проходит без ошибок. Ранее найденная ошибка Doctor для
+проверки Active Xray config была исправлена и подтверждена повторным запуском.
+Этого достаточно, чтобы перейти к переключению штатного Compose; отдельные
+сценарии чистого восстановления из backup здесь не проверялись.
 
-**Готово, когда:** opt-in Compose stack полностью проходит функциональные,
-регрессионные, diagnostics и restore сценарии, а переключение можно отменить
-сменой Compose профиля без потери `/data`.
+**Готово, когда:** opt-in Compose stack проходит функциональные и diagnostics
+сценарии на VDS; backup restore отдельно не подтверждался.
 
-### Этап 8. Переключить штатный Compose runtime и удалить supervisor
+### Этап 8. Переключить штатный Compose runtime, сохранив rollback
 
 - Сделать новый runtime штатным entrypoint существующего `xray` сервиса,
   сохранив внутренний адрес/порт Controller, внешние опубликованные порты,
   config/data volumes, private control network и secret rotation.
 - Сохранить Xray version display, `XRAY_VERSION`/compatibility validation,
   Doctor, backup/restore, logs, probes, IPv6 egress и Hysteria TLS handling.
-- Удалить старый дочерний Xray binary запуск, supervisor gRPC contract/client,
-  token/state volumes, Docker build stage и тесты только после подтверждения,
-  что все callers переключены и rollback больше не нужен.
+- Сделать стандартный `compose.yaml` embedded-конфигурацией; удалить больше не
+  нужный opt-in override и переключить тестовый launcher на стандартный файл.
+- Сохранить отдельный `compose.supervisor-rollback.yaml` и связанные образы,
+  контракты, клиенты, токен и тесты до успешной VDS-проверки нового default.
 - Обновить installer, `.env.example`, README, troubleshooting и
   implementation/controller/supervisor plans; чётко описать сборку из исходников
-  и требование rebuild контейнеров при обновлении Xray-core.
-- Провести пользовательскую VDS проверку на тестовом устройстве перед
-  удалением пути отката из релиза.
+  и точное ограничение версии embedded Xray-core.
+- Создать и отправить отдельный коммит до ручной проверки штатного Compose на
+  VDS. После успешной проверки отдельно выполнить финальный cleanup этапа 9.
 
-**Готово, когда:** штатная чистая установка и upgrade проходят на VDS,
-подключения/создание и отзыв профилей, статистика, backup/restore и Doctor
-проверены; ни backend, ни Controller не вызывают старый supervisor.
+**Готово, когда:** локальные проверки стандартного Compose проходят, VDS
+запускается на embedded runtime, а supervisor rollback остаётся доступен до
+ручной приёмки.
+
+### Этап 9. Удалить supervisor после VDS-приёмки embedded default
+
+- Проверить на VDS запуск и обновление стандартного Compose, подключение
+  клиентов, создание/отзыв/блокировку профилей, телеметрию, Doctor, логи и
+  restart recovery; отдельно проверить backup/restore, если он нужен для
+  релизной приёмки.
+- После успешной проверки удалить временный rollback Compose, дочерний Xray
+  process, supervisor gRPC contract/client, token/state volumes, Docker build
+  stage и тесты, которые нужны только supervisor adapter.
+- Удалить генерацию supervisor token из installer и устаревшие переменные из
+  `.env.example`; обновить старые планы, README и troubleshooting.
+
+**Готово, когда:** чистая установка и upgrade на VDS используют только embedded
+runtime; backend и Controller не содержат supervisor пути и ранее проверенные
+сценарии проходят.
 
 ## Требования к безопасности и наблюдаемости
 
@@ -600,10 +618,9 @@ Web UI будет доступен через SSH tunnel на `http://127.0.0.1:
    коммит.
 3. Не объединять переезд runtime, новый gRPC контракт и удаление supervisor в
    один коммит.
-4. Для этапов 6–7 сначала завершить локальные gates и opt-in Compose путь,
-   затем создать отдельные коммиты и отправить их в `main` перед ручной VDS
-   проверкой. Не переключать production Compose и не удалять supervisor rollback
-   path до результата этой проверки.
+4. Для этапов 6–8 сначала завершить локальные gates и создать отдельные
+   коммиты, отправляя каждый в `main` перед ручной VDS проверкой. Supervisor
+   rollback path удалять только отдельным этапом после приёмки embedded default.
 
 ## Критерии завершения всей миграции
 

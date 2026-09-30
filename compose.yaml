@@ -12,17 +12,16 @@ services:
       - |
         # The TLS volume is mounted beneath read-only /etc/xray in the Xray
         # container. Its mountpoint must already exist in xray_config.
-        mkdir -p /data /config/hysteria-tls /tls /supervisor-state
+        mkdir -p /data /config/hysteria-tls /tls
         if [ ! -f /config/active.json ]; then cp /bootstrap/active.json /config/active.json; fi
-        chown -R 10001:10001 /data /config /tls /supervisor-state
-        chmod 0700 /supervisor-state
+        chown -R 10001:10001 /data /config /tls
     volumes:
       - app_data:/data
       - xray_config:/config
       - hysteria_tls_data:/tls
       - ./prototype/config-stage1:/bootstrap:ro
 
-  init-supervisor-secret:
+  init-xray-runtime-token:
     image: alpine:3.22
     restart: "no"
     user: "0:0"
@@ -30,13 +29,29 @@ services:
       - /bin/sh
       - -ec
       - |
-        mkdir -p /target
-        install -m 0400 -o 10001 -g 10001 /source/xray_supervisor_token /target/xray_supervisor_token
+        umask 077
+        if [ ! -s /target/xray_runtime_token ]; then
+          head -c 48 /dev/urandom | base64 | tr -d '\n' > /target/xray_runtime_token
+          printf '\n' >> /target/xray_runtime_token
+        fi
+        chown 10001:10001 /target/xray_runtime_token
+        chmod 0400 /target/xray_runtime_token
     volumes:
-      - xray_supervisor_token_data:/target
-    secrets:
-      - source: xray_supervisor_token
-        target: /source/xray_supervisor_token
+      - xray_runtime_token_data:/target
+
+  init-xray-runtime-state:
+    image: alpine:3.22
+    restart: "no"
+    user: "0:0"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        mkdir -p /state
+        chown -R 10001:10001 /state
+        chmod 0700 /state
+    volumes:
+      - xray_runtime_state:/state
 
   init-controller-token:
     image: alpine:3.22
@@ -97,32 +112,32 @@ services:
   xray:
     build:
       context: .
-      dockerfile: Dockerfile.xray
+      dockerfile: Dockerfile.xray-runtime
       args:
         XRAY_VERSION: ${XRAY_VERSION:-26.7.28}
     restart: unless-stopped
     user: "10001:10001"
     command:
-      - --config-dir
-      - /etc/xray
-      - --revision-state
-      - /var/lib/xray-supervisor/revision.json
-      - --xray-bin
-      - /usr/local/bin/xray
-      - --xray-api
-      - ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10085
-      - --token-file
-      - /run/secrets/xray_supervisor_token
       - --listen
       - ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
+      - --config
+      - /etc/xray/active.json
+      - --token-file
+      - /run/runtime-auth/xray_runtime_token
+      - --revision-file
+      - /var/lib/xray-runtime/revision-state.json
+    environment:
+      XRAY_RUNTIME_ADDR: ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
+      XRAY_RUNTIME_TOKEN_FILE: /run/runtime-auth/xray_runtime_token
+      XRAY_RUNTIME_REVISION_FILE: /var/lib/xray-runtime/revision-state.json
     ports:
       - "${XRAY_PUBLIC_PORT:-443}:8443/tcp"
       - "${XRAY_PUBLIC_PORT:-443}:8443/udp"
       - "${XRAY_VMESS_PORT:-9443}:8444/tcp"
     volumes:
       - xray_config:/etc/xray:ro
-      - xray_supervisor_state:/var/lib/xray-supervisor
-      - xray_supervisor_token_data:/run/secrets:ro
+      - xray_runtime_state:/var/lib/xray-runtime
+      - xray_runtime_token_data:/run/runtime-auth:ro
       - hysteria_tls_data:/etc/xray/hysteria-tls:ro
     networks:
       control:
@@ -132,19 +147,17 @@ services:
     depends_on:
       init-volumes:
         condition: service_completed_successfully
-      init-supervisor-secret:
+      init-xray-runtime-token:
+        condition: service_completed_successfully
+      init-xray-runtime-state:
         condition: service_completed_successfully
       init-hysteria-tls:
         condition: service_completed_successfully
     healthcheck:
       test:
         - CMD
-        - /usr/local/bin/xray-supervisor
+        - /usr/local/bin/xray-runtime
         - healthcheck
-        - --addr
-        - ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
-        - --token-file
-        - /run/secrets/xray_supervisor_token
       interval: 10s
       timeout: 5s
       retries: 5
@@ -157,15 +170,19 @@ services:
     user: "10001:10001"
     environment:
       XRAY_CONTROLLER_LISTEN: 0.0.0.0:10088
+      XRAY_CONTROLLER_ADDR: 127.0.0.1:10088
       XRAY_CONTROLLER_TOKEN_FILE: /run/controller-auth/controller.token
-      XRAY_SUPERVISOR_ADDR: ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
-      XRAY_SUPERVISOR_TOKEN_FILE: /run/secrets/xray_supervisor_token
+      XRAY_ADAPTER: embedded
+      XRAY_RUNTIME_ADDR: ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
+      XRAY_RUNTIME_TOKEN_FILE: /run/runtime-auth/xray_runtime_token
+      XRAY_CONFIG_DIR: /etc/xray
       AWG_PUBLIC_HOST: ${AWG_PUBLIC_HOST:-}
       AWG_CONTROL_ADDR: ${XRAY_EASY_AWG_IP:-172.31.241.4}:10087
       AWG_CONTROL_TOKEN_FILE: /run/awg-auth/control.token
     volumes:
       - controller_token:/run/controller-auth:ro
-      - xray_supervisor_token_data:/run/secrets:ro
+      - xray_runtime_token_data:/run/runtime-auth:ro
+      - xray_config:/etc/xray:ro
       - awg_control_token:/run/awg-auth:ro
     networks:
       control:
@@ -175,7 +192,7 @@ services:
     depends_on:
       xray:
         condition: service_healthy
-      init-supervisor-secret:
+      init-xray-runtime-token:
         condition: service_completed_successfully
       init-controller-token:
         condition: service_completed_successfully
@@ -332,15 +349,11 @@ services:
       retries: 5
       start_period: 30s
 
-secrets:
-  xray_supervisor_token:
-    file: ${XRAY_SUPERVISOR_TOKEN_SOURCE:-./prototype/secrets/xray_supervisor_token}
-
 volumes:
   app_data:
   xray_config:
-  xray_supervisor_state:
-  xray_supervisor_token_data:
+  xray_runtime_state:
+  xray_runtime_token_data:
   controller_token:
   hysteria_tls_data:
   awg_data:
