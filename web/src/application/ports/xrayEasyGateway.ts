@@ -1,6 +1,5 @@
 import type {
   Admin,
-  CreateAmneziaWGPeerCommand,
   CreateClientCommand,
   DiagnosticEntry,
   HysteriaCertificateUpload,
@@ -15,7 +14,7 @@ import type {
   TOTPSetup,
   TOTPStatus,
 } from '../models'
-import type { AmneziaWGPeer, AmneziaWGStatus, Client, ClientActionType, Settings, SettingsChange } from '../../domain/models'
+import type { AmneziaWGStatus, Client, ClientActionType, Settings, SettingsChange } from '../../domain/models'
 
 /** Callbacks invoked by the live server event stream. */
 export interface XrayEventCallbacks {
@@ -161,6 +160,10 @@ export interface XrayEasyGateway {
      * @returns The API URL that serves the QR code image.
      */
     profileQrUrl(clientId: string): string
+    /** Build the authenticated URL that downloads an AmneziaWG device profile. */
+    profileAmneziaWGUrl(clientId: string): string
+    /** Build the authenticated URL that renders an AmneziaWG device profile QR code. */
+    profileAmneziaWGQrUrl(clientId: string): string
     /** Build the authenticated URL for a Hysteria 2 share URI QR code. */
     profileHysteriaQrUrl(clientId: string): string
     /** Build the authenticated URL for a VMess share URI QR code. */
@@ -235,16 +238,6 @@ export interface XrayEasyGateway {
   amneziawg: {
     /** Read the optional service's availability and public endpoint. */
     status(): Promise<AmneziaWGStatus>
-    /** List non-secret metadata for all configured AmneziaWG peers. */
-    listPeers(): Promise<AmneziaWGPeer[]>
-    /** Create a peer and persist its private client profile inside the AWG service. */
-    createPeer(input: CreateAmneziaWGPeerCommand): Promise<AmneziaWGPeer>
-    /** Revoke a peer and remove its saved client profile. */
-    removePeer(name: string): Promise<void>
-    /** Build the authenticated URL that downloads a peer's credential-bearing profile. */
-    profileUrl(name: string): string
-    /** Build the authenticated URL that renders a credential-bearing profile QR code. */
-    profileQrUrl(name: string): string
   }
   backups: {
     /**

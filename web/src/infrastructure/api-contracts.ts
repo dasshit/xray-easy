@@ -180,22 +180,6 @@ export const AmneziaWGStatusDtoSchema = z.object({
 /** Wire-format type inferred from {@link AmneziaWGStatusDtoSchema}. */
 export type AmneziaWGStatusDto = z.infer<typeof AmneziaWGStatusDtoSchema>
 
-/** Runtime validator for a non-secret AmneziaWG peer summary. */
-export const AmneziaWGPeerDtoSchema = z.object({
-  name: z.string(),
-  public_key: z.string(),
-  ipv4: z.string(),
-  ipv6: z.string(),
-  created_at: z.string(),
-})
-/** Wire-format type inferred from {@link AmneziaWGPeerDtoSchema}. */
-export type AmneziaWGPeerDto = z.infer<typeof AmneziaWGPeerDtoSchema>
-
-/** Runtime validator for the AmneziaWG peer-list response. */
-export const AmneziaWGPeersDtoSchema = z.object({ peers: AmneziaWGPeerDtoSchema.array() })
-/** Wire-format type inferred from {@link AmneziaWGPeersDtoSchema}. */
-export type AmneziaWGPeersDto = z.infer<typeof AmneziaWGPeersDtoSchema>
-
 /** Runtime validator for the active server connection settings. */
 export const SettingsDtoSchema = z.object({
   public_host: z.string(),

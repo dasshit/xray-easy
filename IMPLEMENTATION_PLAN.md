@@ -712,9 +712,14 @@ IPv6-адресом, исходящим IPv6 и E2E-матрицей приве�
 
 ### 8.1. API endpoints
 
+Ниже приведён первоначальный целевой перечень API, а не полный инвентарь
+текущей реализации. В действующем Web UI выдача и отзыв AmneziaWG-профилей
+идут через общий ресурс `/api/clients/awg%3A{name}`: `format=conf|qr` и
+`POST .../revoke`. Статус AmneziaWG остаётся на
+`GET /api/transports/amneziawg`.
+
 ```text
 GET    /api/healthz
-GET    /api/readyz
 GET    /api/setup/status
 POST   /api/setup/initialize
 POST   /api/auth/login
@@ -735,7 +740,7 @@ GET    /api/status
 
 GET    /api/settings
 PATCH  /api/settings
-POST   /api/settings/validate
+PATCH  /api/settings             # проверка изменений и подготовка применения
 POST   /api/settings/apply
 GET    /api/operations/:id
 
@@ -747,7 +752,7 @@ POST   /api/clients/:id/enable
 POST   /api/clients/:id/disable
 POST   /api/clients/:id/revoke
 DELETE /api/clients/:id       # только явное purge
-GET    /api/clients/:id/profile?format=uri|json|qr
+GET    /api/clients/:id/profile?format=uri|json|qr|conf
 
 GET    /api/stats/summary
 GET    /api/stats/clients/:id

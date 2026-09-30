@@ -135,8 +135,8 @@ describe('profile list and creation', () => {
     await flushPromises()
 
     expect(requests.find(request => request.method === 'POST' && request.url === '/api/clients')?.body).toEqual({ name: 'iphone', protocol: 'amneziawg' })
-    expect(wrapper.get('.profile-modal img.qr').attributes('src')).toBe('/api/transports/amneziawg/peers/iphone/profile/qr')
-    expect(wrapper.get('.profile-modal a.download-link').attributes('href')).toBe('/api/transports/amneziawg/peers/iphone/profile')
+    expect(wrapper.get('.profile-modal img.qr').attributes('src')).toBe('/api/clients/awg%3Aiphone/profile?format=qr')
+    expect(wrapper.get('.profile-modal a.download-link').attributes('href')).toBe('/api/clients/awg%3Aiphone/profile?format=conf')
     await wrapper.get('.profile-modal .icon-button').trigger('click')
 
     const device = wrapper.get('.device-card')

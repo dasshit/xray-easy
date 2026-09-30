@@ -113,9 +113,6 @@ func TestLoginSessionCookieLogoutAndProtectedRoutes(t *testing.T) {
 	if got := requestJSON(t, app, http.MethodGet, "/api/healthz", nil, false); got.Code != http.StatusOK || !strings.Contains(got.Body.String(), `"master_key_loaded":true`) {
 		t.Fatalf("healthz = %d %s", got.Code, got.Body.String())
 	}
-	if got := requestJSON(t, app, http.MethodGet, "/api/readyz", nil, false).Code; got != http.StatusOK {
-		t.Fatalf("readyz status = %d", got)
-	}
 	if got := requestJSON(t, app, http.MethodPost, "/api/auth/login", loginRequest{Username: "admin", Password: "incorrect password"}, false).Code; got != http.StatusUnauthorized {
 		t.Fatalf("wrong password status = %d", got)
 	}

@@ -57,15 +57,6 @@ export type AmneziaWGStatus = {
   serviceVersion?: string
 }
 
-/** Non-secret identity and tunnel addresses for an AmneziaWG device. */
-export type AmneziaWGPeer = {
-  name: string
-  publicKey: string
-  ipv4: string
-  ipv6: string
-  createdAt: string
-}
-
 /** Active public endpoint and VLESS + REALITY connection preset. */
 export type Settings = {
   publicHost: string

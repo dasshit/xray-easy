@@ -12,13 +12,13 @@ function gateway(overrides: GatewayOverrides = {}): XrayEasyGateway {
       logout: vi.fn(), logoutAll: vi.fn(), changePassword: vi.fn(), totpStatus: vi.fn().mockResolvedValue({ enabled: false, recoveryCodesRemaining: 0 }),
       beginTOTPSetup: vi.fn(), enableTOTP: vi.fn(), disableTOTP: vi.fn(),
     },
-    clients: { list: vi.fn().mockResolvedValue([]), create: vi.fn(), profile: vi.fn(), setAction: vi.fn(), profileQrUrl: vi.fn(), profileHysteriaQrUrl: vi.fn(), profileVMessQrUrl: vi.fn(), profileJsonUrl: vi.fn() },
+    clients: { list: vi.fn().mockResolvedValue([]), create: vi.fn(), profile: vi.fn(), setAction: vi.fn(), profileQrUrl: vi.fn(), profileHysteriaQrUrl: vi.fn(), profileVMessQrUrl: vi.fn(), profileAmneziaWGUrl: vi.fn(), profileAmneziaWGQrUrl: vi.fn(), profileJsonUrl: vi.fn() },
     settings: { get: vi.fn().mockResolvedValue({ publicHost: 'vpn.test' }), preview: vi.fn(), apply: vi.fn() },
     hysteria: {
       status: vi.fn(), uploadCertificate: vi.fn(), generateCertificate: vi.fn(), preview: vi.fn(), apply: vi.fn(),
     },
     amneziawg: {
-      status: vi.fn(), listPeers: vi.fn(), createPeer: vi.fn(), removePeer: vi.fn(), profileUrl: vi.fn(), profileQrUrl: vi.fn(),
+      status: vi.fn(),
     },
     backups: { create: vi.fn() },
     diagnostics: {

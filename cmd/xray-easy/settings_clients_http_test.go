@@ -59,9 +59,6 @@ func TestSettingsReadValidationAndFingerprintApply(t *testing.T) {
 	if got := requestJSON(t, app, http.MethodDelete, "/api/settings", nil, true).Code; got != http.StatusMethodNotAllowed {
 		t.Fatalf("DELETE settings status = %d", got)
 	}
-	if got := requestJSON(t, app, http.MethodGet, "/api/settings/validate", nil, true).Code; got != http.StatusMethodNotAllowed {
-		t.Fatalf("GET settings validate status = %d", got)
-	}
 	if got := requestJSON(t, app, http.MethodPatch, "/api/settings", nil, true).Code; got != http.StatusBadRequest {
 		t.Fatalf("malformed settings patch status = %d", got)
 	}
@@ -180,7 +177,7 @@ func TestSettingsRotationBacksUpAppliesAndRevokesProfiles(t *testing.T) {
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "macbook")
 	newTarget, newSNI, newHost := "www.google.com:443", "www.google.com", "new-vpn.example.test"
-	prepared := requestJSON(t, app, http.MethodPost, "/api/settings/validate", settingsPatchRequest{PublicHost: &newHost, RealityTarget: &newTarget, RealitySNI: &newSNI, RotatePrivateKey: true}, true)
+	prepared := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{PublicHost: &newHost, RealityTarget: &newTarget, RealitySNI: &newSNI, RotatePrivateKey: true}, true)
 	if prepared.Code != http.StatusOK || !strings.Contains(prepared.Body.String(), `"expected_confirmation":"REVOKE"`) || !strings.Contains(prepared.Body.String(), `"revoked_clients":1`) {
 		t.Fatalf("prepare rotation = %d %s", prepared.Code, prepared.Body.String())
 	}

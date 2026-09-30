@@ -89,46 +89,6 @@ func TestAmneziaWGRoutesRequireAuthenticationAndReportDisabledState(t *testing.T
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"available":false`) {
 		t.Fatalf("disabled AWG status = %d %s", response.Code, response.Body.String())
 	}
-	if got := requestJSON(t, app, http.MethodPost, "/api/transports/amneziawg/peers", amneziaWGCreatePeerRequest{Name: "phone"}, true).Code; got != http.StatusServiceUnavailable {
-		t.Fatalf("create without AWG service = %d", got)
-	}
-}
-
-func TestAmneziaWGPeerLifecycleAndSecretProfileDelivery(t *testing.T) {
-	app := newTestApp(t, true)
-	gateway := &fakeAmneziaWGGateway{
-		status: domain.AmneziaWGStatus{Running: true, PublicHost: "vpn.example.test", PublicPort: 51820, ListenPort: 51820, PeerCount: 0, IPv4Network: "10.88.0.0/24", IPv6Network: "fd88:88:88::/64", ServiceVersion: "prototype-v1"},
-		peers:  make(map[string]domain.AmneziaWGPeer), profiles: make(map[string]string),
-	}
-	app.server.awg = gateway
-
-	statusResponse := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg", nil, true)
-	if statusResponse.Code != http.StatusOK || !strings.Contains(statusResponse.Body.String(), `"running":true`) {
-		t.Fatalf("AWG status = %d %s", statusResponse.Code, statusResponse.Body.String())
-	}
-	if got := requestJSON(t, app, http.MethodPost, "/api/transports/amneziawg/peers", amneziaWGCreatePeerRequest{Name: "bad_name"}, true).Code; got != http.StatusBadRequest {
-		t.Fatalf("invalid AWG peer name = %d", got)
-	}
-	created := requestJSON(t, app, http.MethodPost, "/api/transports/amneziawg/peers", amneziaWGCreatePeerRequest{Name: "iphone-1"}, true)
-	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"ipv4":"10.88.0.2"`) {
-		t.Fatalf("create AWG peer = %d %s", created.Code, created.Body.String())
-	}
-	listed := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers", nil, true)
-	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"name":"iphone-1"`) {
-		t.Fatalf("list AWG peers = %d %s", listed.Code, listed.Body.String())
-	}
-	profile := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers/iphone-1/profile", nil, true)
-	if profile.Code != http.StatusOK || !strings.Contains(profile.Body.String(), "client-private") || profile.Header().Get("Cache-Control") != "no-store, private" {
-		t.Fatalf("AWG profile = %d headers=%v body=%s", profile.Code, profile.Header(), profile.Body.String())
-	}
-	qr := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers/iphone-1/profile/qr", nil, true)
-	if qr.Code != http.StatusOK || qr.Header().Get("Content-Type") != "image/png" || qr.Header().Get("Cache-Control") != "no-store, private" {
-		t.Fatalf("AWG QR response = %d headers=%v", qr.Code, qr.Header())
-	}
-	revoked := requestJSON(t, app, http.MethodDelete, "/api/transports/amneziawg/peers/iphone-1", nil, true)
-	if revoked.Code != http.StatusOK || len(gateway.peers) != 0 || len(gateway.profiles) != 0 {
-		t.Fatalf("revoke AWG peer = %d %s remaining=%d profiles=%d", revoked.Code, revoked.Body.String(), len(gateway.peers), len(gateway.profiles))
-	}
 }
 
 func TestAmneziaWGUsesUnifiedProfileAPIAndKeepsSecretsInAWGService(t *testing.T) {
@@ -156,8 +116,8 @@ func TestAmneziaWGUsesUnifiedProfileAPIAndKeepsSecretsInAWGService(t *testing.T)
 	if qr.Code != http.StatusOK || qr.Header().Get("Content-Type") != "image/png" || qr.Header().Get("Cache-Control") != "no-store, private" {
 		t.Fatalf("unified AWG QR = %d headers=%v", qr.Code, qr.Header())
 	}
-	file := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers/iphone/profile", nil, true)
-	if file.Code != http.StatusOK || !strings.Contains(file.Body.String(), "client-private") || file.Header().Get("Cache-Control") != "no-store, private" {
+	file := requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aiphone/profile?format=conf", nil, true)
+	if file.Code != http.StatusOK || !strings.Contains(file.Body.String(), "client-private") || file.Header().Get("Cache-Control") != "no-store, private" || file.Header().Get("Content-Disposition") != `attachment; filename="iphone.conf"` {
 		t.Fatalf("AWG config delivery = %d %s", file.Code, file.Body.String())
 	}
 
@@ -213,31 +173,22 @@ func TestAmneziaWGRoutesHandleInvalidMethodsAndUpstreamFailures(t *testing.T) {
 	if got := requestJSON(t, app, http.MethodPost, "/api/transports/amneziawg", nil, true).Code; got != http.StatusMethodNotAllowed {
 		t.Fatalf("POST AWG status = %d", got)
 	}
-	if got := requestJSON(t, app, http.MethodPut, "/api/transports/amneziawg/peers", nil, true).Code; got != http.StatusMethodNotAllowed {
-		t.Fatalf("PUT AWG peers = %d", got)
-	}
-	if got := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers/not_a_valid_name/profile", nil, true).Code; got != http.StatusNotFound {
-		t.Fatalf("invalid peer path = %d", got)
-	}
-	if got := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers/missing/other", nil, true).Code; got != http.StatusNotFound {
-		t.Fatalf("unknown peer route = %d", got)
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aphone/profile?format=uri", nil, true).Code; got != http.StatusMethodNotAllowed {
+		t.Fatalf("POST AWG profile = %d", got)
 	}
 
 	app.server.awg = &fakeAmneziaWGGateway{
 		peers: make(map[string]domain.AmneziaWGPeer), profiles: make(map[string]string),
 		listErr: errors.New("private upstream detail"),
 	}
-	response := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers", nil, true)
+	response := requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aphone/profile?format=uri", nil, true)
 	if response.Code != http.StatusBadGateway || strings.Contains(response.Body.String(), "private upstream detail") {
-		t.Fatalf("redacted peer list error = %d %s", response.Code, response.Body.String())
+		t.Fatalf("redacted peer lookup error = %d %s", response.Code, response.Body.String())
 	}
-	app.server.awg = &fakeAmneziaWGGateway{
-		peers: make(map[string]domain.AmneziaWGPeer), profiles: make(map[string]string),
-		createErr: errors.New("private upstream detail"),
-	}
-	response = requestJSON(t, app, http.MethodPost, "/api/transports/amneziawg/peers", amneziaWGCreatePeerRequest{Name: "phone"}, true)
+	app.server.awg = &fakeAmneziaWGGateway{profileErr: errors.New("private upstream detail")}
+	response = requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aphone/profile?format=conf", nil, true)
 	if response.Code != http.StatusBadGateway || strings.Contains(response.Body.String(), "private upstream detail") {
-		t.Fatalf("redacted create error = %d %s", response.Code, response.Body.String())
+		t.Fatalf("redacted profile error = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -248,7 +199,7 @@ func TestAmneziaWGRevocationRequiresSuccessfulAutomaticBackup(t *testing.T) {
 	}
 	app.server.awg = gateway
 	app.server.masterKey = nil
-	response := requestJSON(t, app, http.MethodDelete, "/api/transports/amneziawg/peers/phone", nil, true)
+	response := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aphone/revoke", nil, true)
 	if response.Code != http.StatusInternalServerError || len(gateway.peers) != 1 || !strings.Contains(response.Body.String(), "backup_failed") {
 		t.Fatalf("revoke without backup = %d %s peers=%d", response.Code, response.Body.String(), len(gateway.peers))
 	}
@@ -340,24 +291,21 @@ func TestAWGClientCreateAndPeerRoutesCoverLifecycleFailures(t *testing.T) {
 	gateway.peers["phone"] = domain.AmneziaWGPeer{Name: "phone"}
 	gateway.profiles["phone"] = "[Interface]\nPrivateKey = secret\n"
 
-	if response := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers/phone/profile/qr", nil, false); response.Code != http.StatusUnauthorized {
+	if response := requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aphone/profile?format=qr", nil, false); response.Code != http.StatusUnauthorized {
 		t.Fatalf("anonymous AWG profile request = %d", response.Code)
 	}
 	gateway.profileErr = status.Error(codes.NotFound, "missing")
-	if response := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg/peers/phone/profile", nil, true); response.Code != http.StatusNotFound {
+	if response := requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aphone/profile?format=conf", nil, true); response.Code != http.StatusNotFound {
 		t.Fatalf("missing AWG client config = %d %s", response.Code, response.Body.String())
 	}
 	gateway.profileErr = nil
 	gateway.removeErr = status.Error(codes.Unavailable, "offline")
-	if response := requestJSON(t, app, http.MethodDelete, "/api/transports/amneziawg/peers/phone", nil, true); response.Code != http.StatusServiceUnavailable {
+	if response := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aphone/revoke", nil, true); response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("AWG peer removal failure = %d %s", response.Code, response.Body.String())
 	}
 	gateway.removeErr = nil
-	if response := requestJSON(t, app, http.MethodDelete, "/api/transports/amneziawg/peers/missing", nil, true); response.Code != http.StatusNotFound {
+	if response := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Amissing/revoke", nil, true); response.Code != http.StatusNotFound {
 		t.Fatalf("missing AWG peer removal = %d %s", response.Code, response.Body.String())
-	}
-	if response := requestJSON(t, app, http.MethodPost, "/api/transports/amneziawg/peers", []byte("{"), true); response.Code != http.StatusBadRequest {
-		t.Fatalf("malformed AWG peer create = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -398,10 +346,10 @@ func TestAmneziaWGStatusAndClientHandlersCoverBoundaryFailures(t *testing.T) {
 	defer lock.Close()
 	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond)
 	defer cancel()
-	request = httptest.NewRequest(http.MethodPost, "/api/transports/amneziawg/peers", strings.NewReader(`{"name":"phone"}`)).WithContext(ctx)
+	request = httptest.NewRequest(http.MethodPost, "/api/clients", strings.NewReader(`{"name":"phone","protocol":"amneziawg"}`)).WithContext(ctx)
 	request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
 	response := httptest.NewRecorder()
-	app.server.amneziaWGPeers(response, request)
+	newMux(app.server).ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("peer create during maintenance = %d %s", response.Code, response.Body.String())
 	}

@@ -64,12 +64,9 @@ describe('Xray-easy API adapter', () => {
     })
   })
 
-  it('maps AmneziaWG responses and builds encoded profile routes', async () => {
-    const peer = { name: 'iphone', public_key: 'public-key', ipv4: '10.88.0.2', ipv6: 'fd88:88:88::2', created_at: '2026-09-30T12:00:00Z' }
-    const { send, calls } = requester({
+  it('maps AmneziaWG status and builds device profile routes under the shared client resource', async () => {
+    const { send } = requester({
       '/api/transports/amneziawg': { enabled: true, available: true, running: true, public_key: 'server-key', public_host: 'vpn.example.test', public_port: 51820, listen_port: 51820, peer_count: 1, ipv4_network: '10.88.0.0/24', ipv6_network: 'fd88:88:88::/64', service_version: 'prototype-v1' },
-      '/api/transports/amneziawg/peers': sequence({ peers: [peer] }, peer),
-      '/api/transports/amneziawg/peers/iphone': { removed: true, name: 'iphone' },
     })
     const api = createXrayEasyApi(send)
 
@@ -77,13 +74,8 @@ describe('Xray-easy API adapter', () => {
       enabled: true, available: true, running: true, publicKey: 'server-key', publicHost: 'vpn.example.test', publicPort: 51820,
       listenPort: 51820, peerCount: 1, ipv4Network: '10.88.0.0/24', ipv6Network: 'fd88:88:88::/64', serviceVersion: 'prototype-v1',
     })
-    await expect(api.amneziawg.listPeers()).resolves.toEqual([{ name: 'iphone', publicKey: 'public-key', ipv4: '10.88.0.2', ipv6: 'fd88:88:88::2', createdAt: peer.created_at }])
-    await expect(api.amneziawg.createPeer({ name: 'iphone' })).resolves.toMatchObject({ name: 'iphone', ipv4: '10.88.0.2' })
-    await api.amneziawg.removePeer('iphone')
-    expect(api.amneziawg.profileUrl('phone 1')).toBe('/api/transports/amneziawg/peers/phone%201/profile')
-    expect(api.amneziawg.profileQrUrl('phone 1')).toBe('/api/transports/amneziawg/peers/phone%201/profile/qr')
-    expect(calls[2]).toEqual({ url: '/api/transports/amneziawg/peers', options: { method: 'POST', body: JSON.stringify({ name: 'iphone' }) } })
-    expect(calls[3]).toEqual({ url: '/api/transports/amneziawg/peers/iphone', options: { method: 'DELETE' } })
+    expect(api.clients.profileAmneziaWGUrl('awg:phone 1')).toBe('/api/clients/awg%3Aphone%201/profile?format=conf')
+    expect(api.clients.profileAmneziaWGQrUrl('awg:phone 1')).toBe('/api/clients/awg%3Aphone%201/profile?format=qr')
   })
 
   it('rejects a successful response that does not match its DTO schema', async () => {

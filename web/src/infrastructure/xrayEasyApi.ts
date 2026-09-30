@@ -1,13 +1,11 @@
-import type { Admin, CreateAmneziaWGPeerCommand, CreateClientCommand, DiagnosticEntry, HysteriaCertificateInfo, HysteriaCertificateUpload, HysteriaSettings, HysteriaSettingsCommand, HysteriaSettingsPreview, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
+import type { Admin, CreateClientCommand, DiagnosticEntry, HysteriaCertificateInfo, HysteriaCertificateUpload, HysteriaSettings, HysteriaSettingsCommand, HysteriaSettingsPreview, InitializeSetupCommand, NodeStatus, ProfileDelivery, SettingsPreviewCommand, SetupStatus, TOTPSetup, TOTPStatus } from '../application/models'
 import type { XrayEasyGateway } from '../application/ports/xrayEasyGateway'
-import type { AmneziaWGPeer, AmneziaWGStatus, Client, ClientActionType, Settings, SettingsChange } from '../domain/models'
+import type { AmneziaWGStatus, Client, ClientActionType, Settings, SettingsChange } from '../domain/models'
 import { parseResponse, request } from './api'
 import { connectXrayEvents } from './events'
 import type { ZodType } from 'zod'
 import {
   AdminDtoSchema,
-  AmneziaWGPeerDtoSchema,
-  AmneziaWGPeersDtoSchema,
   AmneziaWGStatusDtoSchema,
   BackupDtoSchema,
   ClientDtoSchema,
@@ -25,7 +23,6 @@ import {
 } from './api-contracts'
 import type {
   AdminDto,
-  AmneziaWGPeerDto,
   AmneziaWGStatusDto,
   BackupDto,
   ClientDto,
@@ -206,14 +203,6 @@ function mapAmneziaWGStatus(dto: AmneziaWGStatusDto): AmneziaWGStatus {
   }
 }
 
-/** Convert a non-secret AmneziaWG peer response into the application model.
- * @param dto - The validated peer response.
- * @returns The peer identity and assigned tunnel addresses.
- */
-function mapAmneziaWGPeer(dto: AmneziaWGPeerDto): AmneziaWGPeer {
-  return { name: dto.name, publicKey: dto.public_key, ipv4: dto.ipv4, ipv6: dto.ipv6, createdAt: dto.created_at }
-}
-
 /**
  * Convert the certificate staging response into the application model.
  * @param dto - The validated certificate upload response.
@@ -379,6 +368,8 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
         return mapClient(await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/${action}`, ClientDtoSchema, post()))
       },
       profileQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=qr`,
+      profileAmneziaWGUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=conf`,
+      profileAmneziaWGQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=qr`,
       profileHysteriaQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=hysteria-qr`,
       profileVMessQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=vmess-qr`,
       profileJsonUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=json`,
@@ -425,11 +416,6 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
     },
     amneziawg: {
       status: async (): Promise<AmneziaWGStatus> => mapAmneziaWGStatus(await sendDto(send, '/api/transports/amneziawg', AmneziaWGStatusDtoSchema)),
-      listPeers: async (): Promise<AmneziaWGPeer[]> => (await sendDto(send, '/api/transports/amneziawg/peers', AmneziaWGPeersDtoSchema)).peers.map(mapAmneziaWGPeer),
-      createPeer: async (input: CreateAmneziaWGPeerCommand): Promise<AmneziaWGPeer> => mapAmneziaWGPeer(await sendDto(send, '/api/transports/amneziawg/peers', AmneziaWGPeerDtoSchema, post(input))),
-      removePeer: (name: string): Promise<void> => sendVoid(`/api/transports/amneziawg/peers/${encodeURIComponent(name)}`, { method: 'DELETE' }),
-      profileUrl: (name: string): string => `/api/transports/amneziawg/peers/${encodeURIComponent(name)}/profile`,
-      profileQrUrl: (name: string): string => `/api/transports/amneziawg/peers/${encodeURIComponent(name)}/profile/qr`,
     },
     backups: {
       create: async (): Promise<{ name: string }> => {

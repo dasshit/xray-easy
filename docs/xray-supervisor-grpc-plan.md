@@ -17,24 +17,26 @@ or how the Web UI works.
 `xray-supervisor` owns the Xray child process, validates candidate files, starts
 and stops Xray, rolls back failed applies, replaces a single inbound using
 Xray's Handler API, probes REALITY targets and outbound IPv6, and retains
-redacted process logs. It currently exposes these private HTTP routes on the
-Docker `control` network at `172.31.241.2:10086`:
+redacted process logs. It exposes a typed Protobuf gRPC service on the Docker
+`control` network at `172.31.241.2:10086`. The current RPCs are:
 
-| HTTP route | Existing caller | gRPC operation |
-| --- | --- | --- |
-| `GET /health` | Compose healthcheck and doctor | `Health` |
-| `GET /status` | doctor and diagnostics | `GetStatus` |
-| `GET /logs` | diagnostics | `GetLogs` |
-| `POST /validate` | configuration preview/apply | `ValidateConfig` |
-| `POST /apply` | configuration apply and restore | `ApplyConfig` |
-| `POST /replace-inbound` | profile reconciliation | `ReplaceInbound` |
-| `POST /probe-target` | initial setup and settings preview | `ProbeTarget` |
-| `GET /probe-ipv6` | doctor | `ProbeIPv6` |
+| gRPC operation | Existing caller |
+| --- | --- |
+| `Health` | Compose healthcheck and doctor |
+| `GetStatus` | doctor and diagnostics |
+| `GetLogs` | diagnostics |
+| `ValidateConfig` | configuration preview/apply |
+| `ApplyConfig` | configuration apply and restore |
+| `ReplaceInbound` | profile reconciliation |
+| `ProbeTarget` | initial setup and settings preview |
+| `ProbeIPv6` | doctor |
 
-The existing HTTP client signs method, path, operation, nonce, and request-body
-hash with HMAC-SHA256. The server compares signatures in constant time, rejects
-replayed nonces, accepts a bounded body, and masks secrets in errors/logs. The
-new transport must retain those properties.
+The gRPC client signs the full method name, operation, nonce, and deterministic
+Protobuf request hash with HMAC-SHA256. The server compares signatures in
+constant time, rejects replayed nonces, enforces message size limits, and masks
+secrets in errors and logs. The migration stages below are retained as the
+historical implementation plan; the active contract is in
+`internal/supervisor/api/v1/supervisor.proto`.
 
 ## Target contract and security
 

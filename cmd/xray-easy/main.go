@@ -383,7 +383,6 @@ func dialRuntimeControl() (runtimeControl, func() error, error) {
 func newMux(s *server) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/healthz", s.healthz)
-	mux.HandleFunc("/api/readyz", s.readyz)
 	mux.HandleFunc("/api/setup/status", s.setupStatus)
 	mux.HandleFunc("/api/setup/initialize", s.initialize)
 	mux.HandleFunc("/api/auth/login", s.login)
@@ -400,7 +399,6 @@ func newMux(s *server) *http.ServeMux {
 	mux.HandleFunc("/api/status", s.status)
 	mux.HandleFunc("/api/logs", s.logs)
 	mux.HandleFunc("/api/settings", s.settings)
-	mux.HandleFunc("/api/settings/validate", s.settingsValidate)
 	mux.HandleFunc("/api/settings/apply", s.settingsApply)
 	mux.HandleFunc("/api/transports/hysteria2", s.hysteriaSettingsRoute)
 	mux.HandleFunc("/api/transports/hysteria2/certificate", s.hysteriaCertificateUpload)
@@ -408,8 +406,6 @@ func newMux(s *server) *http.ServeMux {
 	mux.HandleFunc("/api/transports/hysteria2/preview", s.hysteriaSettingsPreview)
 	mux.HandleFunc("/api/transports/hysteria2/apply", s.hysteriaSettingsApply)
 	mux.HandleFunc("/api/transports/amneziawg", s.amneziaWGStatus)
-	mux.HandleFunc("/api/transports/amneziawg/peers", s.amneziaWGPeers)
-	mux.HandleFunc("/api/transports/amneziawg/peers/", s.amneziaWGPeerRoute)
 	mux.HandleFunc("/api/backups", s.backups)
 	mux.HandleFunc("/api/events", s.events)
 	mux.HandleFunc("/api/clients", s.clients)
@@ -840,10 +836,6 @@ func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "master_key_loaded": len(s.masterKey) >= 32})
-}
-
-func (s *server) readyz(w http.ResponseWriter, r *http.Request) {
-	s.healthz(w, r)
 }
 
 func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
@@ -1517,14 +1509,6 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusMethodNotAllowed, nil)
 }
 
-func (s *server) settingsValidate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, nil)
-		return
-	}
-	s.prepareSettingsChange(w, r)
-}
-
 func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -2111,10 +2095,6 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
-}
-
-func (s *server) createClient(ctx context.Context, settings domain.Settings, privateKey, name, fingerprint, actorID string) (domain.Client, error) {
-	return s.createProtocolClient(ctx, settings, domain.ProtocolVLESS, name, fingerprint, "", actorID)
 }
 
 func (s *server) createProtocolClient(ctx context.Context, settings domain.Settings, protocol domain.ClientProtocol, name, fingerprint, authValue, actorID string) (domain.Client, error) {

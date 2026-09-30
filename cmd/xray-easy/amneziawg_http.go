@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"time"
 
 	"xray-easy/internal/domain"
@@ -29,19 +28,6 @@ type amneziaWGStatusResponse struct {
 	IPv4Network    string `json:"ipv4_network,omitempty"`
 	IPv6Network    string `json:"ipv6_network,omitempty"`
 	ServiceVersion string `json:"service_version,omitempty"`
-	Error          string `json:"error,omitempty"`
-}
-
-type amneziaWGPeerResponse struct {
-	Name      string    `json:"name"`
-	PublicKey string    `json:"public_key"`
-	IPv4      string    `json:"ipv4"`
-	IPv6      string    `json:"ipv6"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
-type amneziaWGCreatePeerRequest struct {
-	Name string `json:"name"`
 }
 
 func (s *server) amneziaWGStatus(w http.ResponseWriter, r *http.Request) {
@@ -74,58 +60,6 @@ func (s *server) amneziaWGStatus(w http.ResponseWriter, r *http.Request) {
 		PublicPort: status.PublicPort, PeerCount: status.PeerCount, IPv4Network: status.IPv4Network,
 		IPv6Network: status.IPv6Network, ServiceVersion: status.ServiceVersion,
 	})
-}
-
-func (s *server) amneziaWGPeers(w http.ResponseWriter, r *http.Request) {
-	admin, err := s.authenticated(r)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
-		return
-	}
-	if s.awg == nil {
-		writeAWGUnavailable(w)
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
-	defer cancel()
-	switch r.Method {
-	case http.MethodGet:
-		peers, err := s.awg.ListPeers(ctx)
-		if err != nil {
-			writeAWGError(w, err)
-			return
-		}
-		items := make([]amneziaWGPeerResponse, 0, len(peers))
-		for _, peer := range peers {
-			items = append(items, mapAmneziaWGPeer(peer))
-		}
-		writeJSON(w, http.StatusOK, map[string]any{"peers": items})
-	case http.MethodPost:
-		lock, err := maintenance.Acquire(ctx, s.maintenancePath)
-		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "maintenance lock is unavailable"})
-			return
-		}
-		defer lock.Close()
-		var request amneziaWGCreatePeerRequest
-		if err := decodeJSON(r, &request); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
-			return
-		}
-		if err := domain.ValidateAmneziaWGPeerName(request.Name); err != nil {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
-			return
-		}
-		peer, err := s.awg.CreatePeer(ctx, request.Name)
-		if err != nil {
-			writeAWGError(w, err)
-			return
-		}
-		_ = s.store.AddAudit(ctx, admin.ID, "awg.peer.create", "awg_peer", peer.Name, "created AmneziaWG peer; assigned IPv4 and IPv6 addresses")
-		writeJSON(w, http.StatusCreated, mapAmneziaWGPeer(peer))
-	default:
-		writeJSON(w, http.StatusMethodNotAllowed, nil)
-	}
 }
 
 func (s *server) createAWGClient(w http.ResponseWriter, r *http.Request, admin store.Admin, name, fingerprint, authValue string) {
@@ -189,7 +123,7 @@ func (s *server) withAWGStats(peers []domain.AmneziaWGPeer) []clientResponse {
 // amneziaWGClientRoute adapts AWG peer lifecycle and credential delivery to the
 // shared /api/clients/{id} resource while preserving the private AWG service as
 // the owner of profile material.
-func (s *server) amneziaWGClientRoute(w http.ResponseWriter, r *http.Request, _ store.Admin, parts []string, name string) {
+func (s *server) amneziaWGClientRoute(w http.ResponseWriter, r *http.Request, admin store.Admin, parts []string, name string) {
 	if err := domain.ValidateAmneziaWGPeerName(name); err != nil {
 		http.NotFound(w, r)
 		return
@@ -199,10 +133,7 @@ func (s *server) amneziaWGClientRoute(w http.ResponseWriter, r *http.Request, _ 
 		return
 	}
 	if len(parts) == 2 && parts[1] == "revoke" && r.Method == http.MethodPost {
-		proxy := r.Clone(r.Context())
-		proxy.Method = http.MethodDelete
-		proxy.URL.Path = "/api/transports/amneziawg/peers/" + name
-		s.amneziaWGPeerRoute(w, proxy)
+		s.revokeAmneziaWGPeer(w, r, admin, name)
 		return
 	}
 	if len(parts) != 2 || parts[1] != "profile" || r.Method != http.MethodGet {
@@ -211,7 +142,9 @@ func (s *server) amneziaWGClientRoute(w http.ResponseWriter, r *http.Request, _ 
 	}
 	format := r.URL.Query().Get("format")
 	if format == "" || format == "uri" {
-		peers, err := s.awg.ListPeers(r.Context())
+		ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+		defer cancel()
+		peers, err := s.awg.ListPeers(ctx)
 		if err != nil {
 			writeAWGError(w, err)
 			return
@@ -225,118 +158,73 @@ func (s *server) amneziaWGClientRoute(w http.ResponseWriter, r *http.Request, _ 
 		writeJSON(w, http.StatusNotFound, map[string]any{"code": "not_found", "error": "AmneziaWG peer not found"})
 		return
 	}
-	path := "/api/transports/amneziawg/peers/" + name + "/profile"
-	switch format {
-	case "conf":
-	case "qr":
-		path += "/qr"
-	default:
+	if format != "conf" && format != "qr" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "unsupported AmneziaWG profile format"})
-		return
-	}
-	proxy := r.Clone(r.Context())
-	proxy.URL.Path = path
-	s.amneziaWGPeerRoute(w, proxy)
-}
-
-func (s *server) amneziaWGPeerRoute(w http.ResponseWriter, r *http.Request) {
-	admin, err := s.authenticated(r)
-	if err != nil {
-		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
-		return
-	}
-	if s.awg == nil {
-		writeAWGUnavailable(w)
-		return
-	}
-	relative := strings.TrimPrefix(r.URL.Path, "/api/transports/amneziawg/peers/")
-	parts := strings.Split(relative, "/")
-	if len(parts) < 1 || parts[0] == "." || parts[0] == "" {
-		http.NotFound(w, r)
-		return
-	}
-	name := parts[0]
-	if err := domain.ValidateAmneziaWGPeerName(name); err != nil {
-		http.NotFound(w, r)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
-	if len(parts) == 1 && r.Method == http.MethodDelete {
-		lock, err := maintenance.Acquire(ctx, s.maintenancePath)
-		if err != nil {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "maintenance lock is unavailable"})
-			return
-		}
-		defer lock.Close()
-		peers, err := s.awg.ListPeers(ctx)
-		if err != nil {
-			writeAWGError(w, err)
-			return
-		}
-		found := false
-		for _, peer := range peers {
-			found = found || peer.Name == name
-		}
-		if !found {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "AmneziaWG peer not found"})
-			return
-		}
-		manager := s.backupManager()
-		backupInfo, err := manager.CreateContext(ctx, "awg-peer-revoke")
-		if err != nil {
-			s.recordDiagnostic("error", "automatic AmneziaWG revoke backup failed: "+err.Error())
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "backup_failed", "error": "could not create automatic backup before revoking the peer"})
-			return
-		}
-		if err := s.awg.RemovePeer(ctx, name); err != nil {
-			writeAWGError(w, err)
-			return
-		}
-		if err := s.store.DeleteAWGTrafficSnapshot(ctx, name); err != nil {
-			s.recordDiagnostic("warn", "could not remove AmneziaWG traffic checkpoint: "+err.Error())
-		}
-		_ = s.store.AddAudit(ctx, admin.ID, "awg.peer.revoke", "awg_peer", name, "revoked AmneziaWG peer; automatic backup "+backupInfo.Name+" created")
-		writeJSON(w, http.StatusOK, map[string]any{"removed": true, "name": name, "backup_name": backupInfo.Name})
+	profile, err := s.awg.ClientConfig(ctx, name)
+	if err != nil {
+		writeAWGError(w, err)
 		return
 	}
-	if len(parts) == 2 && parts[1] == "profile" && r.Method == http.MethodGet {
-		profile, err := s.awg.ClientConfig(ctx, name)
-		if err != nil {
-			writeAWGError(w, err)
-			return
-		}
-		w.Header().Set("Cache-Control", "no-store, private")
-		w.Header().Set("Pragma", "no-cache")
+	w.Header().Set("Cache-Control", "no-store, private")
+	w.Header().Set("Pragma", "no-cache")
+	if format == "conf" {
 		w.Header().Set("Content-Type", "application/x-amneziawg-profile; charset=utf-8")
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", name+".conf"))
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(profile))
 		return
 	}
-	if len(parts) == 3 && parts[1] == "profile" && parts[2] == "qr" && r.Method == http.MethodGet {
-		profile, err := s.awg.ClientConfig(ctx, name)
-		if err != nil {
-			writeAWGError(w, err)
-			return
-		}
-		image, err := qrcode.Encode(profile, qrcode.Medium, 640)
-		if err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not render AmneziaWG profile QR code"})
-			return
-		}
-		w.Header().Set("Cache-Control", "no-store, private")
-		w.Header().Set("Pragma", "no-cache")
-		w.Header().Set("Content-Type", "image/png")
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(image)
+	image, err := qrcode.Encode(profile, qrcode.Medium, 640)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not render AmneziaWG profile QR code"})
 		return
 	}
-	writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
+	w.Header().Set("Content-Type", "image/png")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(image)
 }
 
-func mapAmneziaWGPeer(peer domain.AmneziaWGPeer) amneziaWGPeerResponse {
-	return amneziaWGPeerResponse{Name: peer.Name, PublicKey: peer.PublicKey, IPv4: peer.IPv4, IPv6: peer.IPv6, CreatedAt: peer.CreatedAt}
+func (s *server) revokeAmneziaWGPeer(w http.ResponseWriter, r *http.Request, admin store.Admin, name string) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	lock, err := maintenance.Acquire(ctx, s.maintenancePath)
+	if err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "maintenance lock is unavailable"})
+		return
+	}
+	defer lock.Close()
+	peers, err := s.awg.ListPeers(ctx)
+	if err != nil {
+		writeAWGError(w, err)
+		return
+	}
+	found := false
+	for _, peer := range peers {
+		found = found || peer.Name == name
+	}
+	if !found {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "AmneziaWG peer not found"})
+		return
+	}
+	backupInfo, err := s.backupManager().CreateContext(ctx, "awg-peer-revoke")
+	if err != nil {
+		s.recordDiagnostic("error", "automatic AmneziaWG revoke backup failed: "+err.Error())
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "backup_failed", "error": "could not create automatic backup before revoking the peer"})
+		return
+	}
+	if err := s.awg.RemovePeer(ctx, name); err != nil {
+		writeAWGError(w, err)
+		return
+	}
+	if err := s.store.DeleteAWGTrafficSnapshot(ctx, name); err != nil {
+		s.recordDiagnostic("warn", "could not remove AmneziaWG traffic checkpoint: "+err.Error())
+	}
+	_ = s.store.AddAudit(ctx, admin.ID, "awg.peer.revoke", "awg_peer", name, "revoked AmneziaWG peer; automatic backup "+backupInfo.Name+" created")
+	writeJSON(w, http.StatusOK, map[string]any{"removed": true, "name": name, "backup_name": backupInfo.Name})
 }
 
 func writeAWGUnavailable(w http.ResponseWriter) {
