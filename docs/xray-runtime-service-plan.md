@@ -579,19 +579,32 @@ Web UI будет доступен через SSH tunnel на `http://127.0.0.1:
 
 ### Этап 9. Удалить supervisor после VDS-приёмки embedded default
 
-- Проверить на VDS запуск и обновление стандартного Compose, подключение
-  клиентов, создание/отзыв/блокировку профилей, телеметрию, Doctor, логи и
-  restart recovery; отдельно проверить backup/restore, если он нужен для
-  релизной приёмки.
-- После успешной проверки удалить временный rollback Compose, дочерний Xray
-  process, supervisor gRPC contract/client, token/state volumes, Docker build
-  stage и тесты, которые нужны только supervisor adapter.
-- Удалить генерацию supervisor token из installer и устаревшие переменные из
-  `.env.example`; обновить старые планы, README и troubleshooting.
+- VDS-приёмка default Compose успешно завершена: владелец подтвердил установку
+  и проверки. Проверки backup/restore в эту приёмку не входили.
+- Перенести используемую Controller/backend модель состояния из пакета
+  `internal/supervisor` в доменный пакет и переименовать интерфейсы, поля,
+  события, HTTP DTO и Doctor labels в runtime-термины. Убрать UI-метрику
+  `restart_count`, которую embedded runtime не предоставляет.
+- Удалить selector старого Controller adapter, supervisor gRPC client/server и
+  protobuf contract, `cmd/xray-supervisor`, `Dockerfile.xray`, отдельную
+  supervisor coverage-обвязку и временный rollback Compose. Оставить только
+  embedded runtime service и его версионируемый контракт.
+- Удалить создание/проверку supervisor token из installer, `XRAY_ADAPTER` и
+  `XRAY_SUPERVISOR_*` из активных конфигураций, а также ненужные Buf-модули и
+  генераторы. Не удалять уже существующие данные пользователя; прежние
+  supervisor named volumes и локальный secret Compose автоматически не удаляет.
+- Обновить README, `.env.example`, support bundle, troubleshooting и старые
+  архитектурные планы: пометить описание supervisor как историческое и
+  сослаться на актуальную embedded архитектуру.
+- Проверить `go test ./...`, `go vet ./...`, backend coverage gate, runtime
+  race/coverage gates, protobuf generation/check, Compose config для обычной
+  установки, Docker multiarch build и отсутствие supervisor-ссылок в активном
+  коде/сборке. Затем сделать отдельный cleanup-коммит и push.
 
 **Готово, когда:** чистая установка и upgrade на VDS используют только embedded
 runtime; backend и Controller не содержат supervisor пути и ранее проверенные
-сценарии проходят.
+сценарии проходят. Исторические планы могут содержать термин supervisor только
+в контексте описания прежней архитектуры.
 
 ## Требования к безопасности и наблюдаемости
 
