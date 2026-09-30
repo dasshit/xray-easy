@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	corelog "github.com/xtls/xray-core/common/log"
 	"google.golang.org/grpc/codes"
@@ -48,15 +49,25 @@ type fakeEngine struct {
 	replaceErr   error
 	addErr       error
 	removeErr    error
+	telemetryErr error
+	stats        bool
+	telemetry    []RuntimeUserTelemetry
 	starts       int
 	closes       int
 	replacements int
 	users        map[string]string
 }
 
-func (e *fakeEngine) Start() error    { e.starts++; return e.startErr }
-func (e *fakeEngine) Close() error    { e.closes++; return e.closeErr }
-func (e *fakeEngine) Version() string { return "Xray test" }
+func (e *fakeEngine) Start() error         { e.starts++; return e.startErr }
+func (e *fakeEngine) Close() error         { e.closes++; return e.closeErr }
+func (e *fakeEngine) Version() string      { return "Xray test" }
+func (e *fakeEngine) StatsAvailable() bool { return e.stats }
+func (e *fakeEngine) GetTelemetry(_ context.Context, _ map[xrayruntimev1.Protocol]string) ([]RuntimeUserTelemetry, error) {
+	if e.telemetryErr != nil {
+		return nil, e.telemetryErr
+	}
+	return append([]RuntimeUserTelemetry(nil), e.telemetry...), nil
+}
 func (e *fakeEngine) ReplaceInbound(_ context.Context, _ string, _ []byte) (bool, error) {
 	e.replacements++
 	return false, e.replaceErr
@@ -205,7 +216,7 @@ func TestValidateConfigurationChecksSnapshotWithoutConstructingCoreAndRedactsFai
 	}
 }
 
-func TestTelemetryAndProbeMethodsRemainForNextStage(t *testing.T) {
+func TestTelemetryRequiresAnActiveConfigurationAndProbesRemainForNextStage(t *testing.T) {
 	service, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "v", nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -229,10 +240,133 @@ func TestTelemetryAndProbeMethodsRemainForNextStage(t *testing.T) {
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
-			if err := check.call(); status.Code(err) != codes.Unimplemented {
-				t.Fatalf("error = %v, want Unimplemented", err)
+			if err := check.call(); status.Code(err) != codes.FailedPrecondition && !(check.name != "telemetry" && status.Code(err) == codes.Unimplemented) {
+				t.Fatalf("error = %v, want FailedPrecondition for telemetry or Unimplemented for probe", err)
 			}
 		})
+	}
+}
+
+func TestTelemetryReportsCountersOnlineSourceAndKeepsLastSeen(t *testing.T) {
+	configuration := []byte(`{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)
+	seenAt := time.Date(2026, 9, 30, 10, 20, 30, 0, time.UTC)
+	engine := &fakeEngine{stats: true, telemetry: []RuntimeUserTelemetry{
+		{Email: "device-1@xray-easy", UploadBytes: 123, DownloadBytes: 456, Online: true, LastSeen: seenAt, SourceIPs: []RuntimeIPObservation{{Address: "192.0.2.12", LastSeen: seenAt}}},
+		{Email: "device-2@xray-easy", UploadBytes: -5, DownloadBytes: 0},
+	}}
+	service, err := NewService(&fakeLoader{engine: engine}, "v", configuration, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	capabilities, err := service.GetCapabilities(context.Background(), new(xrayruntimev1.EmptyRequest))
+	if err != nil || len(capabilities.GetProtocols()) != 1 {
+		t.Fatalf("capabilities=%+v error=%v", capabilities, err)
+	}
+	capability := capabilities.GetProtocols()[0]
+	if !capability.GetTrafficCounters() || !capability.GetOnlineStatus() || !capability.GetSourceIp() {
+		t.Fatalf("telemetry capabilities=%+v", capability)
+	}
+	response, err := service.GetTelemetry(context.Background(), new(xrayruntimev1.EmptyRequest))
+	if err != nil || len(response.GetUsers()) != 2 || response.GetSampledAt() == nil {
+		t.Fatalf("telemetry=%+v error=%v", response, err)
+	}
+	first, second := response.GetUsers()[0], response.GetUsers()[1]
+	if first.GetEmail() != "device-1@xray-easy" || first.GetUploadBytes() != 123 || first.GetDownloadBytes() != 456 || !first.GetOnline() || first.GetLastSeen().AsTime() != seenAt || len(first.GetSourceIps()) != 1 || first.GetSourceIps()[0].GetAddress() != "192.0.2.12" {
+		t.Fatalf("online telemetry=%+v", first)
+	}
+	if second.GetUploadBytes() != 0 || second.GetOnline() || second.GetLastSeen() != nil || len(second.GetSourceIps()) != 0 {
+		t.Fatalf("offline telemetry=%+v", second)
+	}
+
+	engine.telemetry = []RuntimeUserTelemetry{{Email: "device-1@xray-easy"}}
+	response, err = service.GetTelemetry(context.Background(), new(xrayruntimev1.EmptyRequest))
+	if err != nil || len(response.GetUsers()) != 1 {
+		t.Fatalf("second telemetry=%+v error=%v", response, err)
+	}
+	first = response.GetUsers()[0]
+	if first.GetOnline() || first.GetLastSeen() == nil || first.GetLastSeen().AsTime() != seenAt || len(first.GetSourceIps()) != 0 {
+		t.Fatalf("offline cached telemetry=%+v", first)
+	}
+	if len(service.lastSeen) != 1 {
+		t.Fatalf("last-seen cache entries=%d, want 1", len(service.lastSeen))
+	}
+	engine.telemetry = nil
+	if _, err := service.GetTelemetry(context.Background(), new(xrayruntimev1.EmptyRequest)); err != nil {
+		t.Fatal(err)
+	}
+	if len(service.lastSeen) != 0 {
+		t.Fatalf("removed roster entry remained in last-seen cache: %v", service.lastSeen)
+	}
+	engine.telemetry = []RuntimeUserTelemetry{{Email: "device-1@xray-easy", LastSeen: seenAt}}
+	if _, err := service.GetTelemetry(context.Background(), new(xrayruntimev1.EmptyRequest)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.RemoveUser(context.Background(), &xrayruntimev1.RemoveUserRequest{
+		Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, Email: "device-1@xray-easy", OperationId: "remove-seen", Revision: 2,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(service.lastSeen) != 0 {
+		t.Fatalf("revoked user remained in last-seen cache: %v", service.lastSeen)
+	}
+}
+
+func TestTelemetryCapabilityRequiresStatsAndUserPolicy(t *testing.T) {
+	cases := []struct {
+		name    string
+		config  string
+		stats   bool
+		traffic bool
+		online  bool
+	}{
+		{"no stats app", `{"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}}}`, true, false, false},
+		{"no manager", `{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}}}`, false, false, false},
+		{"partial traffic flags", `{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserOnline":true}}}}`, true, false, true},
+		{"all features", `{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}}}`, true, true, true},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			engine := &fakeEngine{stats: test.stats}
+			configuration := []byte(strings.TrimSuffix(test.config, "}"))
+			configuration = append(configuration, []byte(`,"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)...)
+			service, err := NewService(&fakeLoader{engine: engine}, "v", configuration, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer service.Close()
+			response, err := service.GetCapabilities(context.Background(), new(xrayruntimev1.EmptyRequest))
+			if err != nil || len(response.GetProtocols()) != 1 {
+				t.Fatalf("capabilities=%+v error=%v", response, err)
+			}
+			capability := response.GetProtocols()[0]
+			if capability.GetTrafficCounters() != test.traffic || capability.GetOnlineStatus() != test.online || capability.GetSourceIp() != test.online {
+				t.Fatalf("capability=%+v", capability)
+			}
+		})
+	}
+}
+
+func TestTelemetryUnavailableAndCanceledRequests(t *testing.T) {
+	configuration := []byte(`{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)
+	engine := &fakeEngine{}
+	service, err := NewService(&fakeLoader{engine: engine}, "v", configuration, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	if _, err := service.GetTelemetry(context.Background(), new(xrayruntimev1.EmptyRequest)); status.Code(err) != codes.Unavailable {
+		t.Fatalf("unavailable telemetry status=%v", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.GetTelemetry(canceled, new(xrayruntimev1.EmptyRequest)); status.Code(err) != codes.Canceled {
+		t.Fatalf("canceled telemetry status=%v", err)
+	}
+	engine.stats = true
+	engine.telemetryErr = errors.New("contains private telemetry data")
+	if _, err := service.GetTelemetry(context.Background(), new(xrayruntimev1.EmptyRequest)); status.Code(err) != codes.Unavailable || strings.Contains(err.Error(), "private telemetry") {
+		t.Fatalf("telemetry error leaked details: %v", err)
 	}
 }
 

@@ -44,6 +44,8 @@ type EngineHandle interface {
 	Start() error
 	Close() error
 	Version() string
+	StatsAvailable() bool
+	GetTelemetry(context.Context, map[xrayruntimev1.Protocol]string) ([]RuntimeUserTelemetry, error)
 	ReplaceInbound(context.Context, string, []byte) (bool, error)
 	AddUser(context.Context, xrayruntimev1.Protocol, string, string, string, string) (bool, error)
 	RemoveUser(context.Context, string, string) (bool, error)
@@ -83,6 +85,8 @@ type Service struct {
 	lastError      string
 	protocols      []string
 	inboundTags    map[xrayruntimev1.Protocol]string
+	telemetry      telemetryCapabilities
+	lastSeen       map[string]time.Time
 	fence          *RevisionFence
 	fatal          chan error
 	logs           []logRecord
@@ -117,7 +121,7 @@ func NewService(loader Loader, serviceVersion string, activeConfiguration []byte
 		serviceVersion: serviceVersion, startedAt: time.Now().UTC(),
 		state: xrayruntimev1.RuntimeState_RUNTIME_STATE_NO_CONFIGURATION, logLimit: 200,
 		activeConfig: append([]byte(nil), activeConfiguration...), inboundTags: make(map[xrayruntimev1.Protocol]string),
-		fence: fence, fatal: make(chan error, 1), activeRevision: activeRevision,
+		fence: fence, fatal: make(chan error, 1), activeRevision: activeRevision, lastSeen: make(map[string]time.Time),
 	}
 	if loader == nil {
 		loader = coreLoader{writeLog: service.addLog}
@@ -152,6 +156,7 @@ func NewService(loader Loader, serviceVersion string, activeConfiguration []byte
 	service.state = xrayruntimev1.RuntimeState_RUNTIME_STATE_RUNNING
 	service.activeRevision = activeRevision
 	service.protocols = protocols
+	service.telemetry = telemetryCapabilitiesFor(activeConfiguration, engine.StatsAvailable())
 	service.addLog("info", "runtime", "embedded Xray instance started")
 	return service, nil
 }
@@ -254,7 +259,8 @@ func (s *Service) GetCapabilities(_ context.Context, _ *xrayruntimev1.EmptyReque
 		}
 		response.Protocols = append(response.Protocols, &xrayruntimev1.ProtocolCapability{
 			Protocol: protocol, Configured: true,
-			UserManagement: true, TrafficCounters: false, OnlineStatus: false, SourceIp: false,
+			UserManagement: true, TrafficCounters: s.telemetry.trafficCounters,
+			OnlineStatus: s.telemetry.onlineStatus, SourceIp: s.telemetry.sourceIP,
 		})
 	}
 	return response, nil
@@ -368,6 +374,7 @@ func (s *Service) ApplyConfiguration(ctx context.Context, request *xrayruntimev1
 	s.activeConfig = append([]byte(nil), request.GetConfigurationJson()...)
 	s.protocols = protocols
 	s.inboundTags = tags
+	s.telemetry = telemetryCapabilitiesFor(request.GetConfigurationJson(), engine.StatsAvailable())
 	s.state = xrayruntimev1.RuntimeState_RUNTIME_STATE_RUNNING
 	s.activeRevision = request.GetRevision()
 	s.mu.Unlock()
@@ -439,6 +446,7 @@ func (s *Service) ReplaceInbound(ctx context.Context, request *xrayruntimev1.Rep
 	s.inboundTags = tags
 	s.activeConfig = append([]byte(nil), request.GetCandidateConfigurationJson()...)
 	s.protocols = protocols
+	s.telemetry = telemetryCapabilitiesFor(request.GetCandidateConfigurationJson(), engine.StatsAvailable())
 	s.mu.Unlock()
 	if err := s.commit(request.GetRevision(), request.GetOperationId(), key, fingerprint); err != nil {
 		s.markFatal(err)
@@ -511,6 +519,7 @@ func (s *Service) RemoveUser(ctx context.Context, request *xrayruntimev1.RemoveU
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "Xray user could not be removed")
 	}
+	delete(s.lastSeen, request.GetEmail())
 	if err := s.commit(request.GetRevision(), request.GetOperationId(), key, fingerprint); err != nil {
 		s.markFatal(err)
 		return nil, status.Error(codes.Unavailable, "Xray revision state could not be committed; runtime is restarting")
@@ -540,8 +549,72 @@ func (s *Service) ListUsers(ctx context.Context, request *xrayruntimev1.ListUser
 	return &xrayruntimev1.ListUsersResponse{Emails: users}, nil
 }
 
-func (s *Service) GetTelemetry(context.Context, *xrayruntimev1.EmptyRequest) (*xrayruntimev1.TelemetryResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "telemetry is not available yet")
+func (s *Service) GetTelemetry(ctx context.Context, _ *xrayruntimev1.EmptyRequest) (*xrayruntimev1.TelemetryResponse, error) {
+	s.opMu.Lock()
+	defer s.opMu.Unlock()
+	if err := contextFailure(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	engine := s.engine
+	tags := make(map[xrayruntimev1.Protocol]string, len(s.inboundTags))
+	for protocol, tag := range s.inboundTags {
+		tags[protocol] = tag
+	}
+	capabilities := s.telemetry
+	s.mu.RUnlock()
+	if engine == nil {
+		return nil, status.Error(codes.FailedPrecondition, "Xray runtime has no active configuration")
+	}
+	if !engine.StatsAvailable() {
+		return nil, status.Error(codes.Unavailable, "Xray telemetry is unavailable")
+	}
+	users, err := engine.GetTelemetry(ctx, tags)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.Error(codes.DeadlineExceeded, "Xray telemetry request timed out")
+		}
+		if errors.Is(err, context.Canceled) {
+			return nil, status.Error(codes.Canceled, "Xray telemetry request was canceled")
+		}
+		return nil, status.Error(codes.Unavailable, "Xray telemetry could not be read")
+	}
+	response := &xrayruntimev1.TelemetryResponse{SampledAt: timestamppb.New(time.Now().UTC())}
+	seenEmails := make(map[string]struct{}, len(users))
+	for _, user := range users {
+		seenEmails[user.Email] = struct{}{}
+		item := &xrayruntimev1.UserTelemetry{Email: user.Email}
+		if capabilities.trafficCounters {
+			item.UploadBytes = clampNonNegative(user.UploadBytes)
+			item.DownloadBytes = clampNonNegative(user.DownloadBytes)
+		}
+		if capabilities.onlineStatus {
+			item.Online = user.Online
+			if !user.LastSeen.IsZero() && user.LastSeen.After(s.lastSeen[user.Email]) {
+				s.lastSeen[user.Email] = user.LastSeen.UTC()
+			}
+			lastSeen := s.lastSeen[user.Email]
+			if !lastSeen.IsZero() {
+				item.LastSeen = timestamppb.New(lastSeen)
+			}
+		}
+		if capabilities.sourceIP {
+			for _, observation := range user.SourceIPs {
+				ip := &xrayruntimev1.IPObservation{Address: observation.Address}
+				if !observation.LastSeen.IsZero() {
+					ip.LastSeen = timestamppb.New(observation.LastSeen.UTC())
+				}
+				item.SourceIps = append(item.SourceIps, ip)
+			}
+		}
+		response.Users = append(response.Users, item)
+	}
+	for email := range s.lastSeen {
+		if _, exists := seenEmails[email]; !exists {
+			delete(s.lastSeen, email)
+		}
+	}
+	return response, nil
 }
 
 func (s *Service) ProbeRealityTarget(context.Context, *xrayruntimev1.ProbeRealityTargetRequest) (*xrayruntimev1.ProbeResponse, error) {

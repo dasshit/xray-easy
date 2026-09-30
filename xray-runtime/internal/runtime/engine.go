@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/netip"
 	"os"
 	"os/exec"
 	"regexp"
@@ -18,6 +19,7 @@ import (
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/core"
 	coreinbound "github.com/xtls/xray-core/features/inbound"
+	corestats "github.com/xtls/xray-core/features/stats"
 	xrayserial "github.com/xtls/xray-core/infra/conf/serial"
 	"github.com/xtls/xray-core/proxy"
 	hysteriaaccount "github.com/xtls/xray-core/proxy/hysteria/account"
@@ -54,6 +56,8 @@ var (
 	bracketedIPv6Pattern = regexp.MustCompile(`\[[0-9a-fA-F:]+\](?::[0-9]{1,5})?`)
 	canonicalUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 )
+
+const maxTelemetrySourceIPs = 32
 
 func redactXrayLog(message string) string {
 	message = ipv4EndpointPattern.ReplaceAllString(message, "[REDACTED-IP]")
@@ -353,6 +357,87 @@ func accountFor(protocolType xrayruntimev1.Protocol, credential, flow string) (p
 
 // Version reports the embedded Xray-core version.
 func (e *Engine) Version() string { return core.Version() }
+
+// StatsAvailable reports whether this instance has an in-process stats manager.
+func (e *Engine) StatsAvailable() bool {
+	if e == nil || e.instance == nil {
+		return false
+	}
+	manager, ok := e.instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	return ok && manager != nil
+}
+
+// GetTelemetry collects configured user roster, cumulative counters, and
+// currently tracked source addresses through Xray's in-process stats feature.
+func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1.Protocol]string) ([]RuntimeUserTelemetry, error) {
+	if e == nil || e.instance == nil {
+		return nil, errors.New("Xray instance is not initialized")
+	}
+	statsManager, ok := e.instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	if !ok || statsManager == nil {
+		return nil, errors.New("Xray stats manager is unavailable")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	usersByEmail := make(map[string]struct{})
+	for _, tag := range inboundTags {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		manager, err := e.userManager(ctx, tag)
+		if err != nil {
+			return nil, fmt.Errorf("read configured inbound users: %w", err)
+		}
+		for _, user := range manager.GetUsers(ctx) {
+			if user != nil && strings.TrimSpace(user.Email) != "" {
+				usersByEmail[user.Email] = struct{}{}
+			}
+		}
+	}
+	emails := make([]string, 0, len(usersByEmail))
+	for email := range usersByEmail {
+		emails = append(emails, email)
+	}
+	sort.Strings(emails)
+	result := make([]RuntimeUserTelemetry, 0, len(emails))
+	for _, email := range emails {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		user := RuntimeUserTelemetry{Email: email, SourceIPs: make([]RuntimeIPObservation, 0)}
+		if counter := statsManager.GetCounter("user>>>" + email + ">>>traffic>>>uplink"); counter != nil {
+			user.UploadBytes = clampNonNegative(counter.Value())
+		}
+		if counter := statsManager.GetCounter("user>>>" + email + ">>>traffic>>>downlink"); counter != nil {
+			user.DownloadBytes = clampNonNegative(counter.Value())
+		}
+		if onlineMap := statsManager.GetOnlineMap("user>>>" + email + ">>>online"); onlineMap != nil {
+			user.Online = onlineMap.Count() > 0
+			observed := make([]RuntimeIPObservation, 0, onlineMap.Count())
+			onlineMap.ForEach(func(rawAddress string, unixLastSeen int64) bool {
+				address, err := netip.ParseAddr(rawAddress)
+				if err != nil || unixLastSeen <= 0 {
+					return true
+				}
+				canonical := address.WithZone("").Unmap().String()
+				lastSeen := time.Unix(unixLastSeen, 0).UTC()
+				observed = append(observed, RuntimeIPObservation{Address: canonical, LastSeen: lastSeen})
+				if lastSeen.After(user.LastSeen) {
+					user.LastSeen = lastSeen
+				}
+				return true
+			})
+			sort.Slice(observed, func(i, j int) bool { return observed[i].Address < observed[j].Address })
+			if len(observed) > maxTelemetrySourceIPs {
+				observed = observed[:maxTelemetrySourceIPs]
+			}
+			user.SourceIPs = observed
+		}
+		result = append(result, user)
+	}
+	return result, nil
+}
 
 // ConfiguredProtocols extracts supported protocol names from a validated
 // snapshot without retaining or exposing secret-bearing configuration fields.

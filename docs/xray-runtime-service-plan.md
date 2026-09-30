@@ -377,6 +377,39 @@ rollback, stale revision, replay/conflict, отмену deadline, restart servic
 данных для каждого протокола; VLESS, VMess и Hysteria отдельно проверены на
 реальном Xray runtime, а семантика UI не вводит пользователя в заблуждение.
 
+**Результат этапа 5 от 2026-09-30:**
+
+- Runtime напрямую перечисляет пользователей через `proxy.UserManager` для
+  настроенных VLESS, VMess и Hysteria 2 inbound’ов, а затем объединяет roster
+  со stats counters `user>>>email>>>traffic>>>{uplink,downlink}` и online map
+  `user>>>email>>>online`. В telemetry входят и offline-пользователи с нулём,
+  если для них ещё нет counters.
+- `traffic_counters`, `online_status` и `source_ip` capabilities выставляются
+  только когда в конфиге включён stats app, embedded instance предоставляет
+  stats manager, а policy level `0` разрешает соответствующие user stats.
+  Если runtime не может прочитать stats feature, RPC возвращает
+  `UNAVAILABLE`, а не правдоподобные нулевые значения.
+- `online` означает, что Xray online map содержит хотя бы один текущий source
+  IP. Источник IP выдаётся только пока он присутствует в map; адреса
+  нормализуются и ограничены 32 значениями на пользователя. Последнее
+  наблюдение сохраняется runtime в памяти до удаления user из roster или его
+  отзыва. История после рестарта остаётся ответственностью backend SQLite.
+- Добавлены sampled timestamp и безопасное преобразование счётчиков в
+  неотрицательные значения. Скорости не вычисляются runtime: Controller
+  продолжает получать cumulative bytes и строить rate по дельте samples.
+  Ошибки telemetry наружу обобщены и не включают внутренние данные.
+- Реальный embedded Xray integration test проверяет сбор counters, online
+  status, IPv4-mapped IPv6 normalization и переход online → offline на VLESS;
+  отдельный тест с тремя реальными inbound managers проверяет roster и
+  synthetic stats counters/online maps для VLESS, VMess и Hysteria 2.
+  Проверены capability gating, offline users, last-seen cache, очистка cache
+  после исчезновения/отзыва user, cancellation и безопасная ошибка stats.
+- `GOCACHE=/tmp/xray-go-cache go test ./...` и `go vet ./...` внутри
+  `xray-runtime` прошли. Интеграционные тесты требуют возможности открыть
+  временные loopback TCP/UDP listeners; sandbox запуск был выполнен с
+  соответствующим разрешением. Реальный клиентский трафик, статистика после
+  рестарта и Controller/UI parity проверяются в этапах 6–7 и на VDS.
+
 ### Этап 6. Интеграционные и отказоустойчивые тесты
 
 - Запускать настоящую embedded Xray Instance в изолированных тестах на
