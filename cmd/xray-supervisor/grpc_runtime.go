@@ -2,66 +2,52 @@ package main
 
 import (
 	"context"
-	"strconv"
 	"time"
+
+	supervisorv1 "xray-easy/internal/supervisor/api/v1"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *supervisor) AlterUser(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "action", "protocol", "email", "id", "flow"); err != nil {
-		return nil, err
+func (s *supervisor) AlterUser(ctx context.Context, request *supervisorv1.AlterUserRequest) (*supervisorv1.OperationResponse, error) {
+	if request == nil || request.Email == "" {
+		return nil, status.Error(codes.InvalidArgument, "email is required")
 	}
-	action, err := rpcString(request, "action", true)
-	if err != nil {
-		return nil, err
-	}
-	protocol, err := rpcString(request, "protocol", true)
-	if err != nil {
-		return nil, err
-	}
-	email, err := rpcString(request, "email", true)
-	if err != nil {
-		return nil, err
-	}
-	id, err := rpcString(request, "id", action == "add")
-	if err != nil {
-		return nil, err
-	}
-	flow, err := rpcString(request, "flow", false)
-	if err != nil {
-		return nil, err
+	protocol, ok := xrayProtocolName(request.Protocol)
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "unsupported Xray protocol")
 	}
 	if s.handler == nil {
 		return nil, status.Error(codes.Unavailable, "Xray Handler adapter is unavailable")
 	}
-	switch action {
-	case "add":
+	var err error
+	switch request.Action {
+	case supervisorv1.XrayUserAction_XRAY_USER_ACTION_ADD:
+		if request.Id == "" {
+			return nil, status.Error(codes.InvalidArgument, "id is required for add operation")
+		}
 		switch protocol {
 		case "vless":
-			err = s.handler.AddUser(ctx, email, id, flow)
+			err = s.handler.AddUser(ctx, request.Email, request.Id, request.Flow)
 		case "vmess":
-			err = s.handler.AddVMessUser(ctx, email, id)
+			err = s.handler.AddVMessUser(ctx, request.Email, request.Id)
 		case "hysteria2":
-			err = s.handler.AddHysteriaUser(ctx, email, id)
-		default:
-			return nil, status.Error(codes.InvalidArgument, "unsupported Xray protocol")
+			err = s.handler.AddHysteriaUser(ctx, request.Email, request.Id)
 		}
-	case "remove":
-		if id != "" || flow != "" {
+	case supervisorv1.XrayUserAction_XRAY_USER_ACTION_REMOVE:
+		if request.Id != "" || request.Flow != "" {
 			return nil, status.Error(codes.InvalidArgument, "remove operation cannot include credentials")
 		}
 		switch protocol {
 		case "vless":
-			err = s.handler.RemoveUser(ctx, email)
+			err = s.handler.RemoveUser(ctx, request.Email)
 		case "vmess":
-			err = s.handler.RemoveVMessUser(ctx, email)
+			err = s.handler.RemoveVMessUser(ctx, request.Email)
 		case "hysteria2":
-			err = s.handler.RemoveHysteriaUser(ctx, email)
-		default:
-			return nil, status.Error(codes.InvalidArgument, "unsupported Xray protocol")
+			err = s.handler.RemoveHysteriaUser(ctx, request.Email)
 		}
 	default:
 		return nil, status.Error(codes.InvalidArgument, "action must be add or remove")
@@ -69,21 +55,22 @@ func (s *supervisor) AlterUser(ctx context.Context, request *structpb.Struct) (*
 	if err != nil {
 		return nil, rpcOperationError(codes.FailedPrecondition, err)
 	}
-	return rpcResponse(map[string]any{"ok": true})
+	return &supervisorv1.OperationResponse{Ok: true, Protocol: protocolVersion}, nil
 }
 
-func (s *supervisor) ListUsers(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "protocol"); err != nil {
-		return nil, err
+func (s *supervisor) ListUsers(ctx context.Context, request *supervisorv1.ListUsersRequest) (*supervisorv1.ListUsersResponse, error) {
+	if request == nil {
+		return nil, status.Error(codes.InvalidArgument, "protocol is required")
 	}
-	protocol, err := rpcString(request, "protocol", true)
-	if err != nil {
-		return nil, err
+	protocol, ok := xrayProtocolName(request.Protocol)
+	if !ok {
+		return nil, status.Error(codes.InvalidArgument, "unsupported Xray protocol")
 	}
 	if s.handler == nil {
 		return nil, status.Error(codes.Unavailable, "Xray Handler adapter is unavailable")
 	}
 	var users []string
+	var err error
 	switch protocol {
 	case "vless":
 		users, err = s.handler.Users(ctx)
@@ -91,23 +78,14 @@ func (s *supervisor) ListUsers(ctx context.Context, request *structpb.Struct) (*
 		users, err = s.handler.UsersInInbound(ctx, "vmess-tls")
 	case "hysteria2":
 		users, err = s.handler.UsersInInbound(ctx, "hysteria2")
-	default:
-		return nil, status.Error(codes.InvalidArgument, "unsupported Xray protocol")
 	}
 	if err != nil {
 		return nil, rpcOperationError(codes.Unavailable, err)
 	}
-	values := make([]any, len(users))
-	for index, user := range users {
-		values[index] = user
-	}
-	return rpcResponse(map[string]any{"users": values})
+	return &supervisorv1.ListUsersResponse{Users: users}, nil
 }
 
-func (s *supervisor) GetUserStats(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request); err != nil {
-		return nil, err
-	}
+func (s *supervisor) GetUserStats(ctx context.Context, _ *emptypb.Empty) (*supervisorv1.UserStatsResponse, error) {
 	if s.stats == nil {
 		return nil, status.Error(codes.Unavailable, "Xray statistics adapter is unavailable")
 	}
@@ -115,23 +93,37 @@ func (s *supervisor) GetUserStats(ctx context.Context, request *structpb.Struct)
 	if err != nil {
 		return nil, rpcOperationError(codes.Unavailable, err)
 	}
-	items := make([]any, 0, len(users))
+	response := &supervisorv1.UserStatsResponse{Users: make([]*supervisorv1.XrayUserStats, 0, len(users))}
 	for _, user := range users {
-		ips := make([]any, 0, len(user.SourceIPs))
-		for _, address := range user.SourceIPs {
-			ips = append(ips, map[string]any{"address": address.Address, "last_seen": runtimeTime(address.LastSeen)})
+		item := &supervisorv1.XrayUserStats{
+			Email: user.Email, UploadBytes: user.UploadBytes, DownloadBytes: user.DownloadBytes,
+			LastSeen:  runtimeTimestamp(user.LastSeen),
+			SourceIps: make([]*supervisorv1.SourceIPObservation, 0, len(user.SourceIPs)),
 		}
-		items = append(items, map[string]any{
-			"email": user.Email, "upload_bytes": strconv.FormatInt(user.UploadBytes, 10),
-			"download_bytes": strconv.FormatInt(user.DownloadBytes, 10), "last_seen": runtimeTime(user.LastSeen), "source_ips": ips,
-		})
+		for _, address := range user.SourceIPs {
+			item.SourceIps = append(item.SourceIps, &supervisorv1.SourceIPObservation{Address: address.Address, LastSeen: runtimeTimestamp(address.LastSeen)})
+		}
+		response.Users = append(response.Users, item)
 	}
-	return rpcResponse(map[string]any{"users": items})
+	return response, nil
 }
 
-func runtimeTime(value time.Time) string {
-	if value.IsZero() {
-		return ""
+func xrayProtocolName(value supervisorv1.XrayProtocol) (string, bool) {
+	switch value {
+	case supervisorv1.XrayProtocol_XRAY_PROTOCOL_VLESS:
+		return "vless", true
+	case supervisorv1.XrayProtocol_XRAY_PROTOCOL_VMESS:
+		return "vmess", true
+	case supervisorv1.XrayProtocol_XRAY_PROTOCOL_HYSTERIA2:
+		return "hysteria2", true
+	default:
+		return "", false
 	}
-	return value.UTC().Format(time.RFC3339Nano)
+}
+
+func runtimeTimestamp(value time.Time) *timestamppb.Timestamp {
+	if value.IsZero() {
+		return nil
+	}
+	return timestamppb.New(value.UTC())
 }

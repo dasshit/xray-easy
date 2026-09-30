@@ -16,13 +16,15 @@ import (
 	"strings"
 	"time"
 
+	"xray-easy/internal/interaction"
+	supervisorv1 "xray-easy/internal/supervisor/api/v1"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/structpb"
-	"xray-easy/internal/interaction"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
@@ -35,6 +37,7 @@ type Client struct {
 
 	conn      grpc.ClientConnInterface
 	closeConn func() error
+	rpc       supervisorv1.SupervisorClient
 	operation string
 }
 
@@ -81,15 +84,20 @@ func DialWithOperation(address, tokenFile, operation string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create supervisor gRPC connection: %w", err)
 	}
-	return &Client{TokenFile: tokenFile, conn: conn, closeConn: conn.Close, operation: operation}, nil
+	return newClient(conn, conn.Close, tokenFile, operation), nil
 }
 
 // NewClientWithConn wraps an existing gRPC connection, primarily for bufconn
 // integration tests. The caller retains ownership of the connection.
 func NewClientWithConn(conn grpc.ClientConnInterface, tokenFile string) *Client {
-	return &Client{TokenFile: tokenFile, conn: conn, operation: operationControlPlane}
+	return newClient(conn, nil, tokenFile, operationControlPlane)
 }
 
+func newClient(conn grpc.ClientConnInterface, closeConn func() error, tokenFile, operation string) *Client {
+	return &Client{TokenFile: tokenFile, conn: conn, closeConn: closeConn, rpc: supervisorv1.NewSupervisorClient(conn), operation: operation}
+}
+
+// Close releases the underlying HTTP/2 connection when this client owns it.
 func (c *Client) Close() error {
 	if c == nil || c.closeConn == nil {
 		return nil
@@ -97,141 +105,137 @@ func (c *Client) Close() error {
 	return c.closeConn()
 }
 
+// Validate asks Supervisor to validate a candidate Xray configuration.
 func (c *Client) Validate(ctx context.Context, path, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
-	_, err := c.call(ctx, "ValidateConfig", stringRequest(map[string]string{"path": path, "operation_id": operationID, "state_revision": strconv.FormatInt(interaction.StateRevision(ctx), 10)}))
+	request := &supervisorv1.ValidateConfigRequest{Path: path, OperationId: operationID, StateRevision: interaction.StateRevision(ctx)}
+	_, err := c.call(ctx, supervisorv1.Supervisor_ValidateConfig_FullMethodName, request,
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.ValidateConfig(ctx, request) })
 	return err
 }
 
+// Apply activates a validated candidate Xray configuration.
 func (c *Client) Apply(ctx context.Context, path, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
-	_, err := c.call(ctx, "ApplyConfig", stringRequest(map[string]string{"path": path, "operation_id": operationID, "state_revision": strconv.FormatInt(interaction.StateRevision(ctx), 10)}))
+	request := &supervisorv1.ApplyConfigRequest{Path: path, OperationId: operationID, StateRevision: interaction.StateRevision(ctx)}
+	_, err := c.call(ctx, supervisorv1.Supervisor_ApplyConfig_FullMethodName, request,
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.ApplyConfig(ctx, request) })
 	return err
 }
 
 // ReplaceInbound updates one Xray inbound through HandlerService without restarting the Xray process.
 func (c *Client) ReplaceInbound(ctx context.Context, candidatePath, previousPath, tag, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
-	request := stringRequest(map[string]string{
-		"candidate_path": candidatePath,
-		"previous_path":  previousPath,
-		"tag":            tag,
-		"operation_id":   operationID,
-		"state_revision": strconv.FormatInt(interaction.StateRevision(ctx), 10),
-	})
-	_, err := c.call(ctx, "ReplaceInbound", request)
+	request := &supervisorv1.ReplaceInboundRequest{
+		CandidatePath: candidatePath, PreviousPath: previousPath, Tag: tag,
+		OperationId: operationID, StateRevision: interaction.StateRevision(ctx),
+	}
+	_, err := c.call(ctx, supervisorv1.Supervisor_ReplaceInbound_FullMethodName, request,
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.ReplaceInbound(ctx, request) })
 	return err
 }
 
+// ProbeTarget verifies DNS resolution and TLS reachability for a REALITY target.
 func (c *Client) ProbeTarget(ctx context.Context, target, sni string) error {
-	_, err := c.call(ctx, "ProbeTarget", stringRequest(map[string]string{"target": target, "sni": sni}))
-	return err
+	request := &supervisorv1.ProbeTargetRequest{Target: target, Sni: sni}
+	response, err := c.call(ctx, supervisorv1.Supervisor_ProbeTarget_FullMethodName, request,
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.ProbeTarget(ctx, request) })
+	if err != nil {
+		return err
+	}
+	if !response.(*supervisorv1.ProbeTargetResponse).GetOk() {
+		return errors.New("supervisor target probe returned an unsuccessful response")
+	}
+	return nil
 }
 
 // ProbeIPv6 checks outbound IPv6 connectivity from the Xray container.
 func (c *Client) ProbeIPv6(ctx context.Context) error {
-	_, err := c.call(ctx, "ProbeIPv6", new(emptypb.Empty))
-	return err
+	response, err := c.call(ctx, supervisorv1.Supervisor_ProbeIPv6_FullMethodName, new(emptypb.Empty),
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.ProbeIPv6(ctx, new(emptypb.Empty)) })
+	if err != nil {
+		return err
+	}
+	if !response.(*supervisorv1.ProbeIPv6Response).GetOk() {
+		return errors.New("supervisor IPv6 probe returned an unsuccessful response")
+	}
+	return nil
 }
 
+// Health checks that Supervisor is running and accepts healthcheck credentials.
 func (c *Client) Health(ctx context.Context) error {
-	_, err := c.call(ctx, "Health", new(emptypb.Empty))
-	return err
+	response, err := c.call(ctx, supervisorv1.Supervisor_Health_FullMethodName, new(emptypb.Empty),
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.Health(ctx, new(emptypb.Empty)) })
+	if err != nil {
+		return err
+	}
+	if !response.(*supervisorv1.HealthResponse).GetOk() {
+		return errors.New("supervisor health response is not ready")
+	}
+	return nil
 }
 
+// Status returns the current child process state reported by Supervisor.
 func (c *Client) Status(ctx context.Context) (Status, error) {
-	response, err := c.call(ctx, "GetStatus", new(emptypb.Empty))
+	result, err := c.call(ctx, supervisorv1.Supervisor_GetStatus_FullMethodName, new(emptypb.Empty),
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.GetStatus(ctx, new(emptypb.Empty)) })
 	if err != nil {
 		return Status{}, err
 	}
-	fields := response.GetFields()
-	status := Status{}
-	if status.Protocol, err = responseString(fields, "protocol", true); err != nil {
-		return Status{}, err
+	response := result.(*supervisorv1.SupervisorStatus)
+	if response.Protocol == "" || response.XrayVersion == "" || response.State == "" || response.Pid < 0 || response.RestartCount < 0 {
+		return Status{}, errors.New("decode supervisor status: required or numeric field is invalid")
 	}
-	if status.XrayVersion, err = responseString(fields, "xray_version", true); err != nil {
-		return Status{}, err
-	}
-	if status.State, err = responseString(fields, "state", true); err != nil {
-		return Status{}, err
-	}
-	if status.ConfigPath, err = responseString(fields, "config_path", false); err != nil {
-		return Status{}, err
-	}
-	if status.LastError, err = responseString(fields, "last_error", false); err != nil {
-		return Status{}, err
-	}
-	if status.LastExit, err = responseString(fields, "last_exit", false); err != nil {
-		return Status{}, err
-	}
-	if status.PID, err = responseInt(fields, "pid"); err != nil {
-		return Status{}, err
-	}
-	if status.RestartCount, err = responseInt(fields, "restart_count"); err != nil {
-		return Status{}, err
-	}
-	startedAt, err := responseString(fields, "started_at", false)
+	startedAt, err := protobufTimeToTime("started_at", response.StartedAt)
 	if err != nil {
 		return Status{}, err
 	}
-	if startedAt != "" {
-		status.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt)
-		if err != nil {
-			return Status{}, fmt.Errorf("decode supervisor started_at: %w", err)
-		}
-	}
-	return status, nil
+	return Status{
+		Protocol: response.Protocol, XrayVersion: response.XrayVersion, State: response.State,
+		PID: int(response.Pid), ConfigPath: response.ConfigPath, LastError: response.LastError,
+		LastExit: response.LastExit, RestartCount: int(response.RestartCount), StartedAt: startedAt,
+	}, nil
 }
 
+// Logs returns the bounded, redacted log buffer from the Supervisor process.
 func (c *Client) Logs(ctx context.Context) ([]string, error) {
-	response, err := c.call(ctx, "GetLogs", new(emptypb.Empty))
+	result, err := c.call(ctx, supervisorv1.Supervisor_GetLogs_FullMethodName, new(emptypb.Empty),
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.GetLogs(ctx, new(emptypb.Empty)) })
 	if err != nil {
 		return nil, err
 	}
-	value := response.GetFields()["lines"]
-	if value == nil || value.GetListValue() == nil {
-		return nil, errors.New("decode supervisor logs: lines must be a list")
-	}
-	lines := make([]string, 0, len(value.GetListValue().GetValues()))
-	for index, line := range value.GetListValue().GetValues() {
-		if line.GetStringValue() == "" && line.GetKind() == nil {
-			return nil, fmt.Errorf("decode supervisor logs: line %d is missing", index)
-		}
-		if _, ok := line.GetKind().(*structpb.Value_StringValue); !ok {
-			return nil, fmt.Errorf("decode supervisor logs: line %d must be a string", index)
-		}
-		lines = append(lines, line.GetStringValue())
-	}
-	return lines, nil
+	return append([]string(nil), result.(*supervisorv1.LogsResponse).Lines...), nil
 }
 
-func (c *Client) call(ctx context.Context, method string, request proto.Message) (*structpb.Struct, error) {
-	if c == nil || c.conn == nil {
+func (c *Client) call(ctx context.Context, method string, request proto.Message, invoke func(context.Context) (proto.Message, error)) (proto.Message, error) {
+	if c == nil || c.conn == nil || c.rpc == nil {
 		return nil, errors.New("supervisor gRPC connection is not initialized")
 	}
 	operation := c.operation
 	if operation == "" {
 		operation = operationControlPlane
 	}
-	if operation == operationHealthcheck && method != "Health" {
+	if operation == operationHealthcheck && method != supervisorv1.Supervisor_Health_FullMethodName {
 		return nil, errors.New("healthcheck identity cannot invoke supervisor control methods")
 	}
 	metadataContext, requestID, err := interaction.OutgoingContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create supervisor request ID: %w", err)
 	}
-	metadataContext, err = signRequest(metadataContext, c.TokenFile, operation, "/"+RPCServiceName+"/"+method, request)
+	metadataContext, err = signRequest(metadataContext, c.TokenFile, operation, method, request)
 	if err != nil {
 		return nil, err
 	}
-	response := new(structpb.Struct)
-	fullMethod := "/" + RPCServiceName + "/" + method
 	started := time.Now()
-	if err := c.conn.Invoke(metadataContext, fullMethod, request, response); err != nil {
-		interaction.LogRPC(slog.Default(), "xray-supervisor-client", fullMethod, requestID, "xray", started, err, interaction.TraceFromContext(metadataContext))
-		return nil, fmt.Errorf("supervisor %s: %w", method, err)
+	response, err := invoke(metadataContext)
+	if err != nil {
+		interaction.LogRPC(slog.Default(), "xray-supervisor-client", method, requestID, "xray", started, err, interaction.TraceFromContext(metadataContext))
+		return nil, fmt.Errorf("supervisor %s: %w", method[strings.LastIndex(method, "/")+1:], err)
 	}
-	interaction.LogRPC(slog.Default(), "xray-supervisor-client", fullMethod, requestID, "xray", started, nil, interaction.TraceFromContext(metadataContext))
+	if response == nil {
+		return nil, errors.New("supervisor returned an empty protobuf response")
+	}
+	interaction.LogRPC(slog.Default(), "xray-supervisor-client", method, requestID, "xray", started, nil, interaction.TraceFromContext(metadataContext))
 	return response, nil
 }
 
@@ -257,48 +261,18 @@ func signRequest(ctx context.Context, tokenFile, operation, method string, reque
 	message := strings.Join([]string{method, operation, nonce, hex.EncodeToString(bodyHash[:])}, "\n")
 	mac := hmac.New(sha256.New, token)
 	_, _ = mac.Write([]byte(message))
-	values := map[string]string{
-		"x-xray-operation": operation,
-		"x-xray-nonce":     nonce,
-		"x-xray-signature": hex.EncodeToString(mac.Sum(nil)),
-	}
 	return metadata.AppendToOutgoingContext(ctx,
-		"x-xray-operation", values["x-xray-operation"],
-		"x-xray-nonce", values["x-xray-nonce"],
-		"x-xray-signature", values["x-xray-signature"],
-	), nil
+		"x-xray-operation", operation,
+		"x-xray-nonce", nonce,
+		"x-xray-signature", hex.EncodeToString(mac.Sum(nil))), nil
 }
 
-func stringRequest(fields map[string]string) *structpb.Struct {
-	values := make(map[string]*structpb.Value, len(fields))
-	for key, value := range fields {
-		values[key] = structpb.NewStringValue(value)
-	}
-	return &structpb.Struct{Fields: values}
-}
-
-func responseString(fields map[string]*structpb.Value, name string, required bool) (string, error) {
-	value := fields[name]
+func protobufTimeToTime(field string, value *timestamppb.Timestamp) (time.Time, error) {
 	if value == nil {
-		if required {
-			return "", fmt.Errorf("decode supervisor response: missing %s", name)
-		}
-		return "", nil
+		return time.Time{}, nil
 	}
-	if _, ok := value.GetKind().(*structpb.Value_StringValue); !ok {
-		return "", fmt.Errorf("decode supervisor response: %s must be a string", name)
+	if err := value.CheckValid(); err != nil {
+		return time.Time{}, fmt.Errorf("decode supervisor %s: invalid timestamp: %w", field, err)
 	}
-	return value.GetStringValue(), nil
-}
-
-func responseInt(fields map[string]*structpb.Value, name string) (int, error) {
-	value := fields[name]
-	if value == nil {
-		return 0, fmt.Errorf("decode supervisor response: missing %s", name)
-	}
-	number, ok := value.GetKind().(*structpb.Value_NumberValue)
-	if !ok || number.NumberValue != float64(int(number.NumberValue)) {
-		return 0, fmt.Errorf("decode supervisor response: %s must be an integer", name)
-	}
-	return int(number.NumberValue), nil
+	return value.AsTime().UTC(), nil
 }

@@ -43,9 +43,9 @@ runtime adapter accesses the control plane database.
   adding more containers.
 - Use versioned, typed Protobuf messages for every Controller RPC. Generated Go
   sources come from the pinned Buf plugins using
-  `scripts/generate-controller-proto.sh`; generation tooling is not included
-  in runtime images. Keep the internal Xray-supervisor and AWG service
-  contracts separately versioned; they are not the Controller API.
+  `scripts/generate-protobuf.sh`; generation tooling is not included in
+  runtime images. Keep the internal Xray-supervisor and AWG service contracts
+  separately versioned; they are not the Controller API.
 - All gRPC listeners stay on private internal Compose networks and are
   unpublished on the host. Each hop authenticates independently using its own
   mounted secret; request correlation metadata is not an authentication

@@ -30,6 +30,7 @@ import (
 
 	"xray-easy/internal/diagnostics"
 	supervisorapi "xray-easy/internal/supervisor"
+	supervisorv1 "xray-easy/internal/supervisor/api/v1"
 	"xray-easy/internal/xrayapi"
 )
 
@@ -79,6 +80,8 @@ func (b *logBuffer) all() []string {
 }
 
 type supervisor struct {
+	supervisorv1.UnimplementedSupervisorServer
+
 	cfg         *config
 	log         *logBuffer
 	xrayVersion string

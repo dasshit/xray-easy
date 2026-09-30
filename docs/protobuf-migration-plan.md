@@ -38,13 +38,13 @@ required coordinated rebuild in the repository deployment notes.
 
 ## Stages and commits
 
-### Stage 0 — Record migration plan
+### Stage 0 — Record migration plan — complete
 
 - Document current dynamic contracts, migration boundaries, rollout
   compatibility, typed data choices, and validation gates.
 - Commit: `docs: plan typed protobuf migration for runtime services`.
 
-### Stage 1 — Type the Xray Supervisor API
+### Stage 1 — Type the Xray Supervisor API — complete
 
 - Replace `Struct` method payloads in the Supervisor `.proto` with explicit
   messages. Use `int64` for config state revisions and byte counters,
@@ -61,8 +61,8 @@ required coordinated rebuild in the repository deployment notes.
   counters, timestamp parsing, and dynamic map conversion from the Supervisor
   client path.
 - Add/update transport and adapter tests; run root-module tests, race tests for
-  the supervisor/controller path, `go vet`, and coverage checks for the
-  affected modules.
+  the supervisor/controller path, `go vet`, the root 90% handwritten coverage
+  gate, and the per-file Supervisor 90% coverage gate.
 - Commit: `refactor: use typed protobuf for xray supervisor`.
 
 ### Stage 2 — Type the AmneziaWG service API

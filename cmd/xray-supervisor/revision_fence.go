@@ -23,13 +23,55 @@ type revisionMutation struct {
 // revisionFence persists only the last Xray mutation identity and its status.
 // It is operational metadata, not a second copy of desired application state.
 type revisionFence struct {
-	path   string
-	latest revisionRecord
-	err    error
+	path       string
+	latest     revisionRecord
+	err        error
+	fileSystem *revisionFileSystem
+}
+
+type revisionTempFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type revisionDirectory interface {
+	Sync() error
+	Close() error
+}
+
+type revisionFileSystem struct {
+	mkdirAll   func(string, os.FileMode) error
+	marshal    func(any) ([]byte, error)
+	createTemp func(string, string) (revisionTempFile, error)
+	remove     func(string) error
+	rename     func(string, string) error
+	openDir    func(string) (revisionDirectory, error)
+}
+
+func defaultRevisionFileSystem() *revisionFileSystem {
+	return &revisionFileSystem{
+		mkdirAll: os.MkdirAll,
+		marshal:  json.Marshal,
+		createTemp: func(directory, pattern string) (revisionTempFile, error) {
+			return os.CreateTemp(directory, pattern)
+		},
+		remove: os.Remove,
+		rename: os.Rename,
+		openDir: func(path string) (revisionDirectory, error) {
+			return os.Open(path)
+		},
+	}
 }
 
 func newRevisionFence(path string) revisionFence {
-	fence := revisionFence{path: path}
+	return newRevisionFenceWithFileSystem(path, defaultRevisionFileSystem())
+}
+
+func newRevisionFenceWithFileSystem(path string, fileSystem *revisionFileSystem) revisionFence {
+	fence := revisionFence{path: path, fileSystem: fileSystem}
 	if strings.TrimSpace(path) == "" {
 		fence.err = errors.New("revision state path is required")
 		return fence
@@ -141,18 +183,22 @@ func (f *revisionFence) commit(revision int64, operationID, mutationKey, fingerp
 }
 
 func (f *revisionFence) persist(record revisionRecord) error {
-	if err := os.MkdirAll(filepath.Dir(f.path), 0o700); err != nil {
+	fileSystem := f.fileSystem
+	if fileSystem == nil {
+		fileSystem = defaultRevisionFileSystem()
+	}
+	if err := fileSystem.mkdirAll(filepath.Dir(f.path), 0o700); err != nil {
 		return fmt.Errorf("create revision state directory: %w", err)
 	}
-	data, err := json.Marshal(record)
+	data, err := fileSystem.marshal(record)
 	if err != nil {
 		return fmt.Errorf("encode revision state: %w", err)
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(f.path), ".revision-state-*")
+	temporary, err := fileSystem.createTemp(filepath.Dir(f.path), ".revision-state-*")
 	if err != nil {
 		return fmt.Errorf("create revision state temporary file: %w", err)
 	}
-	defer os.Remove(temporary.Name())
+	defer fileSystem.remove(temporary.Name())
 	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("secure revision state file: %w", err)
@@ -168,10 +214,10 @@ func (f *revisionFence) persist(record revisionRecord) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("close revision state: %w", err)
 	}
-	if err := os.Rename(temporary.Name(), f.path); err != nil {
+	if err := fileSystem.rename(temporary.Name(), f.path); err != nil {
 		return fmt.Errorf("replace revision state: %w", err)
 	}
-	directory, err := os.Open(filepath.Dir(f.path))
+	directory, err := fileSystem.openDir(filepath.Dir(f.path))
 	if err != nil {
 		return fmt.Errorf("open revision state directory: %w", err)
 	}

@@ -1,9 +1,8 @@
 # Xray supervisor gRPC migration plan
 
-> Scope note: this document tracks the private Xray-supervisor gRPC contract,
-> which currently uses validated `google.protobuf.Struct` messages. The
-> separate backend ↔ Controller contract is now generated, typed Protobuf;
-> Controller typing does not automatically change the supervisor contract.
+> Status: the private Supervisor gRPC migration is complete. Its API now uses
+> generated, typed Protobuf messages. The later typed Controller contract is
+> separate, and its types do not replace the runtime service contracts.
 
 ## Goal
 
@@ -40,14 +39,13 @@ new transport must retain those properties.
 ## Target contract and security
 
 - Define `xrayeasy.supervisor.v1.Supervisor` in
-  `internal/supervisor/api/v1/supervisor.proto`.
-- For the first migration, use `google.protobuf.Struct` request/response
-  messages, following the existing private AWG gRPC convention. Keep Go-side
-  request and response conversion helpers strict: required strings, integer
-  ranges, timestamp formats, and unexpected fields are validated explicitly.
-  This avoids a generated-code toolchain change while keeping the wire format
-  protobuf/gRPC interoperable. Promote frequently reused payloads to typed
-  messages when the protocol-neutral Controller contract is designed.
+  `internal/supervisor/api/v1/supervisor.proto` with explicit messages for all
+  requests and responses. Use `int64` for state revisions and traffic
+  counters, `Timestamp` for event times, repeated fields for collections,
+  and enums for Xray protocols and user actions.
+- Generate and check in the Go messages and gRPC client/server with the pinned
+  Buf plugins. The Supervisor's generated package is distinct from the
+  backend-to-Controller API package.
 - Use unary methods `Health`, `GetStatus`, `GetLogs`, `ValidateConfig`,
   `ApplyConfig`, `ReplaceInbound`, `ProbeTarget`, and `ProbeIPv6`.
 - Bind the server only to the private Docker control network. Do not publish
@@ -73,18 +71,18 @@ new transport must retain those properties.
 
 ## Implementation stages
 
-### 1. Freeze the behavior and add the contract
+### 1. Freeze the behavior and add the contract — complete
 
 - Inventory callers and outputs from the current routes (table above).
-- Add the versioned `.proto` contract and the manually registered Go service
-  descriptor used by this repository's AWG service pattern.
-- Specify each Struct field and response field in package documentation/tests.
+- Add the versioned `.proto` contract and generated service registration.
+- Specify each typed request and response in the contract and integration
+  tests.
 - Keep existing `supervisor.Client` methods (`Health`, `Status`, `Logs`,
   `Validate`, `Apply`, `ReplaceInbound`, `ProbeTarget`, `ProbeIPv6`) as the
   control-plane adapter so domain logic does not depend on generated RPC
   details.
 
-### 2. Implement authenticated gRPC on the supervisor
+### 2. Implement authenticated gRPC on the supervisor — complete
 
 - Convert the HTTP handlers into server RPC methods without changing their
   process operations or safety checks.
@@ -97,7 +95,7 @@ new transport must retain those properties.
   replayed/expired/malformed nonces, cancelled requests, status code mapping,
   redaction, and healthcheck credentials.
 
-### 3. Migrate the backend client
+### 3. Migrate the backend client — complete
 
 - Replace HTTP request construction/JSON decoding in `internal/supervisor`
   with the versioned gRPC client and signed metadata.
@@ -109,7 +107,7 @@ new transport must retain those properties.
 - Keep the token file as the only credential source. Do not move the HMAC key
   into environment variables or ordinary application configuration.
 
-### 4. Switch Docker wiring and CLI checks
+### 4. Switch Docker wiring and CLI checks — complete
 
 - Replace `XRAY_SUPERVISOR_URL` with an address setting such as
   `XRAY_SUPERVISOR_ADDR=172.31.241.2:10086` and update install/doctor/docs.
@@ -121,7 +119,7 @@ new transport must retain those properties.
   caller has moved to gRPC; avoid retaining two control protocols in the
   shipped service.
 
-### 5. Verify, document, and commit
+### 5. Verify, document, and commit — complete
 
 - Run root Go unit tests, race tests, root coverage gate, AWG coverage gate,
   web lint/typecheck/unit coverage, and Compose config validation.
@@ -184,11 +182,13 @@ protocol-neutral service or creating two competing orchestration owners.
 
 ## Реализация этапа supervisor gRPC
 
-Реализация сохраняет прежние операции и переводит transport на unary gRPC
-`xrayeasy.supervisor.v1.Supervisor`. Backend сохраняет адаптерные методы
-`Health`, `Status`, `Logs`, `Validate`, `Apply`, `ReplaceInbound`, `ProbeTarget`
-и `ProbeIPv6`, поэтому control-plane маршруты и UI не меняются. Сервер и
-healthcheck используют общий HMAC-контракт; supervisor доступен только через
-private Compose network. Документированный Controller остаётся последующим
-этапом, пока его протокольно-нейтральный контракт и границы владения runtime
-не согласованы.
+Реализация сохраняет прежние операции и использует unary gRPC
+`xrayeasy.supervisor.v1.Supervisor` с generated typed Protobuf. Backend
+сохраняет адаптерные методы `Health`, `Status`, `Logs`, `Validate`, `Apply`,
+`ReplaceInbound`, `ProbeTarget` и `ProbeIPv6`, поэтому control-plane маршруты и
+UI не меняются. Счётчики и state revision передаются как `int64`, даты как
+`Timestamp`, а протоколы и user actions как enum. Сервер и healthcheck
+используют HMAC-контракт над deterministic protobuf bytes; supervisor доступен
+только через private Compose network. Из-за изменения wire-формата
+`xray-controller` и `xray-supervisor` необходимо обновлять из одного checkout
+одновременно.

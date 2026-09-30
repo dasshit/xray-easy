@@ -3,27 +3,35 @@ package supervisor
 import (
 	"context"
 	"fmt"
-	"strconv"
-	"time"
 
+	supervisorv1 "xray-easy/internal/supervisor/api/v1"
 	"xray-easy/internal/xrayapi"
 
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 // AddProtocolUser adds one protocol-specific identity to a live Xray inbound.
 func (c *Client) AddProtocolUser(ctx context.Context, protocol, email, id, flow string) error {
-	_, err := c.call(ctx, "AlterUser", stringRequest(map[string]string{
-		"action": "add", "protocol": protocol, "email": email, "id": id, "flow": flow,
-	}))
+	protocolValue, err := xrayProtocolValue(protocol)
+	if err != nil {
+		return err
+	}
+	request := &supervisorv1.AlterUserRequest{Action: supervisorv1.XrayUserAction_XRAY_USER_ACTION_ADD, Protocol: protocolValue, Email: email, Id: id, Flow: flow}
+	_, err = c.call(ctx, supervisorv1.Supervisor_AlterUser_FullMethodName, request,
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.AlterUser(ctx, request) })
 	return err
 }
 
-// RemoveProtocolUser removes a protocol-specific identity from a live Xray inbound.
+// RemoveProtocolUser removes one protocol-specific identity from a live Xray inbound.
 func (c *Client) RemoveProtocolUser(ctx context.Context, protocol, email string) error {
-	_, err := c.call(ctx, "AlterUser", stringRequest(map[string]string{
-		"action": "remove", "protocol": protocol, "email": email,
-	}))
+	protocolValue, err := xrayProtocolValue(protocol)
+	if err != nil {
+		return err
+	}
+	request := &supervisorv1.AlterUserRequest{Action: supervisorv1.XrayUserAction_XRAY_USER_ACTION_REMOVE, Protocol: protocolValue, Email: email}
+	_, err = c.call(ctx, supervisorv1.Supervisor_AlterUser_FullMethodName, request,
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.AlterUser(ctx, request) })
 	return err
 }
 
@@ -64,103 +72,63 @@ func (c *Client) Users(ctx context.Context) ([]string, error) {
 
 // UsersInInbound returns loaded users for a supported Xray inbound tag.
 func (c *Client) UsersInInbound(ctx context.Context, inbound string) ([]string, error) {
-	protocol := map[string]string{"vless-reality": "vless", "hysteria2": "hysteria2", "vmess-tls": "vmess"}[inbound]
-	if protocol == "" {
+	protocol, ok := map[string]string{"vless-reality": "vless", "hysteria2": "hysteria2", "vmess-tls": "vmess"}[inbound]
+	if !ok {
 		return nil, fmt.Errorf("unsupported Xray inbound %q", inbound)
 	}
-	response, err := c.call(ctx, "ListUsers", stringRequest(map[string]string{"protocol": protocol}))
+	protocolValue, _ := xrayProtocolValue(protocol)
+	request := &supervisorv1.ListUsersRequest{Protocol: protocolValue}
+	result, err := c.call(ctx, supervisorv1.Supervisor_ListUsers_FullMethodName, request,
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.ListUsers(ctx, request) })
 	if err != nil {
 		return nil, err
 	}
-	value := response.GetFields()["users"]
-	if value == nil || value.GetListValue() == nil {
-		return nil, fmt.Errorf("decode supervisor users: users must be a list")
-	}
-	users := make([]string, 0, len(value.GetListValue().GetValues()))
-	for index, item := range value.GetListValue().GetValues() {
-		if _, ok := item.GetKind().(*structpb.Value_StringValue); !ok {
-			return nil, fmt.Errorf("decode supervisor users: item %d must be a string", index)
-		}
-		users = append(users, item.GetStringValue())
-	}
-	return users, nil
+	return append([]string(nil), result.(*supervisorv1.ListUsersResponse).Users...), nil
 }
 
 // Poll reads per-user Xray counters and source IP observations.
 func (c *Client) Poll(ctx context.Context) ([]xrayapi.UserStats, error) {
-	response, err := c.call(ctx, "GetUserStats", new(structpb.Struct))
+	result, err := c.call(ctx, supervisorv1.Supervisor_GetUserStats_FullMethodName, new(emptypb.Empty),
+		func(ctx context.Context) (proto.Message, error) { return c.rpc.GetUserStats(ctx, new(emptypb.Empty)) })
 	if err != nil {
 		return nil, err
 	}
-	items := response.GetFields()["users"]
-	if items == nil || items.GetListValue() == nil {
-		return nil, fmt.Errorf("decode supervisor user stats: users must be a list")
-	}
-	users := make([]xrayapi.UserStats, 0, len(items.GetListValue().GetValues()))
-	for index, item := range items.GetListValue().GetValues() {
-		fields := item.GetStructValue()
-		if fields == nil {
-			return nil, fmt.Errorf("decode supervisor user stats: item %d must be an object", index)
+	response := result.(*supervisorv1.UserStatsResponse)
+	users := make([]xrayapi.UserStats, 0, len(response.Users))
+	for index, item := range response.Users {
+		if item == nil || item.Email == "" || item.UploadBytes < 0 || item.DownloadBytes < 0 {
+			return nil, fmt.Errorf("decode supervisor user stats: item %d has invalid fields", index)
 		}
-		values := fields.GetFields()
-		user := xrayapi.UserStats{}
-		if user.Email, err = responseString(values, "email", true); err != nil {
+		lastSeen, err := protobufTimeToTime("last_seen", item.LastSeen)
+		if err != nil {
 			return nil, err
 		}
-		if user.UploadBytes, err = responseCounter(values, "upload_bytes"); err != nil {
-			return nil, err
-		}
-		if user.DownloadBytes, err = responseCounter(values, "download_bytes"); err != nil {
-			return nil, err
-		}
-		if user.LastSeen, err = responseTime(values, "last_seen"); err != nil {
-			return nil, err
-		}
-		ips := values["source_ips"]
-		if ips == nil || ips.GetListValue() == nil {
-			return nil, fmt.Errorf("decode supervisor user stats: source_ips must be a list")
-		}
-		user.SourceIPs = make([]xrayapi.IPObservation, 0, len(ips.GetListValue().GetValues()))
-		for ipIndex, ip := range ips.GetListValue().GetValues() {
-			ipFields := ip.GetStructValue()
-			if ipFields == nil {
-				return nil, fmt.Errorf("decode supervisor user stats: source IP %d must be an object", ipIndex)
+		user := xrayapi.UserStats{Email: item.Email, UploadBytes: item.UploadBytes, DownloadBytes: item.DownloadBytes, LastSeen: lastSeen}
+		user.SourceIPs = make([]xrayapi.IPObservation, 0, len(item.SourceIps))
+		for ipIndex, address := range item.SourceIps {
+			if address == nil || address.Address == "" {
+				return nil, fmt.Errorf("decode supervisor user stats: source IP %d for user %q is invalid", ipIndex, item.Email)
 			}
-			address, err := responseString(ipFields.GetFields(), "address", true)
+			ipLastSeen, err := protobufTimeToTime("source_ips.last_seen", address.LastSeen)
 			if err != nil {
 				return nil, err
 			}
-			lastSeen, err := responseTime(ipFields.GetFields(), "last_seen")
-			if err != nil {
-				return nil, err
-			}
-			user.SourceIPs = append(user.SourceIPs, xrayapi.IPObservation{Address: address, LastSeen: lastSeen})
+			user.SourceIPs = append(user.SourceIPs, xrayapi.IPObservation{Address: address.Address, LastSeen: ipLastSeen})
 		}
 		users = append(users, user)
 	}
 	return users, nil
 }
 
-func responseCounter(fields map[string]*structpb.Value, key string) (int64, error) {
-	value, err := responseString(fields, key, true)
-	if err != nil {
-		return 0, err
+func xrayProtocolValue(protocol string) (supervisorv1.XrayProtocol, error) {
+	switch protocol {
+	case "vless":
+		return supervisorv1.XrayProtocol_XRAY_PROTOCOL_VLESS, nil
+	case "vmess":
+		return supervisorv1.XrayProtocol_XRAY_PROTOCOL_VMESS, nil
+	case "hysteria2":
+		return supervisorv1.XrayProtocol_XRAY_PROTOCOL_HYSTERIA2, nil
+	default:
+		return supervisorv1.XrayProtocol_XRAY_PROTOCOL_UNSPECIFIED, fmt.Errorf("unsupported Xray protocol %q", protocol)
 	}
-	counter, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || counter < 0 {
-		return 0, fmt.Errorf("decode supervisor response: %s must be a non-negative integer", key)
-	}
-	return counter, nil
-}
-
-func responseTime(fields map[string]*structpb.Value, key string) (time.Time, error) {
-	value, err := responseString(fields, key, false)
-	if err != nil || value == "" {
-		return time.Time{}, err
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("decode supervisor response: %s must be an RFC3339 timestamp", key)
-	}
-	return parsed, nil
 }

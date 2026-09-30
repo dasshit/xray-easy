@@ -15,10 +15,9 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
-	"google.golang.org/protobuf/types/known/structpb"
-
 	"xray-easy/internal/interaction"
 	supervisorapi "xray-easy/internal/supervisor"
+	supervisorv1 "xray-easy/internal/supervisor/api/v1"
 )
 
 func newSupervisorTestClient(t *testing.T, instance *supervisor) *supervisorapi.Client {
@@ -195,66 +194,25 @@ func TestRunSupervisorReportsServeFailure(t *testing.T) {
 }
 
 func TestSupervisorRPCValidationHelpers(t *testing.T) {
-	for _, testcase := range []struct {
-		name     string
-		request  *structpb.Struct
-		field    string
-		required bool
-		wantCode codes.Code
-	}{
-		{name: "nil required request", required: true, wantCode: codes.InvalidArgument},
-		{name: "nil optional request", required: false},
-		{name: "missing required field", request: &structpb.Struct{}, field: "path", required: true, wantCode: codes.InvalidArgument},
-		{name: "missing optional field", request: &structpb.Struct{}, field: "sni", required: false},
-		{name: "wrong required type", request: &structpb.Struct{Fields: map[string]*structpb.Value{"path": structpb.NewNumberValue(4)}}, field: "path", required: true, wantCode: codes.InvalidArgument},
-		{name: "wrong optional type", request: &structpb.Struct{Fields: map[string]*structpb.Value{"sni": structpb.NewBoolValue(true)}}, field: "sni", required: false, wantCode: codes.InvalidArgument},
-		{name: "empty required value", request: &structpb.Struct{Fields: map[string]*structpb.Value{"path": structpb.NewStringValue("")}}, field: "path", required: true, wantCode: codes.InvalidArgument},
-		{name: "empty optional value", request: &structpb.Struct{Fields: map[string]*structpb.Value{"sni": structpb.NewStringValue("")}}, field: "sni", required: false},
-		{name: "valid value", request: &structpb.Struct{Fields: map[string]*structpb.Value{"path": structpb.NewStringValue("candidate")}}, field: "path", required: true},
-	} {
-		t.Run(testcase.name, func(t *testing.T) {
-			value, err := rpcString(testcase.request, testcase.field, testcase.required)
-			if testcase.wantCode != codes.OK {
-				if status.Code(err) != testcase.wantCode {
-					t.Fatalf("rpcString value=%q error=%v", value, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("rpcString valid value: %v", err)
-			}
-		})
+	instance, configDir := newProcessTestSupervisor(t)
+	if _, err := instance.ValidateConfig(context.Background(), nil); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("nil ValidateConfig request status = %v", err)
 	}
-	if _, err := rpcResponse(map[string]any{"invalid": make(chan int)}); err == nil {
-		t.Fatal("unsupported response value encoded successfully")
+	if _, err := instance.ValidateConfig(context.Background(), &supervisorv1.ValidateConfigRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("missing ValidateConfig path status = %v", err)
 	}
-	for _, request := range []*structpb.Struct{
-		{},
-		{Fields: map[string]*structpb.Value{"state_revision": structpb.NewStringValue("0")}},
-		{Fields: map[string]*structpb.Value{"state_revision": structpb.NewStringValue("-1")}},
-		{Fields: map[string]*structpb.Value{"state_revision": structpb.NewStringValue("not-a-number")}},
-	} {
-		if _, err := rpcRevision(request); status.Code(err) != codes.InvalidArgument {
-			t.Errorf("rpcRevision(%v) error = %v, want InvalidArgument", request, err)
+	if _, err := instance.ValidateConfig(context.Background(), &supervisorv1.ValidateConfigRequest{Path: filepath.Join(configDir, "missing.json")}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("invalid ValidateConfig path status = %v", err)
+	}
+	for _, revision := range []int64{0, -1} {
+		if err := rpcRevision(revision); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("rpcRevision(%d) = %v, want InvalidArgument", revision, err)
 		}
 	}
-	if revision, err := rpcRevision(&structpb.Struct{Fields: map[string]*structpb.Value{"state_revision": structpb.NewStringValue("17")}}); err != nil || revision != 17 {
-		t.Fatalf("rpcRevision(valid) = %d, %v", revision, err)
-	}
-	if err := rpcFields(nil, "path"); err != nil {
-		t.Fatalf("nil request fields = %v", err)
-	}
-	if err := rpcFields(&structpb.Struct{Fields: map[string]*structpb.Value{"path": structpb.NewStringValue("candidate")}}, "path"); err != nil {
-		t.Fatalf("allowlisted request field rejected: %v", err)
-	}
-	if err := rpcFields(&structpb.Struct{Fields: map[string]*structpb.Value{"unexpected": structpb.NewStringValue("value")}}, "path"); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("unexpected field status = %v", err)
+	if err := rpcRevision(17); err != nil {
+		t.Fatalf("rpcRevision(valid) = %v", err)
 	}
 	if rpcOperationError(codes.Internal, nil) != nil {
 		t.Fatal("nil operation error became non-nil")
-	}
-	instance, _ := newProcessTestSupervisor(t)
-	if _, err := instance.ValidateConfig(context.Background(), &structpb.Struct{Fields: map[string]*structpb.Value{"extra": structpb.NewStringValue("no")}}); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("unexpected ValidateConfig field status = %v", err)
 	}
 }

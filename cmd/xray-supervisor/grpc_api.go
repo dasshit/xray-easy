@@ -3,165 +3,111 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strconv"
 	"time"
+
+	supervisorv1 "xray-easy/internal/supervisor/api/v1"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
-func (s *supervisor) Health(_ context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
+func (s *supervisor) Health(context.Context, *emptypb.Empty) (*supervisorv1.HealthResponse, error) {
 	s.mu.Lock()
 	state := s.state
 	s.mu.Unlock()
 	if state != "running" && state != "no-config" {
 		return nil, status.Errorf(codes.Unavailable, "supervisor is not ready: %s", state)
 	}
-	return rpcResponse(map[string]any{"ok": true, "state": state, "protocol": protocolVersion})
+	return &supervisorv1.HealthResponse{Ok: true, State: state, Protocol: protocolVersion}, nil
 }
 
-func (s *supervisor) GetStatus(_ context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
+func (s *supervisor) GetStatus(context.Context, *emptypb.Empty) (*supervisorv1.SupervisorStatus, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	pid := 0
+	pid := int32(0)
 	if s.child != nil && s.child.Process != nil {
-		pid = s.child.Process.Pid
+		pid = int32(s.child.Process.Pid)
 	}
-	return rpcResponse(map[string]any{
-		"protocol":      protocolVersion,
-		"xray_version":  s.xrayVersion,
-		"state":         s.state,
-		"pid":           pid,
-		"config_path":   s.configPath,
-		"last_error":    redact(s.lastError),
-		"last_exit":     redact(s.lastExit),
-		"restart_count": s.restartCount,
-		"started_at":    s.startedAt.Format(time.RFC3339Nano),
-	})
+	response := &supervisorv1.SupervisorStatus{
+		Protocol: protocolVersion, XrayVersion: s.xrayVersion, State: s.state, Pid: pid,
+		ConfigPath: s.configPath, LastError: redact(s.lastError), LastExit: redact(s.lastExit),
+		RestartCount: int32(s.restartCount),
+	}
+	if !s.startedAt.IsZero() {
+		response.StartedAt = timestamppb.New(s.startedAt.UTC())
+	}
+	return response, nil
 }
 
-func (s *supervisor) GetLogs(_ context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
-	lines := s.log.all()
-	values := make([]any, len(lines))
-	for index, line := range lines {
-		values[index] = line
-	}
-	return rpcResponse(map[string]any{"protocol": protocolVersion, "lines": values})
+func (s *supervisor) GetLogs(context.Context, *emptypb.Empty) (*supervisorv1.LogsResponse, error) {
+	return &supervisorv1.LogsResponse{Protocol: protocolVersion, Lines: s.log.all()}, nil
 }
 
-func (s *supervisor) ValidateConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "path", "operation_id", "state_revision"); err != nil {
-		return nil, err
+func (s *supervisor) ValidateConfig(ctx context.Context, request *supervisorv1.ValidateConfigRequest) (*supervisorv1.OperationResponse, error) {
+	if request == nil || request.Path == "" {
+		return nil, status.Error(codes.InvalidArgument, "path is required")
 	}
-	path, err := rpcString(request, "path", true)
-	if err != nil {
-		return nil, err
-	}
-	operationID, err := rpcString(request, "operation_id", false)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.validateContext(ctx, path); err != nil {
+	if err := s.validateContext(ctx, request.Path); err != nil {
 		return nil, rpcOperationError(codes.FailedPrecondition, err)
 	}
-	return rpcResponse(map[string]any{"ok": true, "operation_id": operationID, "protocol": protocolVersion})
+	return &supervisorv1.OperationResponse{Ok: true, OperationId: request.OperationId, Protocol: protocolVersion}, nil
 }
 
-func (s *supervisor) ApplyConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "path", "operation_id", "state_revision"); err != nil {
+func (s *supervisor) ApplyConfig(ctx context.Context, request *supervisorv1.ApplyConfigRequest) (*supervisorv1.OperationResponse, error) {
+	if request == nil || request.Path == "" || request.OperationId == "" {
+		return nil, status.Error(codes.InvalidArgument, "path and operation_id are required")
+	}
+	if err := rpcRevision(request.StateRevision); err != nil {
 		return nil, err
 	}
-	path, err := rpcString(request, "path", true)
-	if err != nil {
-		return nil, err
-	}
-	operationID, err := rpcString(request, "operation_id", true)
-	if err != nil {
-		return nil, err
-	}
-	revision, err := rpcRevision(request)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.applyRevisionContext(ctx, path, operationID, revision); err != nil {
+	if err := s.applyRevisionContext(ctx, request.Path, request.OperationId, request.StateRevision); err != nil {
 		return nil, rpcOperationError(codes.FailedPrecondition, err)
 	}
-	return rpcResponse(map[string]any{"ok": true, "operation_id": operationID, "protocol": protocolVersion})
+	return &supervisorv1.OperationResponse{Ok: true, OperationId: request.OperationId, Protocol: protocolVersion}, nil
 }
 
-func (s *supervisor) ReplaceInbound(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "candidate_path", "previous_path", "tag", "operation_id", "state_revision"); err != nil {
+func (s *supervisor) ReplaceInbound(ctx context.Context, request *supervisorv1.ReplaceInboundRequest) (*supervisorv1.OperationResponse, error) {
+	if request == nil || request.CandidatePath == "" || request.PreviousPath == "" || request.Tag == "" || request.OperationId == "" {
+		return nil, status.Error(codes.InvalidArgument, "candidate_path, previous_path, tag, and operation_id are required")
+	}
+	if err := rpcRevision(request.StateRevision); err != nil {
 		return nil, err
 	}
-	candidatePath, err := rpcString(request, "candidate_path", true)
-	if err != nil {
-		return nil, err
-	}
-	previousPath, err := rpcString(request, "previous_path", true)
-	if err != nil {
-		return nil, err
-	}
-	tag, err := rpcString(request, "tag", true)
-	if err != nil {
-		return nil, err
-	}
-	operationID, err := rpcString(request, "operation_id", true)
-	if err != nil {
-		return nil, err
-	}
-	input := replaceInboundRequest{CandidatePath: candidatePath, PreviousPath: previousPath, Tag: tag, OperationID: operationID}
-	revision, err := rpcRevision(request)
-	if err != nil {
-		return nil, err
-	}
-	if err := s.replaceInboundRevisionContext(ctx, input, revision); err != nil {
+	input := replaceInboundRequest{CandidatePath: request.CandidatePath, PreviousPath: request.PreviousPath, Tag: request.Tag, OperationID: request.OperationId}
+	if err := s.replaceInboundRevisionContext(ctx, input, request.StateRevision); err != nil {
 		return nil, rpcOperationError(codes.FailedPrecondition, err)
 	}
-	return rpcResponse(map[string]any{"ok": true, "operation_id": operationID, "protocol": protocolVersion})
+	return &supervisorv1.OperationResponse{Ok: true, OperationId: request.OperationId, Protocol: protocolVersion}, nil
 }
 
-func rpcRevision(request *structpb.Struct) (int64, error) {
-	value, err := rpcString(request, "state_revision", true)
-	if err != nil {
-		return 0, err
+func rpcRevision(revision int64) error {
+	if revision < 1 {
+		return status.Error(codes.InvalidArgument, "state_revision must be a positive integer")
 	}
-	revision, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || revision < 1 {
-		return 0, status.Error(codes.InvalidArgument, "state_revision must be a positive integer")
-	}
-	return revision, nil
+	return nil
 }
 
-func (s *supervisor) ProbeTarget(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "target", "sni"); err != nil {
-		return nil, err
-	}
-	target, err := rpcString(request, "target", true)
-	if err != nil {
-		return nil, err
-	}
-	sni, err := rpcString(request, "sni", false)
-	if err != nil {
-		return nil, err
+func (s *supervisor) ProbeTarget(ctx context.Context, request *supervisorv1.ProbeTargetRequest) (*supervisorv1.ProbeTargetResponse, error) {
+	if request == nil || request.Target == "" {
+		return nil, status.Error(codes.InvalidArgument, "target is required")
 	}
 	probe := s.cfg.probeTargetFn
 	if probe == nil {
 		probe = probeTargetContext
 	}
-	if err := probe(ctx, target, sni); err != nil {
+	if err := probe(ctx, request.Target, request.Sni); err != nil {
 		code := codes.Unavailable
 		if errors.Is(err, errInvalidProbeTarget) {
 			code = codes.InvalidArgument
 		}
 		return nil, rpcOperationError(code, err)
 	}
-	return rpcResponse(map[string]any{"ok": true, "target": target, "protocol": protocolVersion})
+	return &supervisorv1.ProbeTargetResponse{Ok: true, Target: request.Target, Protocol: protocolVersion}, nil
 }
 
-func (s *supervisor) ProbeIPv6(ctx context.Context, _ *emptypb.Empty) (*structpb.Struct, error) {
+func (s *supervisor) ProbeIPv6(ctx context.Context, _ *emptypb.Empty) (*supervisorv1.ProbeIPv6Response, error) {
 	probeContext, cancel := context.WithTimeout(ctx, 4*time.Second)
 	defer cancel()
 	probe := s.ipv6ProbeFn
@@ -171,55 +117,7 @@ func (s *supervisor) ProbeIPv6(ctx context.Context, _ *emptypb.Empty) (*structpb
 	if err := probe(probeContext); err != nil {
 		return nil, rpcOperationError(codes.Unavailable, errors.New("outbound IPv6 TCP probe failed"))
 	}
-	return rpcResponse(map[string]any{"ok": true, "protocol": protocolVersion})
-}
-
-func rpcResponse(fields map[string]any) (*structpb.Struct, error) {
-	response, err := structpb.NewStruct(fields)
-	if err != nil {
-		return nil, fmt.Errorf("encode supervisor response: %w", err)
-	}
-	return response, nil
-}
-
-func rpcString(request *structpb.Struct, field string, required bool) (string, error) {
-	if request == nil {
-		if required {
-			return "", status.Errorf(codes.InvalidArgument, "%s is required", field)
-		}
-		return "", nil
-	}
-	value := request.GetFields()[field]
-	if value == nil {
-		if required {
-			return "", status.Errorf(codes.InvalidArgument, "%s is required", field)
-		}
-		return "", nil
-	}
-	if _, ok := value.GetKind().(*structpb.Value_StringValue); !ok {
-		return "", status.Errorf(codes.InvalidArgument, "%s must be a string", field)
-	}
-	result := value.GetStringValue()
-	if required && result == "" {
-		return "", status.Errorf(codes.InvalidArgument, "%s is required", field)
-	}
-	return result, nil
-}
-
-func rpcFields(request *structpb.Struct, allowed ...string) error {
-	if request == nil {
-		return nil
-	}
-	allowlist := make(map[string]struct{}, len(allowed))
-	for _, field := range allowed {
-		allowlist[field] = struct{}{}
-	}
-	for field := range request.GetFields() {
-		if _, ok := allowlist[field]; !ok {
-			return status.Errorf(codes.InvalidArgument, "unexpected request field %q", field)
-		}
-	}
-	return nil
+	return &supervisorv1.ProbeIPv6Response{Ok: true, Protocol: protocolVersion}, nil
 }
 
 func rpcOperationError(code codes.Code, err error) error {

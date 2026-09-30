@@ -2,23 +2,134 @@ syntax = "proto3";
 
 package xrayeasy.supervisor.v1;
 
-option go_package = "xray-easy/internal/supervisor";
-
 import "google/protobuf/empty.proto";
-import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
 
-// Private Xray process-control API. Struct fields are specified in
-// docs/xray-supervisor-grpc-plan.md and validated by the Go adapter.
+option go_package = "xray-easy/internal/supervisor/api/v1;supervisorv1";
+
+// Private typed process-control API between xray-controller and
+// xray-supervisor. Both containers must be upgraded from the same project
+// revision because request and response wire types are versioned together.
 service Supervisor {
-  rpc Health(google.protobuf.Empty) returns (google.protobuf.Struct);
-  rpc GetStatus(google.protobuf.Empty) returns (google.protobuf.Struct);
-  rpc GetLogs(google.protobuf.Empty) returns (google.protobuf.Struct);
-  rpc ValidateConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ApplyConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ReplaceInbound(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ProbeTarget(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ProbeIPv6(google.protobuf.Empty) returns (google.protobuf.Struct);
-  rpc AlterUser(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ListUsers(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc GetUserStats(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc Health(google.protobuf.Empty) returns (HealthResponse);
+  rpc GetStatus(google.protobuf.Empty) returns (SupervisorStatus);
+  rpc GetLogs(google.protobuf.Empty) returns (LogsResponse);
+  rpc ValidateConfig(ValidateConfigRequest) returns (OperationResponse);
+  rpc ApplyConfig(ApplyConfigRequest) returns (OperationResponse);
+  rpc ReplaceInbound(ReplaceInboundRequest) returns (OperationResponse);
+  rpc ProbeTarget(ProbeTargetRequest) returns (ProbeTargetResponse);
+  rpc ProbeIPv6(google.protobuf.Empty) returns (ProbeIPv6Response);
+  rpc AlterUser(AlterUserRequest) returns (OperationResponse);
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc GetUserStats(google.protobuf.Empty) returns (UserStatsResponse);
+}
+
+message HealthResponse {
+  bool ok = 1;
+  string state = 2;
+  string protocol = 3;
+}
+
+message SupervisorStatus {
+  string protocol = 1;
+  string xray_version = 2;
+  string state = 3;
+  int32 pid = 4;
+  string config_path = 5;
+  string last_error = 6;
+  string last_exit = 7;
+  int32 restart_count = 8;
+  google.protobuf.Timestamp started_at = 9;
+}
+
+message LogsResponse {
+  string protocol = 1;
+  repeated string lines = 2;
+}
+
+message ValidateConfigRequest {
+  string path = 1;
+  string operation_id = 2;
+  int64 state_revision = 3;
+}
+
+message ApplyConfigRequest {
+  string path = 1;
+  string operation_id = 2;
+  int64 state_revision = 3;
+}
+
+message ReplaceInboundRequest {
+  string candidate_path = 1;
+  string previous_path = 2;
+  string tag = 3;
+  string operation_id = 4;
+  int64 state_revision = 5;
+}
+
+message ProbeTargetRequest {
+  string target = 1;
+  string sni = 2;
+}
+
+message ProbeTargetResponse {
+  bool ok = 1;
+  string target = 2;
+  string protocol = 3;
+}
+
+message ProbeIPv6Response {
+  bool ok = 1;
+  string protocol = 2;
+}
+
+enum XrayProtocol {
+  XRAY_PROTOCOL_UNSPECIFIED = 0;
+  XRAY_PROTOCOL_VLESS = 1;
+  XRAY_PROTOCOL_VMESS = 2;
+  XRAY_PROTOCOL_HYSTERIA2 = 3;
+}
+
+enum XrayUserAction {
+  XRAY_USER_ACTION_UNSPECIFIED = 0;
+  XRAY_USER_ACTION_ADD = 1;
+  XRAY_USER_ACTION_REMOVE = 2;
+}
+
+message OperationResponse {
+  bool ok = 1;
+  string operation_id = 2;
+  string protocol = 3;
+}
+
+message AlterUserRequest {
+  XrayUserAction action = 1;
+  XrayProtocol protocol = 2;
+  string email = 3;
+  string id = 4;
+  string flow = 5;
+}
+
+message ListUsersRequest {
+  XrayProtocol protocol = 1;
+}
+message ListUsersResponse {
+  repeated string users = 1;
+}
+
+message SourceIPObservation {
+  string address = 1;
+  google.protobuf.Timestamp last_seen = 2;
+}
+
+message XrayUserStats {
+  string email = 1;
+  int64 upload_bytes = 2;
+  int64 download_bytes = 3;
+  google.protobuf.Timestamp last_seen = 4;
+  repeated SourceIPObservation source_ips = 5;
+}
+
+message UserStatsResponse {
+  repeated XrayUserStats users = 1;
 }

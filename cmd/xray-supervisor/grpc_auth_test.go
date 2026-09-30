@@ -16,9 +16,9 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
 
 	supervisorapi "xray-easy/internal/supervisor"
+	supervisorv1 "xray-easy/internal/supervisor/api/v1"
 )
 
 func signedSupervisorRequest(t *testing.T, request proto.Message, method, operation, nonce, token string) string {
@@ -36,7 +36,7 @@ func signedSupervisorRequest(t *testing.T, request proto.Message, method, operat
 
 func TestSupervisorRPCAuthenticationVerifiesSignatureReplayAndExpiry(t *testing.T) {
 	instance, _ := newProcessTestSupervisor(t)
-	request, _ := structpb.NewStruct(map[string]any{"path": "/etc/xray/candidate.json"})
+	request := &supervisorv1.ValidateConfigRequest{Path: "/etc/xray/candidate.json"}
 	method := "/" + supervisorapi.RPCServiceName + "/ValidateConfig"
 	nonce := "0123456789abcdef0123456789abcdef"
 	signature := signedSupervisorRequest(t, request, method, "control-plane", nonce, "test-token")
@@ -60,7 +60,7 @@ func TestSupervisorRPCAuthenticationVerifiesSignatureReplayAndExpiry(t *testing.
 
 func TestSupervisorRPCAuthenticationRejectsInvalidMetadataAndCredentials(t *testing.T) {
 	instance, _ := newProcessTestSupervisor(t)
-	request, _ := structpb.NewStruct(map[string]any{"path": "candidate"})
+	request := &supervisorv1.ValidateConfigRequest{Path: "candidate"}
 	method := "/" + supervisorapi.RPCServiceName + "/ValidateConfig"
 	validNonce := "0123456789abcdef0123456789abcdef"
 	validSignature := signedSupervisorRequest(t, request, method, "control-plane", validNonce, "test-token")
@@ -124,7 +124,7 @@ func TestSupervisorRPCMetadataAndUnaryInterceptor(t *testing.T) {
 	}
 
 	instance, _ := newProcessTestSupervisor(t)
-	request, _ := structpb.NewStruct(map[string]any{"path": "candidate"})
+	request := &supervisorv1.ValidateConfigRequest{Path: "candidate"}
 	method := "/" + supervisorapi.RPCServiceName + "/ValidateConfig"
 	nonce = "cccccccccccccccccccccccccccccccc"
 	signature = signedSupervisorRequest(t, request, method, "control-plane", nonce, "test-token")
@@ -157,7 +157,7 @@ func TestSupervisorRPCMetadataAndUnaryInterceptor(t *testing.T) {
 }
 
 func TestAllowedSupervisorMethods(t *testing.T) {
-	for _, method := range []string{"Health", "GetStatus", "GetLogs", "ValidateConfig", "ApplyConfig", "ReplaceInbound", "ProbeTarget", "ProbeIPv6"} {
+	for _, method := range []string{"Health", "GetStatus", "GetLogs", "ValidateConfig", "ApplyConfig", "ReplaceInbound", "ProbeTarget", "ProbeIPv6", "AlterUser", "ListUsers", "GetUserStats"} {
 		full := "/" + supervisorapi.RPCServiceName + "/" + method
 		if !allowedSupervisorMethod(full, "control-plane") {
 			t.Errorf("control-plane not allowed for %s", method)
