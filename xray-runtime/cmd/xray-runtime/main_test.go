@@ -29,6 +29,27 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 	}
 }
 
+func TestValidateCandidateCommand(t *testing.T) {
+	validPath := filepath.Join(t.TempDir(), "candidate.json")
+	valid := `{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`
+	if err := os.WriteFile(validPath, []byte(valid), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"validate-candidate", validPath}); err != nil {
+		t.Fatalf("validate valid candidate: %v", err)
+	}
+	if err := run([]string{"validate-candidate", filepath.Join(t.TempDir(), "missing")}); err == nil {
+		t.Fatal("missing candidate was accepted")
+	}
+	invalidPath := filepath.Join(t.TempDir(), "invalid.json")
+	if err := os.WriteFile(invalidPath, []byte(`{"inbounds":[`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := run([]string{"validate-candidate", invalidPath}); err == nil {
+		t.Fatal("invalid candidate was accepted")
+	}
+}
+
 func TestReadTokenValidatesPathAndLength(t *testing.T) {
 	if _, err := readToken(" "); err == nil {
 		t.Fatal("empty token path was accepted")
@@ -148,14 +169,14 @@ func TestHealthcheckAuthenticatesUsingSeparateIdentity(t *testing.T) {
 }
 
 func TestServeReportsTokenAndConfigReadErrors(t *testing.T) {
-	if err := serve("127.0.0.1:0", "", filepath.Join(t.TempDir(), "no-token")); err == nil || !strings.Contains(err.Error(), "authentication token") {
+	if err := serve("127.0.0.1:0", "", filepath.Join(t.TempDir(), "no-token"), ""); err == nil || !strings.Contains(err.Error(), "authentication token") {
 		t.Fatalf("missing token error = %v", err)
 	}
 	tokenPath := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenPath, []byte(strings.Repeat("a", 32)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := serve("127.0.0.1:0", t.TempDir(), tokenPath); err == nil || !strings.Contains(err.Error(), "active Xray configuration") {
+	if err := serve("127.0.0.1:0", t.TempDir(), tokenPath, ""); err == nil || !strings.Contains(err.Error(), "active Xray configuration") {
 		t.Fatalf("config read error = %v", err)
 	}
 }

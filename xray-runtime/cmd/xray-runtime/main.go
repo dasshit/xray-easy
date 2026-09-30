@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
@@ -28,6 +29,7 @@ const (
 	defaultListen    = "0.0.0.0:10086"
 	defaultTokenFile = "/run/secrets/xray_runtime_token"
 	defaultConfig    = "/etc/xray/active.json"
+	defaultRevision  = "/etc/xray/revision-state.json"
 )
 
 var newHealthConnection = func(address string) (*grpc.ClientConn, error) {
@@ -46,6 +48,16 @@ func main() {
 }
 
 func run(args []string) error {
+	if len(args) >= 1 && args[0] == "validate-candidate" {
+		if len(args) > 2 {
+			return errors.New("usage: xray-runtime validate-candidate [snapshot-path]")
+		}
+		path := ""
+		if len(args) == 2 {
+			path = args[1]
+		}
+		return validateCandidate(path)
+	}
 	if len(args) == 1 && args[0] == "healthcheck" {
 		return healthcheck(envOr("XRAY_RUNTIME_ADDR", "127.0.0.1:10086"), envOr("XRAY_RUNTIME_TOKEN_FILE", defaultTokenFile))
 	}
@@ -53,16 +65,17 @@ func run(args []string) error {
 	listen := flags.String("listen", envOr("XRAY_RUNTIME_LISTEN", defaultListen), "private gRPC listen address")
 	configPath := flags.String("config", envOr("XRAY_CONFIG_PATH", defaultConfig), "active Xray configuration path")
 	tokenPath := flags.String("token-file", envOr("XRAY_RUNTIME_TOKEN_FILE", defaultTokenFile), "service authentication token path")
+	revisionPath := flags.String("revision-file", envOr("XRAY_RUNTIME_REVISION_FILE", defaultRevision), "durable operation revision state path")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
-		return errors.New("usage: xray-runtime [--listen address] [--config path] [--token-file path] | healthcheck")
+		return errors.New("usage: xray-runtime [--listen address] [--config path] [--token-file path] [--revision-file path] | healthcheck")
 	}
-	return serve(*listen, *configPath, *tokenPath)
+	return serve(*listen, *configPath, *tokenPath, *revisionPath)
 }
 
-func serve(listenAddress, configPath, tokenPath string) error {
+func serve(listenAddress, configPath, tokenPath, revisionPath string) error {
 	token, err := readToken(tokenPath)
 	if err != nil {
 		return fmt.Errorf("load runtime authentication token: %w", err)
@@ -71,7 +84,7 @@ func serve(listenAddress, configPath, tokenPath string) error {
 	if err != nil {
 		return fmt.Errorf("load active Xray configuration: %w", err)
 	}
-	service, err := runtime.NewService(nil, runtimeVersion, configuration, 0)
+	service, err := runtime.NewService(nil, runtimeVersion, configuration, 0, revisionPath)
 	if err != nil {
 		return err
 	}
@@ -110,7 +123,31 @@ func serve(listenAddress, configPath, tokenPath string) error {
 			return fmt.Errorf("serve Xray runtime gRPC: %w", err)
 		}
 		return nil
+	case <-service.Fatal():
+		server.Stop()
+		return errors.New("Xray runtime failed and must restart from the active configuration")
 	}
+}
+
+func validateCandidate(path string) error {
+	var configuration []byte
+	var err error
+	if strings.TrimSpace(path) == "" {
+		configuration, err = io.ReadAll(io.LimitReader(os.Stdin, (16<<20)+1))
+	} else {
+		configuration, err = os.ReadFile(path)
+	}
+	if err != nil || len(configuration) == 0 || len(configuration) > 16<<20 {
+		return errors.New("read candidate configuration")
+	}
+	engine, err := runtime.LoadEngine(configuration)
+	if err != nil {
+		return errors.New("candidate Xray configuration could not construct a runtime")
+	}
+	if err := engine.Close(); err != nil {
+		return errors.New("candidate Xray runtime failed validation shutdown")
+	}
+	return nil
 }
 
 func runtimeLoggingInterceptor(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {

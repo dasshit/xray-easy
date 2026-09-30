@@ -303,6 +303,56 @@ Controller и runtime adapters — в
 rollback, stale revision, replay/conflict, отмену deadline, restart service и
 все ранее поддерживаемые live user/inbound операции.
 
+**Результат этапа 4 от 2026-09-30:**
+
+- Добавлен versioned durable revision journal runtime service по умолчанию в
+  `/etc/xray/revision-state.json`. Он сохраняет revision, operation ID,
+  mutation key и SHA-256 fingerprint, но не записывает snapshot, credential,
+  email пользователя или другие секреты. Запись выполняется атомарно через
+  временный файл, `fsync` и rename с правами `0600`.
+- На рестарте committed операции переводятся в pending для повторного
+  согласования с восстановленным `active.json`. Apply сравнивает snapshot с
+  активным содержимым; add/remove проверяют фактический user manager; inbound
+  replacement сравнивает настройки текущего handler. Поэтому повтор операции
+  после сбоя не должен повторно менять уже согласованное состояние.
+- Полная проверка конфигурации сначала запускает upstream config builder, затем
+  передаёт candidate по stdin отдельному `xray-runtime validate-candidate`
+  subprocess. В subprocess выполняется `core.New` без `Start`; его stdout/stderr
+  отбрасываются, а parent учитывает gRPC cancellation/deadline. Candidate не
+  сохраняется во временный файл и не меняет глобальные настройки активного
+  процесса.
+- Реализованы ApplyConfiguration с последовательной заменой единственного
+  `core.Instance`, targeted `ReplaceInbound` через `inbound.Manager` и
+  `core.AddInboundHandler`, а также Add/Remove/List users через публичные
+  `proxy.UserManager` интерфейсы. Замена inbound восстанавливает прежние
+  settings при неудачном добавлении; если восстановление невозможно, runtime
+  сообщает entrypoint о необходимости завершить процесс. После неудачного
+  полного apply runtime также завершается, чтобы Docker заново поднял прежний
+  durable `active.json`.
+- При restart committed операции становятся pending, потому что backend мог
+  ещё не продвинуть active snapshot. Операции сделаны идемпотентными по
+  фактическому состоянию Xray: одинаковый существующий account не добавляется
+  повторно, отсутствующий пользователь считается уже отозванным, совпавший
+  inbound и snapshot не перезапускаются повторно. При компенсации используется
+  та же семантика `operation_id + "-rollback"` и revision fence старого
+  supervisor.
+- Для протоколов runtime выбирает единственный настроенный inbound по enum:
+  VLESS, VMess или Hysteria 2. Неоднозначные конфиги с двумя inbound одного
+  протокола отклоняются. UUID для VLESS/VMess проверяются в canonical форме,
+  поддерживаемый flow ограничен пустым значением или XTLS Vision для VLESS.
+  Capabilities теперь сообщают user management как доступный; telemetry и
+  probes остаются этапом 5.
+- Добавлены unit-тесты для revision persistence/replay/conflict/rollback,
+  apply и process restart semantics, input validation, deadline cancellation,
+  user operations и fatal recovery. Локальный integration test запускает
+  настоящий embedded Xray на временном loopback TCP-порту, проверяет live
+  add/remove VLESS пользователя, смену inbound listener и повторные операции.
+- Проверки прошли: runtime `go test ./internal/runtime ./cmd/xray-runtime`,
+  runtime `go vet`, корневые `go test ./...` и `go vet ./...`; отдельно собран
+  исполняемый runtime и проверен CLI preflight на валидном и malformed JSON.
+  Production Compose и старый supervisor path не менялись. Проверка реального
+  старта контейнера на VDS остаётся за пользователем после этапов 5–7 и push.
+
 ### Этап 5. Реализовать status и telemetry через core interfaces
 
 - Читать VLESS/VMess/Hysteria cumulative counters через stats feature и
