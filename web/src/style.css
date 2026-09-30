@@ -95,6 +95,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .header-actions { display: flex; align-items: center; gap: 18px; white-space: nowrap; }
 .eyebrow { margin-bottom: 5px; color: var(--muted); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .tabs { display: flex; gap: 4px; padding: 0 30px; border-bottom: 1px solid var(--border); overflow-x: auto; }
+.tabs.diagnostics-tabs { margin: 0 0 22px; padding: 0; }
 .tabs button { position: relative; border-radius: 0; padding: 13px 14px; background: transparent; color: var(--muted); white-space: nowrap; }
 .tabs button:hover:not(:disabled) { background: var(--surface-muted); color: var(--primary); }
 .tabs button.active { color: var(--primary); font-weight: 700; }
@@ -138,8 +139,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .settings-fields-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 .settings-fields-grid > label { align-self: start; }
 .settings-card, .security-card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
-.diagnostics-awg-card { margin-top: 14px; }
-.diagnostics-awg-card .card-heading { flex-wrap: wrap; }
+.diagnostics-awg-help { margin: 0 0 10px; }
 .diagnostics-awg-connections { margin-top: 18px; }
 .diagnostics-awg-connections h4 { margin: 0; }
 .diagnostics-awg-connections .diagnostics-list { margin-top: 10px; }
@@ -181,11 +181,8 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .diagnostics-list li { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .diagnostics-list small { color: var(--muted); font: 11px ui-monospace, monospace; }
 .diagnostics-subsection { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
-.diagnostics-subsection-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
-.diagnostics-subsection-heading h3 { margin: 0; }
-.diagnostics-subsection-heading p { margin: 0; text-align: right; }
+.diagnostics-xray-version { margin: 0 0 16px; }
 .diagnostics-subsection .diagnostics-feed { margin-top: 20px; }
-.diagnostics-amneziawg .diagnostics-awg-card { margin-top: 0; }
 .diagnostics-control-plane .diagnostics-list { margin-top: 0; }
 .diagnostics-overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 14px; align-items: stretch; }
 .diagnostic-status-card { display: flex; align-items: center; gap: 12px; padding: 17px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-muted); }
@@ -272,8 +269,6 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .device-actions { width: 100%; flex-wrap: wrap; gap: 12px 18px; }
   .header-actions { gap: 12px; }
   .settings-grid, .settings-fields-grid, .security-grid, .diagnostics-overview { grid-template-columns: 1fr; }
-  .diagnostics-subsection-heading { align-items: flex-start; flex-direction: column; }
-  .diagnostics-subsection-heading p { text-align: left; }
   .hysteria-file-grid { grid-template-columns: 1fr; gap: 0; }
   .vmess-settings-list > div { grid-template-columns: 1fr; gap: 4px; }
   .totp-setup-grid { grid-template-columns: 1fr; }

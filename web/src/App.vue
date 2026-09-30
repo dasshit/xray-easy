@@ -29,6 +29,7 @@ const { language, t, toggleLanguage } = useI18n()
 const api = requireGateway(inject(xrayEasyGatewayKey))
 const theme = ref<Theme>(readTheme())
 const activeSection = ref<Section>('profiles')
+const activeDiagnosticsSection = ref<'xray' | 'amneziawg' | 'control-plane'>('xray')
 const createModalOpen = ref(false)
 const hysteriaStatus = ref<HysteriaSettings | null>(null)
 const amneziaWGStatus = ref<AmneziaWGStatus | null>(null)
@@ -655,8 +656,13 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       </section>
       <section v-if="activeSection === 'diagnostics'" class="section-panel">
         <div class="section-heading"><h2>{{ t().diagnostics }}</h2><button class="secondary" :disabled="busy" @click="refreshDiagnostics">{{ t().refreshDiagnostics }}</button></div>
-        <section class="diagnostics-subsection diagnostics-xray" data-testid="xray-diagnostics">
-          <div class="diagnostics-subsection-heading"><h3>{{ t().xrayDiagnostics }}</h3><p class="muted">{{ t().configuredXrayVersion }}: {{ nodeStatus?.configuredXrayVersion || '—' }} · {{ t().runtimeXrayVersion }}: {{ nodeStatus?.xrayVersion || '—' }} · {{ t().restarts }}: {{ nodeStatus?.restartCount || 0 }}</p></div>
+        <nav class="tabs diagnostics-tabs" role="tablist" :aria-label="t().diagnosticsComponents">
+          <button data-testid="diagnostics-tab-xray" role="tab" :aria-selected="activeDiagnosticsSection === 'xray'" :class="{ active: activeDiagnosticsSection === 'xray' }" aria-controls="diagnostics-panel-xray" @click="activeDiagnosticsSection = 'xray'">{{ t().xrayDiagnostics }}</button>
+          <button data-testid="diagnostics-tab-awg" role="tab" :aria-selected="activeDiagnosticsSection === 'amneziawg'" :class="{ active: activeDiagnosticsSection === 'amneziawg' }" aria-controls="diagnostics-panel-awg" @click="activeDiagnosticsSection = 'amneziawg'">{{ t().amneziawg }}</button>
+          <button data-testid="diagnostics-tab-control-plane" role="tab" :aria-selected="activeDiagnosticsSection === 'control-plane'" :class="{ active: activeDiagnosticsSection === 'control-plane' }" aria-controls="diagnostics-panel-control-plane" @click="activeDiagnosticsSection = 'control-plane'">{{ t().controlPlaneDiagnostics }}</button>
+        </nav>
+        <section v-show="activeDiagnosticsSection === 'xray'" id="diagnostics-panel-xray" class="diagnostics-subsection diagnostics-xray" data-testid="xray-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-xray">
+          <p class="muted diagnostics-xray-version">{{ t().configuredXrayVersion }}: {{ nodeStatus?.configuredXrayVersion || '—' }} · {{ t().runtimeXrayVersion }}: {{ nodeStatus?.xrayVersion || '—' }}</p>
           <p v-if="nodeStatus?.state === 'running' && nodeStatus.xrayVersion && nodeStatus.xrayVersionVerified === false" class="diagnostic-version-warning" role="status">{{ t().xrayVersionUnverified }}</p>
           <div class="diagnostics-overview">
             <article class="diagnostic-status-card" :class="`diagnostic-${statusTone(nodeStatus?.state)}`"><span class="status-icon" aria-hidden="true">{{ nodeStatus?.state === 'running' ? '✓' : '!' }}</span><div><span class="stat-label">{{ t().xrayState }}</span><strong>{{ statusLabel(nodeStatus?.state) }}</strong></div></article>
@@ -665,9 +671,9 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
           <div v-if="nodeStatus?.lastError || nodeStatus?.statsLastError" class="diagnostic-alerts"><p v-if="nodeStatus?.lastError" class="error">{{ nodeStatus.lastError }}</p><p v-if="nodeStatus?.statsLastError" class="error">{{ nodeStatus.statsLastError }}</p></div>
           <div class="diagnostics-feed"><div class="feed-heading"><h4>{{ t().xrayEvents }}</h4><span class="muted">{{ xrayDiagnostics.length }}</span></div><ul v-if="xrayDiagnostics.length" class="diagnostics-list"><li v-for="entry in xrayDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul><p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p></div>
         </section>
-        <section class="diagnostics-subsection diagnostics-amneziawg" data-testid="awg-diagnostics">
-          <div class="diagnostics-subsection-heading"><h3>{{ t().amneziawg }}</h3><p class="muted">{{ t().awgDiagnosticsHelp }}</p></div>
+        <section v-show="activeDiagnosticsSection === 'amneziawg'" id="diagnostics-panel-awg" class="diagnostics-subsection diagnostics-amneziawg" data-testid="awg-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-awg">
           <article class="settings-card diagnostics-awg-card">
+            <p class="hint diagnostics-awg-help">{{ t().awgDiagnosticsHelp }}</p>
             <p class="status-badge" :class="amneziaWGDiagnosticTone">{{ amneziaWGDiagnosticLabel }}</p>
             <dl v-if="amneziaWGStatus?.available" class="vmess-settings-list">
               <div><dt>{{ t().awgListener }}</dt><dd>{{ amneziaWGStatus.publicHost || '—' }}:{{ amneziaWGStatus.publicPort || '—' }}/UDP</dd></div>
@@ -689,9 +695,9 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
             </div>
           </article>
         </section>
-        <section v-if="appDiagnostics.length" class="diagnostics-subsection diagnostics-control-plane" data-testid="control-plane-diagnostics">
-          <div class="diagnostics-subsection-heading"><h3>{{ t().controlPlaneDiagnostics }}</h3><p class="muted">{{ appDiagnostics.length }}</p></div>
-          <ul class="diagnostics-list"><li v-for="entry in appDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul>
+        <section v-show="activeDiagnosticsSection === 'control-plane'" id="diagnostics-panel-control-plane" class="diagnostics-subsection diagnostics-control-plane" data-testid="control-plane-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-control-plane">
+          <ul v-if="appDiagnostics.length" class="diagnostics-list"><li v-for="entry in appDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul>
+          <p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p>
         </section>
       </section>
       <section v-if="activeSection === 'security'" class="section-panel security-panel">

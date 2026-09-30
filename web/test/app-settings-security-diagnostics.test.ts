@@ -354,6 +354,9 @@ describe('diagnostics', () => {
       return defaultHandler({ authenticated: true, clients: [awgClient] })(request)
     })
     await openTab(wrapper, 'Diagnostics')
+    expect(wrapper.get('[data-testid="diagnostics-tab-xray"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('[data-testid="awg-diagnostics"]').isVisible()).toBe(false)
+    await wrapper.get('[data-testid="diagnostics-tab-awg"]').trigger('click')
 
     const section = wrapper.get('[data-testid="awg-diagnostics"]')
     expect(section.text()).toContain('Running')
@@ -374,6 +377,7 @@ describe('diagnostics', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Diagnostics')
+    await wrapper.get('[data-testid="diagnostics-tab-awg"]').trigger('click')
 
     const section = wrapper.get('[data-testid="awg-diagnostics"]')
     expect(section.get('.status-badge').text()).toBe('Unavailable')
@@ -394,15 +398,15 @@ describe('diagnostics', () => {
     })
     await openTab(wrapper, 'Diagnostics')
     const xraySection = wrapper.get('[data-testid="xray-diagnostics"]')
-    const controlPlaneSection = wrapper.get('[data-testid="control-plane-diagnostics"]')
-    expect(xraySection.get('h3').text()).toBe('Xray')
-    expect(controlPlaneSection.get('h3').text()).toBe('Control plane events')
+    expect(wrapper.get('[data-testid="diagnostics-tab-xray"]').text()).toBe('Xray')
     expect(xraySection.get('.diagnostic-summary').text()).toContain('2 warnings')
     expect(xraySection.get('.diagnostic-summary').text()).toContain('0 errors')
     expect(xraySection.findAll('.diagnostic-event').map(event => event.text())).toEqual([
       expect.stringContaining('early warning'),
       expect.stringContaining('late warning'),
     ])
+    await wrapper.get('[data-testid="diagnostics-tab-control-plane"]').trigger('click')
+    const controlPlaneSection = wrapper.get('[data-testid="control-plane-diagnostics"]')
     expect(controlPlaneSection.findAll('.diagnostic-event').map(event => event.text())).toEqual([
       expect.stringContaining('middle error'),
     ])
