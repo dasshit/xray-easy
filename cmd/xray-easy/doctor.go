@@ -81,10 +81,14 @@ func runDoctorCLI(ctx context.Context, args []string, dataDir, configDir string,
 	defer handler.Close()
 	stats := xrayapi.NewStatsClient(envOr("XRAY_API_LISTEN", "127.0.0.1:10085"))
 	defer stats.Close()
-	sup := supervisor.Client{
-		BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
-		TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
+	sup, err := supervisor.Dial(
+		envOr("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086"),
+		envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
+	)
+	if err != nil {
+		return fmt.Errorf("initialize Xray supervisor gRPC client: %w", err)
 	}
+	defer sup.Close()
 	var awg doctorAWG
 	var awgErr error
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {

@@ -113,7 +113,7 @@ func TestDoctorBundleReportsOutputAndFilesystemFailures(t *testing.T) {
 func TestDoctorCLIDispatchesChecksAndRequestedBundle(t *testing.T) {
 	dataDir := t.TempDir()
 	configDir := t.TempDir()
-	t.Setenv("XRAY_SUPERVISOR_URL", "not-a-supervisor-url")
+	t.Setenv("XRAY_SUPERVISOR_ADDR", "127.0.0.1:1")
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
 	t.Setenv("XRAY_EASY_MASTER_KEY", "")
 	for _, args := range [][]string{nil, {"bundle"}} {

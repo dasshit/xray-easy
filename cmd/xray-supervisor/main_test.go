@@ -1,9 +1,8 @@
 package main
 
 import (
+	"context"
 	"errors"
-	"fmt"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -214,6 +213,16 @@ func TestSafePathResolvesSymlinksBeforeCheckingBoundary(t *testing.T) {
 	if _, err := s.safePath(link); err == nil || !strings.Contains(err.Error(), "inside config directory") {
 		t.Fatalf("symlink escape accepted: %v", err)
 	}
+	if _, err := s.safePath(""); err == nil || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("empty config path error = %v", err)
+	}
+	if _, err := s.safePath(filepath.Join(configDir, "missing.json")); err == nil || !strings.Contains(err.Error(), "resolve config path") {
+		t.Fatalf("missing config path error = %v", err)
+	}
+	s.cfg.configDir = filepath.Join(t.TempDir(), "missing-config-dir")
+	if _, err := s.safePath(inside); err == nil || !strings.Contains(err.Error(), "resolve config dir") {
+		t.Fatalf("missing config directory error = %v", err)
+	}
 }
 
 func TestInboundOnlyFileKeepsXrayAPIConfigEnvelope(t *testing.T) {
@@ -279,6 +288,39 @@ func TestApplyPreservesCurrentProcessOnValidationFailureAndRollsBackStartupFailu
 	waitForSupervisorState(t, s, "stopped")
 }
 
+func TestApplyContextCancellationKeepsPreviousRuntime(t *testing.T) {
+	s, configDir := newProcessTestSupervisor(t)
+	active := writeTestConfig(t, configDir, "active.json", "valid-active")
+	if err := s.startInitial(); err != nil {
+		t.Fatal(err)
+	}
+	waitForSupervisorState(t, s, "running")
+	candidate := writeTestConfig(t, configDir, "candidates/cancelled.json", "valid-candidate")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	err := s.applyContext(ctx, candidate)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled apply error = %v", err)
+	}
+	state := snapshotProcess(s)
+	if state.state != "running" || state.configPath != canonicalTestPath(t, active) {
+		t.Fatalf("canceled apply changed active config: %+v", state)
+	}
+
+	deadlineContext, cancelDeadline := context.WithTimeout(context.Background(), 120*time.Millisecond)
+	defer cancelDeadline()
+	err = s.applyContext(deadlineContext, candidate)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline apply error = %v", err)
+	}
+	waitForSupervisorState(t, s, "running")
+	state = snapshotProcess(s)
+	if state.configPath != canonicalTestPath(t, active) {
+		t.Fatalf("deadline rollback restored %q, want %q", state.configPath, active)
+	}
+	s.stopChild()
+}
+
 func TestRollbackDegradesWhenNoPreviousConfigOrRestartFails(t *testing.T) {
 	s, configDir := newProcessTestSupervisor(t)
 	s.rollback(filepath.Join(configDir, "missing-active.json"), errors.New("candidate failed"))
@@ -295,18 +337,9 @@ func TestRollbackDegradesWhenNoPreviousConfigOrRestartFails(t *testing.T) {
 	}
 }
 
-func TestRedactAndWriteJSON(t *testing.T) {
+func TestRedact(t *testing.T) {
 	if got := redact(`password="secret"`); strings.Contains(got, "secret") || !strings.Contains(got, "[REDACTED]") {
 		t.Fatalf("redact() = %q", got)
-	}
-	response := httptest.NewRecorder()
-	writeJSON(response, 202, map[string]string{"ok": "yes"})
-	if response.Code != 202 || response.Header().Get("Content-Type") != "application/json" || !strings.Contains(response.Body.String(), `"ok":"yes"`) {
-		t.Fatalf("writeJSON response = %d %q %q", response.Code, response.Header(), response.Body.String())
-	}
-	writeError(response, 400, fmt.Errorf(`invalid password="secret"`))
-	if strings.Contains(response.Body.String(), "secret") || !strings.Contains(response.Body.String(), "[REDACTED]") {
-		t.Fatalf("writeError leaked secret: %q", response.Body.String())
 	}
 }
 

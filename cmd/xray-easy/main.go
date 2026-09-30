@@ -338,6 +338,17 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 	if awgClient != nil {
 		awgGateway = awgClient
 	}
+	supervisorClient, err := supervisor.Dial(
+		envOr("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086"),
+		envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
+	)
+	if err != nil {
+		if awgClient != nil {
+			_ = awgClient.Close()
+		}
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("initialize Xray supervisor gRPC client: %w", err)
+	}
 	s := &server{
 		store:            db,
 		masterKey:        masterKey,
@@ -347,10 +358,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		dataDir:          dataDir,
 		maintenancePath:  filepath.Join(dataDir, "maintenance.lock"),
 		defaultAPIListen: apiListen,
-		supervisor: supervisor.Client{
-			BaseURL:   envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"),
-			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
-		},
+		supervisor:       supervisorClient,
 		handler:          handlerClient,
 		awg:              awgGateway,
 		pendingSettings:  make(map[string]pendingSettingsChange),
@@ -367,6 +375,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 	cleanup := func() {
 		_ = statsClient.Close()
 		_ = handlerClient.Close()
+		_ = supervisorClient.Close()
 		if awgClient != nil {
 			_ = awgClient.Close()
 		}
@@ -707,7 +716,11 @@ func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
 }
 
 func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int) error {
-	sup := supervisor.Client{BaseURL: envOr("XRAY_SUPERVISOR_URL", "http://127.0.0.1:10086"), TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token")}
+	sup, err := supervisor.Dial(envOr("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086"), envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"))
+	if err != nil {
+		return fmt.Errorf("initialize Xray supervisor gRPC client: %w", err)
+	}
+	defer sup.Close()
 	return applyRestoredStateWithSupervisor(ctx, db, masterKey, configDir, publicPort, sup)
 }
 

@@ -9,42 +9,38 @@ package main
 import (
 	"bufio"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"crypto/subtle"
-	"crypto/tls"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net"
-	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"xray-easy/internal/diagnostics"
+	supervisorapi "xray-easy/internal/supervisor"
 )
 
 const protocolVersion = "v1"
 
 type config struct {
-	configDir  string
-	xrayBinary string
-	xrayAPI    string
-	tokenFile  string
-	listen     string
-	grace      time.Duration
-	logSize    int
+	configDir     string
+	xrayBinary    string
+	xrayAPI       string
+	tokenFile     string
+	listen        string
+	grace         time.Duration
+	logSize       int
+	listenFunc    func(string, string) (net.Listener, error)
+	probeTargetFn func(context.Context, string, string) error
 }
 
 type logBuffer struct {
@@ -94,6 +90,7 @@ type supervisor struct {
 	startedAt    time.Time
 	usedNoncesMu sync.Mutex
 	usedNonces   map[string]time.Time
+	ipv6ProbeFn  func(context.Context) error
 }
 
 func newSupervisor(cfg *config) *supervisor {
@@ -214,10 +211,14 @@ func (s *supervisor) stopChild() {
 }
 
 func (s *supervisor) apply(path string) error {
+	return s.applyContext(context.Background(), path)
+}
+
+func (s *supervisor) applyContext(ctx context.Context, path string) error {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 
-	if err := s.validate(path); err != nil {
+	if err := s.validateContext(ctx, path); err != nil {
 		return err
 	}
 	// The control plane only promotes a candidate to active.json after this
@@ -229,7 +230,15 @@ func (s *supervisor) apply(path string) error {
 		s.rollback(previous, err)
 		return err
 	}
-	time.Sleep(500 * time.Millisecond)
+	startupTimer := time.NewTimer(500 * time.Millisecond)
+	defer startupTimer.Stop()
+	select {
+	case <-ctx.Done():
+		s.stopChild()
+		s.rollback(previous, ctx.Err())
+		return ctx.Err()
+	case <-startupTimer.C:
+	}
 	s.mu.Lock()
 	state := s.state
 	lastError := s.lastError
@@ -268,16 +277,20 @@ func (s *supervisor) rollback(previous string, cause error) {
 }
 
 func (s *supervisor) validate(path string) error {
+	return s.validateContext(context.Background(), path)
+}
+
+func (s *supervisor) validateContext(parent context.Context, path string) error {
 	path, err := s.safePath(path)
 	if err != nil {
 		return err
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, s.cfg.xrayBinary, "run", "-test", "-config", path)
 	out, err := cmd.CombinedOutput()
 	if ctx.Err() != nil {
-		return fmt.Errorf("xray config validation timed out")
+		return fmt.Errorf("xray config validation timed out: %w", ctx.Err())
 	}
 	if err != nil {
 		return fmt.Errorf("xray config validation failed: %s", redact(strings.TrimSpace(string(out))))
@@ -312,41 +325,6 @@ func (s *supervisor) safePath(path string) (string, error) {
 	return full, nil
 }
 
-type applyRequest struct {
-	Path        string `json:"path"`
-	OperationID string `json:"operation_id"`
-}
-
-type probeRequest struct {
-	Target string `json:"target"`
-	SNI    string `json:"sni"`
-}
-
-func (s *supervisor) handler() http.Handler {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/health", s.handleHealth)
-	mux.HandleFunc("/status", s.handleStatus)
-	mux.HandleFunc("/logs", s.handleLogs)
-	mux.HandleFunc("/validate", s.handleValidate)
-	mux.HandleFunc("/apply", s.handleApply)
-	mux.HandleFunc("/replace-inbound", s.handleReplaceInbound)
-	mux.HandleFunc("/probe-target", s.handleProbe)
-	mux.HandleFunc("/probe-ipv6", s.handleIPv6Probe)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, err := readBody(r)
-		if err != nil {
-			writeError(w, http.StatusBadRequest, err)
-			return
-		}
-		if err := s.authenticate(r, body); err != nil {
-			writeError(w, http.StatusUnauthorized, err)
-			return
-		}
-		r.Body = io.NopCloser(strings.NewReader(string(body)))
-		mux.ServeHTTP(w, r)
-	})
-}
-
 type replaceInboundRequest struct {
 	CandidatePath string `json:"candidate_path"`
 	PreviousPath  string `json:"previous_path"`
@@ -354,27 +332,14 @@ type replaceInboundRequest struct {
 	OperationID   string `json:"operation_id"`
 }
 
-func (s *supervisor) handleReplaceInbound(w http.ResponseWriter, r *http.Request) {
-	var req replaceInboundRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if req.OperationID == "" || req.Tag == "" {
-		writeError(w, http.StatusBadRequest, errors.New("operation_id and inbound tag are required"))
-		return
-	}
-	if err := s.replaceInbound(req); err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation_id": req.OperationID, "protocol": protocolVersion})
-}
-
 // replaceInbound performs Xray's native RemoveInbound/AddInbound sequence.
 // It briefly interrupts connections on the selected tag, but leaves the Xray
 // process and every other inbound running.
 func (s *supervisor) replaceInbound(req replaceInboundRequest) error {
+	return s.replaceInboundContext(context.Background(), req)
+}
+
+func (s *supervisor) replaceInboundContext(parent context.Context, req replaceInboundRequest) error {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	if s.cfg.xrayAPI == "" {
@@ -415,7 +380,7 @@ func (s *supervisor) replaceInbound(req replaceInboundRequest) error {
 		return errors.New("inbound is absent from both candidate and active configurations")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
 	if previousFound {
 		if err := s.runXrayAPI(ctx, "rmi", "--server="+s.cfg.xrayAPI, "--timeout=20", req.Tag); err != nil {
@@ -467,6 +432,19 @@ func inboundOnlyFile(configPath, tag string) (string, error) {
 }
 
 func optionalInboundFile(configPath, tag string) (string, bool, error) {
+	return optionalInboundFileWith(configPath, tag, func() (inboundTempFile, error) {
+		return os.CreateTemp("", "xray-inbound-*.json")
+	})
+}
+
+type inboundTempFile interface {
+	Write([]byte) (int, error)
+	Chmod(os.FileMode) error
+	Name() string
+	Close() error
+}
+
+func optionalInboundFileWith(configPath, tag string, createTemp func() (inboundTempFile, error)) (string, bool, error) {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		return "", false, err
@@ -491,7 +469,7 @@ func optionalInboundFile(configPath, tag string) (string, bool, error) {
 			if err != nil {
 				return "", false, err
 			}
-			file, err := os.CreateTemp("", "xray-inbound-*.json")
+			file, err := createTemp()
 			if err != nil {
 				return "", false, err
 			}
@@ -515,233 +493,6 @@ func optionalInboundFile(configPath, tag string) (string, bool, error) {
 	return "", false, nil
 }
 
-func readBody(r *http.Request) ([]byte, error) {
-	body, err := io.ReadAll(io.LimitReader(r.Body, (1<<20)+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(body) > 1<<20 {
-		return nil, errors.New("request body is too large")
-	}
-	return body, nil
-}
-
-func (s *supervisor) authenticate(r *http.Request, body []byte) error {
-	secret, err := os.ReadFile(s.cfg.tokenFile)
-	if err != nil || len(secret) == 0 {
-		return errors.New("supervisor token is unavailable")
-	}
-	operation := r.Header.Get("X-Xray-Operation")
-	nonce := r.Header.Get("X-Xray-Nonce")
-	signature := r.Header.Get("X-Xray-Signature")
-	if operation == "" || nonce == "" || signature == "" {
-		return errors.New("missing request authentication headers")
-	}
-	bodyHash := sha256.Sum256(body)
-	message := strings.Join([]string{r.Method, r.URL.Path, operation, nonce, hex.EncodeToString(bodyHash[:])}, "\n")
-	mac := hmac.New(sha256.New, bytesTrimSpace(secret))
-	_, _ = mac.Write([]byte(message))
-	expected := hex.EncodeToString(mac.Sum(nil))
-	if subtle.ConstantTimeCompare([]byte(expected), []byte(strings.ToLower(signature))) != 1 {
-		return errors.New("invalid request signature")
-	}
-	if len(nonce) < 16 || len(nonce) > 128 {
-		return errors.New("invalid request nonce")
-	}
-	now := time.Now()
-	s.usedNoncesMu.Lock()
-	defer s.usedNoncesMu.Unlock()
-	for key, seen := range s.usedNonces {
-		if now.Sub(seen) > 2*time.Minute {
-			delete(s.usedNonces, key)
-		}
-	}
-	if _, exists := s.usedNonces[nonce]; exists {
-		return errors.New("request nonce was already used")
-	}
-	s.usedNonces[nonce] = now
-	return nil
-}
-
-func bytesTrimSpace(value []byte) []byte { return []byte(strings.TrimSpace(string(value))) }
-
-func (s *supervisor) handleHealth(w http.ResponseWriter, _ *http.Request) {
-	s.mu.Lock()
-	state := s.state
-	s.mu.Unlock()
-	if state != "running" && state != "no-config" {
-		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "state": state, "protocol": protocolVersion})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "state": state, "protocol": protocolVersion})
-}
-
-func (s *supervisor) handleStatus(w http.ResponseWriter, _ *http.Request) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	pid := 0
-	if s.child != nil && s.child.Process != nil {
-		pid = s.child.Process.Pid
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"protocol":      protocolVersion,
-		"xray_version":  s.xrayVersion,
-		"state":         s.state,
-		"pid":           pid,
-		"config_path":   s.configPath,
-		"last_error":    redact(s.lastError),
-		"last_exit":     redact(s.lastExit),
-		"restart_count": s.restartCount,
-		"started_at":    s.startedAt,
-	})
-}
-
-func (s *supervisor) handleLogs(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"protocol": protocolVersion, "lines": s.log.all()})
-}
-
-func (s *supervisor) handleValidate(w http.ResponseWriter, r *http.Request) {
-	var req applyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if err := s.validate(req.Path); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation_id": req.OperationID, "protocol": protocolVersion})
-}
-
-func (s *supervisor) handleApply(w http.ResponseWriter, r *http.Request) {
-	var req applyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if req.OperationID == "" {
-		writeError(w, http.StatusBadRequest, errors.New("operation_id is required"))
-		return
-	}
-	if err := s.apply(req.Path); err != nil {
-		writeError(w, http.StatusUnprocessableEntity, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "operation_id": req.OperationID, "protocol": protocolVersion})
-}
-
-func (s *supervisor) handleProbe(w http.ResponseWriter, r *http.Request) {
-	var req probeRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, err)
-		return
-	}
-	if err := probeTarget(req.Target, req.SNI); err != nil {
-		writeError(w, http.StatusBadGateway, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "target": req.Target, "protocol": protocolVersion})
-}
-
-func (s *supervisor) handleIPv6Probe(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		writeError(w, http.StatusMethodNotAllowed, errors.New("method not allowed"))
-		return
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), 4*time.Second)
-	defer cancel()
-	if err := probeIPv6(ctx); err != nil {
-		writeError(w, http.StatusBadGateway, errors.New("outbound IPv6 TCP probe failed"))
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "protocol": protocolVersion})
-}
-
-const ipv6ProbeAddress = "[2606:4700:4700::1111]:443"
-
-func probeIPv6(ctx context.Context) error {
-	dialer := &net.Dialer{Timeout: 3 * time.Second}
-	return probeIPv6With(ctx, dialer.DialContext)
-}
-
-func probeIPv6With(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) error {
-	conn, err := dial(ctx, "tcp6", ipv6ProbeAddress)
-	if err != nil {
-		return fmt.Errorf("connect to IPv6 probe endpoint: %w", err)
-	}
-	if conn == nil {
-		return errors.New("IPv6 probe dialer returned no connection")
-	}
-	return conn.Close()
-}
-
-func probeTarget(target, sni string) error {
-	dialer := &net.Dialer{Timeout: 5 * time.Second}
-	return probeTargetWith(target, sni, net.DefaultResolver.LookupIP, func(address string, config *tls.Config) (net.Conn, error) {
-		return tls.DialWithDialer(dialer, "tcp", address, config)
-	})
-}
-
-func probeTargetWith(target, sni string, lookupIP func(context.Context, string, string) ([]net.IP, error), dialTLS func(string, *tls.Config) (net.Conn, error)) error {
-	host, port, err := net.SplitHostPort(target)
-	if err != nil || host == "" || port == "" {
-		return errors.New("target must be host:port")
-	}
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return errors.New("target port must be between 1 and 65535")
-	}
-	if sni == "" {
-		sni = host
-	}
-	addresses := []net.IP{}
-	if ip := net.ParseIP(host); ip != nil {
-		addresses = append(addresses, ip)
-	} else {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		addresses, err = lookupIP(ctx, "ip", host)
-		cancel()
-		if err != nil {
-			return fmt.Errorf("resolve target: %w", err)
-		}
-	}
-	if len(addresses) == 0 {
-		return errors.New("target has no addresses")
-	}
-	for _, address := range addresses {
-		if forbiddenProbeIP(address) {
-			return errors.New("target resolves to a private or local address")
-		}
-	}
-	// Dial the address returned by the same DNS lookup that passed the SSRF
-	// checks. Using the hostname here would allow a DNS rebinding between the
-	// check and the TLS connection.
-	var lastErr error
-	for _, address := range addresses {
-		conn, dialErr := dialTLS(net.JoinHostPort(address.String(), port), &tls.Config{ServerName: sni, MinVersion: tls.VersionTLS12})
-		if dialErr == nil {
-			_ = conn.Close()
-			return nil
-		}
-		lastErr = dialErr
-	}
-	return fmt.Errorf("TLS probe failed: %w", lastErr)
-}
-
-func forbiddenProbeIP(ip net.IP) bool {
-	return ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() || ip.IsMulticast()
-}
-
-func writeError(w http.ResponseWriter, status int, err error) {
-	writeJSON(w, status, map[string]any{"ok": false, "error": redact(err.Error()), "protocol": protocolVersion})
-}
-
-func writeJSON(w http.ResponseWriter, status int, value any) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(value)
-}
-
 func formatExit(err error) string {
 	if err == nil {
 		return "clean exit"
@@ -757,46 +508,24 @@ func redact(value string) string {
 	return diagnostics.Redact(value)
 }
 
-func runHealthcheck(url, tokenFile string) error {
-	return runHealthcheckWithClient(url, tokenFile, &http.Client{Timeout: 5 * time.Second})
-}
-
-func runHealthcheckWithClient(url, tokenFile string, client *http.Client) error {
-	body := []byte{}
-	nonce := fmt.Sprintf("health-%d", time.Now().UnixNano())
-	secret, err := os.ReadFile(tokenFile)
-	if err != nil {
-		return fmt.Errorf("read token: %w", err)
-	}
-	hash := sha256.Sum256(body)
-	message := strings.Join([]string{"GET", "/health", "healthcheck", nonce, hex.EncodeToString(hash[:])}, "\n")
-	mac := hmac.New(sha256.New, bytesTrimSpace(secret))
-	_, _ = mac.Write([]byte(message))
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+func runHealthcheck(address, tokenFile string) error {
+	client, err := supervisorapi.DialWithOperation(address, tokenFile, "healthcheck")
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Xray-Operation", "healthcheck")
-	req.Header.Set("X-Xray-Nonce", nonce)
-	req.Header.Set("X-Xray-Signature", hex.EncodeToString(mac.Sum(nil)))
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("health endpoint returned %s", resp.Status)
-	}
-	return nil
+	defer client.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return client.Health(ctx)
 }
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		fs := flag.NewFlagSet("healthcheck", flag.ExitOnError)
-		url := fs.String("url", "http://127.0.0.1:10086/health", "health endpoint")
+		address := fs.String("addr", "127.0.0.1:10086", "supervisor gRPC address")
 		tokenFile := fs.String("token-file", "/run/secrets/xray_supervisor_token", "HMAC token file")
 		_ = fs.Parse(os.Args[2:])
-		if err := runHealthcheck(*url, *tokenFile); err != nil {
+		if err := runHealthcheck(*address, *tokenFile); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
@@ -809,29 +538,15 @@ func main() {
 	fs.StringVar(&cfg.xrayBinary, "xray-bin", "/usr/local/bin/xray", "Xray binary")
 	fs.StringVar(&cfg.xrayAPI, "xray-api", "127.0.0.1:10085", "private Xray gRPC API address")
 	fs.StringVar(&cfg.tokenFile, "token-file", "/run/secrets/xray_supervisor_token", "HMAC token file")
-	fs.StringVar(&cfg.listen, "listen", "0.0.0.0:10086", "private supervisor API address")
+	fs.StringVar(&cfg.listen, "listen", "127.0.0.1:10086", "private supervisor gRPC address")
 	fs.DurationVar(&cfg.grace, "grace-period", 10*time.Second, "grace period for Xray shutdown")
 	fs.IntVar(&cfg.logSize, "log-capacity", 200, "number of recent log lines to retain")
 	_ = fs.Parse(os.Args[1:])
 
-	s := newSupervisor(cfg)
-	if err := s.startInitial(); err != nil {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
+	if err := runSupervisor(cfg, signals); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	server := &http.Server{Addr: cfg.listen, Handler: s.handler(), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, WriteTimeout: 30 * time.Second}
-	go func() {
-		s.logf("supervisor API listening on %s", cfg.listen)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			s.logf("supervisor API stopped: %v", err)
-		}
-	}()
-
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGINT, syscall.SIGTERM)
-	<-signals
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.grace)
-	defer cancel()
-	_ = server.Shutdown(ctx)
-	s.stopChild()
 }

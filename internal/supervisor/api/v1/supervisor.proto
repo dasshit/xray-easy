@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package xrayeasy.supervisor.v1;
+
+option go_package = "xray-easy/internal/supervisor";
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/struct.proto";
+
+// Private Xray process-control API. Struct fields are specified in
+// docs/xray-supervisor-grpc-plan.md and validated by the Go adapter.
+service Supervisor {
+  rpc Health(google.protobuf.Empty) returns (google.protobuf.Struct);
+  rpc GetStatus(google.protobuf.Empty) returns (google.protobuf.Struct);
+  rpc GetLogs(google.protobuf.Empty) returns (google.protobuf.Struct);
+  rpc ValidateConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ApplyConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ReplaceInbound(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ProbeTarget(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ProbeIPv6(google.protobuf.Empty) returns (google.protobuf.Struct);
+}

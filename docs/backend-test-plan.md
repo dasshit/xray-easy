@@ -116,11 +116,13 @@ AWG-состояния в общих backup и rollback SQLite/профилей 
 ### Актуальные coverage gates — 30 сентября 2026 года
 
 Покрытие пересчитано без кэша тестовых результатов. Root Go-модуль достигает
-**6626 / 7346 (90,2%)** по handwritten-коду; скрипт также требует не менее 80%
+**6795 / 7522 (90,3%)** по handwritten-коду; скрипт также требует не менее 80%
 в каждом пакете. Отдельный вложенный модуль `awg-service` достигает
 **1113 / 1234 (90,19%)**. Web достигает **93,31% statements**, 97,31% lines,
-90,9% functions и 88,38% branches. Для каждого модуля действует собственный
-порог, а не один сводный процент.
+90,9% functions и 88,38% branches. Supervisor достигает 94,5% в
+`cmd/xray-supervisor`; каждый его handwritten-файл, включая gRPC client
+`internal/supervisor`, покрыт не ниже 90%. Для каждого модуля действует
+собственный порог, а не один сводный процент.
 
 Проверки из корня репозитория:
 
@@ -133,7 +135,9 @@ bash scripts/awg-coverage.sh
 Root Go gate проверяет 90% общего handwritten Go-кода и 80% на пакет;
 AWG gate отдельно проверяет 90% модуля. Web-пороги заданы в
 `web/vite.config.ts`: statements/lines/functions >= 90%, branches >= 85%,
-каждый web-файл lines >= 90%. Все три gates запускаются GitHub Actions.
+каждый web-файл lines >= 90%. `scripts/xray-supervisor-coverage.sh` отдельно
+проверяет 90% для каждого исходного файла supervisor и gRPC client. Все gates
+запускаются GitHub Actions.
 
 ## Порядок работы
 
@@ -153,7 +157,16 @@ AWG gate отдельно проверяет 90% модуля. Web-пороги 
 
 ### 4. Управление процессом и статистика
 
-Покрыть `cmd/xray-supervisor`, `internal/supervisor`, `internal/stats`. Через `httptest` проверить HMAC подпись, nonce replay/TTL, ограничение тела запроса, разрешённые пути, SSRF-защиту probe, маскирование логов и HTTP-контракт. Через тестовый исполняемый файл проверить validate/apply, быстрый выход дочернего процесса и rollback к `active.json`, не запуская настоящий Xray. Для статистики проверить накопление трафика после сброса счетчиков/рестарта Xray, отсутствие отрицательных дельт, online-window, восстановление snapshots из SQLite, ошибки polling и подписки. Ввести часы и внешние зависимости через интерфейсы там, где это нужно для детерминированных тестов.
+Покрыть `cmd/xray-supervisor`, `internal/supervisor`, `internal/stats`. Для
+supervisor проверить gRPC HMAC-подпись, nonce replay/TTL, лимит protobuf
+сообщения, RPC allowlist, SSRF-защиту probe, маскирование логов и wire-контракт
+через `bufconn`. Через тестовый исполняемый файл проверить validate/apply,
+быстрый выход дочернего процесса и rollback к `active.json`, не запуская
+настоящий Xray. Для статистики проверить накопление трафика после сброса
+счётчиков/рестарта Xray, отсутствие отрицательных дельт, online-window,
+восстановление snapshots из SQLite, ошибки polling и подписки. Ввести часы и
+внешние зависимости через интерфейсы там, где это нужно для детерминированных
+тестов.
 
 ### 5. Control plane и CLI
 

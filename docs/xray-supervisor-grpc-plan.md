@@ -172,3 +172,14 @@ Recommended later Controller stages:
 This sequence gives an immediate gRPC supervisor boundary now and a coherent
 multi-protocol Controller later, without making the supervisor itself a
 protocol-neutral service or creating two competing orchestration owners.
+
+## Реализация этапа supervisor gRPC
+
+Реализация сохраняет прежние операции и переводит transport на unary gRPC
+`xrayeasy.supervisor.v1.Supervisor`. Backend сохраняет адаптерные методы
+`Health`, `Status`, `Logs`, `Validate`, `Apply`, `ReplaceInbound`, `ProbeTarget`
+и `ProbeIPv6`, поэтому control-plane маршруты и UI не меняются. Сервер и
+healthcheck используют общий HMAC-контракт; supervisor доступен только через
+private Compose network. Документированный Controller остаётся последующим
+этапом, пока его протокольно-нейтральный контракт и границы владения runtime
+не согласованы.

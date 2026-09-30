@@ -16,7 +16,7 @@ func setBootstrapEnv(t *testing.T, root string) {
 	t.Setenv("XRAY_PUBLIC_PORT", "8443")
 	t.Setenv("XRAY_VMESS_PORT", "9443")
 	t.Setenv("XRAY_API_LISTEN", "127.0.0.1:10100")
-	t.Setenv("XRAY_SUPERVISOR_URL", "http://supervisor.test:10086")
+	t.Setenv("XRAY_SUPERVISOR_ADDR", "supervisor.test:10086")
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", "/tmp/supervisor.token")
 }
 

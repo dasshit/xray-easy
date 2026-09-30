@@ -197,6 +197,12 @@ persistent state lives in Docker named volumes. IPv6 handling in Compose,
 profiles and `doctor` is implemented; actual reachability still depends on the
 VPS IPv6 route, Docker daemon and firewall, so verify it with the checks below.
 
+The control plane communicates with `xray-supervisor` over authenticated gRPC
+on the private Compose `control` network. The gRPC port is not published on the
+VPS. Requests use HMAC-SHA256 signatures and replay-protected nonces; this
+authenticates requests but does not encrypt traffic, so keep the service on the
+private Docker network. The in-container healthcheck uses the same gRPC API.
+
 ## IPv6 checks
 
 Docker Desktop can check the Compose file and create an IPv6-enabled network,

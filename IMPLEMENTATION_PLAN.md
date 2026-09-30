@@ -554,13 +554,13 @@ Browser
        |-- SQLite /data/state.db
        |-- Config renderer -> shared xray-config volume
        |-- gRPC client -> xray:10085 (Xray Handler/Stats API)
-       `-- control client -> xray:10086 (private supervisor API)
+       `-- authenticated gRPC client -> xray:10086 (private supervisor API)
 
 xray service
   |-- xray-supervisor (PID 1)
   |     |-- validates candidate config with `xray run -test`
   |     |-- starts/restarts pinned Xray child
-  |     `-- exposes private apply/status API :10086
+  |     `-- exposes private authenticated gRPC API :10086
   |-- official pinned Xray binary
   |     `-- Xray API :10085, bound only to the Compose control network
   `-- public inbound :8443 inside container -> host ${XRAY_PUBLIC_PORT:-443}/tcp
@@ -843,8 +843,8 @@ services:
       XRAY_EASY_MASTER_KEY: ${XRAY_EASY_MASTER_KEY:?set a persistent master key}
       XRAY_PUBLIC_PORT: ${XRAY_PUBLIC_PORT:-443}
       XRAY_EASY_XRAY_API: xray:10085
-      XRAY_EASY_XRAY_SUPERVISOR: http://xray:10086
-      XRAY_EASY_XRAY_SUPERVISOR_TOKEN_FILE: /run/secrets/xray_supervisor_token
+      XRAY_SUPERVISOR_ADDR: xray:10086
+      XRAY_SUPERVISOR_TOKEN_FILE: /run/secrets/xray_supervisor_token
     secrets:
       - xray_supervisor_token
     networks:
@@ -890,7 +890,7 @@ services:
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     healthcheck:
-      test: ["CMD", "xray-supervisor", "healthcheck"]
+      test: ["CMD", "xray-supervisor", "healthcheck", "--addr", "127.0.0.1:10086", "--token-file", "/run/secrets/xray_supervisor_token"]
 
 volumes:
   xray_easy_data:
@@ -1238,7 +1238,7 @@ TypeScript/Nuxt backend остаётся только альтернативой
 
 Срез процесса Xray:
 
-- `cmd/xray-supervisor` — PID 1 supervisor с HMAC-authenticated API `v1`;
+- `cmd/xray-supervisor` — PID 1 supervisor с HMAC-authenticated gRPC API `v1`;
 - `Dockerfile.xray` — multi-stage образ с pinned Xray image tag и supervisor;
 - `compose.yaml` — внутренние control/egress сети и непубликуемые Xray API;
 - `prototype/config-stage1/active.json` — bootstrap-конфигурация без публичного inbound.
@@ -1251,7 +1251,7 @@ TypeScript/Nuxt backend остаётся только альтернативой
 - `internal/secret` — AES-GCM envelope для REALITY private key;
 - `internal/xray` — генерация ключей, renderer VLESS + REALITY + TCP/Vision и
   клиентские URI/JSON-профили;
-- `internal/supervisor` — HMAC-клиент validate/apply/probe;
+- `internal/supervisor` — HMAC-authenticated gRPC client validate/apply/probe;
 - `internal/xrayapi` — generated protobuf subset из pinned Xray 26.9.8 для
   HandlerService и StatsService; control plane подключает пользователей и
   получает per-user counters без импорта всего `xray-core`;

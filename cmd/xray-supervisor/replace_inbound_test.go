@@ -2,9 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,15 +58,6 @@ func TestReplaceInboundUsesXrayAPIWithoutRestartingProcess(t *testing.T) {
 	calls, err := os.ReadFile(logPath)
 	if err != nil || string(calls) != "rmi\nadi\n" {
 		t.Fatalf("Xray API calls = %q, %v", calls, err)
-	}
-	response := httptest.NewRecorder()
-	body, err := json.Marshal(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	s.handleReplaceInbound(response, httptest.NewRequest(http.MethodPost, "/replace-inbound", strings.NewReader(string(body))))
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"operation_id":"op-1"`) {
-		t.Fatalf("replace inbound response = %d %s", response.Code, response.Body.String())
 	}
 }
 
@@ -171,13 +159,6 @@ func TestReplaceInboundRejectsInvalidStateAndInput(t *testing.T) {
 			request, s.cfg.xrayAPI = originalRequest, originalAPI
 		})
 	}
-	for _, body := range []string{`{`, `{}`, `{"tag":"vless-reality"}`} {
-		response := httptest.NewRecorder()
-		s.handleReplaceInbound(response, httptest.NewRequest(http.MethodPost, "/replace-inbound", strings.NewReader(body)))
-		if response.Code != http.StatusBadRequest {
-			t.Fatalf("body %q status = %d", body, response.Code)
-		}
-	}
 }
 
 func TestInboundOnlyFileRejectsMissingMalformedAndWrongInbound(t *testing.T) {
@@ -203,22 +184,5 @@ func TestInboundOnlyFileRejectsMissingMalformedAndWrongInbound(t *testing.T) {
 	}
 	if _, err := inboundOnlyFile(filepath.Join(root, "missing.json"), "vless-reality"); err == nil {
 		t.Fatal("missing config was accepted")
-	}
-}
-
-func TestIPv6ProbeHandlerRejectsMethodAndCanceledRequest(t *testing.T) {
-	s := &supervisor{}
-	wrongMethod := httptest.NewRecorder()
-	s.handleIPv6Probe(wrongMethod, httptest.NewRequest(http.MethodPost, "/probe-ipv6", nil))
-	if wrongMethod.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("POST IPv6 probe status = %d", wrongMethod.Code)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	request := httptest.NewRequest(http.MethodGet, "/probe-ipv6", nil).WithContext(ctx)
-	failedProbe := httptest.NewRecorder()
-	s.handleIPv6Probe(failedProbe, request)
-	if failedProbe.Code != http.StatusBadGateway {
-		t.Fatalf("canceled IPv6 probe status = %d", failedProbe.Code)
 	}
 }
