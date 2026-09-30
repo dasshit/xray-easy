@@ -180,7 +180,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .diagnostics-list { list-style: none; padding: 0; margin: 20px 0 0; border-top: 1px solid var(--border); }
 .diagnostics-list li { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .diagnostics-list small { color: var(--muted); font: 11px ui-monospace, monospace; }
-.diagnostics-subsection { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
+.diagnostics-subsection { margin-top: 28px; padding-top: 24px; }
 .diagnostics-xray-version { margin: 0 0 16px; }
 .diagnostics-subsection .diagnostics-feed { margin-top: 20px; }
 .diagnostics-control-plane .diagnostics-list { margin-top: 0; }
