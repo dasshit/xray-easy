@@ -223,14 +223,45 @@ networks if they overlap routes already used by the VPS.
 
 ### Logs, status and upgrade
 
-Run commands from the repository directory on the VPS:
+All Compose containers send their stdout/stderr to the host's **systemd journal**.
+Run these commands from the repository directory on the VPS to inspect the last
+three hours or follow new Xray messages:
 
 ~~~sh
 docker compose ps
-docker compose logs --tail=100
-docker compose logs -f xray
-docker compose logs -f
+docker compose logs --since=3h
+docker compose logs --since=3h -f xray
 ~~~
+
+The journal can also be queried directly. For example, this shows Xray entries
+from the last three hours (the container name is resolved from the active
+Compose project):
+
+~~~sh
+xray_container=$(docker compose ps --all --format '{{.Name}}' xray)
+sudo journalctl --since '3 hours ago' "CONTAINER_NAME=$xray_container" -o short-iso-precise
+~~~
+
+Journald rotates archived files automatically according to the host's size
+limits. To persist journal data across reboots and bound its disk usage, an
+administrator can add a system-wide drop-in on a Linux VPS:
+
+~~~sh
+sudo install -d -m 0755 /etc/systemd/journald.conf.d
+sudo tee /etc/systemd/journald.conf.d/20-xray-easy.conf >/dev/null <<'EOF'
+[Journal]
+Storage=persistent
+SystemMaxUse=256M
+SystemMaxFileSize=32M
+EOF
+sudo systemctl restart systemd-journald
+~~~
+
+These journald limits apply to **all host journal entries**, not only Xray-easy.
+The size limit may remove older entries sooner during high log volume; check
+`sudo journalctl --disk-usage` and adjust `SystemMaxUse` for the VPS. On
+Docker Desktop, use `docker compose logs --since=3h`; the journal is inside the
+Docker VM and is not directly available through the macOS `journalctl` command.
 
 To update from source, create a backup first, then pull and rerun the installer:
 

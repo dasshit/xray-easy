@@ -1,10 +1,16 @@
 # Existing installations without XRAY_EASY_PROJECT_NAME keep their named volumes.
 name: ${XRAY_EASY_PROJECT_NAME:-xray-easy-stage1}
 
+x-logging: &journald-logging
+  driver: journald
+  options:
+    tag: "{{.Name}}"
+
 services:
   init-volumes:
     image: alpine:3.22
     restart: "no"
+    logging: *journald-logging
     user: "0:0"
     command:
       - /bin/sh
@@ -24,6 +30,7 @@ services:
   init-xray-runtime-token:
     image: alpine:3.22
     restart: "no"
+    logging: *journald-logging
     user: "0:0"
     command:
       - /bin/sh
@@ -42,6 +49,7 @@ services:
   init-xray-runtime-state:
     image: alpine:3.22
     restart: "no"
+    logging: *journald-logging
     user: "0:0"
     command:
       - /bin/sh
@@ -56,6 +64,7 @@ services:
   init-controller-token:
     image: alpine:3.22
     restart: "no"
+    logging: *journald-logging
     user: "0:0"
     command:
       - /bin/sh
@@ -74,6 +83,7 @@ services:
   init-awg-control-token:
     image: alpine:3.22
     restart: "no"
+    logging: *journald-logging
     user: "0:0"
     command:
       - /bin/sh
@@ -94,6 +104,7 @@ services:
       context: .
       dockerfile: Dockerfile.hysteria-tls
     restart: "no"
+    logging: *journald-logging
     user: "0:0"
     tmpfs:
       - /tmp
@@ -116,6 +127,7 @@ services:
       args:
         XRAY_VERSION: ${XRAY_VERSION:-26.7.28}
     restart: unless-stopped
+    logging: *journald-logging
     user: "10001:10001"
     command:
       - --listen
@@ -167,6 +179,7 @@ services:
       context: .
       dockerfile: Dockerfile.controller
     restart: unless-stopped
+    logging: *journald-logging
     user: "10001:10001"
     environment:
       XRAY_CONTROLLER_LISTEN: 0.0.0.0:10088
@@ -208,6 +221,7 @@ services:
       context: .
       dockerfile: Dockerfile.control
     restart: unless-stopped
+    logging: *journald-logging
     user: "10001:10001"
     environment:
       XRAY_EASY_DATA_DIR: /data
@@ -255,6 +269,7 @@ services:
     profiles: ["awg", "awg-prototype"]
     image: alpine:3.22
     restart: "no"
+    logging: *journald-logging
     user: "0:0"
     command:
       - /bin/sh
@@ -272,6 +287,7 @@ services:
       context: .
       dockerfile: Dockerfile.awg
     restart: unless-stopped
+    logging: *journald-logging
     user: "0:10001"
     read_only: true
     init: true
