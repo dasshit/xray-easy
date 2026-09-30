@@ -326,6 +326,10 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 			return nil, nil, fmt.Errorf("inspect AmneziaWG control token: %w", statErr)
 		}
 	}
+	var awgGateway awgcontrol.Gateway
+	if awgClient != nil {
+		awgGateway = awgClient
+	}
 	s := &server{
 		store:            db,
 		masterKey:        masterKey,
@@ -340,7 +344,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 			TokenFile: envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
 		},
 		handler:          handlerClient,
-		awg:              awgClient,
+		awg:              awgGateway,
 		pendingSettings:  make(map[string]pendingSettingsChange),
 		pendingHysteria:  make(map[string]pendingHysteriaChange),
 		eventSubs:        make(map[chan struct{}]struct{}),
