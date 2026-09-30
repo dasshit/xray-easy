@@ -202,6 +202,24 @@ Controller и runtime adapters — в
 идемпотентность, auth и тесты сериализации/совместимости; Controller может
 подключить новый adapter без изменения backend HTTP API и Web UI.
 
+**Результат этапа 2 от 2026-09-30:**
+
+- Добавлен контракт `xrayeasy.xray.v1.Runtime` в
+  `internal/xrayruntime/api/v1/runtime.proto` и закреплена генерация Go/gRPC
+  кода в protobuf scripts.
+- API покрывает health/status/capabilities/logs, проверку и применение
+  конфигурационного snapshot, замену inbound, операции с пользователями,
+  telemetry и сетевые probes. Протоколы представлены enum; сведения о
+  доступности telemetry описаны отдельными capability flags.
+- Кандидат передаётся как snapshot bytes с `operation_id` и `revision`, а не
+  как путь внутри контейнера. Snapshot содержит runtime secrets; контракт
+  прямо запрещает включать его в логи или ошибки.
+- Добавлены сериализационный и descriptor tests: проверяются versioned service,
+  основные методы, enums и отсутствие path-based config request. `go test
+  ./internal/xrayruntime/api/v1` проходит.
+- Runtime authentication/interceptors и поведенческие fake-runtime тесты
+  остаются в этапах 3 и 6; API ещё не подключён к production Controller.
+
 ### Этап 3. Реализовать оболочку runtime service
 
 - Создать `cmd/xray-runtime` и изолированный модуль/target сборки с pinned
