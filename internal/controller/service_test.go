@@ -15,17 +15,23 @@ import (
 )
 
 type fakeRuntime struct {
-	status    supervisor.Status
-	logs      []string
-	err       error
-	called    string
-	args      []string
-	requestID string
+	status        supervisor.Status
+	logs          []string
+	err           error
+	called        string
+	args          []string
+	requestID     string
+	operationID   string
+	attempt       int
+	stateRevision int64
 }
 
 func (f *fakeRuntime) Health(ctx context.Context) error {
 	f.called = "Health"
 	f.requestID = interaction.IncomingRequestID(ctx)
+	f.operationID = interaction.OperationID(ctx)
+	f.attempt = interaction.Attempt(ctx)
+	f.stateRevision = interaction.StateRevision(ctx)
 	return f.err
 }
 func (f *fakeRuntime) Status(context.Context) (supervisor.Status, error) {
@@ -199,6 +205,41 @@ func TestServiceRejectsMalformedRequestsAndUnavailableAdapter(t *testing.T) {
 	}
 	if _, err = response(map[string]any{"bad": make(chan int)}); err == nil {
 		t.Fatal("response accepted unsupported value")
+	}
+}
+
+func TestXrayDeviceMutationsAreIdempotentForOneOperationID(t *testing.T) {
+	handler := &fakeXrayHandler{}
+	service := NewServiceWithAdapters(&fakeRuntime{}, handler, nil, nil)
+	operationID := "abcdef0123456789abcdef0123456789"
+	ctx := interaction.WithOperationID(context.Background(), operationID)
+	addRequest := request(map[string]any{"protocol": "vless", "email": "device-1-vless@xray-easy", "id": "stable-uuid", "flow": "vision"})
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := service.AddDeviceUser(ctx, addRequest)
+		if err != nil {
+			t.Fatalf("AddDeviceUser retry %d = %v", attempt, err)
+		}
+		if attempt == 1 && !result.GetFields()["already_applied"].GetBoolValue() {
+			t.Fatalf("duplicate add response = %v", result.AsMap())
+		}
+	}
+	if handler.adds != 1 || len(handler.users) != 1 {
+		t.Fatalf("duplicate add changed runtime more than once: adds=%d users=%v", handler.adds, handler.users)
+	}
+
+	removeCtx := interaction.WithOperationID(context.Background(), "0123456789abcdef0123456789abcdef")
+	removeRequest := request(map[string]any{"protocol": "vless", "email": "device-1-vless@xray-easy"})
+	for attempt := 0; attempt < 2; attempt++ {
+		result, err := service.RemoveDeviceUser(removeCtx, removeRequest)
+		if err != nil {
+			t.Fatalf("RemoveDeviceUser retry %d = %v", attempt, err)
+		}
+		if attempt == 1 && !result.GetFields()["already_applied"].GetBoolValue() {
+			t.Fatalf("duplicate remove response = %v", result.AsMap())
+		}
+	}
+	if handler.removes != 1 || len(handler.users) != 0 {
+		t.Fatalf("duplicate remove changed runtime more than once: removes=%d users=%v", handler.removes, handler.users)
 	}
 }
 

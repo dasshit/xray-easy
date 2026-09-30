@@ -1523,6 +1523,28 @@ func (s *Store) UpdateApplyOperation(ctx context.Context, id, state, operationEr
 	return err
 }
 
+// GetApplyOperation returns a persisted runtime configuration operation and its
+// monotonic state revision for downstream correlation.
+func (s *Store) GetApplyOperation(ctx context.Context, id string) (ApplyOperation, error) {
+	var operation ApplyOperation
+	var createdAt, updatedAt string
+	err := s.db.QueryRowContext(ctx, `SELECT id, revision, state, error, created_at, updated_at FROM apply_operations WHERE id=?`, id).Scan(
+		&operation.ID, &operation.Revision, &operation.State, &operation.Error, &createdAt, &updatedAt,
+	)
+	if err != nil {
+		return ApplyOperation{}, err
+	}
+	operation.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	if err != nil {
+		return ApplyOperation{}, fmt.Errorf("parse apply operation creation time: %w", err)
+	}
+	operation.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	if err != nil {
+		return ApplyOperation{}, fmt.Errorf("parse apply operation update time: %w", err)
+	}
+	return operation, nil
+}
+
 func (s *Store) AddAudit(ctx context.Context, actorID, action, entity, entityID, diff string) error {
 	id, err := randomID()
 	if err != nil {

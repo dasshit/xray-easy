@@ -31,15 +31,15 @@ func (s *supervisor) unaryAuthInterceptor(ctx context.Context, request any, info
 	started := time.Now()
 	operation, nonce, signature, err := rpcAuthMetadata(ctx)
 	if err != nil {
-		interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, status.Error(codes.Unauthenticated, err.Error()))
+		interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, status.Error(codes.Unauthenticated, err.Error()), interaction.TraceFromContext(ctx))
 		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
 	if err := s.authenticateRPC(request, info.FullMethod, operation, nonce, signature); err != nil {
-		interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, status.Error(codes.Unauthenticated, err.Error()))
+		interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, status.Error(codes.Unauthenticated, err.Error()), interaction.TraceFromContext(ctx))
 		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
 	response, callErr := handler(ctx, request)
-	interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, callErr)
+	interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, callErr, interaction.TraceFromContext(ctx))
 	return response, callErr
 }
 

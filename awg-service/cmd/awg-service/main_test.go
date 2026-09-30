@@ -1,10 +1,44 @@
 package main
 
 import (
+	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestMainRunsKeygenCommand(t *testing.T) {
+	previousArgs, previousStdout := os.Args, os.Stdout
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Args = []string{"awg-service", "keygen"}
+	os.Stdout = writer
+	t.Cleanup(func() {
+		os.Args = previousArgs
+		os.Stdout = previousStdout
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	main()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var keypair map[string]string
+	if err := json.Unmarshal(output, &keypair); err != nil {
+		t.Fatalf("keygen output %q is not JSON: %v", output, err)
+	}
+	if keypair["privateKey"] == "" || keypair["publicKey"] == "" {
+		t.Fatalf("keygen output is missing keys: %v", keypair)
+	}
+}
 
 func TestRemoveSavedProfileDeletesOnlyValidatedPeerFile(t *testing.T) {
 	dataDir := t.TempDir()

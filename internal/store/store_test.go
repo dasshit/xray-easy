@@ -675,8 +675,16 @@ func TestClientsTrafficOperationsAndAudit(t *testing.T) {
 	if err := db.CreateApplyOperation(ctx, ApplyOperation{ID: "operation-1", Revision: 4, State: "pending", CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
+	operation, err := db.GetApplyOperation(ctx, "operation-1")
+	if err != nil || operation.Revision != 4 || operation.State != "pending" {
+		t.Fatalf("GetApplyOperation() = %+v, %v", operation, err)
+	}
 	if err := db.UpdateApplyOperation(ctx, "operation-1", "failed", "probe failed"); err != nil {
 		t.Fatal(err)
+	}
+	operation, err = db.GetApplyOperation(ctx, "operation-1")
+	if err != nil || operation.State != "failed" || operation.Error != "probe failed" {
+		t.Fatalf("GetApplyOperation(updated) = %+v, %v", operation, err)
 	}
 	var state, operationError string
 	if err := db.db.QueryRow(`SELECT state, error FROM apply_operations WHERE id='operation-1'`).Scan(&state, &operationError); err != nil || state != "failed" || operationError != "probe failed" {

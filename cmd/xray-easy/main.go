@@ -1801,6 +1801,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": err.Error()})
 		return
 	}
+	r = r.WithContext(s.traceApplyOperation(r.Context(), operationID))
 	if err := s.store.UpdateApplyOperation(r.Context(), operationID, "applying", ""); err != nil {
 		_ = os.Remove(path)
 		s.finishSettingsChange(req.ChangeID, false)
@@ -2167,6 +2168,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		_ = s.store.DeleteClient(ctx, clientID)
 		return domain.Client{}, err
 	}
+	ctx = s.traceApplyOperation(ctx, operationID)
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	activePath := filepath.Join(s.configDir, "active.json")
 	usedReplace := protocol == domain.ProtocolVLESS && replaceInbound
@@ -2346,6 +2348,7 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
+	r = r.WithContext(s.traceApplyOperation(r.Context(), operationID))
 	_ = s.store.UpdateApplyOperation(r.Context(), operationID, "applying", "")
 	activePath := filepath.Join(s.configDir, "active.json")
 	hysteriaChanged := stateChanged(client, next, domain.ProtocolHysteria2)
@@ -2777,6 +2780,7 @@ func (s *server) reconcilePersistedClientConfigLocked(ctx context.Context, clien
 	if err != nil {
 		return err
 	}
+	ctx = s.traceApplyOperation(ctx, operationID)
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	if err := os.Rename(path, activePath); err != nil {
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
@@ -2939,6 +2943,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	if err != nil {
 		return err
 	}
+	ctx = s.traceApplyOperation(ctx, operationID)
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	fullApply := false
 	replacer, canReplace := s.supervisor.(inboundReplacer)
@@ -3037,6 +3042,7 @@ func (s *server) applyClientsLocked(ctx context.Context, settings domain.Setting
 	if err != nil {
 		return err
 	}
+	ctx = s.traceApplyOperation(ctx, operationID)
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "validated", "")
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	if err := s.supervisor.Apply(ctx, path, operationID); err != nil {
@@ -3062,6 +3068,7 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Set
 	if err != nil {
 		return err
 	}
+	ctx = s.traceApplyOperation(ctx, operationID)
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "validated", "")
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 
@@ -3134,12 +3141,21 @@ func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, setting
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return "", "", err
 	}
-	if err := s.supervisor.Validate(ctx, path, operationID); err != nil {
+	if err := s.supervisor.Validate(s.traceApplyOperation(ctx, operationID), path, operationID); err != nil {
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		_ = os.Remove(path)
 		return "", "", err
 	}
 	return path, operationID, nil
+}
+
+func (s *server) traceApplyOperation(ctx context.Context, operationID string) context.Context {
+	ctx = interaction.WithOperationID(ctx, operationID)
+	operation, err := s.store.GetApplyOperation(ctx, operationID)
+	if err != nil || operation.Revision < 1 {
+		return ctx
+	}
+	return interaction.WithStateRevision(ctx, operation.Revision)
 }
 
 func rendererSettings(settings domain.Settings, privateKey string) xray.Settings {

@@ -28,11 +28,12 @@ runtime adapter accesses the control plane database.
   tunnel. It exposes stable operations such as apply desired devices, revoke a
   device, read capabilities/status, and collect telemetry. Engine-specific
   details stay inside protocol adapters.
-- The control plane remains authoritative for desired state. It passes a
-  monotonically increasing state revision and stable device IDs to Controller;
-  Controller operations are idempotent for `(revision, operation_id)` and
-  report per-protocol outcomes. No second copy of product state or SQLite
-  database is added to Controller.
+- The control plane remains authoritative for desired state. It passes stable
+  operation IDs to Controller and includes the persisted config revision on
+  config apply operations. The Controller forwards revision metadata for
+  tracing; stale-revision fencing is a later requirement before enabling
+  automatic retries. No second copy of product state or SQLite database is
+  added to Controller.
 - During migration, the backend may keep an adapter call for an operation only
   until its Controller route has passed parity tests. A given operation must
   have one active write path at a time; do not dual-write runtime state.
@@ -58,16 +59,17 @@ Logging is part of the Controller rollout, not an afterthought. Every request
 that crosses a service boundary must be diagnosable from logs at the backend,
 Controller, and the relevant runtime adapter.
 
-- The backend creates a cryptographically random `request_id` for each
-  authenticated HTTP operation that invokes runtime behavior. It puts the ID
-  in request context, returns it in `X-Request-ID`, and sends it as gRPC
-  metadata to Controller.
-- Controller validates or replaces malformed correlation IDs, adds its own
-  `controller_operation_id` when it starts a multi-adapter operation, and
-  forwards both IDs to each adapter. Retries keep the same operation ID and
-  receive a new transport attempt number. The current implementation propagates
-  and logs `request_id`; distinct operation IDs and attempt numbers are not yet
-  part of the RPC contract.
+- The backend creates cryptographically random `request_id` and default
+  `controller_operation_id` values for each HTTP request that invokes runtime
+  behavior. It puts them in request context, returns the request ID in
+  `X-Request-ID`, and sends both as gRPC metadata. Durable config mutations
+  replace the default operation ID with their persisted `apply_operations.id`
+  and attach the associated revision.
+- Controller and the runtime adapters validate or replace malformed IDs and
+  forward the trace metadata. No automatic RPC retries are enabled. Calls use
+  attempt `1`; any future retry must retain the operation ID and increment the
+  attempt. The current state revision is correlation metadata only: services
+  log it but do not yet reject stale revisions.
 - Xray supervisor and AWG service include the same correlation fields in their
   structured operation logs. Existing authentication metadata remains
   independent and is never copied into logs.
@@ -106,21 +108,45 @@ The current implementation has completed the routing and isolation milestones:
 - [x] Structured logs at the backend, Controller, Xray supervisor, and AWG
   service include request ID, method, protocol, outcome, gRPC status, and
   duration; log bodies and raw errors are excluded.
-- [ ] Add distinct controller operation IDs and retry-attempt fields alongside
-  request ID when mutation idempotency and retry semantics are implemented.
-- [ ] Complete operation-level idempotency for uncertain/retried mutations and
-  add explicit state revision handling. The Controller currently delegates to
-  runtime APIs; this milestone must be finished before enabling automatic RPC
-  retries.
-- [ ] Finish end-to-end fault-injection and VDS installation/runtime
-  verification. Local race, coverage and Compose checks are tracked in the
-  implementation report; a VDS rollout remains a manual validation step.
-- [x] Local verification passed: root and AWG Go tests, race detector, `go vet`,
-  and `docker compose config`. New Controller/supervisor integration packages
-  have 90%+ statement coverage.
+- [x] Add distinct controller operation IDs, attempt numbers, and config
+  revision metadata alongside request ID. Attempt is currently always `1`
+  because automatic retries remain disabled.
+- [x] Make Xray live user add/remove safe to replay by checking the loaded user
+  roster and serializing the roster-check/mutation pair inside the single
+  Controller process. Persist AWG create/revoke operation receipts across AWG
+  restarts and preserve a pending client key so an interrupted profile write
+  can be resumed.
+- [x] Attach the persisted apply-operation revision to config validation/apply
+  calls and include it in structured logs at each gRPC layer.
+- [ ] Add stale-revision fencing and define durable deduplication behavior for
+  every mutating operation before enabling automatic RPC retries. Revision is
+  currently propagated for diagnostics but not enforced by Controller or
+  runtime adapters.
+- [ ] Finish broader Controller restart/deadline/partial-failure fault
+  injection and VDS installation/runtime verification. Local replay/recovery
+  tests, race checks, coverage, vet, and Compose validation pass; VDS validation
+  remains a manual step.
+- [x] Local verification passed: root and AWG Go tests, targeted race detector,
+  `go vet`, and `docker compose config`. Root handwritten coverage is 90.8%; AWG
+  handwritten coverage is 90.11%; Controller and supervisor packages exceed
+  90% statement coverage.
 
 The checkboxes describe repository state after implementation begins; they do
 not replace the full acceptance criteria at the end of this plan.
+
+### Current constraints before automatic RPC retries
+
+- The Controller is deployed as a single service instance. Xray roster-based
+  deduplication is serialized within that process; it is not a cross-instance
+  durable operation journal.
+- AWG operation receipts are retained in `/data/state.json` indefinitely so a
+  delayed replay cannot recreate a revoked peer or remove a replacement with
+  the same name. The journal grows with create/revoke operations; any future
+  compaction policy must preserve the required replay window and be tested
+  against backup/restore.
+- Config revisions are logged and propagated but are not yet a stale-write
+  fence. Keep automatic retries disabled until revision fencing and durable
+  deduplication semantics are defined for every mutation.
 
 ### 1. Freeze current behavior and define the runtime contract
 

@@ -5,10 +5,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"strconv"
+	"sync"
 	"time"
 
 	"xray-easy/internal/awgcontrol"
 	"xray-easy/internal/domain"
+	"xray-easy/internal/interaction"
 	"xray-easy/internal/supervisor"
 	"xray-easy/internal/xrayapi"
 
@@ -59,11 +61,12 @@ type AmneziaWGRuntime interface {
 
 // Service orchestrates runtime adapters behind the Controller API.
 type Service struct {
-	xray    XrayRuntime
-	handler XrayHandlerRuntime
-	stats   XrayStatsRuntime
-	awg     AmneziaWGRuntime
-	now     func() time.Time
+	xray           XrayRuntime
+	handler        XrayHandlerRuntime
+	stats          XrayStatsRuntime
+	awg            AmneziaWGRuntime
+	now            func() time.Time
+	userMutationMu sync.Mutex
 }
 
 // NewService creates a Controller backed by the Xray runtime adapter.
@@ -286,6 +289,17 @@ func (s *Service) AddDeviceUser(ctx context.Context, request *structpb.Struct) (
 	if err != nil {
 		return nil, err
 	}
+	s.userMutationMu.Lock()
+	defer s.userMutationMu.Unlock()
+	if interaction.OperationID(ctx) != "" {
+		users, err := deviceUsers(ctx, handler, protocol)
+		if err != nil {
+			return nil, err
+		}
+		if containsUser(users, email) {
+			return response(map[string]any{"ok": true, "already_applied": true})
+		}
+	}
 	switch protocol {
 	case "vless":
 		err = handler.AddUser(ctx, email, id, flow)
@@ -320,6 +334,17 @@ func (s *Service) RemoveDeviceUser(ctx context.Context, request *structpb.Struct
 	if err != nil {
 		return nil, err
 	}
+	s.userMutationMu.Lock()
+	defer s.userMutationMu.Unlock()
+	if interaction.OperationID(ctx) != "" {
+		users, err := deviceUsers(ctx, handler, protocol)
+		if err != nil {
+			return nil, err
+		}
+		if !containsUser(users, email) {
+			return response(map[string]any{"ok": true, "already_applied": true})
+		}
+	}
 	switch protocol {
 	case "vless":
 		err = handler.RemoveUser(ctx, email)
@@ -332,6 +357,28 @@ func (s *Service) RemoveDeviceUser(ctx context.Context, request *structpb.Struct
 		return nil, err
 	}
 	return response(map[string]any{"ok": true})
+}
+
+func deviceUsers(ctx context.Context, handler XrayHandlerRuntime, protocol string) ([]string, error) {
+	switch protocol {
+	case "vless":
+		return handler.Users(ctx)
+	case "hysteria2":
+		return handler.UsersInInbound(ctx, "hysteria2")
+	case "vmess":
+		return handler.UsersInInbound(ctx, "vmess-tls")
+	default:
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", protocol)
+	}
+}
+
+func containsUser(users []string, email string) bool {
+	for _, current := range users {
+		if current == email {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Service) ListDeviceUsers(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {

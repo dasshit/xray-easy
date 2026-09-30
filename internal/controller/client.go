@@ -136,18 +136,21 @@ func (c *Client) Logs(ctx context.Context) ([]string, error) {
 
 // Validate asks the Xray adapter to validate a candidate config.
 func (c *Client) Validate(ctx context.Context, path, operationID string) error {
+	ctx = interaction.WithOperationID(ctx, operationID)
 	_, err := c.call(ctx, "ValidateConfig", map[string]any{"path": path, "operation_id": operationID})
 	return err
 }
 
 // Apply activates a validated Xray config.
 func (c *Client) Apply(ctx context.Context, path, operationID string) error {
+	ctx = interaction.WithOperationID(ctx, operationID)
 	_, err := c.call(ctx, "ApplyConfig", map[string]any{"path": path, "operation_id": operationID})
 	return err
 }
 
 // ReplaceInbound updates one running Xray inbound without restarting Xray.
 func (c *Client) ReplaceInbound(ctx context.Context, candidatePath, previousPath, tag, operationID string) error {
+	ctx = interaction.WithOperationID(ctx, operationID)
 	_, err := c.call(ctx, "ReplaceInbound", map[string]any{"candidate_path": candidatePath, "previous_path": previousPath, "tag": tag, "operation_id": operationID})
 	return err
 }
@@ -305,7 +308,7 @@ func (c *Client) call(ctx context.Context, method string, fields map[string]any)
 	fullMethod := "/" + RPCServiceName + "/" + method
 	started := time.Now()
 	err = c.connection.Invoke(outgoing, fullMethod, request, response)
-	interaction.LogRPC(c.logger, "xray-easy", fullMethod, requestID, protocolForClientCall(method, fields), started, err)
+	interaction.LogRPC(c.logger, "xray-easy", fullMethod, requestID, protocolForClientCall(method, fields), started, err, interaction.TraceFromContext(outgoing))
 	if err != nil {
 		return nil, fmt.Errorf("Controller %s: %w", method, err)
 	}

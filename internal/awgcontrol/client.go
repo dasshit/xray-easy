@@ -231,10 +231,10 @@ func (c *Client) call(ctx context.Context, method string, fields map[string]any)
 	fullMethod := serviceName + method
 	started := time.Now()
 	if err := c.connection.Invoke(ctx, fullMethod, request, response); err != nil {
-		interaction.LogRPC(slog.Default(), "awg-client", fullMethod, requestID, "amneziawg", started, err)
+		interaction.LogRPC(slog.Default(), "awg-client", fullMethod, requestID, "amneziawg", started, err, interaction.TraceFromContext(ctx))
 		return nil, fmt.Errorf("AWG %s failed: %w", method, err)
 	}
-	interaction.LogRPC(slog.Default(), "awg-client", fullMethod, requestID, "amneziawg", started, nil)
+	interaction.LogRPC(slog.Default(), "awg-client", fullMethod, requestID, "amneziawg", started, nil, interaction.TraceFromContext(ctx))
 	return response, nil
 }
 

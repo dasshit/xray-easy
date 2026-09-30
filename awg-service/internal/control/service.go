@@ -28,7 +28,36 @@ var servicePeerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 
 // NewService creates the RPC adapter for a configured lifecycle manager.
 func NewService(manager *Manager, options Options) *Service {
-	return &Service{manager: manager, options: options}
+	service := &Service{manager: manager, options: options}
+	service.removeOrphanedOperationKeys()
+	return service
+}
+
+func (s *Service) removeOrphanedOperationKeys() {
+	if s == nil || s.manager == nil || strings.TrimSpace(s.options.DataDir) == "" {
+		return
+	}
+	directory := filepath.Join(s.options.DataDir, "operations")
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() {
+		return
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".key") {
+			continue
+		}
+		operationID := strings.TrimSuffix(entry.Name(), ".key")
+		if peer, active := s.manager.PeerForOperation(operationID); active {
+			if _, err := readClientProfile(s.options.DataDir, peer.Name); err != nil {
+				continue
+			}
+		}
+		_ = os.Remove(filepath.Join(directory, entry.Name()))
+	}
 }
 
 // GetStatus returns the running device identity and its configured listener.
@@ -86,7 +115,7 @@ func (s *Service) GetPeerStats(context.Context, *structpb.Struct) (*structpb.Str
 
 // CreatePeer creates a keypair, registers its public key, and persists the
 // corresponding private client profile for later authenticated delivery.
-func (s *Service) CreatePeer(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) CreatePeer(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	name, err := stringField(request, "name")
@@ -96,24 +125,85 @@ func (s *Service) CreatePeer(_ context.Context, request *structpb.Struct) (*stru
 	if !servicePeerNamePattern.MatchString(name) {
 		return nil, mapError(fmt.Errorf("invalid peer name: %w", ErrInvalid))
 	}
-	privateKey, publicKey, err := GenerateKeypair()
+	operationID := OperationID(ctx)
+	if operationID != "" {
+		if receipt, ok := s.manager.OperationReceipt(operationID); ok && (receipt.Action != "create" || receipt.Name != name) {
+			return nil, status.Error(codes.Aborted, "operation ID was already used for a different peer")
+		} else if ok && receipt.Removed {
+			return nil, status.Error(codes.FailedPrecondition, "peer creation operation was already revoked")
+		}
+		if peer, ok := s.manager.PeerForOperation(operationID); ok {
+			if peer.Name != name {
+				return nil, status.Error(codes.Aborted, "operation ID was already used for a different peer")
+			}
+			if _, err := readClientProfile(s.options.DataDir, name); err == nil {
+				_ = removePendingOperationKey(s.options.DataDir, operationID)
+				return response(peerMap(peer))
+			}
+			privateKey, err := readPendingOperationKey(s.options.DataDir, operationID)
+			if err != nil {
+				return nil, statusError("recover interrupted peer creation", err)
+			}
+			if err := s.persistPeerProfile(peer, privateKey, operationID); err != nil {
+				return nil, statusError("recover interrupted peer creation", err)
+			}
+			return response(peerMap(peer))
+		}
+	}
+
+	privateKey, publicKey := "", ""
+	if operationID != "" {
+		privateKey, err = readPendingOperationKey(s.options.DataDir, operationID)
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, statusError("read peer creation intent", err)
+		}
+	}
+	if privateKey != "" {
+		_, publicKey, err = derivePublicKey(privateKey)
+	} else {
+		privateKey, publicKey, err = GenerateKeypair()
+	}
 	if err != nil {
 		return nil, statusError("generate peer keypair", err)
 	}
-	peer, err := s.manager.AddPeer(name, publicKey)
+	if operationID != "" {
+		if err := writePendingOperationKey(s.options.DataDir, operationID, privateKey); err != nil {
+			return nil, statusError("persist peer creation intent", err)
+		}
+	}
+	peer, repeated, err := s.manager.AddPeerForOperation(name, publicKey, operationID)
 	if err != nil {
 		return nil, mapError(err)
 	}
-	config, err := s.manager.RenderClientConfig(name, privateKey)
-	if err != nil {
-		_ = s.manager.RemovePeer(name)
-		return nil, statusError("render client profile", err)
+	if repeated {
+		privateKey, err = readPendingOperationKey(s.options.DataDir, operationID)
+		if err != nil {
+			return nil, statusError("recover interrupted peer creation", err)
+		}
 	}
-	if err := writeClientProfile(s.options.DataDir, name, config); err != nil {
-		_ = s.manager.RemovePeer(name)
+	if err := s.persistPeerProfile(peer, privateKey, operationID); err != nil {
+		if operationID == "" {
+			_ = s.manager.RemovePeer(name)
+		}
 		return nil, statusError("persist client profile", err)
 	}
 	return response(peerMap(peer))
+}
+
+func (s *Service) persistPeerProfile(peer Peer, privateKey, operationID string) error {
+	config, err := s.manager.RenderClientConfig(peer.Name, privateKey)
+	if err != nil {
+		return fmt.Errorf("render client profile: %w", err)
+	}
+	if err := writeClientProfile(s.options.DataDir, peer.Name, config); err != nil {
+		return fmt.Errorf("persist client profile: %w", err)
+	}
+	if operationID != "" {
+		if err := removePendingOperationKey(s.options.DataDir, operationID); err != nil {
+			return fmt.Errorf("complete peer creation receipt: %w", err)
+		}
+	}
+	return nil
 }
 
 // AddPeer activates a peer immediately and persists it for process recovery.
@@ -136,14 +226,19 @@ func (s *Service) AddPeer(_ context.Context, request *structpb.Struct) (*structp
 }
 
 // RemovePeer revokes the selected peer in the live device and persistent state.
-func (s *Service) RemovePeer(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) RemovePeer(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	name, err := stringField(request, "name")
 	if err != nil {
 		return nil, err
 	}
-	if err := s.manager.RemovePeer(name); err != nil {
+	if operationID := OperationID(ctx); operationID != "" {
+		_, err = s.manager.RemovePeerForOperation(name, operationID)
+	} else {
+		err = s.manager.RemovePeer(name)
+	}
+	if err != nil {
 		return nil, mapError(err)
 	}
 	if err := removeClientProfile(s.options.DataDir, name); err != nil {
@@ -236,9 +331,87 @@ func writeClientProfile(dataDir, name, config string) error {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}
+	if err := os.Chmod(directory, 0700); err != nil {
+		return err
+	}
 	return writeClientProfileWithPath(path, directory, config, func(dir, pattern string) (savedProfileFile, error) {
 		return os.CreateTemp(dir, pattern)
 	})
+}
+
+func pendingOperationKeyPath(dataDir, operationID string) (string, error) {
+	if !operationIDPattern.MatchString(operationID) || strings.TrimSpace(dataDir) == "" {
+		return "", ErrInvalid
+	}
+	return filepath.Join(dataDir, "operations", operationID+".key"), nil
+}
+
+func writePendingOperationKey(dataDir, operationID, privateKey string) error {
+	path, err := pendingOperationKeyPath(dataDir, operationID)
+	if err != nil {
+		return err
+	}
+	directory := filepath.Dir(path)
+	if err := os.MkdirAll(directory, 0700); err != nil {
+		return err
+	}
+	if key, err := readPendingOperationKey(dataDir, operationID); err == nil {
+		if key == privateKey {
+			return nil
+		}
+		return ErrOperationConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if _, err := file.WriteString(privateKey); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	return file.Close()
+}
+
+func readPendingOperationKey(dataDir, operationID string) (string, error) {
+	path, err := pendingOperationKeyPath(dataDir, operationID)
+	if err != nil {
+		return "", err
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() > 256 {
+		return "", errors.New("pending peer key is not a private regular file")
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	key := strings.TrimSpace(string(data))
+	if _, err := decodeKey(key); err != nil {
+		return "", errors.New("pending peer key is malformed")
+	}
+	return key, nil
+}
+
+func removePendingOperationKey(dataDir, operationID string) error {
+	path, err := pendingOperationKeyPath(dataDir, operationID)
+	if err != nil {
+		return err
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 type savedProfileFile interface {

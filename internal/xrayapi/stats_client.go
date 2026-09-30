@@ -56,7 +56,7 @@ func (c *StatsClient) Poll(ctx context.Context) ([]UserStats, error) {
 	}
 	started := time.Now()
 	response, err := client.GetUsersStats(rpcContext, &statscommand.GetUsersStatsRequest{IncludeTraffic: true})
-	interaction.LogRPC(slog.Default(), "xray-stats-client", "/xray.app.stats.command.StatsService/GetUsersStats", requestID, "xray", started, err)
+	interaction.LogRPC(slog.Default(), "xray-stats-client", "/xray.app.stats.command.StatsService/GetUsersStats", requestID, "xray", started, err, interaction.TraceFromContext(rpcContext))
 	if err != nil {
 		c.reset()
 		return nil, fmt.Errorf("get users stats: %w", err)

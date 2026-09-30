@@ -43,7 +43,7 @@ func LoggingInterceptor(service string) grpc.UnaryServerInterceptor {
 		}
 		started := time.Now()
 		response, callErr := handler(ctx, request)
-		interaction.LogRPC(nil, service, info.FullMethod, requestID, protocolForRPC(info.FullMethod, request), started, callErr)
+		interaction.LogRPC(nil, service, info.FullMethod, requestID, protocolForRPC(info.FullMethod, request), started, callErr, interaction.TraceFromContext(ctx))
 		return response, callErr
 	}
 }

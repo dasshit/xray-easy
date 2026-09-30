@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -29,15 +30,19 @@ func TestLoggingInterceptorCorrelatesWithoutLoggingPayloads(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
 	defer slog.SetDefault(previous)
 	requestID := "abcdef0123456789abcdef0123456789"
-	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", requestID))
+	operationID := "0123456789abcdef0123456789abcdef"
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", requestID, "x-controller-operation-id", operationID, "x-controller-attempt", "4", "x-controller-state-revision", "9"))
 	secret := "private-key-never-log"
-	response, err := LoggingInterceptor()(ctx, map[string]string{"secret": secret}, &grpc.UnaryServerInfo{FullMethod: "/test/Operation"}, func(context.Context, any) (any, error) {
+	response, err := LoggingInterceptor()(ctx, map[string]string{"secret": secret}, &grpc.UnaryServerInfo{FullMethod: "/test/Operation"}, func(callContext context.Context, _ any) (any, error) {
+		if got := OperationID(callContext); got != operationID {
+			t.Errorf("operation ID in handler context = %q, want %q", got, operationID)
+		}
 		return "ok", errors.New(secret)
 	})
 	if response != "ok" || err == nil {
 		t.Fatalf("interceptor result = %v, %v", response, err)
 	}
-	for _, expected := range []string{requestID, "/test/Operation", "failure", "Unknown"} {
+	for _, expected := range []string{requestID, operationID, `"retry_attempt":4`, `"state_revision":9`, "/test/Operation", "failure", "Unknown"} {
 		if !strings.Contains(output.String(), expected) {
 			t.Errorf("log %q does not contain %q", output.String(), expected)
 		}
@@ -49,6 +54,19 @@ func TestLoggingInterceptorCorrelatesWithoutLoggingPayloads(t *testing.T) {
 	_, err = LoggingInterceptor()(metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "bad")), nil, &grpc.UnaryServerInfo{FullMethod: "/test/Health"}, func(context.Context, any) (any, error) { return nil, nil })
 	if err != nil || !strings.Contains(output.String(), "request_id") || strings.Contains(output.String(), "request_id=bad") {
 		t.Fatalf("invalid incoming ID was not replaced safely: %s, %v", output.String(), err)
+	}
+	output.Reset()
+	validID := "abcdef0123456789abcdef0123456789"
+	_, err = LoggingInterceptor()(metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"x-request-id", validID, "x-controller-operation-id", "invalid", "x-controller-attempt", "-2", "x-controller-state-revision", "0",
+	)), nil, &grpc.UnaryServerInfo{FullMethod: "/test/Mutation"}, func(ctx context.Context, _ any) (any, error) {
+		if OperationID(ctx) == "invalid" || StateRevision(ctx) != 0 {
+			t.Errorf("invalid trace metadata was retained: operation=%q revision=%d", OperationID(ctx), StateRevision(ctx))
+		}
+		return nil, nil
+	})
+	if err != nil || !strings.Contains(output.String(), `"retry_attempt":1`) || strings.Contains(output.String(), `"state_revision"`) {
+		t.Fatalf("invalid trace values were not normalized: %s, %v", output.String(), err)
 	}
 }
 
@@ -157,6 +175,8 @@ func TestRPCValidationAndErrorMapping(t *testing.T) {
 	}{
 		{name: "not found", call: func() error { return mapError(ErrNotFound) }, want: codes.NotFound},
 		{name: "already exists", call: func() error { return mapError(ErrAlreadyExists) }, want: codes.AlreadyExists},
+		{name: "operation conflict", call: func() error { return mapError(ErrOperationConflict) }, want: codes.Aborted},
+		{name: "operation completed", call: func() error { return mapError(ErrOperationCompleted) }, want: codes.FailedPrecondition},
 		{name: "invalid", call: func() error { return mapError(ErrInvalid) }, want: codes.InvalidArgument},
 		{name: "internal", call: func() error { return mapError(os.ErrPermission) }, want: codes.Internal},
 	} {
@@ -618,6 +638,368 @@ func TestCreatePeerPersistsProfileAndRemoveDeletesIt(t *testing.T) {
 	}
 	if _, err := os.Stat(profilePath); !os.IsNotExist(err) {
 		t.Fatalf("profile still exists after peer removal: stat error = %v", err)
+	}
+}
+
+func TestCreatePeerRetryReturnsSamePersistedPeerAndProfile(t *testing.T) {
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(manager, opts)
+	operationID := "abcdef0123456789abcdef0123456789"
+	ctx := context.WithValue(context.Background(), operationIDKey, operationID)
+	request, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	first, err := service.CreatePeer(ctx, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstPeer := first.AsMap()
+	firstProfile, err := os.ReadFile(filepath.Join(opts.DataDir, "profiles", "iphone.conf"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreatePeer(ctx, request); err != nil {
+		t.Fatalf("retry CreatePeer() = %v", err)
+	}
+	if got := len(manager.Peers()); got != 1 {
+		t.Fatalf("peer count after retry = %d, want one", got)
+	}
+	secondProfile, err := os.ReadFile(filepath.Join(opts.DataDir, "profiles", "iphone.conf"))
+	if err != nil || !bytes.Equal(firstProfile, secondProfile) {
+		t.Fatalf("profile changed after retry: err=%v", err)
+	}
+	manager.Close()
+
+	restarted, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	service = NewService(restarted, opts)
+	second, err := service.CreatePeer(ctx, request)
+	if err != nil {
+		t.Fatalf("retry after service restart = %v", err)
+	}
+	if !reflect.DeepEqual(second.AsMap(), firstPeer) || len(restarted.Peers()) != 1 {
+		t.Fatalf("retry after restart changed peer: first=%v second=%v peers=%+v", firstPeer, second.AsMap(), restarted.Peers())
+	}
+	removeID := "fedcba9876543210fedcba9876543210"
+	removeCtx := context.WithValue(context.Background(), operationIDKey, removeID)
+	for attempt := 0; attempt < 2; attempt++ {
+		if _, err := service.RemovePeer(removeCtx, request); err != nil {
+			t.Fatalf("RemovePeer retry %d = %v", attempt, err)
+		}
+	}
+	if len(restarted.Peers()) != 0 {
+		t.Fatalf("remove retries left peers: %+v", restarted.Peers())
+	}
+	if _, err := service.CreatePeer(ctx, request); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("replayed create after revoke = %v", err)
+	}
+	if len(restarted.Peers()) != 0 {
+		t.Fatalf("replayed create resurrected a revoked peer: %+v", restarted.Peers())
+	}
+}
+
+func TestCreatePeerRejectsMalformedIntentAndReusedOperationIDs(t *testing.T) {
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	service := NewService(manager, opts)
+	createID := "abcdef0123456789abcdef0123456789"
+	createContext := context.WithValue(context.Background(), operationIDKey, createID)
+	createRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	if _, err := service.CreatePeer(createContext, createRequest); err != nil {
+		t.Fatal(err)
+	}
+	changedName, _ := structpb.NewStruct(map[string]any{"name": "ipad"})
+	if _, err := service.CreatePeer(createContext, changedName); status.Code(err) != codes.Aborted {
+		t.Fatalf("create retry with a different peer name = %v", err)
+	}
+
+	removeID := "fedcba9876543210fedcba9876543210"
+	removeContext := context.WithValue(context.Background(), operationIDKey, removeID)
+	missingRequest, _ := structpb.NewStruct(map[string]any{"name": "missing"})
+	if _, err := service.RemovePeer(removeContext, missingRequest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreatePeer(removeContext, missingRequest); status.Code(err) != codes.Aborted {
+		t.Fatalf("create reusing a completed remove operation = %v", err)
+	}
+
+	malformedID := "0123456789abcdef0123456789abcdef"
+	malformedPath := filepath.Join(opts.DataDir, "operations", malformedID+".key")
+	if err := os.MkdirAll(filepath.Dir(malformedPath), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(malformedPath, []byte("not-a-key"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	malformedContext := context.WithValue(context.Background(), operationIDKey, malformedID)
+	if _, err := service.CreatePeer(malformedContext, changedName); status.Code(err) != codes.Internal {
+		t.Fatalf("create with a malformed persisted intent = %v", err)
+	}
+	if _, err := service.CreatePeer(context.Background(), createRequest); status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("create using an existing peer name = %v", err)
+	}
+}
+
+func TestCreatePeerRecoversInterruptedProfileFromOperationKey(t *testing.T) {
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	operationID := "0123456789abcdef0123456789abcdef"
+	privateKey, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := writePendingOperationKey(opts.DataDir, operationID, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	orphanID := "fedcba9876543210fedcba9876543210"
+	if err := writePendingOperationKey(opts.DataDir, orphanID, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := manager.AddPeerForOperation("iphone", publicKey, operationID); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(manager, opts)
+	if _, err := os.Stat(filepath.Join(opts.DataDir, "operations", orphanID+".key")); !os.IsNotExist(err) {
+		t.Fatalf("orphan pending key survived service initialization: %v", err)
+	}
+	ctx := context.WithValue(context.Background(), operationIDKey, operationID)
+	request, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	if _, err := service.CreatePeer(ctx, request); err != nil {
+		t.Fatalf("CreatePeer recovery = %v", err)
+	}
+	profile, err := readClientProfile(opts.DataDir, "iphone")
+	if err != nil || !strings.Contains(profile, "PrivateKey = "+privateKey) {
+		t.Fatalf("recovered profile did not retain original key: err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(opts.DataDir, "operations", operationID+".key")); !os.IsNotExist(err) {
+		t.Fatalf("completed operation key was not removed: %v", err)
+	}
+}
+
+func TestCreatePeerRetriesAfterProfilePersistenceFailure(t *testing.T) {
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	profileDirectory := filepath.Join(opts.DataDir, "profiles")
+	if err := os.WriteFile(profileDirectory, []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(manager, opts)
+	operationID := "abcdef0123456789abcdef0123456789"
+	ctx := context.WithValue(context.Background(), operationIDKey, operationID)
+	request, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	if _, err := service.CreatePeer(ctx, request); status.Code(err) != codes.Internal {
+		t.Fatalf("CreatePeer with blocked profile path = %v", err)
+	}
+	if len(manager.Peers()) != 1 {
+		t.Fatalf("interrupted peer creation was not persisted: %+v", manager.Peers())
+	}
+	pendingPath := filepath.Join(opts.DataDir, "operations", operationID+".key")
+	privateKey, err := readPendingOperationKey(opts.DataDir, operationID)
+	if err != nil {
+		t.Fatalf("read pending key after profile failure = %v", err)
+	}
+	if err := os.Remove(profileDirectory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(profileDirectory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.CreatePeer(ctx, request); err != nil {
+		t.Fatalf("CreatePeer retry after fixing storage = %v", err)
+	}
+	profile, err := readClientProfile(opts.DataDir, "iphone")
+	if err != nil || !strings.Contains(profile, "PrivateKey = "+privateKey) {
+		t.Fatalf("recovered profile key mismatch: err=%v", err)
+	}
+	if _, err := os.Stat(pendingPath); !os.IsNotExist(err) {
+		t.Fatalf("completed retry left pending key: %v", err)
+	}
+}
+
+func TestPendingOperationKeyFilesAreValidatedAndCleaned(t *testing.T) {
+	dataDir := t.TempDir()
+	operationID := "abcdef0123456789abcdef0123456789"
+	privateKey, otherKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pendingOperationKeyPath(dataDir, "bad-id"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid operation key path = %v", err)
+	}
+	if _, err := pendingOperationKeyPath("", operationID); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty data directory path = %v", err)
+	}
+	if _, err := readPendingOperationKey(dataDir, operationID); !os.IsNotExist(err) {
+		t.Fatalf("read missing operation key = %v", err)
+	}
+	if err := removePendingOperationKey(dataDir, "bad-id"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("remove invalid operation key = %v", err)
+	}
+	blocked := filepath.Join(t.TempDir(), "data-file")
+	if err := os.WriteFile(blocked, []byte("blocked"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePendingOperationKey(blocked, operationID, privateKey); err == nil {
+		t.Fatal("pending key write succeeded below a regular file")
+	}
+	if err := writePendingOperationKey(dataDir, "bad-id", privateKey); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("pending key write with invalid operation ID = %v", err)
+	}
+	if err := writePendingOperationKey("", operationID, privateKey); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("pending key write with empty data directory = %v", err)
+	}
+	if err := writePendingOperationKey(dataDir, operationID, privateKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePendingOperationKey(dataDir, operationID, privateKey); err != nil {
+		t.Fatalf("idempotent key write = %v", err)
+	}
+	if err := writePendingOperationKey(dataDir, operationID, otherKey); !errors.Is(err, ErrOperationConflict) {
+		t.Fatalf("same operation with another key = %v", err)
+	}
+	path := filepath.Join(dataDir, "operations", operationID+".key")
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPendingOperationKey(dataDir, operationID); err == nil {
+		t.Fatal("read accepted an overly permissive pending key file")
+	}
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("malformed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPendingOperationKey(dataDir, operationID); err == nil {
+		t.Fatal("read accepted a malformed private key")
+	}
+	if err := removePendingOperationKey(dataDir, operationID); err != nil {
+		t.Fatal(err)
+	}
+	if err := removePendingOperationKey(dataDir, operationID); err != nil {
+		t.Fatalf("repeat pending key removal = %v", err)
+	}
+	badOperationID := "11111111222222223333333344444444"
+	badOperationPath := filepath.Join(dataDir, "operations", badOperationID+".key")
+	if err := os.WriteFile(badOperationPath, []byte("malformed"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writePendingOperationKey(dataDir, badOperationID, privateKey); err == nil {
+		t.Fatal("write replaced an existing malformed operation key")
+	}
+	if err := os.Remove(badOperationPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(badOperationPath, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(badOperationPath, "child"), []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readPendingOperationKey(dataDir, badOperationID); err == nil {
+		t.Fatal("read accepted a directory as a pending key file")
+	}
+	if err := removePendingOperationKey(dataDir, badOperationID); err == nil {
+		t.Fatal("remove unexpectedly removed a pending-key directory")
+	}
+}
+
+func TestGRPCPeerMutationsReplaySafelyAcrossServiceRestart(t *testing.T) {
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	newConnection := func(service *Service) (*grpc.Server, *bufconn.Listener, *grpc.ClientConn) {
+		t.Helper()
+		listener := bufconn.Listen(1 << 20)
+		server := grpc.NewServer(grpc.ChainUnaryInterceptor(LoggingInterceptor(), AuthInterceptor("test-token")))
+		Register(server, service)
+		go func() { _ = server.Serve(listener) }()
+		connection, err := grpc.NewClient("passthrough:///awg-operation-replay", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			server.Stop()
+			_ = listener.Close()
+			t.Fatal(err)
+		}
+		return server, listener, connection
+	}
+	server, listener, connection := newConnection(NewService(manager, opts))
+	base := context.Background()
+	trace := func(operationID string) context.Context {
+		return metadata.NewOutgoingContext(base, metadata.Pairs(
+			"authorization", "Bearer test-token", "x-request-id", "abcdef0123456789abcdef0123456789",
+			"x-controller-operation-id", operationID, "x-controller-attempt", "2", "x-controller-state-revision", "17",
+		))
+	}
+	createID := "0123456789abcdef0123456789abcdef"
+	createRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	var firstCreate map[string]any
+	for attempt := 0; attempt < 2; attempt++ {
+		response := new(structpb.Struct)
+		if err := connection.Invoke(trace(createID), "/xrayeasy.awg.v1.Control/CreatePeer", createRequest, response); err != nil {
+			t.Fatalf("CreatePeer attempt %d = %v", attempt, err)
+		}
+		if attempt == 0 {
+			firstCreate = response.AsMap()
+		} else if !reflect.DeepEqual(firstCreate, response.AsMap()) {
+			t.Fatalf("create retry changed peer: first=%v second=%v", firstCreate, response.AsMap())
+		}
+	}
+	if len(manager.Peers()) != 1 {
+		t.Fatalf("create retry produced %d peers", len(manager.Peers()))
+	}
+	removeID := "fedcba9876543210fedcba9876543210"
+	removeRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	for attempt := 0; attempt < 2; attempt++ {
+		if err := connection.Invoke(trace(removeID), "/xrayeasy.awg.v1.Control/RemovePeer", removeRequest, new(structpb.Struct)); err != nil {
+			t.Fatalf("RemovePeer attempt %d = %v", attempt, err)
+		}
+	}
+	if len(manager.Peers()) != 0 {
+		t.Fatalf("remove retry left peers: %+v", manager.Peers())
+	}
+	server.Stop()
+	_ = connection.Close()
+	_ = listener.Close()
+	manager.Close()
+
+	restarted, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	server, listener, connection = newConnection(NewService(restarted, opts))
+	defer server.Stop()
+	defer connection.Close()
+	defer listener.Close()
+	newCreateID := "11111111111111111111111111111111"
+	newRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	if err := connection.Invoke(trace(newCreateID), "/xrayeasy.awg.v1.Control/CreatePeer", newRequest, new(structpb.Struct)); err != nil {
+		t.Fatalf("create replacement peer after restart = %v", err)
+	}
+	if err := connection.Invoke(trace(removeID), "/xrayeasy.awg.v1.Control/RemovePeer", removeRequest, new(structpb.Struct)); err != nil {
+		t.Fatalf("replay old revoke after restart = %v", err)
+	}
+	if len(restarted.Peers()) != 1 || restarted.Peers()[0].OperationID != newCreateID {
+		t.Fatalf("old revoke removed a replacement peer: %+v", restarted.Peers())
 	}
 }
 

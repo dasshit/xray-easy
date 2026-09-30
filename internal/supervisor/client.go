@@ -98,17 +98,20 @@ func (c *Client) Close() error {
 }
 
 func (c *Client) Validate(ctx context.Context, path, operationID string) error {
+	ctx = interaction.WithOperationID(ctx, operationID)
 	_, err := c.call(ctx, "ValidateConfig", stringRequest(map[string]string{"path": path, "operation_id": operationID}))
 	return err
 }
 
 func (c *Client) Apply(ctx context.Context, path, operationID string) error {
+	ctx = interaction.WithOperationID(ctx, operationID)
 	_, err := c.call(ctx, "ApplyConfig", stringRequest(map[string]string{"path": path, "operation_id": operationID}))
 	return err
 }
 
 // ReplaceInbound updates one Xray inbound through HandlerService without restarting the Xray process.
 func (c *Client) ReplaceInbound(ctx context.Context, candidatePath, previousPath, tag, operationID string) error {
+	ctx = interaction.WithOperationID(ctx, operationID)
 	request := stringRequest(map[string]string{
 		"candidate_path": candidatePath,
 		"previous_path":  previousPath,
@@ -224,10 +227,10 @@ func (c *Client) call(ctx context.Context, method string, request proto.Message)
 	fullMethod := "/" + RPCServiceName + "/" + method
 	started := time.Now()
 	if err := c.conn.Invoke(metadataContext, fullMethod, request, response); err != nil {
-		interaction.LogRPC(slog.Default(), "xray-supervisor-client", fullMethod, requestID, "xray", started, err)
+		interaction.LogRPC(slog.Default(), "xray-supervisor-client", fullMethod, requestID, "xray", started, err, interaction.TraceFromContext(metadataContext))
 		return nil, fmt.Errorf("supervisor %s: %w", method, err)
 	}
-	interaction.LogRPC(slog.Default(), "xray-supervisor-client", fullMethod, requestID, "xray", started, nil)
+	interaction.LogRPC(slog.Default(), "xray-supervisor-client", fullMethod, requestID, "xray", started, nil, interaction.TraceFromContext(metadataContext))
 	return response, nil
 }
 

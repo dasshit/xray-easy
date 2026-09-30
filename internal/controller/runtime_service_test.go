@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
 	"xray-easy/internal/awgcontrol"
 	"xray-easy/internal/domain"
+	"xray-easy/internal/interaction"
 	"xray-easy/internal/xrayapi"
 
 	"google.golang.org/grpc/codes"
@@ -16,43 +18,76 @@ import (
 )
 
 type fakeXrayHandler struct {
-	called string
-	args   []string
-	users  []string
-	err    error
+	called     string
+	args       []string
+	users      []string
+	err        error
+	adds       int
+	removes    int
+	traces     []interaction.Trace
+	requestIDs []string
 }
 
-func (f *fakeXrayHandler) AddUser(_ context.Context, email, id, flow string) error {
+func (f *fakeXrayHandler) AddUser(ctx context.Context, email, id, flow string) error {
 	f.called, f.args = "add-vless", []string{email, id, flow}
+	f.adds++
+	f.users = append(f.users, email)
+	f.captureTrace(ctx)
 	return f.err
 }
 func (f *fakeXrayHandler) RemoveUser(_ context.Context, email string) error {
 	f.called, f.args = "remove-vless", []string{email}
+	f.removes++
+	f.users = withoutUser(f.users, email)
 	return f.err
 }
-func (f *fakeXrayHandler) Users(context.Context) ([]string, error) {
+func (f *fakeXrayHandler) Users(ctx context.Context) ([]string, error) {
 	f.called = "list-vless"
+	f.captureTrace(ctx)
 	return f.users, f.err
+}
+
+func (f *fakeXrayHandler) captureTrace(ctx context.Context) {
+	f.traces = append(f.traces, interaction.TraceFromContext(ctx))
+	f.requestIDs = append(f.requestIDs, interaction.RequestID(ctx))
 }
 func (f *fakeXrayHandler) AddHysteriaUser(_ context.Context, email, id string) error {
 	f.called, f.args = "add-hysteria2", []string{email, id}
+	f.adds++
+	f.users = append(f.users, email)
 	return f.err
 }
 func (f *fakeXrayHandler) RemoveHysteriaUser(_ context.Context, email string) error {
 	f.called, f.args = "remove-hysteria2", []string{email}
+	f.removes++
+	f.users = withoutUser(f.users, email)
 	return f.err
 }
 func (f *fakeXrayHandler) AddVMessUser(_ context.Context, email, id string) error {
 	f.called, f.args = "add-vmess", []string{email, id}
+	f.adds++
+	f.users = append(f.users, email)
 	return f.err
 }
 func (f *fakeXrayHandler) RemoveVMessUser(_ context.Context, email string) error {
 	f.called, f.args = "remove-vmess", []string{email}
+	f.removes++
+	f.users = withoutUser(f.users, email)
 	return f.err
 }
 func (f *fakeXrayHandler) UsersInInbound(_ context.Context, inbound string) ([]string, error) {
 	f.called, f.args = "list-"+inbound, []string{inbound}
 	return f.users, f.err
+}
+
+func withoutUser(users []string, email string) []string {
+	result := users[:0]
+	for _, user := range users {
+		if user != email {
+			result = append(result, user)
+		}
+	}
+	return result
 }
 
 type fakeXrayStats struct {
@@ -197,6 +232,85 @@ func TestServiceRoutesAllAmneziaWGRuntimeOperations(t *testing.T) {
 	}
 	if _, err := service.RestoreAmneziaWGBackup(context.Background(), request(map[string]any{"data": "YXJjaGl2ZQ=="})); err != nil || !reflect.DeepEqual(awg.restored, []byte("archive")) {
 		t.Fatalf("RestoreAmneziaWGBackup() = %v, restored=%q", err, awg.restored)
+	}
+}
+
+type concurrentAddHandler struct {
+	fakeXrayHandler
+	mu           sync.Mutex
+	users        []string
+	listCalls    int
+	firstList    chan struct{}
+	secondList   chan struct{}
+	releaseFirst chan struct{}
+	addCalls     int
+}
+
+func (h *concurrentAddHandler) Users(context.Context) ([]string, error) {
+	h.mu.Lock()
+	h.listCalls++
+	call := h.listCalls
+	users := append([]string(nil), h.users...)
+	h.mu.Unlock()
+	if call == 1 {
+		close(h.firstList)
+		<-h.releaseFirst
+	}
+	if call == 2 {
+		close(h.secondList)
+	}
+	return users, nil
+}
+
+func (h *concurrentAddHandler) AddUser(_ context.Context, email, _, _ string) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.addCalls++
+	h.users = append(h.users, email)
+	return nil
+}
+
+func TestXrayDeviceMutationCheckAndApplyAreSerialized(t *testing.T) {
+	handler := &concurrentAddHandler{
+		firstList:    make(chan struct{}),
+		secondList:   make(chan struct{}),
+		releaseFirst: make(chan struct{}),
+	}
+	service := NewServiceWithAdapters(&fakeRuntime{}, handler, nil, nil)
+	ctx := interaction.WithOperationID(context.Background(), "abcdef0123456789abcdef0123456789")
+	request := request(map[string]any{"protocol": "vless", "email": "device@xray-easy", "id": "stable-uuid", "flow": "vision"})
+	results := make(chan error, 2)
+	go func() { _, err := service.AddDeviceUser(ctx, request); results <- err }()
+	select {
+	case <-handler.firstList:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first idempotency check did not start")
+	}
+	go func() { _, err := service.AddDeviceUser(ctx, request); results <- err }()
+	concurrentCheck := false
+	select {
+	case <-handler.secondList:
+		concurrentCheck = true
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(handler.releaseFirst)
+	for range 2 {
+		select {
+		case err := <-results:
+			if err != nil {
+				t.Fatalf("concurrent AddDeviceUser() = %v", err)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("concurrent add did not finish")
+		}
+	}
+	if concurrentCheck {
+		t.Fatal("second operation checked the stale roster before the first add completed")
+	}
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	if handler.addCalls != 1 || len(handler.users) != 1 {
+		t.Fatalf("concurrent retry added duplicate users: calls=%d users=%v", handler.addCalls, handler.users)
 	}
 }
 

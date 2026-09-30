@@ -26,9 +26,11 @@ import (
 )
 
 var (
-	ErrInvalid       = errors.New("invalid peer")
-	ErrNotFound      = errors.New("peer not found")
-	ErrAlreadyExists = errors.New("peer already exists")
+	ErrInvalid            = errors.New("invalid peer")
+	ErrNotFound           = errors.New("peer not found")
+	ErrAlreadyExists      = errors.New("peer already exists")
+	ErrOperationConflict  = errors.New("operation ID was already used for a different peer")
+	ErrOperationCompleted = errors.New("operation was already completed and its result cannot be replayed")
 )
 
 var peerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
@@ -38,17 +40,27 @@ const stateVersion = 1
 
 // Peer is the non-secret, persisted identity and tunnel address of a client.
 type Peer struct {
-	Name      string    `json:"name"`
-	PublicKey string    `json:"publicKey"`
-	IPv4      string    `json:"ipv4"`
-	IPv6      string    `json:"ipv6"`
-	CreatedAt time.Time `json:"createdAt"`
+	Name        string    `json:"name"`
+	PublicKey   string    `json:"publicKey"`
+	IPv4        string    `json:"ipv4"`
+	IPv6        string    `json:"ipv6"`
+	CreatedAt   time.Time `json:"createdAt"`
+	OperationID string    `json:"operationId,omitempty"`
 }
 
 type persistedState struct {
-	Version            int    `json:"version"`
-	PrivateKeyEnvelope string `json:"privateKeyEnvelope"`
-	Peers              []Peer `json:"peers"`
+	Version            int                         `json:"version"`
+	PrivateKeyEnvelope string                      `json:"privateKeyEnvelope"`
+	Peers              []Peer                      `json:"peers"`
+	Operations         map[string]OperationReceipt `json:"operations,omitempty"`
+}
+
+// OperationReceipt makes create and revoke retries safe across service restarts.
+type OperationReceipt struct {
+	Action  string `json:"action"`
+	Name    string `json:"name"`
+	Peer    Peer   `json:"peer,omitempty"`
+	Removed bool   `json:"removed,omitempty"`
 }
 
 // Options are the non-secret deployment settings of the prototype service.
@@ -111,12 +123,15 @@ func Open(opts Options, factory DeviceFactory) (*Manager, error) {
 		if sealErr != nil {
 			return nil, sealErr
 		}
-		state = persistedState{Version: stateVersion, PrivateKeyEnvelope: envelope, Peers: []Peer{}}
+		state = persistedState{Version: stateVersion, PrivateKeyEnvelope: envelope, Peers: []Peer{}, Operations: map[string]OperationReceipt{}}
 		if err := writeState(statePath, state); err != nil {
 			return nil, err
 		}
 	} else if err != nil {
 		return nil, err
+	}
+	if state.Operations == nil {
+		state.Operations = map[string]OperationReceipt{}
 	}
 	serverPrivateKey, err = openPrivateKey(state.PrivateKeyEnvelope, opts.MasterKey)
 	if err != nil {
@@ -252,53 +267,128 @@ func GenerateKeypair() (privateKey, publicKey string, err error) {
 
 // AddPeer allocates a dual-stack address pair and activates a peer without restarting the engine.
 func (m *Manager) AddPeer(name, publicKey string) (Peer, error) {
+	peer, _, err := m.AddPeerForOperation(name, publicKey, "")
+	return peer, err
+}
+
+// AddPeerForOperation deduplicates retries by stable operation ID and records
+// the receipt atomically with the peer state. The optional persisted field is
+// backward compatible with existing AWG state files.
+func (m *Manager) AddPeerForOperation(name, publicKey, operationID string) (Peer, bool, error) {
 	if !peerNamePattern.MatchString(name) {
-		return Peer{}, fmt.Errorf("peer name must contain 1-32 letters, digits or hyphens: %w", ErrInvalid)
+		return Peer{}, false, fmt.Errorf("peer name must contain 1-32 letters, digits or hyphens: %w", ErrInvalid)
 	}
 	if _, err := decodeKey(publicKey); err != nil {
-		return Peer{}, fmt.Errorf("client public key: %w", err)
+		return Peer{}, false, fmt.Errorf("client public key: %w", err)
+	}
+	if operationID != "" && !operationIDPattern.MatchString(operationID) {
+		return Peer{}, false, fmt.Errorf("invalid operation ID: %w", ErrInvalid)
 	}
 	_, serverPublicKey, err := derivePublicKey(m.serverPrivateKey)
 	if err != nil {
-		return Peer{}, err
+		return Peer{}, false, err
 	}
 	if serverPublicKey == publicKey {
-		return Peer{}, fmt.Errorf("client public key cannot equal the server key: %w", ErrInvalid)
+		return Peer{}, false, fmt.Errorf("client public key cannot equal the server key: %w", ErrInvalid)
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return Peer{}, errors.New("AWG manager is closed")
+		return Peer{}, false, errors.New("AWG manager is closed")
+	}
+	if operationID != "" {
+		if receipt, exists := m.state.Operations[operationID]; exists {
+			if receipt.Action != "create" || receipt.Name != name {
+				return Peer{}, false, ErrOperationConflict
+			}
+			if receipt.Removed {
+				return Peer{}, false, ErrOperationCompleted
+			}
+			return receipt.Peer, true, nil
+		}
 	}
 	for _, peer := range m.state.Peers {
+		if operationID != "" && peer.OperationID == operationID {
+			if peer.Name != name {
+				return Peer{}, false, ErrOperationConflict
+			}
+			return peer, true, nil
+		}
 		if peer.Name == name || peer.PublicKey == publicKey {
-			return Peer{}, ErrAlreadyExists
+			return Peer{}, false, ErrAlreadyExists
 		}
 	}
 	ipv4, ipv6, err := m.nextAddressesLocked()
 	if err != nil {
-		return Peer{}, err
+		return Peer{}, false, err
 	}
-	peer := Peer{Name: name, PublicKey: publicKey, IPv4: ipv4.String(), IPv6: ipv6.String(), CreatedAt: time.Now().UTC()}
+	peer := Peer{Name: name, PublicKey: publicKey, IPv4: ipv4.String(), IPv6: ipv6.String(), CreatedAt: time.Now().UTC(), OperationID: operationID}
 	if err := m.device.Set(peerConfig(peer)); err != nil {
-		return Peer{}, fmt.Errorf("activate peer: %w", err)
+		return Peer{}, false, fmt.Errorf("activate peer: %w", err)
 	}
 	next := cloneState(m.state)
 	next.Peers = append(next.Peers, peer)
+	if operationID != "" {
+		next.Operations[operationID] = OperationReceipt{Action: "create", Name: name, Peer: peer}
+	}
 	if err := writeState(filepath.Join(m.opts.DataDir, "state.json"), next); err != nil {
 		_ = m.device.Set(removePeerConfig(peer))
-		return Peer{}, err
+		return Peer{}, false, err
 	}
 	m.state = next
-	return peer, nil
+	return peer, false, nil
+}
+
+var operationIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
+
+// PeerForOperation returns a persisted peer created by an earlier operation.
+func (m *Manager) PeerForOperation(operationID string) (Peer, bool) {
+	if !operationIDPattern.MatchString(operationID) {
+		return Peer{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if receipt, ok := m.state.Operations[operationID]; ok && receipt.Action == "create" && !receipt.Removed {
+		return receipt.Peer, true
+	}
+	return Peer{}, false
+}
+
+// OperationReceipt returns a durable result record for an operation ID.
+func (m *Manager) OperationReceipt(operationID string) (OperationReceipt, bool) {
+	if !operationIDPattern.MatchString(operationID) {
+		return OperationReceipt{}, false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	receipt, ok := m.state.Operations[operationID]
+	return receipt, ok
 }
 
 // RemovePeer removes a client from the live device and persisted desired state.
 func (m *Manager) RemovePeer(name string) error {
+	_, err := m.RemovePeerForOperation(name, "")
+	return err
+}
+
+// RemovePeerForOperation revokes a peer and records the result atomically.
+// Replaying a revoke cannot remove a later peer that reused the same name.
+func (m *Manager) RemovePeerForOperation(name, operationID string) (bool, error) {
+	if operationID != "" && !operationIDPattern.MatchString(operationID) {
+		return false, fmt.Errorf("invalid operation ID: %w", ErrInvalid)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.closed {
-		return errors.New("AWG manager is closed")
+		return false, errors.New("AWG manager is closed")
+	}
+	if operationID != "" {
+		if receipt, exists := m.state.Operations[operationID]; exists {
+			if receipt.Action != "remove" || receipt.Name != name {
+				return false, ErrOperationConflict
+			}
+			return true, nil
+		}
 	}
 	index := -1
 	for i, peer := range m.state.Peers {
@@ -308,20 +398,35 @@ func (m *Manager) RemovePeer(name string) error {
 		}
 	}
 	if index < 0 {
-		return ErrNotFound
+		if operationID == "" {
+			return false, ErrNotFound
+		}
+		next := cloneState(m.state)
+		next.Operations[operationID] = OperationReceipt{Action: "remove", Name: name, Removed: true}
+		if err := writeState(filepath.Join(m.opts.DataDir, "state.json"), next); err != nil {
+			return false, err
+		}
+		m.state = next
+		return false, nil
 	}
 	peer := m.state.Peers[index]
 	if err := m.device.Set(removePeerConfig(peer)); err != nil {
-		return fmt.Errorf("deactivate peer: %w", err)
+		return false, fmt.Errorf("deactivate peer: %w", err)
 	}
 	next := cloneState(m.state)
 	next.Peers = append(next.Peers[:index], next.Peers[index+1:]...)
+	if peer.OperationID != "" {
+		next.Operations[peer.OperationID] = OperationReceipt{Action: "create", Name: name, Peer: peer, Removed: true}
+	}
+	if operationID != "" {
+		next.Operations[operationID] = OperationReceipt{Action: "remove", Name: name, Peer: peer, Removed: true}
+	}
 	if err := writeState(filepath.Join(m.opts.DataDir, "state.json"), next); err != nil {
 		_ = m.device.Set(peerConfig(peer))
-		return err
+		return false, err
 	}
 	m.state = next
-	return nil
+	return false, nil
 }
 
 // RestorePersistedState validates and applies a state snapshot using the
@@ -657,13 +762,16 @@ func validateState(state persistedState, opts Options) error {
 	if state.PrivateKeyEnvelope == "" {
 		return fmt.Errorf("persisted server key envelope is missing: %w", ErrInvalid)
 	}
-	seenName, seenKey, seen4, seen6 := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	seenName, seenKey, seen4, seen6, seenOperation := map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}, map[string]bool{}
 	for _, peer := range state.Peers {
 		if !peerNamePattern.MatchString(peer.Name) || seenName[peer.Name] || seenKey[peer.PublicKey] {
 			return fmt.Errorf("invalid or duplicate persisted AWG peer: %w", ErrInvalid)
 		}
 		if _, err := decodeKey(peer.PublicKey); err != nil {
 			return fmt.Errorf("invalid persisted peer key: %w", err)
+		}
+		if peer.OperationID != "" && (!operationIDPattern.MatchString(peer.OperationID) || seenOperation[peer.OperationID]) {
+			return fmt.Errorf("invalid or duplicate persisted operation ID: %w", ErrInvalid)
 		}
 		ip4, err4 := netip.ParseAddr(peer.IPv4)
 		ip6, err6 := netip.ParseAddr(peer.IPv6)
@@ -674,12 +782,28 @@ func validateState(state persistedState, opts Options) error {
 			return fmt.Errorf("invalid persisted peer IPv6 address: %w", ErrInvalid)
 		}
 		seenName[peer.Name], seenKey[peer.PublicKey], seen4[peer.IPv4], seen6[peer.IPv6] = true, true, true, true
+		if peer.OperationID != "" {
+			seenOperation[peer.OperationID] = true
+		}
+	}
+	for operationID, receipt := range state.Operations {
+		if !operationIDPattern.MatchString(operationID) || !peerNamePattern.MatchString(receipt.Name) || (receipt.Action != "create" && receipt.Action != "remove") {
+			return fmt.Errorf("invalid persisted AWG operation receipt: %w", ErrInvalid)
+		}
+		if receipt.Action == "create" && (!peerNamePattern.MatchString(receipt.Peer.Name) || receipt.Peer.Name != receipt.Name) {
+			return fmt.Errorf("invalid persisted AWG create receipt: %w", ErrInvalid)
+		}
 	}
 	return nil
 }
 
 func cloneState(state persistedState) persistedState {
 	state.Peers = append([]Peer(nil), state.Peers...)
+	operations := make(map[string]OperationReceipt, len(state.Operations))
+	for operationID, receipt := range state.Operations {
+		operations[operationID] = receipt
+	}
+	state.Operations = operations
 	return state
 }
 

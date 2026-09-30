@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,27 @@ import (
 )
 
 const serviceName = "xrayeasy.awg.v1.Control"
+
+type traceContextKey string
+
+const (
+	requestIDKey   traceContextKey = "x-request-id"
+	operationIDKey traceContextKey = "x-controller-operation-id"
+	attemptKey     traceContextKey = "x-controller-attempt"
+	revisionKey    traceContextKey = "x-controller-state-revision"
+)
+
+// OperationID returns the Controller operation ID attached by the server interceptor.
+func OperationID(ctx context.Context) string {
+	value, _ := ctx.Value(operationIDKey).(string)
+	return value
+}
+
+// StateRevision returns the desired-state revision attached by the interceptor.
+func StateRevision(ctx context.Context) int64 {
+	value, _ := ctx.Value(revisionKey).(int64)
+	return value
+}
 
 // API is the authenticated, private gRPC surface used by the Xray-easy control plane.
 type API interface {
@@ -95,20 +117,9 @@ func AuthInterceptor(token string) grpc.UnaryServerInterceptor {
 // protobuf payloads, peer credentials, or raw error messages.
 func LoggingInterceptor() grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		requestID := ""
-		if values, ok := metadata.FromIncomingContext(ctx); ok {
-			items := values.Get("x-request-id")
-			if len(items) == 1 && validRequestID(items[0]) {
-				requestID = strings.ToLower(items[0])
-			}
-		}
-		if requestID == "" {
-			bytes := make([]byte, 16)
-			if _, err := rand.Read(bytes); err == nil {
-				requestID = hex.EncodeToString(bytes)
-			} else {
-				requestID = "unavailable"
-			}
+		ctx, requestID, operationID, attempt, traceErr := ensureIncomingTrace(ctx)
+		if traceErr != nil {
+			return nil, status.Error(codes.Internal, "could not create request identifier")
 		}
 		started := time.Now()
 		response, err := handler(ctx, request)
@@ -116,22 +127,75 @@ func LoggingInterceptor() grpc.UnaryServerInterceptor {
 		if err != nil {
 			code, result, level = status.Code(err).String(), "failure", slog.LevelError
 		}
-		slog.Default().LogAttrs(context.Background(), level, "grpc interaction",
+		attrs := []slog.Attr{
 			slog.String("service", "awg-service"), slog.String("method", info.FullMethod),
-			slog.String("request_id", requestID), slog.String("protocol", "amneziawg"),
+			slog.String("request_id", requestID), slog.String("controller_operation_id", operationID),
+			slog.Int("retry_attempt", attempt), slog.String("protocol", "amneziawg"),
 			slog.String("result", result), slog.String("grpc_code", code),
 			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
-		)
+		}
+		if revision := StateRevision(ctx); revision > 0 {
+			attrs = append(attrs, slog.Int64("state_revision", revision))
+		}
+		slog.Default().LogAttrs(context.Background(), level, "grpc interaction", attrs...)
 		return response, err
 	}
 }
 
-func validRequestID(value string) bool {
-	if len(value) != 32 {
-		return false
+func ensureIncomingTrace(ctx context.Context) (context.Context, string, string, int, error) {
+	values, _ := metadata.FromIncomingContext(ctx)
+	readID := func(key string) string {
+		items := values.Get(key)
+		if len(items) != 1 || len(items[0]) != 32 {
+			return ""
+		}
+		if _, err := hex.DecodeString(items[0]); err != nil {
+			return ""
+		}
+		return strings.ToLower(items[0])
 	}
-	_, err := hex.DecodeString(value)
-	return err == nil
+	newID := func() (string, error) {
+		value := make([]byte, 16)
+		if _, err := rand.Read(value); err != nil {
+			return "", err
+		}
+		return hex.EncodeToString(value), nil
+	}
+	requestID := readID("x-request-id")
+	if requestID == "" {
+		var err error
+		requestID, err = newID()
+		if err != nil {
+			return nil, "", "", 0, err
+		}
+	}
+	operationID := readID("x-controller-operation-id")
+	if operationID == "" {
+		var err error
+		operationID, err = newID()
+		if err != nil {
+			return nil, "", "", 0, err
+		}
+	}
+	attempt := 1
+	if items := values.Get("x-controller-attempt"); len(items) == 1 {
+		if parsed, err := strconv.Atoi(items[0]); err == nil && parsed > 0 && parsed <= 1_000_000 {
+			attempt = parsed
+		}
+	}
+	var revision int64
+	if items := values.Get("x-controller-state-revision"); len(items) == 1 {
+		if parsed, err := strconv.ParseInt(items[0], 10, 64); err == nil && parsed > 0 {
+			revision = parsed
+		}
+	}
+	ctx = context.WithValue(ctx, requestIDKey, requestID)
+	ctx = context.WithValue(ctx, operationIDKey, operationID)
+	ctx = context.WithValue(ctx, attemptKey, attempt)
+	if revision > 0 {
+		ctx = context.WithValue(ctx, revisionKey, revision)
+	}
+	return ctx, requestID, operationID, attempt, nil
 }
 
 // Field helpers keep decoding strict and return safe gRPC validation errors.
@@ -166,6 +230,12 @@ func mapError(err error) error {
 	}
 	if errors.Is(err, ErrAlreadyExists) {
 		return status.Error(codes.AlreadyExists, err.Error())
+	}
+	if errors.Is(err, ErrOperationConflict) {
+		return status.Error(codes.Aborted, err.Error())
+	}
+	if errors.Is(err, ErrOperationCompleted) {
+		return status.Error(codes.FailedPrecondition, err.Error())
 	}
 	if errors.Is(err, ErrInvalid) {
 		return status.Error(codes.InvalidArgument, err.Error())

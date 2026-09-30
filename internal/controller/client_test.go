@@ -40,9 +40,12 @@ func TestClientInvokesControllerAndForwardsRequestID(t *testing.T) {
 	runtime := &fakeRuntime{status: supervisor.Status{Protocol: "v1", XrayVersion: "26.7.28", State: "running", PID: 5, RestartCount: 1, StartedAt: time.Date(2026, 9, 30, 11, 0, 0, 0, time.UTC)}, logs: []string{"line"}}
 	client, _ := controllerTestClient(t, runtime, "test-token")
 	wantID := "abcdef0123456789abcdef0123456789"
-	ctx := interaction.WithRequestID(context.Background(), wantID)
-	if err := client.Health(ctx); err != nil || runtime.requestID != wantID {
-		t.Fatalf("Health() id=%q, err=%v", runtime.requestID, err)
+	wantOperationID := "0123456789abcdef0123456789abcdef"
+	ctx := interaction.WithStateRevision(
+		interaction.WithAttempt(
+			interaction.WithOperationID(interaction.WithRequestID(context.Background(), wantID), wantOperationID), 3), 42)
+	if err := client.Health(ctx); err != nil || runtime.requestID != wantID || runtime.operationID != wantOperationID || runtime.attempt != 3 || runtime.stateRevision != 42 {
+		t.Fatalf("Health() trace=%q/%q/%d/%d, err=%v", runtime.requestID, runtime.operationID, runtime.attempt, runtime.stateRevision, err)
 	}
 	statusValue, err := client.Status(ctx)
 	if err != nil || statusValue.XrayVersion != "26.7.28" || statusValue.PID != 5 {
@@ -66,6 +69,36 @@ func TestClientInvokesControllerAndForwardsRequestID(t *testing.T) {
 	}
 	if err := client.ProbeIPv6(ctx); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBackendControllerAndXrayAdapterShareMutationTrace(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer(grpc.ChainUnaryInterceptor(LoggingInterceptor("controller-test"), AuthInterceptor("test-token")))
+	handler := &fakeXrayHandler{}
+	RegisterRPC(server, NewServiceWithAdapters(&fakeRuntime{}, handler, nil, nil))
+	go func() { _ = server.Serve(listener) }()
+	connection, err := grpc.NewClient("passthrough:///controller-trace-test", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Stop()
+	defer connection.Close()
+	defer listener.Close()
+	client := NewClientWithConn(connection, "test-token")
+	requestID := "abcdef0123456789abcdef0123456789"
+	operationID := "0123456789abcdef0123456789abcdef"
+	ctx := interaction.WithStateRevision(interaction.WithAttempt(interaction.WithOperationID(interaction.WithRequestID(context.Background(), requestID), operationID), 2), 77)
+	if err := client.AddUser(ctx, "device-1-vless@xray-easy", "stable-uuid", "vision"); err != nil {
+		t.Fatal(err)
+	}
+	if handler.adds != 1 || len(handler.traces) != 2 || len(handler.requestIDs) != 2 {
+		t.Fatalf("runtime observed calls=%d traces=%+v IDs=%v", handler.adds, handler.traces, handler.requestIDs)
+	}
+	for index, trace := range handler.traces {
+		if trace.OperationID != operationID || trace.Attempt != 2 || trace.StateRevision != 77 || handler.requestIDs[index] != requestID {
+			t.Errorf("adapter trace[%d] = %+v requestID=%q", index, trace, handler.requestIDs[index])
+		}
 	}
 }
 

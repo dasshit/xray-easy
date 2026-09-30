@@ -73,6 +73,22 @@ func TestGenerateKeypairProducesMatchingPublicKey(t *testing.T) {
 	}
 }
 
+func TestKeyEnvelopeAndPublicKeyRejectMalformedKeys(t *testing.T) {
+	masterKey := bytes.Repeat([]byte{0x5a}, 32)
+	if _, err := sealPrivateKey("not-base64", masterKey); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("seal malformed private key = %v", err)
+	}
+	if _, _, err := derivePublicKey("not-base64"); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("derive public key from malformed private key = %v", err)
+	}
+	if _, err := openPrivateKey("not-base64", masterKey); err == nil {
+		t.Fatal("open accepted malformed envelope encoding")
+	}
+	if _, err := openPrivateKey(base64.StdEncoding.EncodeToString([]byte("short")), masterKey); err == nil {
+		t.Fatal("open accepted a truncated envelope")
+	}
+}
+
 func TestAddPeerAppliesLiveAndPersistsAllocatedAddresses(t *testing.T) {
 	opts := testOptions(t)
 	device := &fakeDevice{}
@@ -128,6 +144,73 @@ func TestAddPeerAppliesLiveAndPersistsAllocatedAddresses(t *testing.T) {
 	}
 	if strings.Contains(string(mustRead(t, filepath.Join(opts.DataDir, "state.json"))), manager.serverPrivateKey) {
 		t.Fatal("server private key was not encrypted in persistent state")
+	}
+}
+
+func TestAddPeerForOperationIsIdempotentAndSurvivesRestart(t *testing.T) {
+	opts := testOptions(t)
+	device := &fakeDevice{}
+	manager, err := Open(opts, fakeFactory{device: device})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, found := manager.PeerForOperation("invalid"); found {
+		t.Fatal("peer lookup accepted a malformed operation ID")
+	}
+	if _, found := manager.OperationReceipt("invalid"); found {
+		t.Fatal("receipt lookup accepted a malformed operation ID")
+	}
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID := "abcdef0123456789abcdef0123456789"
+	first, repeated, err := manager.AddPeerForOperation("iphone", publicKey, operationID)
+	if err != nil || repeated {
+		t.Fatalf("first AddPeerForOperation = %+v, repeated=%v, err=%v", first, repeated, err)
+	}
+	second, repeated, err := manager.AddPeerForOperation("iphone", publicKey, operationID)
+	if err != nil || !repeated || second != first {
+		t.Fatalf("repeated AddPeerForOperation = %+v, repeated=%v, err=%v", second, repeated, err)
+	}
+	if len(manager.Peers()) != 1 {
+		t.Fatalf("retry created %d peers", len(manager.Peers()))
+	}
+	if _, _, err := manager.AddPeerForOperation("tablet", publicKey, operationID); !errors.Is(err, ErrOperationConflict) {
+		t.Fatalf("operation ID reused for another peer = %v", err)
+	}
+	removeID := "fedcba9876543210fedcba9876543210"
+	if repeated, err := manager.RemovePeerForOperation("iphone", removeID); err != nil || repeated {
+		t.Fatalf("first RemovePeerForOperation = repeated=%v, err=%v", repeated, err)
+	}
+	_, replacementKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddPeer("iphone", replacementKey); err != nil {
+		t.Fatalf("recreate peer name after revoke = %v", err)
+	}
+	if repeated, err := manager.RemovePeerForOperation("iphone", removeID); err != nil || !repeated {
+		t.Fatalf("repeated RemovePeerForOperation = repeated=%v, err=%v", repeated, err)
+	}
+	if len(manager.Peers()) != 1 || manager.Peers()[0].PublicKey != replacementKey {
+		t.Fatalf("old revoke removed the replacement peer: %+v", manager.Peers())
+	}
+	manager.Close()
+	restarted, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer restarted.Close()
+	restored, ok := restarted.PeerForOperation(operationID)
+	if ok || restored != (Peer{}) {
+		t.Fatalf("revoked create operation still appears active: %+v, found=%v", restored, ok)
+	}
+	if _, _, err := restarted.AddPeerForOperation("iphone", publicKey, operationID); !errors.Is(err, ErrOperationCompleted) {
+		t.Fatalf("replayed revoked create = %v", err)
+	}
+	if repeated, err := restarted.RemovePeerForOperation("iphone", removeID); err != nil || !repeated || len(restarted.Peers()) != 1 {
+		t.Fatalf("replayed revoke after restart removed replacement: repeated=%v err=%v peers=%+v", repeated, err, restarted.Peers())
 	}
 }
 
@@ -456,6 +539,10 @@ func TestPersistedAWGStateRejectsCorruptionUnsafePermissionsAndInvalidPeers(t *t
 		{name: "broadcast address", state: persistedState{Version: stateVersion, PrivateKeyEnvelope: state.PrivateKeyEnvelope, Peers: []Peer{{Name: "phone", PublicKey: validPeerKey, IPv4: "10.88.0.7", IPv6: validPeer.IPv6}}}},
 		{name: "invalid IPv6", state: persistedState{Version: stateVersion, PrivateKeyEnvelope: state.PrivateKeyEnvelope, Peers: []Peer{{Name: "phone", PublicKey: validPeerKey, IPv4: validPeer.IPv4, IPv6: "2001:db8::2"}}}},
 		{name: "duplicate identity", state: persistedState{Version: stateVersion, PrivateKeyEnvelope: state.PrivateKeyEnvelope, Peers: []Peer{validPeer, validPeer}}},
+		{name: "invalid peer operation ID", state: persistedState{Version: stateVersion, PrivateKeyEnvelope: state.PrivateKeyEnvelope, Peers: []Peer{{Name: "phone", PublicKey: validPeerKey, IPv4: validPeer.IPv4, IPv6: validPeer.IPv6, OperationID: "bad"}}}},
+		{name: "invalid operation receipt key", state: persistedState{Version: stateVersion, PrivateKeyEnvelope: state.PrivateKeyEnvelope, Operations: map[string]OperationReceipt{"bad": {Action: "remove", Name: "phone"}}}},
+		{name: "invalid operation receipt action", state: persistedState{Version: stateVersion, PrivateKeyEnvelope: state.PrivateKeyEnvelope, Operations: map[string]OperationReceipt{"abcdef0123456789abcdef0123456789": {Action: "edit", Name: "phone"}}}},
+		{name: "mismatched create receipt", state: persistedState{Version: stateVersion, PrivateKeyEnvelope: state.PrivateKeyEnvelope, Operations: map[string]OperationReceipt{"abcdef0123456789abcdef0123456789": {Action: "create", Name: "phone", Peer: Peer{Name: "tablet"}}}}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if err := validateState(test.state, opts); err == nil {

@@ -421,6 +421,7 @@ func (s *server) hysteriaSettingsApply(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": "Xray rejected the Hysteria 2 configuration"})
 		return
 	}
+	r = r.WithContext(s.traceApplyOperation(r.Context(), operationID))
 	activePath := filepath.Join(s.configDir, "active.json")
 	oldHasInbound := hasInboundTag(activePath, xray.HysteriaInboundTag)
 	oldHasVMessInbound := hasInboundTag(activePath, xray.VMessInboundTag)

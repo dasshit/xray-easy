@@ -105,7 +105,7 @@ func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) (
 	}
 	started := time.Now()
 	response, err := client.GetInboundUsers(rpcContext, &handlercommand.GetInboundUserRequest{Tag: tag})
-	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/GetInboundUsers", requestID, "xray", started, err)
+	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/GetInboundUsers", requestID, "xray", started, err, interaction.TraceFromContext(rpcContext))
 	if err != nil {
 		c.reset()
 		return nil, fmt.Errorf("get inbound users: %w", err)
@@ -138,11 +138,11 @@ func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation 
 	}
 	started := time.Now()
 	if _, err := client.AlterInbound(rpcContext, &handlercommand.AlterInboundRequest{Tag: tag, Operation: operation}); err != nil {
-		interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/AlterInbound", requestID, "xray", started, err)
+		interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/AlterInbound", requestID, "xray", started, err, interaction.TraceFromContext(rpcContext))
 		c.reset()
 		return fmt.Errorf("alter inbound: %w", err)
 	}
-	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/AlterInbound", requestID, "xray", started, nil)
+	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/AlterInbound", requestID, "xray", started, nil, interaction.TraceFromContext(rpcContext))
 	return nil
 }
 
@@ -153,7 +153,7 @@ func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercom
 	}
 	started := time.Now()
 	tags, err := client.ListInbounds(rpcContext, &handlercommand.ListInboundsRequest{IsOnlyTags: true})
-	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/ListInbounds", requestID, "xray", started, err)
+	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/ListInbounds", requestID, "xray", started, err, interaction.TraceFromContext(rpcContext))
 	if err != nil {
 		c.reset()
 		return "", fmt.Errorf("list Xray inbounds: %w", err)
