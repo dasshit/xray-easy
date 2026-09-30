@@ -1,466 +1,370 @@
 # Xray-easy
 
-Xray-easy is a private web panel for one Xray server. It runs Xray, its Go
-control plane, and protocol runtime services in separate Docker containers.
-One administrator can create VLESS + REALITY + TCP/RAW + XTLS Vision profiles,
-plus optional VMess + TLS and Hysteria 2 inbounds in the same Xray process.
-AmneziaWG is an optional independent container with its own UDP port and a
-shared profile workflow. The panel is bound to the server's loopback address;
-open it through an SSH tunnel.
+<div align="center">
+  <p><img src="web/public/favicon-light.svg" width="48" height="48" alt="Xray-easy icon"></p>
+  <p><img src="docs/assets/xray-easy-banner.svg" width="100%" alt="Xray-easy — a private VPN control panel for your own server"></p>
+  <p><strong>Self-hosted VPN, managed from a private web panel.</strong><br>
+  Build it on your VPS, open the panel through SSH, and create client profiles without editing Xray configs by hand.</p>
+</div>
 
-The pinned and verified Xray version is **26.7.28**. The panel reports both
-`XRAY_VERSION` from Compose and the version reported by the running binary, and
-marks unverified versions as experimental. `doctor` checks the HandlerService
-and StatsService endpoints and warns when versions differ or the binary is
-outside the verified matrix. See [the version record](versions/xray-compatibility.json).
-Before changing `XRAY_VERSION`, create a backup from Security or with
-`docker compose exec xray-easy xray-easy backup create`. Recheck V2Rage when
-changing Xray, profile generation or Compose networking. The
-complete product scope and implementation notes are in
-[IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md).
+Xray-easy is a Docker Compose application for one administrator and one server.
+It combines Xray and optional AmneziaWG with a web UI for setup, device
+profiles, diagnostics and maintenance. The panel listens on the VPS loopback
+interface and is intended to be accessed through an SSH tunnel.
+
+## Contents
+
+- [Quick start](#quick-start)
+- [Ports and firewall](#ports-and-firewall)
+- [Protocol guide: Xray](#protocol-guide-xray)
+- [Protocol guide: AmneziaWG](#protocol-guide-amneziawg)
+- [Operations and troubleshooting](#operations-and-troubleshooting)
+- [Security and architecture](#security-and-architecture)
+- [Development](#development)
 
 ## Quick start
 
-You need a Linux VPS with an `amd64` or `arm64` CPU, Docker Engine **28.0.0 or
-newer**, Docker Compose plugin **2.33.1 or newer**, SSH access, and an available
-public TCP port (443 by default). VMess + TLS also uses TCP port 9443 by
-default. Hysteria 2 requires UDP on the VLESS port. These Docker versions are
-required to choose the correct IPv4/IPv6 egress gateway for Xray. Allow inbound
-TCP on the ports for the protocols you use in the VPS firewall/security group.
-The VPS needs outbound access for Docker images and VPN traffic. AmneziaWG
-additionally needs a Linux Docker host with `/dev/net/tun`, `NET_ADMIN`, IPv4
-and IPv6 forwarding, and working egress for both address families. Go and
-Node.js are **not required** on the VPS.
+### Requirements
 
-Run these commands **on the VPS**:
+- Linux VPS with an **amd64** or **arm64** CPU and SSH access.
+- Docker Engine **28.0.0+** and Docker Compose plugin **2.33.1+**.
+- A public IPv4 address or DNS name. IPv6 can also be used when the VPS,
+  Docker and firewall have working IPv6 routing.
+- An available public TCP port, **443** by default.
 
-```sh
+The VPS needs outbound network access to build/download dependencies and to
+carry VPN traffic. Go and Node.js are not required on the VPS: the installer
+builds the project images from the cloned source.
+
+### 1. Clone and install
+
+Run these commands on the VPS:
+
+~~~sh
 git clone https://github.com/dasshit/xray-easy.git
 cd xray-easy
 ./install.sh
-```
+~~~
 
-The repository is currently private, so GitHub access is required to clone it.
-The installer builds its terminal UI in a temporary Docker container, then
-opens a full-screen terminal workspace. Use **↑/↓ or Tab** to move between
-fields, **Enter** to continue, **Esc** to cancel, and **Ctrl+C** to stop. It checks
-Docker/Compose, asks for the public and panel ports, the optional Hysteria 2
-TLS mode and whether to enable AmneziaWG, generates the master key
-and supervisor token, writes `.env` and `secrets/xray_supervisor_token` with
-mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
-services to become healthy, then runs the final `xray-easy doctor` check. A
-repeat run reuses the existing keys and Docker volumes. After the first start,
-manage Hysteria 2 settings and certificates in the Web UI. If Compose cannot make
-the services healthy, the installer displays `compose ps --all` and recent logs
-from the control plane, Controller, Xray and any enabled optional services. It
-leaves containers and configuration in place and prints recovery commands.
+The installer opens a full-screen terminal wizard. It checks Docker, guides
+you through the public and panel ports, optional Hysteria 2 TLS and optional
+AmneziaWG, then creates the secrets, builds the images, starts Compose and runs
+the final health check. Use **↑/↓** or **Tab** to move, **Enter** to continue,
+**Esc** to cancel and **Ctrl+C** to stop.
 
-The installer builds the application images locally from this checkout for the
-VPS architecture. Prebuilt images are not distributed.
+Images are built locally from this checkout; prebuilt application images are
+not published. If a service does not become healthy, the installer keeps the
+configuration for troubleshooting and prints recent logs and recovery
+commands. It reuses existing keys and Docker volumes on repeat runs.
 
-Example configuration screen (shortened):
+### 2. Open the panel through SSH
 
-```text
-  XRAY-EASY  /  PRIVATE SERVER INSTALLER
-  01 CHECK     02 CONFIGURE     03 REVIEW     04 START
+Keep this command running on your own computer. Replace the SSH user, VPS host
+and port if you chose a panel port other than 8080:
 
-  02 / 04   Configuration
-  ╭─────────────────────────────────────────────────────╮
-  │  Public Xray TCP / UDP port                         │
-  │  › [ 443 ]                                          │
-  │  Web UI port on VDS loopback                        │
-  │    [ 8080 ]                                         │
-  │  VMess TCP defaults to 9443                         │
-  ╰─────────────────────────────────────────────────────╯
+~~~sh
+ssh -N -L 8080:127.0.0.1:8080 user@your-vps
+~~~
 
-  ↑↓ / Tab  Move     Enter  Continue     Esc  Cancel
-```
+Then open [http://127.0.0.1:8080](http://127.0.0.1:8080) in a browser. The panel
+is bound to **127.0.0.1 on the VPS**; do not expose its port in a public
+firewall or reverse proxy.
 
-On **your own computer**, start a tunnel to the VPS (replace the user and
-host):
+### 3. Finish first-run setup
 
-```sh
-ssh -N -L 8080:127.0.0.1:8080 user@your-vds
-```
+In the panel:
 
-Open [http://127.0.0.1:8080](http://127.0.0.1:8080). If you chose another Web
-UI port in the installer, use it in both places in the command and URL. The
-panel is never published on the VPS public interface by `compose.yaml`.
+1. Create the administrator login and password.
+2. Set the public host clients will use: the VPS IPv4, IPv6, or a DNS name.
+   For dual-stack DNS, configure working A and AAAA records.
+3. Choose the REALITY target and SNI for the default VLESS profile.
+4. Create the first device and select its protocol.
+5. Scan the QR code or download/copy the profile into the matching client.
 
-In the browser, create the administrator, enter the VPS public IPv4 address,
-IPv6 address, or DNS name, choose a REALITY target and SNI, and create the first
-device profile. Enter an IPv6 address without brackets or a port, for example
-`2001:db8::1`. Use a DNS name with both A and AAAA records to let clients choose
-their available address family. Choose **VLESS + REALITY**, **VMess + TLS** when
-a valid certificate is available in Settings, or **Hysteria 2** when enabled and
-its certificate is ready. VMess does not require the Hysteria 2 inbound to be
-enabled. The profile dialog shows that protocol's QR code and link; VLESS and
-VMess profiles also offer JSON files. To give one device multiple transports,
-create a separate profile for each transport with the same device name. The
-VLESS/Hysteria public port and VMess TCP port come from `.env`; they are not
-edited in the panel. The VMess host port defaults to 9443. An inbound is created
-when the first profile for its protocol is applied.
+The installer configures deployment-wide values such as public ports. The
+panel manages protocol settings and individual devices. Enable TOTP from the
+Security page after the first login.
 
-## What is available
+## Ports and firewall
 
-- Protocol-specific device creation, enable/disable/revoke and profile delivery.
-  New profiles use either VLESS + REALITY, VMess + TLS or Hysteria 2, never a
-  combination. Existing
-  migrated profiles keep both transports and are marked as legacy in the list.
-  Reopening a profile shows the same saved credentials; it does not rotate them.
-- VLESS profiles provide a QR code, VLESS link and JSON export. Their fingerprint
-  can be selected per profile.
-- Hysteria 2 profiles provide a QR code and `hysteria2://` link, with an
-  independently generated password by default. An administrator can set a
-  password in the form's Advanced section. Hysteria 2 has no client JSON export.
-  Its option is available only while the inbound is running and its certificate
-  is valid; the form links to Settings when it is unavailable.
-- VMess profiles provide a QR code, standard `vmess://` share link, and client
-  JSON. The inbound uses TCP + TLS on the separate `XRAY_VMESS_PORT` (9443 by
-  default), with `alterId: 0`. VMess reuses the certificate configured under
-  **Settings → Hysteria 2**, even when the Hysteria 2 transport is disabled.
-  Create or upload a certificate there before creating a VMess profile. For an
-  self-signed or legacy certificate, the VMess link pins its SHA-256 certificate
-  fingerprint (`pcs`) and the downloadable Xray JSON uses
-  `pinnedPeerCertSha256`; trusted custom certificates use normal CA validation.
-  Re-import the profile after changing the certificate. This compatibility
-  option requires server/client clocks within about two minutes and is easier to
-  identify by traffic analysis than VLESS + REALITY or Hysteria 2. It is not
-  presented as a DPI-resistance improvement. Allow inbound TCP at
-  `XRAY_VMESS_PORT` in the VPS firewall/security group.
-- The REALITY short-ID reserve holds five free values. While IDs remain in the
-  reserve, new VLESS users are added through HandlerService without restarting
-  Xray. When it is exhausted, Xray's gRPC API replaces only the VLESS inbound;
-  its active connections may briefly reconnect. The control plane validates
-  candidate configs and reconciles SQLite, `active.json` and runtime state after
-  interruptions.
-- Optional Hysteria 2 profile transport for V2Rage. It runs as a second inbound
-  in the same Xray container, on UDP at `XRAY_PUBLIC_PORT`. During the initial
-  `./install.sh`,
-  choose one of three options:
+Allow only the ports for transports you use. Apply the rules in both the VPS
+firewall and the provider security group, for IPv4 and IPv6 where enabled.
 
-  1. **Off:** VLESS/REALITY only. This is the default.
-  2. **mkcert for public IPv4:** enter the VPS public IPv4. If the installer
-     finds one public IPv4 on the host, press Enter to accept its suggestion;
-     otherwise type the address. The Web UI suggests the selected address
-     during first-run setup and requires the public host to match it. The
-     installer builds `mkcert` and generates a certificate with that IP in its
-     SAN. The CA is not installed
-     into any trust store and its private key is discarded. Generated Hysteria 2
-     links include `insecure=1`. This disables server certificate verification
-     in the client, so this mode does not authenticate the server against a
-     man-in-the-middle. The certificate is kept in a Docker volume and reused
-     on repeat installation until it is within 30 days of expiry or the
-     configured IPv4 changes. Run `./install.sh` again to renew it later.
-  3. **My TLS certificate:** enter paths to a PEM full chain and matching
-     private key on the VPS. You can leave them blank if they are already at
-     `secrets/hysteria/fullchain.pem` and `secrets/hysteria/privkey.pem`. The
-     installer checks the pair and imports it. Enter a DNS name or IP address
-     covered by the certificate. If clients connect to an IPv4 address while
-     the certificate covers a DNS name, enter that DNS name; it becomes the
-     URI `sni` value. These links
-     omit `insecure`, so clients verify the certificate normally. Make sure
-     the chain is trusted by your clients.
+| Transport | Default public port | Protocol | Notes |
+| --- | ---: | --- | --- |
+| VLESS + REALITY | 443 | TCP | Default Xray profile |
+| Hysteria 2 | 443 | UDP | Optional; shares the public port number with VLESS |
+| VMess + TLS | 9443 | TCP | Optional separate Xray inbound |
+| AmneziaWG | 1234 | UDP | Optional separate service |
+| Web UI | 8080 | TCP, loopback only | Reach through SSH; never open publicly |
 
-  The control plane manages the Hysteria TLS volume; Xray mounts it read-only.
-  After setup, use **Settings → Hysteria 2** to enable or disable the inbound,
-  generate a mkcert certificate, upload a trusted PEM pair, or change host/SNI
-  and advanced transport options. Settings are stored in SQLite; the Hysteria
-  `.env` values only seed a new installation. The private key is not sent to the
-  browser. Each change shows a preview and creates a backup. It updates only the
-  affected Hysteria 2 and/or VMess inbounds; active connections on those
-  inbounds may briefly reconnect, while VLESS stays running. A host, SNI,
-  certificate or TLS-mode change can require importing updated profile links.
-  Allow inbound UDP at `XRAY_PUBLIC_PORT` in the VPS firewall/security group.
-- Online and last-seen indicators, cumulative upload/download totals, and live
-  panel updates through SSE.
-- Node settings with a preview of changes, confirmation and an automatic
-  backup before changes that revoke existing profiles. The Settings page also
-  controls Xray log verbosity (`debug`, `info`, `warning`, `error`, `none`);
-  changing it restarts Xray and briefly interrupts active connections without
-  revoking device profiles. Debug logging is verbose, so return to `warning`
-  after troubleshooting.
-- Password login, optional TOTP with recovery codes, three-hour sessions, and
-  a command to sign out all sessions. The Security page can change the
-  administrator password; the change ends every active session.
-- Diagnostics showing supervisor state, configured and running Xray versions,
-  and recent redacted warnings/errors.
-- Manual and automatic backups in `/data/backups`; the last ten are retained.
-  Backups are plaintext, so protect the VPS and any copies you export.
+Ports are configurable during installation and stored in the root **.env**
+file. Xray uses **XRAY_PUBLIC_PORT** for VLESS TCP and optional Hysteria 2 UDP,
+and **XRAY_VMESS_PORT** for VMess TCP. AmneziaWG uses **AWG_PUBLIC_PORT**.
 
-The Compose control and Xray egress networks have IPv6 enabled. Xray's public
-VLESS TCP port is published on the VPS and mapped to container port `8443`;
-the VMess TCP port is mapped to container port `8444`. Docker publishes them on
-IPv4 and IPv6 host addresses when the host daemon supports
-dual-stack port publishing. The panel remains mapped only to `127.0.0.1` on the
-VPS. The Controller and Xray supervisor share a private supervisor token;
-the Controller and optional AWG service use a separate AWG token. The backend
-does not mount either runtime token. Persistent state lives in Docker named
-volumes. IPv6 handling in Compose,
-profiles and `doctor` is implemented; actual reachability still depends on the
-VPS IPv6 route, Docker daemon and firewall, so verify it with the checks below.
+## Protocol guide: Xray
 
-Runtime services are isolated on private Compose networks. The backend is on a
-dedicated internal `backend` network with the Controller; it cannot address
-Xray or AWG directly. The Controller also joins the separate internal `control`
-network with Xray and optional AWG. It routes Xray process/configuration,
-HandlerService, StatsService and AmneziaWG operations to their runtime adapters.
-`xray-supervisor` owns the Xray process and its Handler/Stats clients. No gRPC
-port is published on the VPS. Each service hop authenticates independently;
-supervisor requests use HMAC-SHA256 signatures and replay-protected nonces.
-These internal links are authenticated but not encrypted, so keep them on the
-private Docker networks. Supervisor and Controller use generated, typed
-Protobuf contracts. Rebuild both sides of an internal RPC link from the same
-checkout revision when updating; `scripts/generate-protobuf.sh` regenerates the
-checked-in Controller, Supervisor and AWG bindings.
+The Xray core runs in its own container. The project pins Xray **26.7.28** as
+the currently verified version for its API integration and VLESS + REALITY
+profile workflow.
+The UI and doctor report when the configured or running version differs from
+the verified compatibility record at
+[versions/xray-compatibility.json](versions/xray-compatibility.json). Treat
+other versions as experimental until tested with your clients.
 
-Backend, Controller, `xray-supervisor` and `awg-service` interaction logs carry
-the same random `X-Request-ID`. They record method, outcome and duration, but
-never RPC payloads or credential-bearing profiles. Xray core's own connection
-logs do not include this request ID. To trace a control operation, use
-`docker compose logs controller xray awg xray-easy`; `doctor` reports
-Controller and runtime availability.
+| Profile type | Transport and security | Profile delivery |
+| --- | --- | --- |
+| VLESS | TCP/RAW + REALITY + XTLS Vision | QR, VLESS link, JSON |
+| Hysteria 2 | UDP + TLS | QR, hysteria2 link |
+| VMess | TCP + TLS, alterId 0 | QR, vmess link, JSON |
 
-## IPv6 checks
+Each new profile uses one protocol. To give one device multiple transports,
+create a separate profile for each one with the same device name.
 
-Docker Desktop can check the Compose file and create an IPv6-enabled network,
-but it does not prove IPv6 routing on a Linux VPS. On the VPS, confirm it has a
-global IPv6 address and a default route:
+### VLESS + REALITY
 
-```sh
-ip -6 address show scope global
-ip -6 route show default
-```
+This is the default protocol. New clients are added live through Xray's
+HandlerService while one of five reserved REALITY short IDs is available.
+When the reserve is exhausted, Xray replaces the VLESS inbound; its active
+connections may briefly reconnect. The UI validates and previews sensitive
+settings changes before applying them and creates an automatic backup where
+needed.
 
-Allow inbound TCP on the configured Xray port in both the VPS firewall and the
-provider security group. Then, from a separate IPv6-capable device, test the
-VPS address and port before importing the profile:
+Changing the REALITY key, target or SNI can invalidate issued profiles. Follow
+the warning in the panel and re-import refreshed profiles on clients. Xray
+log verbosity is managed separately in Settings; debug logs are verbose, so
+return to warning after troubleshooting.
 
-```sh
-nc -6 -vz 2001:db8::1 443
-```
+### Hysteria 2
 
-Replace the example address and port with the VPS values. A successful TCP test
-checks reachability only; finish by connecting with the client and opening a
-site. For DNS profiles, verify the hostname's AAAA record points to a working
-IPv6 endpoint before publishing it. Clients may try the AAAA record first, so a
-stale or unreachable IPv6 address can make an otherwise working profile appear
-unstable.
+Hysteria 2 runs as an optional UDP inbound in the same Xray container. Enable
+it during installation or later from **Settings → Hysteria 2**. Its profiles
+have an independent password and are available once the inbound and TLS
+certificate are ready.
 
-`xray-easy doctor` also checks outbound IPv6 TCP connectivity from the Xray
-container by opening a short connection to Cloudflare's public IPv6 resolver at
-`[2606:4700:4700::1111]:443`, then closing it without sending application data.
-It reports a warning if that route is unavailable; IPv4 can still work. This
-probe cannot confirm inbound reachability, provider firewall rules, or
-application traffic to every IPv6 destination. Docker uses an IPv6-enabled
-bridge with NAT by default, so outbound connections should appear to remote
-sites from the VPS address. If the IPv6 Docker network cannot be created, check
-the [Docker daemon IPv6 setup](https://docs.docker.com/engine/daemon/ipv6/) and
-the host's kernel IPv6 support.
+The TLS setup supports two modes:
 
-## Day-to-day commands
+- **mkcert certificate:** the installer generates a certificate for a
+  public IPv4 address. Generated client links use **insecure=1**. This lets
+  clients connect but disables server certificate verification, so the client
+  does not authenticate the server against a man-in-the-middle.
+- **Custom certificate:** provide a matching PEM full chain and private key.
+  Use a certificate trusted by clients and whose name matches the endpoint or
+  configured SNI. Links use normal certificate verification.
+
+The panel can enable/disable the inbound, update TLS and transport settings,
+and replace certificates. Applying changes may briefly reconnect Hysteria 2
+clients; VLESS remains running. Allow inbound UDP on the configured Xray
+public port.
+
+### VMess + TLS
+
+VMess uses a separate TCP port, **9443** by default. It reuses the certificate
+managed under **Settings → Hysteria 2**, even if the Hysteria 2 inbound is
+disabled. Configure that certificate before creating a VMess profile.
+
+For self-signed or legacy certificates, the generated VMess link pins the
+certificate fingerprint and the downloadable Xray JSON uses
+**pinnedPeerCertSha256**. Client and server clocks should be within about two
+minutes. Re-import profiles after replacing the certificate. VMess is provided
+for compatibility and is easier to identify by traffic analysis than VLESS +
+REALITY or Hysteria 2; it is not presented as a DPI-resistance improvement.
+
+### Xray status and troubleshooting
+
+Profiles show online/last-seen state, cumulative upload/download, sampled
+current rates and the last observed source IP when the protocol reports it.
+Online status is a five-minute freshness estimate; rates are sampled over the
+control plane's ten-second polling interval.
+
+Run the doctor from the VPS repository directory:
+
+~~~sh
+docker compose exec -T xray-easy xray-easy doctor
+~~~
+
+It checks configuration, runtime/API availability, version compatibility and
+network prerequisites. It cannot test inbound firewall reachability from
+inside Compose; verify public ports from another network. For IPv6-specific
+checks, see [IPv6 verification](#ipv6-verification).
+
+## Protocol guide: AmneziaWG
+
+AmneziaWG is an optional independent service, not an Xray inbound. Enable it
+in the installer and enter the public IP or DNS name clients will connect to.
+It appears in the shared **Profiles** workflow alongside Xray protocols and
+in **Settings** as a read-only summary of the active endpoint, ports, address
+pools, peer count, server public key and service version.
+
+The service requires a **Linux Docker host**, **/dev/net/tun**, the
+**NET_ADMIN** capability, IPv4 and IPv6 forwarding, and working egress for both
+address families. Rootless Docker or host policies that block TUN access may
+prevent startup. The default public UDP port is **1234**; the internal listen
+port is **51820**. Allow the public port in the VPS and provider firewalls.
+
+Profiles include the client private key. Scan the QR code with the official
+AmneziaWG client on iOS or macOS, or download the **.conf** file. Handle both
+as credentials. Peer changes apply to the live engine without restarting its
+container. Revoking a peer creates an automatic backup first and deletes the
+saved profile from the server.
+
+The profile list reports handshake-based online state, last seen, cumulative
+and sampled traffic, plus source IP when available. These are observations
+from the latest handshake, not a live socket count. The built-in AmneziaWG 3.x
+obfuscation preset matches current client defaults. Advanced overrides are
+available through **AWG_*** values in **.env.example**; changing shared
+parameters requires refreshing and re-importing client profiles.
+
+AmneziaWG allocates addresses from **10.88.0.0/24** and **fd88:88:88::/64** by
+default, with DNS **1.1.1.1** and **2606:4700:4700::1111**. Change these
+networks if they overlap routes already used by the VPS.
+
+## Operations and troubleshooting
+
+### Logs, status and upgrade
 
 Run commands from the repository directory on the VPS:
 
-```sh
+~~~sh
 docker compose ps
 docker compose logs --tail=100
 docker compose logs -f xray
-docker compose down                         # stop, preserving named volumes
-docker compose up -d --build --wait          # start again
-docker compose exec -T xray-easy xray-easy doctor
-docker compose exec -T xray-easy xray-easy doctor bundle
-```
+docker compose logs -f
+~~~
 
-`./install.sh` runs the same doctor command after Compose reports its services
-healthy. `PASS` completes installation; warnings are shown for follow-up (for
-example, pending first-run setup, an unavailable optional stats RPC, IPv6
-egress, or the VDS firewall, which cannot be checked from inside Compose). A
-`FAIL` leaves the containers and configuration in place and prints the command
-to rerun doctor after fixing the reported issue. Doctor checks the active
-config without applying it or restarting Xray. If the control-plane container is stopped, run
-a one-off diagnostic container with:
+To update from source, create a backup first, then pull and rerun the installer:
 
-```sh
-docker compose run --rm --no-deps xray-easy doctor
-docker compose run --rm --no-deps xray-easy doctor bundle
-```
-
-`doctor bundle` prints the same checks and saves a `.tar.gz` archive under
-`/data/diagnostics` in the persistent app volume. Its first report lines show
-the Xray-easy build and configured Xray image versions, plus the public/UI
-ports from the active Compose environment. It contains that report, Xray
-supervisor status, up to 100 recent Xray log lines,
-and a redacted active config. It saves the archive even when a check fails, but
-still exits with a non-zero status in that case. It omits the database, master key, supervisor
-token, client UUIDs, names, REALITY private key, and short IDs. Review the
-archive before sharing it: non-secret server settings such as the REALITY
-target and SNI remain useful for troubleshooting. When the control-plane
-service is running, copy a generated file to the current directory with the
-path printed by the command:
-
-```sh
-docker compose cp xray-easy:/data/diagnostics ./doctor-reports
-```
-
-The command copies all generated bundles; share the specific archive printed by
-`doctor bundle`.
-
-To update the code, create a backup from the Security page or CLI, then run:
-
-```sh
+~~~sh
 git pull
 ./install.sh
-```
+~~~
 
-Changing `XRAY_VERSION` is a separate manual change. Create a backup before
-editing `.env`, rebuild the Xray image, and run `doctor` before relying on an
-unverified version.
+The installer keeps the existing **.env**, secret and Docker volumes. Keep
+**XRAY_EASY_MASTER_KEY** unchanged: it encrypts the persisted Xray and
+AmneziaWG server keys and is required to restore backups. Changing
+**XRAY_VERSION** is a separate, advanced change: back up first, rebuild the
+Xray image and run doctor before relying on that version.
 
-The installer keeps an existing `.env` and supervisor token. Keep the value of
-`XRAY_EASY_MASTER_KEY`: it decrypts the stored REALITY private key and verifies
-backups. Changing the public port in `.env` affects issued profiles and requires
-reviewing their replacement in the panel.
+### Backups and restore
 
-Administrative commands run inside the control-plane container:
+The Security page can create a manual backup. The application also creates
+automatic backups before operations such as changing Hysteria 2 settings,
+rotating REALITY credentials or revoking an AmneziaWG peer. The ten newest are
+kept under **/data/backups** in the persistent Docker volume. Backups are
+plaintext, so protect the VPS and any exported copies. Create a manual backup
+before updating the checkout.
 
-```sh
-docker compose exec xray-easy xray-easy admin logout-all
-docker compose exec xray-easy xray-easy admin reset-password
-docker compose exec xray-easy xray-easy admin reset-totp
-docker compose exec xray-easy xray-easy admin recovery-codes
+~~~sh
 docker compose exec xray-easy xray-easy backup create
 docker compose exec xray-easy xray-easy backup list
 docker compose exec xray-easy xray-easy restore BACKUP_NAME RESTORE
-```
-
-Use an actual name from `backup list` in place of `BACKUP_NAME`. Restore checks
-the backup and master key and creates a backup of the current state before
-applying it. Recovery-code reissue invalidates previous codes; TOTP reset
-revokes all sessions. Password reset prompts twice without echoing input and
-revokes all sessions; run it in an interactive terminal without `-T`. To copy
-the unencrypted backup directories to the VPS filesystem before transferring
-them over SSH:
-
-```sh
 docker compose cp xray-easy:/data/backups ./backups
-```
+~~~
 
-## Manual setup and existing installations
+Replace **BACKUP_NAME** with a name from the list. Restore requires the backup
+name and the confirmation word **RESTORE** as CLI arguments, validates the
+snapshot, then backs up the current state before applying it. AWG data can only
+be restored when AmneziaWG is enabled in Compose.
 
-For a manual first install, copy [.env.example](.env.example), fill in
-`XRAY_EASY_MASTER_KEY` with a persistent value from `openssl rand -base64 32`,
-create the token, then start Compose:
+### Administrator recovery
 
-```sh
-cp .env.example .env
-openssl rand -base64 32                    # paste into XRAY_EASY_MASTER_KEY in .env
-umask 077
-mkdir -p secrets
-openssl rand -base64 32 > secrets/xray_supervisor_token
-chmod 600 .env secrets/xray_supervisor_token
-docker compose up -d --build --wait
-docker compose exec -T xray-easy xray-easy doctor
-```
+These commands run in the control-plane container:
 
-If you previously used `compose.stage1.yaml`, keep its `.env` and
-`prototype/secrets/xray_supervisor_token`, update the checkout and run
-`./install.sh`. The new Compose file defaults to the old project name for an
-existing `.env` without `XRAY_EASY_PROJECT_NAME`, so it reuses the existing
-volumes. Fresh installations use the project name `xray-easy` and store the
-token under `secrets/`. The old stage 0 prototype had no panel state to
-migrate.
+~~~sh
+docker compose exec xray-easy xray-easy admin reset-password
+docker compose exec xray-easy xray-easy admin reset-totp
+docker compose exec xray-easy xray-easy admin recovery-codes
+docker compose exec xray-easy xray-easy admin logout-all
+~~~
 
-If startup fails, inspect `docker compose ps` and
-`docker compose logs --tail=100`. Installer failures retain
-`.env` and the token so you can correct the problem and rerun `./install.sh`.
+Password reset prompts twice without echoing input and revokes all sessions.
+Run it in an interactive terminal without **-T**. TOTP reset and recovery-code
+reissue also invalidate sessions or previous codes as appropriate.
 
-## Optional AmneziaWG transport
+### Doctor bundle
 
-The installer can enable a separate `awg` container. It runs the pinned
-AmneziaWG Go engine, exposes only a token-protected gRPC API on the private
-Compose control network, and publishes the configured UDP port. The API is not
-published to the host. Xray and AmneziaWG remain independent services.
+If doctor reports a failure, create a support bundle:
 
-To enable it during initial setup or later, run `./install.sh`, choose
-**Enable for AmneziaWG clients**, and enter the public IP address or DNS name
-that clients will use. The installer stores `COMPOSE_PROFILES=awg`,
-`AWG_PUBLIC_HOST`, and `AWG_PUBLIC_PORT` in `.env` and starts the service.
-The public UDP port defaults to `1234` (mapped to UDP `51820` inside the
-container); the installer rejects a collision
-with the Xray UDP port. Allow inbound UDP `AWG_PUBLIC_PORT` for IPv4 and IPv6
-in the VDS firewall and provider security group.
+~~~sh
+docker compose exec -T xray-easy xray-easy doctor bundle
+docker compose cp xray-easy:/data/diagnostics ./doctor-reports
+~~~
 
-AmneziaWG requires a Linux Docker host with `/dev/net/tun`, the `NET_ADMIN`
-capability, IPv4/IPv6 forwarding, and working egress for both address families.
-The service configures separate NAT rules for the IPv4 and IPv6 egress
-interfaces and reports a startup error when either route is unavailable. It
-uses the default client networks `10.88.0.0/24` and `fd88:88:88::/64`, with DNS
-servers `1.1.1.1` and `2606:4700:4700::1111`; do not overlap those networks
-with routes already used by the VPS.
+The bundle contains the doctor report, Xray supervisor status, recent Xray
+logs and a redacted active config. It omits database contents, keys, tokens,
+UUIDs, device names and REALITY short IDs. The selected REALITY target and SNI
+remain in the report; review the archive before sharing it.
 
-When the optional Compose profile is enabled, create an AmneziaWG device from
-the shared **Profiles** screen by choosing **AmneziaWG** in the protocol list.
-It appears alongside VLESS, VMess and Hysteria 2 profiles. Open its profile to
-scan the QR code in the official AmneziaWG client on iOS or macOS, or download
-the `.conf` file. The profile contains the client's private key. Treat QR
-codes, downloads and backups as credentials; transfer them securely and do not
-commit or attach them to diagnostics. Revoking a peer creates an automatic
-backup first, removes its saved profile from the volume and records a redacted
-audit event. AmneziaWG is read-only in **Settings**, where the active endpoint,
-ports, networks, peer count, server public key and service version are shown.
+### IPv6 verification
 
-The shared profile list shows online/offline state, last seen, cumulative
-upload/download, current sampled upload/download rates and observed source IPs.
-Xray source addresses come from StatsService IP observations; AmneziaWG uses
-the remote endpoint from its latest handshake. Online is a five-minute
-freshness estimate, not a live socket count. Speeds are averages over the
-control plane's ten-second polling interval, not link limits; they are zeroed
-when a device is offline or a sample becomes stale. Source IP is omitted when
-the protocol has not reported a recent address.
+On the VPS, check for a global IPv6 address and a default route:
 
-The service allocates IPv4 and IPv6 addresses, enables full-tunnel routes, and
-applies peer changes to the live engine without restarting the container. It
-persists server state in `awg_data`; the server private key is encrypted using
-`XRAY_EASY_MASTER_KEY`. Backups contain that state and saved client profiles.
-Backups are plaintext with mode `0600`, so protect the VPS and any copies you
-export. Restore requires the AmneziaWG Compose profile to be enabled and a
-backup created while the service was enabled; otherwise the restore command
-stops before changing application state. `doctor` checks the service, peer
-state and warns that public UDP reachability must be verified from outside.
-Deleting or recreating `awg_data` loses the server identity and peer state;
-previously exported profiles will no longer connect and must be reissued.
+~~~sh
+ip -6 address show scope global
+ip -6 route show default
+~~~
 
-If the public endpoint or shared AWG preset changes, reopen each device profile
-in the Web UI and import the refreshed `.conf` or QR code. The service refreshes
-the saved profile when it is requested; copies already exported to clients keep
-their previous endpoint or obfuscation settings.
+From another IPv6-capable network, test the public Xray TCP port:
 
-The built-in AmneziaWG 3.x preset follows current defaults in the
-[official Amnezia client implementation](https://github.com/amnezia-vpn/amnezia-client/blob/dev/client/core/installers/awgInstaller.cpp):
-`Jc=4`, `Jmin=10`, `Jmax=50`, `S1`–`S4=12`, `H1`–`H4=1`–`4`, header protection,
-content padding, timing ranges, random trailers and disabled cookies. These
-values provide protocol compatibility, not a guarantee against DPI or
-blocking. Advanced container controls remain in `.env`; if you change shared
-obfuscation values, recreate the `awg` service and re-import profiles so
-client and server parameters match. The lower-level gRPC API and maintenance
-commands are described in [awg-service/README.md](awg-service/README.md).
-The unified profiles and telemetry implementation plan is recorded in
-[docs/amneziawg-unified-profiles-plan.md](docs/amneziawg-unified-profiles-plan.md).
+~~~sh
+nc -6 -vz 2001:db8::1 443
+~~~
 
-VDS checks passed with the official AmneziaWG iOS client: a clean AWG volume
-connected and carried traffic; peer state survived a container restart and VDS
-reboot; backup/restore recovered a revoked test peer and its profile, and the
-client connected again. The previous volume failed key authentication and was
-reinitialized, so upgrade/recovery from that existing encrypted state remains
-unverified. Longer-term stability, macOS client coverage and IPv6 egress still
-need separate verification.
+Replace the example address and port. A successful TCP check confirms basic
+reachability only; also test an actual client connection. For DNS profiles,
+confirm the AAAA record points to a working endpoint. Doctor tests outbound
+IPv6 connectivity from the Xray container, not public inbound reachability.
 
-Backend test coverage and the test plan are documented in
-[docs/backend-test-plan.md](docs/backend-test-plan.md). Run
-`bash scripts/backend-coverage.sh` to check coverage thresholds locally.
-The planned web unit-test coverage is documented in
-[docs/web-test-plan.md](docs/web-test-plan.md).
+## Security and architecture
 
-Run web checks from `web/` with `npm ci`, `npm run lint`, `npm test`,
-`npm run test:coverage`, `npm run typecheck`, and `npm run build`.
+- The web panel is published only on the VPS loopback interface. Admin access
+  is through SSH port forwarding, with password login and optional TOTP.
+- Backend, Controller, Xray supervisor, Xray and optional AmneziaWG use
+  separate containers and private Compose networks. Runtime gRPC ports are not
+  published to the VPS.
+- Internal RPC links use authentication but are not encrypted; keep them on
+  the private Docker networks and do not attach untrusted containers.
+- **XRAY_EASY_MASTER_KEY** must be base64 encoding at least 32 bytes. The
+  installer generates it on first run. Store it safely and keep it for the
+  lifetime of the data volume.
+- Backups are plaintext and include credentials needed to restore devices.
+  Secure backup files and copied client profiles as secrets.
+- Interaction logs correlate backend, Controller and runtime calls with a
+  random request ID. They include method, result and duration, not RPC payloads
+  or profiles. Xray core connection logs do not include that request ID.
+
+## Development
+
+The backend, Controller, Xray supervisor and AmneziaWG service are Go
+components; the web UI uses TypeScript, Vue and Vite. Local development tools
+are not required on the VPS.
+
+Run the root backend tests and coverage gate:
+
+~~~sh
+go test ./...
+bash scripts/backend-coverage.sh
+~~~
+
+The AWG implementation and protobuf contract are separate Go modules:
+
+~~~sh
+cd awg-service && go test -race ./...
+cd ../awg-contract && go test ./...
+~~~
+
+For web checks, run from **web/**:
+
+~~~sh
+npm ci
+npm run lint
+npm test
+npm run test:coverage
+npm run typecheck
+npm run build
+~~~
+
+Regenerate checked-in typed protobuf bindings from the repository root with
+**scripts/generate-protobuf.sh**. See
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party components
+and licenses.
