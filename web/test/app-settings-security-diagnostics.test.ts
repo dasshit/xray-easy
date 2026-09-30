@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { VueWrapper } from '@vue/test-utils'
+import type { Client } from '../src/domain/models'
 import { defaultHandler, flushPromises, itemAt, mountApp, openTab, settings, hysteriaStatus, sampleClient, type RequestRecord } from './appHarness'
 
 const preview = {
@@ -333,6 +334,53 @@ describe('backups and TOTP security', () => {
 })
 
 describe('diagnostics', () => {
+  it('shows AmneziaWG service health and active device connection details without a duplicate heading', async () => {
+    const awgClient: Client = {
+      ...sampleClient,
+      id: 'awg:iphone',
+      name: 'iphone',
+      protocol: 'amneziawg',
+      protocols: ['amneziawg'],
+      online: true,
+      sourceIPs: ['198.51.100.24'],
+    }
+    const status = {
+      enabled: true, available: true, running: true, public_host: 'vpn.example.com', public_port: 1234,
+      listen_port: 51820, peer_count: 2, ipv4_network: '10.88.0.0/24', ipv6_network: 'fd88:88:88::/64',
+      service_version: 'prototype-v1',
+    }
+    const { wrapper } = await mountApp(request => {
+      if (request.url === '/api/transports/amneziawg') return { body: status }
+      return defaultHandler({ authenticated: true, clients: [awgClient] })(request)
+    })
+    await openTab(wrapper, 'Diagnostics')
+
+    const section = wrapper.get('[data-testid="awg-diagnostics"]')
+    expect(section.text()).toContain('Running')
+    expect(section.text()).toContain('vpn.example.com:1234/UDP')
+    expect(section.text()).toContain('2')
+    expect(section.text()).toContain('1')
+    expect(section.text()).toContain('10.88.0.0/24')
+    expect(section.text()).toContain('prototype-v1')
+    expect(section.text()).toContain('iphone')
+    expect(section.text()).toContain('198.51.100.24')
+    expect(wrapper.get('.section-heading').findAll('.eyebrow')).toHaveLength(0)
+    expect(wrapper.get('.section-heading h2').text()).toBe('Diagnostics')
+  })
+
+  it('reports an unreachable AmneziaWG status endpoint as unavailable', async () => {
+    const { wrapper } = await mountApp(request => {
+      if (request.url === '/api/transports/amneziawg') return { status: 503, body: { error: 'service unavailable' } }
+      return defaultHandler({ authenticated: true })(request)
+    })
+    await openTab(wrapper, 'Diagnostics')
+
+    const section = wrapper.get('[data-testid="awg-diagnostics"]')
+    expect(section.get('.status-badge').text()).toBe('Unavailable')
+    expect(section.text()).toContain('The AmneziaWG container cannot be reached')
+    expect(section.text()).not.toContain('AmneziaWG is not enabled')
+  })
+
   it('combines available logs, sorts them, and counts warn and warning levels', async () => {
     const { wrapper } = await mountApp(request => {
       if (request.url === '/api/logs?component=xray&limit=100') return { body: { entries: [
@@ -409,6 +457,7 @@ describe('diagnostics', () => {
       '/api/status',
       '/api/logs?component=xray&limit=100',
       '/api/logs?component=app&limit=100',
+      '/api/transports/amneziawg',
     ]))
   })
 })

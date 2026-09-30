@@ -138,6 +138,13 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .settings-fields-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
 .settings-fields-grid > label { align-self: start; }
 .settings-card, .security-card { min-width: 0; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); }
+.diagnostics-awg-card { margin-top: 14px; }
+.diagnostics-awg-card .card-heading { flex-wrap: wrap; }
+.diagnostics-awg-connections { margin-top: 18px; }
+.diagnostics-awg-connections h4 { margin: 0; }
+.diagnostics-awg-connections .diagnostics-list { margin-top: 10px; }
+.diagnostics-awg-connections .diagnostics-list li { gap: 5px; }
+.diagnostics-awg-connections .diagnostics-list span { color: var(--muted); font-size: .82rem; overflow-wrap: anywhere; }
 .settings-grid .hysteria-settings-card { grid-column: 1 / -1; }
 .settings-card h4 { margin: 0 0 6px; }
 .settings-danger-inline { margin-top: 18px; padding: 15px 16px; border: 1px solid color-mix(in srgb, var(--error) 35%, var(--border)); border-radius: 11px; background: color-mix(in srgb, var(--error-surface) 35%, var(--surface)); }
