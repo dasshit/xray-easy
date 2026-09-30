@@ -578,6 +578,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         <div class="settings-stack">
           <article class="settings-card settings-vless-card">
             <div class="card-heading"><div><h3>{{ t().vlessSettingsTitle }}</h3><p class="hint">{{ t().vlessSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌁</span></div>
+            <p class="status-badge" :class="statusTone(nodeStatus?.state) === 'positive' ? 'positive' : statusTone(nodeStatus?.state) === 'negative' ? 'negative' : 'muted'">{{ statusLabel(nodeStatus?.state) }}</p>
             <div class="settings-fields-grid">
               <label>{{ t().host }}<input v-model="settingsForm.publicHost" /><small class="hint">{{ t().hostHint }}</small></label>
               <label>{{ t().target }}<input v-model="settingsForm.realityTarget" /></label>
