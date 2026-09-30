@@ -15,6 +15,20 @@ const preview = {
 }
 
 describe('connection settings', () => {
+  it('removes repeated Settings and Security headings but keeps their useful status text', async () => {
+    const { wrapper } = await mountApp(defaultHandler({ authenticated: true }))
+
+    await openTab(wrapper, 'Settings')
+    let panel = wrapper.get('.section-panel')
+    expect(panel.find(':scope > .section-heading').exists()).toBe(false)
+    expect(panel.get('.section-intro').text()).toContain('Configure each inbound')
+
+    await openTab(wrapper, 'Security')
+    panel = wrapper.get('.section-panel')
+    expect(panel.find(':scope > .section-heading').exists()).toBe(false)
+    expect(panel.get('.section-intro').text()).toContain('TOTP is not enabled')
+  })
+
   it('shows the configured VMess port and its shared TLS certificate', async () => {
     const certificate = {
       subject: 'CN=vpn.example.com', issuer: 'CN=Example CA', dns_names: ['vpn.example.com'], ip_addresses: [],

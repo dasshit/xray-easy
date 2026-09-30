@@ -111,6 +111,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .section-panel { padding: 28px 30px 32px; }
 .section-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 26px; }
 .section-heading h2 { font-size: 1.45rem; letter-spacing: -.025em; }
+.section-intro { margin: 0 0 26px; }
 .button-icon { margin-right: 7px; font-size: 1.15rem; line-height: 0; }
 .muted, .hint { color: var(--muted); font-size: .88rem; }
 .hint { margin: 14px 0; }
@@ -218,7 +219,6 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .diagnostic-level-negative { background: var(--error-surface); color: var(--error); }
 .diagnostic-level-warning { color: #b26b00; background: color-mix(in srgb, #f0a000 14%, var(--surface)); }
 .compact-empty { margin: 16px 0 0; padding: 28px 18px; }
-.security-panel .section-heading { align-items: center; }
 .security-panel { max-width: none; }
 .security-status { display: inline-flex; align-items: center; gap: 2px; margin: 3px 0 12px; color: var(--muted); font-size: .86rem; }
 .security-status.enabled { color: var(--success); }

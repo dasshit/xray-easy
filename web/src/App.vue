@@ -607,7 +607,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         </ul>
       </section>
       <section v-if="activeSection === 'settings' && settings" class="section-panel">
-        <div class="section-heading"><div><p class="eyebrow">{{ t().settings }}</p><h2>{{ t().settings }}</h2><p class="muted">{{ t().settingsPageHelp }}</p></div></div>
+        <p class="muted section-intro">{{ t().settingsPageHelp }}</p>
         <div class="settings-stack">
           <article class="settings-card settings-vless-card">
             <div class="card-heading"><div><h3>{{ t().vlessSettingsTitle }}</h3><p class="hint">{{ t().vlessSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌁</span></div>
@@ -714,7 +714,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         </section>
       </section>
       <section v-if="activeSection === 'security'" class="section-panel security-panel">
-        <div class="section-heading"><div><p class="eyebrow">{{ t().security }}</p><h2>{{ t().security }}</h2><p class="muted">{{ t().totp }}: <strong>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</strong></p></div></div>
+        <p class="muted section-intro">{{ t().totp }}: <strong>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</strong></p>
         <div class="security-grid">
           <article class="security-card">
             <div class="card-heading"><div><h3>{{ t().passwordSecurityTitle }}</h3><p class="hint">{{ t().passwordSecurityHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌑</span></div>
