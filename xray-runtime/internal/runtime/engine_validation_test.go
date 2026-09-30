@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net"
 	"os"
@@ -110,6 +111,36 @@ func TestEngineStartReturnsListenerBindFailure(t *testing.T) {
 	}
 	if err := listener.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStripExternalAPIServer(t *testing.T) {
+	configuration := []byte(`{"api":{"listen":"192.0.2.123:10085"},"inbounds":[{"tag":"client-inbound"}],"outbounds":[{"protocol":"freedom"}]}`)
+	stripped, err := stripExternalAPIServer(configuration)
+	if err != nil {
+		t.Fatalf("strip supervisor API app: %v", err)
+	}
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(stripped, &document); err != nil {
+		t.Fatalf("decode stripped config: %v", err)
+	}
+	if _, exists := document["api"]; exists {
+		t.Fatal("supervisor API app remained in embedded config")
+	}
+	if string(document["inbounds"]) != `[{"tag":"client-inbound"}]` || string(document["outbounds"]) != `[{"protocol":"freedom"}]` {
+		t.Fatalf("stripping API changed other Xray config: %s", stripped)
+	}
+
+	withoutAPI := []byte(`{"inbounds":[],"outbounds":[]}`)
+	unchanged, err := stripExternalAPIServer(withoutAPI)
+	if err != nil || string(unchanged) != string(withoutAPI) {
+		t.Fatalf("config without API changed: %s error=%v", unchanged, err)
+	}
+	for _, malformed := range [][]byte{[]byte(`{"api":`), []byte(`null`)} {
+		unchanged, err := stripExternalAPIServer(malformed)
+		if err != nil || string(unchanged) != string(malformed) {
+			t.Errorf("malformed/non-object config changed: %s error=%v", unchanged, err)
+		}
 	}
 }
 

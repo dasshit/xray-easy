@@ -108,6 +108,22 @@ func TestEmbeddedEngineManagesUsersAndReplacesInboundLive(t *testing.T) {
 	}
 }
 
+func TestEmbeddedEngineIgnoresSupervisorAPIServerAddress(t *testing.T) {
+	configuration := []byte(`{"log":{"loglevel":"none"},"api":{"tag":"api","listen":"192.0.2.123:10085","services":["HandlerService","StatsService","LoggerService"]},"inbounds":[],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`)
+	engine, err := LoadEngine(configuration)
+	if err != nil {
+		t.Fatalf("load config with supervisor API listener: %v", err)
+	}
+	defer func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("close embedded Xray engine: %v", err)
+		}
+	}()
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start embedded Xray with an address from another container: %v", err)
+	}
+}
+
 func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) {
 	vlessPort := freeEngineTCPPort(t)
 	vmessPort := freeEngineTCPPort(t)

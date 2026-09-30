@@ -139,11 +139,38 @@ func parseConfig(configuration []byte) (*core.Config, error) {
 	if len(configuration) == 0 {
 		return nil, errors.New("Xray configuration is empty")
 	}
+	configuration, err := stripExternalAPIServer(configuration)
+	if err != nil {
+		return nil, fmt.Errorf("remove external Xray API server: %w", err)
+	}
 	config, err := xrayserial.LoadJSONConfig(bytes.NewReader(configuration))
 	if err != nil {
 		return nil, fmt.Errorf("parse Xray configuration: %w", err)
 	}
 	return config, nil
+}
+
+// stripExternalAPIServer removes the top-level Xray API app from configs
+// rendered for the supervisor. The embedded runtime owns the Xray instance
+// directly and uses its in-process features, so starting this legacy listener
+// is unnecessary and can fail when its configured address belongs to the
+// supervisor container's network namespace.
+func stripExternalAPIServer(configuration []byte) ([]byte, error) {
+	var document map[string]json.RawMessage
+	if err := json.Unmarshal(configuration, &document); err != nil || document == nil {
+		// Let Xray's config loader report malformed or non-object input using its
+		// regular validation path.
+		return configuration, nil
+	}
+	if _, exists := document["api"]; !exists {
+		return configuration, nil
+	}
+	delete(document, "api")
+	stripped, err := json.Marshal(document)
+	if err != nil {
+		return nil, err
+	}
+	return stripped, nil
 }
 
 // Start starts the Xray listeners and runtime features.
