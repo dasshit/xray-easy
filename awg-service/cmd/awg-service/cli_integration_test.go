@@ -8,72 +8,103 @@ import (
 	"strings"
 	"testing"
 
-	"google.golang.org/protobuf/types/known/structpb"
+	awgapi "xray-easy/awg-contract/api/v1"
 	"xray-easy/awg-service/internal/control"
+
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 type cliControl struct {
+	awgapi.UnimplementedControlServer
 	config string
 }
 
-func (cliControl) GetStatus(context.Context, *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"running": true, "peerCount": 1})
+func (cliControl) GetStatus(context.Context, *emptypb.Empty) (*awgapi.StatusResponse, error) {
+	return &awgapi.StatusResponse{Running: true, PeerCount: 1}, nil
 }
-func (cliControl) ListPeers(context.Context, *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"peers": []any{map[string]any{"name": "phone"}}})
+func (cliControl) ListPeers(context.Context, *emptypb.Empty) (*awgapi.ListPeersResponse, error) {
+	return &awgapi.ListPeersResponse{Peers: []*awgapi.Peer{{Name: "phone"}}}, nil
 }
-func (cliControl) GetPeerStats(context.Context, *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"peers": []any{}})
+func (cliControl) GetPeerStats(context.Context, *emptypb.Empty) (*awgapi.GetPeerStatsResponse, error) {
+	return &awgapi.GetPeerStatsResponse{}, nil
 }
-func (cliControl) CreatePeer(context.Context, *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"name": "phone"})
+func (cliControl) CreatePeer(context.Context, *awgapi.CreatePeerRequest) (*awgapi.Peer, error) {
+	return &awgapi.Peer{Name: "phone"}, nil
 }
-func (cliControl) AddPeer(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"name": request.GetFields()["name"].GetStringValue(), "publicKey": request.GetFields()["publicKey"].GetStringValue()})
+func (cliControl) AddPeer(_ context.Context, request *awgapi.AddPeerRequest) (*awgapi.Peer, error) {
+	return &awgapi.Peer{Name: request.GetName(), PublicKey: request.GetPublicKey()}, nil
 }
-func (cliControl) RemovePeer(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"removed": true, "name": request.GetFields()["name"].GetStringValue()})
+func (cliControl) RemovePeer(_ context.Context, request *awgapi.RemovePeerRequest) (*awgapi.RemovePeerResponse, error) {
+	return &awgapi.RemovePeerResponse{Removed: true, Name: request.GetName()}, nil
 }
-func (cliControl) GetClientConfig(context.Context, *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"config": "[Interface]\nPrivateKey = persisted\n[Peer]\n"})
+func (cliControl) GetClientConfig(context.Context, *awgapi.GetClientConfigRequest) (*awgapi.ClientConfigResponse, error) {
+	return &awgapi.ClientConfigResponse{Config: "[Interface]\nPrivateKey = persisted\n[Peer]\n"}, nil
 }
-func (cliControl) ExportBackup(context.Context, *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"snapshot": "backup"})
+func (cliControl) ExportBackup(context.Context, *emptypb.Empty) (*awgapi.BackupResponse, error) {
+	return &awgapi.BackupResponse{Data: []byte("backup")}, nil
 }
-func (cliControl) RestoreBackup(context.Context, *structpb.Struct) (*structpb.Struct, error) {
-	return structpb.NewStruct(map[string]any{"restored": true})
+func (cliControl) RestoreBackup(context.Context, *awgapi.RestoreBackupRequest) (*awgapi.RestoreBackupResponse, error) {
+	return &awgapi.RestoreBackupResponse{Restored: true}, nil
 }
-func (s cliControl) RenderClientConfig(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	name := request.GetFields()["name"].GetStringValue()
-	key := request.GetFields()["privateKey"].GetStringValue()
+func (s cliControl) RenderClientConfig(_ context.Context, request *awgapi.RenderClientConfigRequest) (*awgapi.ClientConfigResponse, error) {
+	name := request.GetName()
+	key := request.GetPrivateKey()
 	config := s.config
 	if config == "" {
 		config = "[Interface]\nPrivateKey = " + key + "\nAddress = 10.88.0.2/32\n\n[Peer]\n# " + name + "\n"
 	}
-	return structpb.NewStruct(map[string]any{"config": config})
+	return &awgapi.ClientConfigResponse{Config: config}, nil
 }
 
 type inProcessCLIClient struct{ api control.API }
 
-func (c inProcessCLIClient) Invoke(ctx context.Context, method string, fields map[string]any) (*structpb.Struct, error) {
-	request, err := structpb.NewStruct(fields)
-	if err != nil {
-		return nil, err
+func (c inProcessCLIClient) Invoke(ctx context.Context, method string, fields map[string]any) (map[string]any, error) {
+	request := func(message proto.Message) error {
+		data, err := json.Marshal(fields)
+		if err != nil {
+			return err
+		}
+		return protojson.Unmarshal(data, message)
 	}
+	var response proto.Message
+	var err error
 	switch method {
 	case "GetStatus":
-		return c.api.GetStatus(ctx, request)
+		response, err = c.api.GetStatus(ctx, &emptypb.Empty{})
 	case "ListPeers":
-		return c.api.ListPeers(ctx, request)
+		response, err = c.api.ListPeers(ctx, &emptypb.Empty{})
 	case "AddPeer":
-		return c.api.AddPeer(ctx, request)
+		message := new(awgapi.AddPeerRequest)
+		if err = request(message); err == nil {
+			response, err = c.api.AddPeer(ctx, message)
+		}
 	case "RemovePeer":
-		return c.api.RemovePeer(ctx, request)
+		message := new(awgapi.RemovePeerRequest)
+		if err = request(message); err == nil {
+			response, err = c.api.RemovePeer(ctx, message)
+		}
 	case "RenderClientConfig":
-		return c.api.RenderClientConfig(ctx, request)
+		message := new(awgapi.RenderClientConfigRequest)
+		if err = request(message); err == nil {
+			response, err = c.api.RenderClientConfig(ctx, message)
+		}
 	default:
 		return nil, context.Canceled
 	}
+	if err != nil {
+		return nil, err
+	}
+	data, err := protojson.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	var result map[string]any
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, err
+	}
+	return result, nil
 }
 func (inProcessCLIClient) Close() error { return nil }
 

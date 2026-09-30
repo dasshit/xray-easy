@@ -1,6 +1,7 @@
 FROM golang:1.24-alpine AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY awg-contract ./awg-contract
 COPY third_party ./third_party
 RUN for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
 COPY cmd ./cmd

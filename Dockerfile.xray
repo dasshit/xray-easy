@@ -6,6 +6,7 @@ FROM ghcr.io/xtls/xray-core:${XRAY_VERSION} AS xray
 FROM golang:1.24-alpine AS supervisor-build
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY awg-contract ./awg-contract
 COPY third_party ./third_party
 RUN go mod download
 COPY cmd ./cmd

@@ -15,12 +15,15 @@ import (
 	"testing"
 	"time"
 
+	awgapi "xray-easy/awg-contract/api/v1"
+
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -84,7 +87,7 @@ func TestGRPCLifecycleRequiresTokenAndChangesPeerWithoutRestart(t *testing.T) {
 
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer(grpc.UnaryInterceptor(AuthInterceptor("correct-test-token")))
-	Register(server, NewService(manager, opts))
+	Register(server, newStructService(manager, opts).Service)
 	go func() { _ = server.Serve(listener) }()
 	defer server.Stop()
 
@@ -98,42 +101,38 @@ func TestGRPCLifecycleRequiresTokenAndChangesPeerWithoutRestart(t *testing.T) {
 	}
 	defer connection.Close()
 
-	statusRequest, _ := structpb.NewStruct(nil)
-	statusResponse := new(structpb.Struct)
-	err = connection.Invoke(ctx, "/xrayeasy.awg.v1.Control/GetStatus", statusRequest, statusResponse)
+	client := awgapi.NewControlClient(connection)
+	statusRequest := &emptypb.Empty{}
+	_, err = client.GetStatus(ctx, statusRequest)
 	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("unauthenticated status error = %v", err)
 	}
 
 	authCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer correct-test-token")
-	statusResponse = new(structpb.Struct)
-	if err := connection.Invoke(authCtx, "/xrayeasy.awg.v1.Control/GetStatus", statusRequest, statusResponse); err != nil {
+	statusResponse, err := client.GetStatus(authCtx, statusRequest)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if statusResponse.GetFields()["protocol"].GetStringValue() != "AmneziaWG" || statusResponse.GetFields()["running"].GetBoolValue() != true {
-		t.Fatalf("unexpected status response: %v", statusResponse.AsMap())
+	if statusResponse.GetProtocol() != "AmneziaWG" || !statusResponse.GetRunning() {
+		t.Fatalf("unexpected status response: %v", statusResponse)
 	}
-	listResponse := new(structpb.Struct)
-	if err := connection.Invoke(authCtx, "/xrayeasy.awg.v1.Control/ListPeers", statusRequest, listResponse); err != nil {
+	listResponse, err := client.ListPeers(authCtx, statusRequest)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listResponse.GetFields()["peers"].GetListValue().GetValues()) != 0 {
-		t.Fatalf("new device already has peers: %v", listResponse.AsMap())
+	if len(listResponse.GetPeers()) != 0 {
+		t.Fatalf("new device already has peers: %v", listResponse)
 	}
 	_, clientPublicKey, err := GenerateKeypair()
 	if err != nil {
 		t.Fatal(err)
 	}
-	addRequest, err := structpb.NewStruct(map[string]any{"name": "ios", "publicKey": clientPublicKey})
+	peerResponse, err := client.AddPeer(authCtx, &awgapi.AddPeerRequest{Name: "ios", PublicKey: clientPublicKey})
 	if err != nil {
 		t.Fatal(err)
 	}
-	peerResponse := new(structpb.Struct)
-	if err := connection.Invoke(authCtx, "/xrayeasy.awg.v1.Control/AddPeer", addRequest, peerResponse); err != nil {
-		t.Fatal(err)
-	}
-	if peerResponse.GetFields()["ipv4"].GetStringValue() != "10.88.0.2" {
-		t.Fatalf("unexpected allocated peer: %v", peerResponse.AsMap())
+	if peerResponse.GetIpv4() != "10.88.0.2" {
+		t.Fatalf("unexpected allocated peer: %v", peerResponse)
 	}
 	if engine.ups != 1 {
 		t.Fatalf("adding peer restarted the engine %d times", engine.ups-1)
@@ -143,23 +142,22 @@ func TestGRPCLifecycleRequiresTokenAndChangesPeerWithoutRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.snapshot = "public_key=" + hex.EncodeToString(clientPublicKeyBytes) + "\nendpoint=203.0.113.9:4567\nlast_handshake_time_sec=1790798400\nlast_handshake_time_nsec=0\nrx_bytes=11\ntx_bytes=22\n"
-	statsRequest, _ := structpb.NewStruct(nil)
-	statsResponse := new(structpb.Struct)
-	if err := connection.Invoke(ctx, "/xrayeasy.awg.v1.Control/GetPeerStats", statsRequest, statsResponse); status.Code(err) != codes.Unauthenticated {
+	statsRequest := &emptypb.Empty{}
+	_, err = client.GetPeerStats(ctx, statsRequest)
+	if status.Code(err) != codes.Unauthenticated {
 		t.Fatalf("unauthenticated peer stats error = %v", err)
 	}
-	statsResponse = new(structpb.Struct)
-	if err := connection.Invoke(authCtx, "/xrayeasy.awg.v1.Control/GetPeerStats", statsRequest, statsResponse); err != nil {
+	statsResponse, err := client.GetPeerStats(authCtx, statsRequest)
+	if err != nil {
 		t.Fatal(err)
 	}
-	entries := statsResponse.GetFields()["peers"].GetListValue().GetValues()
-	if len(entries) != 1 || entries[0].GetStructValue().GetFields()["name"].GetStringValue() != "ios" || entries[0].GetStructValue().GetFields()["uploadBytes"].GetStringValue() != "11" {
-		t.Fatalf("peer stats response = %v", statsResponse.AsMap())
+	entries := statsResponse.GetPeers()
+	if len(entries) != 1 || entries[0].GetName() != "ios" || entries[0].GetUploadBytes() != 11 {
+		t.Fatalf("peer stats response = %v", statsResponse)
 	}
 
-	removeRequest, _ := structpb.NewStruct(map[string]any{"name": "ios"})
-	removeResponse := new(structpb.Struct)
-	if err := connection.Invoke(authCtx, "/xrayeasy.awg.v1.Control/RemovePeer", removeRequest, removeResponse); err != nil {
+	_, err = client.RemovePeer(authCtx, &awgapi.RemovePeerRequest{Name: "ios"})
+	if err != nil {
 		t.Fatal(err)
 	}
 	if len(manager.Peers()) != 0 || engine.ups != 1 {
@@ -186,33 +184,14 @@ func TestRPCValidationAndErrorMapping(t *testing.T) {
 			}
 		})
 	}
-	for _, request := range []*structpb.Struct{nil, {Fields: map[string]*structpb.Value{"name": structpb.NewNumberValue(3)}}, {Fields: map[string]*structpb.Value{"name": structpb.NewStringValue("")}}} {
-		if _, err := stringField(request, "name"); status.Code(err) != codes.InvalidArgument {
-			t.Errorf("invalid string field error = %v", err)
-		}
-	}
-	if _, err := response(map[string]any{"invalid": make(chan int)}); err == nil {
-		t.Fatal("response accepted an unsupported protobuf value")
-	}
 }
 
-func TestMethodDecoderAndDirectHandlerPath(t *testing.T) {
-	method := method("GetStatus", func(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-		if len(request.GetFields()) != 0 {
-			return nil, errors.New("unexpected request fields")
-		}
-		return response(map[string]any{"ok": true})
-	})
-	handler := method.Handler
-	result, err := handler(nil, context.Background(), func(value any) error {
-		value.(*structpb.Struct).Reset()
-		return nil
-	}, nil)
-	if err != nil || !result.(*structpb.Struct).GetFields()["ok"].GetBoolValue() {
-		t.Fatalf("direct method handler = %v, %v", result, err)
-	}
-	if _, err := handler(nil, context.Background(), func(any) error { return errors.New("decode error") }, nil); err == nil {
-		t.Fatal("decode error was ignored")
+func TestGeneratedAWGServiceRegistersTypedMethods(t *testing.T) {
+	server := grpc.NewServer()
+	Register(server, NewService(nil, Options{}))
+	info := server.GetServiceInfo()["xrayeasy.awg.v1.Control"]
+	if len(info.Methods) != 10 {
+		t.Fatalf("registered methods = %d, want 10", len(info.Methods))
 	}
 }
 
@@ -223,7 +202,7 @@ func TestServiceStatusListsPeersAndRejectsInvalidRequests(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	statusResponse, err := service.GetStatus(context.Background(), &structpb.Struct{})
 	if err != nil || statusResponse.GetFields()["publicPort"].GetNumberValue() != float64(opts.PublicPort) {
 		t.Fatalf("service status = %v, %v", statusResponse, err)
@@ -231,6 +210,17 @@ func TestServiceStatusListsPeersAndRejectsInvalidRequests(t *testing.T) {
 	peers, err := service.ListPeers(context.Background(), &structpb.Struct{})
 	if err != nil || len(peers.GetFields()["peers"].GetListValue().GetValues()) != 0 {
 		t.Fatalf("empty peer list = %v, %v", peers, err)
+	}
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddPeer("listed", publicKey); err != nil {
+		t.Fatal(err)
+	}
+	typedPeers, err := service.Service.ListPeers(context.Background(), &emptypb.Empty{})
+	if err != nil || len(typedPeers.GetPeers()) != 1 || typedPeers.GetPeers()[0].GetName() != "listed" {
+		t.Fatalf("typed peer list = %v, %v", typedPeers, err)
 	}
 	missing := &structpb.Struct{}
 	if _, err := service.AddPeer(context.Background(), missing); status.Code(err) != codes.InvalidArgument {
@@ -255,7 +245,7 @@ func TestServiceMapsClosedManagerStatusAndTelemetryFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	manager.Close()
 	if _, err := service.GetStatus(context.Background(), &structpb.Struct{}); status.Code(err) != codes.Internal {
 		t.Fatalf("GetStatus with a closed manager = %v", err)
@@ -276,7 +266,7 @@ func TestServiceCleansUpPeerWhenPrivateProfileCannotBeWritten(t *testing.T) {
 	if err := os.WriteFile(blockedDataDir, []byte("file"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	service.options.DataDir = blockedDataDir
 	request, _ := structpb.NewStruct(map[string]any{"name": "phone"})
 	if _, err := service.CreatePeer(context.Background(), request); status.Code(err) != codes.Internal {
@@ -294,7 +284,7 @@ func TestServicePeerMethodsMapValidationAndRemovalFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	ctx := context.Background()
 
 	if _, err := service.CreatePeer(ctx, nil); status.Code(err) != codes.InvalidArgument {
@@ -335,7 +325,7 @@ func TestServicePeerMethodsMapValidationAndRemovalFailures(t *testing.T) {
 }
 
 func TestBackupRPCRejectsInvalidPayloadsAndUnavailableManager(t *testing.T) {
-	service := NewService(nil, Options{DataDir: t.TempDir()})
+	service := newStructService(nil, Options{DataDir: t.TempDir()})
 	if _, err := service.ExportBackup(context.Background(), nil); status.Code(err) != codes.Internal {
 		t.Fatalf("ExportBackup without manager = %v", err)
 	}
@@ -355,7 +345,7 @@ func TestBackupRPCRejectsInvalidPayloadsAndUnavailableManager(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	active := NewService(manager, opts)
+	active := newStructService(manager, opts)
 	invalidArchive, _ := structpb.NewStruct(map[string]any{"data": base64.StdEncoding.EncodeToString([]byte("not a gzip archive"))})
 	if _, err := active.RestoreBackup(context.Background(), invalidArchive); status.Code(err) != codes.InvalidArgument || !strings.Contains(err.Error(), "open archive") {
 		t.Fatalf("RestoreBackup invalid archive = %v", err)
@@ -518,7 +508,7 @@ func TestServiceGetClientConfigRejectsMalformedSavedKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	request, _ := structpb.NewStruct(map[string]any{"name": "phone"})
-	if _, err := NewService(manager, opts).GetClientConfig(context.Background(), request); status.Code(err) != codes.InvalidArgument {
+	if _, err := newStructService(manager, opts).GetClientConfig(context.Background(), request); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("malformed saved private key error = %v", err)
 	}
 }
@@ -530,7 +520,7 @@ func TestServiceMapsClosedManagerStatusAndPeerStatsFailures(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	if _, err := service.GetStatus(context.Background(), nil); status.Code(err) != codes.Internal {
 		t.Fatalf("closed manager GetStatus error = %v", err)
 	}
@@ -549,7 +539,7 @@ func TestServiceCreatePeerRemovesRuntimePeerWhenProfileCannotBePersisted(t *test
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	request, err := structpb.NewStruct(map[string]any{"name": "phone"})
 	if err != nil {
 		t.Fatal(err)
@@ -576,7 +566,7 @@ func TestRenderConfigRequiresRegisteredMatchingPrivateKey(t *testing.T) {
 	if _, err := manager.AddPeer("phone", publicKey); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	request, _ := structpb.NewStruct(map[string]any{"name": "phone", "privateKey": privateKey})
 	response, err := service.RenderClientConfig(context.Background(), request)
 	if err != nil {
@@ -599,7 +589,7 @@ func TestCreatePeerPersistsProfileAndRemoveDeletesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	request, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
 	created, err := service.CreatePeer(context.Background(), request)
 	if err != nil {
@@ -647,7 +637,7 @@ func TestCreatePeerRetryReturnsSamePersistedPeerAndProfile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	operationID := "abcdef0123456789abcdef0123456789"
 	ctx := context.WithValue(context.Background(), operationIDKey, operationID)
 	request, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
@@ -677,7 +667,7 @@ func TestCreatePeerRetryReturnsSamePersistedPeerAndProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer restarted.Close()
-	service = NewService(restarted, opts)
+	service = newStructService(restarted, opts)
 	second, err := service.CreatePeer(ctx, request)
 	if err != nil {
 		t.Fatalf("retry after service restart = %v", err)
@@ -710,7 +700,7 @@ func TestCreatePeerRejectsMalformedIntentAndReusedOperationIDs(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	createID := "abcdef0123456789abcdef0123456789"
 	createContext := context.WithValue(context.Background(), operationIDKey, createID)
 	createRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
@@ -771,7 +761,7 @@ func TestCreatePeerRecoversInterruptedProfileFromOperationKey(t *testing.T) {
 	if _, _, err := manager.AddPeerForOperation("iphone", publicKey, operationID); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	if _, err := os.Stat(filepath.Join(opts.DataDir, "operations", orphanID+".key")); !os.IsNotExist(err) {
 		t.Fatalf("orphan pending key survived service initialization: %v", err)
 	}
@@ -800,7 +790,7 @@ func TestCreatePeerRetriesAfterProfilePersistenceFailure(t *testing.T) {
 	if err := os.WriteFile(profileDirectory, []byte("blocked"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	operationID := "abcdef0123456789abcdef0123456789"
 	ctx := context.WithValue(context.Background(), operationIDKey, operationID)
 	request, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
@@ -941,7 +931,7 @@ func TestGRPCPeerMutationsReplaySafelyAcrossServiceRestart(t *testing.T) {
 		}
 		return server, listener, connection
 	}
-	server, listener, connection := newConnection(NewService(manager, opts))
+	server, listener, connection := newConnection(newStructService(manager, opts).Service)
 	base := context.Background()
 	trace := func(operationID string) context.Context {
 		return metadata.NewOutgoingContext(base, metadata.Pairs(
@@ -950,9 +940,9 @@ func TestGRPCPeerMutationsReplaySafelyAcrossServiceRestart(t *testing.T) {
 		))
 	}
 	createID := "0123456789abcdef0123456789abcdef"
-	createRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	createRequest := &awgapi.CreatePeerRequest{Name: "iphone"}
 	lossyConnection := &loseFirstGRPCResponse{ClientConnInterface: connection, method: "/xrayeasy.awg.v1.Control/CreatePeer"}
-	if err := lossyConnection.Invoke(trace(createID), "/xrayeasy.awg.v1.Control/CreatePeer", createRequest, new(structpb.Struct)); status.Code(err) != codes.Unavailable {
+	if err := lossyConnection.Invoke(trace(createID), "/xrayeasy.awg.v1.Control/CreatePeer", createRequest, new(awgapi.Peer)); status.Code(err) != codes.Unavailable {
 		t.Fatalf("CreatePeer response-loss attempt = %v, want Unavailable", err)
 	}
 	server.Stop()
@@ -965,27 +955,27 @@ func TestGRPCPeerMutationsReplaySafelyAcrossServiceRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	manager = restarted
-	server, listener, connection = newConnection(NewService(manager, opts))
+	server, listener, connection = newConnection(newStructService(manager, opts).Service)
 	var firstCreate map[string]any
 	for attempt := 0; attempt < 2; attempt++ {
-		response := new(structpb.Struct)
+		response := new(awgapi.Peer)
 		err := connection.Invoke(trace(createID), "/xrayeasy.awg.v1.Control/CreatePeer", createRequest, response)
 		if err != nil {
 			t.Fatalf("CreatePeer attempt %d = %v", attempt, err)
 		}
 		if attempt == 0 {
-			firstCreate = response.AsMap()
-		} else if !reflect.DeepEqual(firstCreate, response.AsMap()) {
-			t.Fatalf("create retry changed peer: first=%v second=%v", firstCreate, response.AsMap())
+			firstCreate = map[string]any{"peer": response.String()}
+		} else if !reflect.DeepEqual(firstCreate, map[string]any{"peer": response.String()}) {
+			t.Fatalf("create retry changed peer: first=%v second=%v", firstCreate, response)
 		}
 	}
 	if len(manager.Peers()) != 1 {
 		t.Fatalf("create retry produced %d peers", len(manager.Peers()))
 	}
 	removeID := "fedcba9876543210fedcba9876543210"
-	removeRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	removeRequest := &awgapi.RemovePeerRequest{Name: "iphone"}
 	for attempt := 0; attempt < 2; attempt++ {
-		if err := connection.Invoke(trace(removeID), "/xrayeasy.awg.v1.Control/RemovePeer", removeRequest, new(structpb.Struct)); err != nil {
+		if err := connection.Invoke(trace(removeID), "/xrayeasy.awg.v1.Control/RemovePeer", removeRequest, new(awgapi.RemovePeerResponse)); err != nil {
 			t.Fatalf("RemovePeer attempt %d = %v", attempt, err)
 		}
 	}
@@ -1006,16 +996,16 @@ func TestGRPCPeerMutationsReplaySafelyAcrossServiceRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer afterRestart.Close()
-	server, listener, connection = newConnection(NewService(afterRestart, opts))
+	server, listener, connection = newConnection(newStructService(afterRestart, opts).Service)
 	defer server.Stop()
 	defer connection.Close()
 	defer listener.Close()
 	newCreateID := "11111111111111111111111111111111"
-	newRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
-	if err := connection.Invoke(trace(newCreateID), "/xrayeasy.awg.v1.Control/CreatePeer", newRequest, new(structpb.Struct)); err != nil {
+	newRequest := &awgapi.CreatePeerRequest{Name: "iphone"}
+	if err := connection.Invoke(trace(newCreateID), "/xrayeasy.awg.v1.Control/CreatePeer", newRequest, new(awgapi.Peer)); err != nil {
 		t.Fatalf("create replacement peer after restart = %v", err)
 	}
-	if err := connection.Invoke(trace(removeID), "/xrayeasy.awg.v1.Control/RemovePeer", removeRequest, new(structpb.Struct)); err != nil {
+	if err := connection.Invoke(trace(removeID), "/xrayeasy.awg.v1.Control/RemovePeer", removeRequest, new(awgapi.RemovePeerResponse)); err != nil {
 		t.Fatalf("replay old revoke after restart = %v", err)
 	}
 	if len(afterRestart.Peers()) != 1 || afterRestart.Peers()[0].OperationID != newCreateID {
@@ -1045,7 +1035,7 @@ func TestAWGBackupRestoresPeersAndPrivateProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	firstRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
 	if _, err := service.CreatePeer(context.Background(), firstRequest); err != nil {
 		t.Fatal(err)

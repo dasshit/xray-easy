@@ -1,0 +1,103 @@
+syntax = "proto3";
+
+package xrayeasy.awg.v1;
+
+import "google/protobuf/empty.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "xray-easy/awg-contract/api/v1;awgapi";
+
+// Private typed control API between the application Controller and AWG
+// service. Both containers must be rebuilt from the same project revision.
+service Control {
+  rpc GetStatus(google.protobuf.Empty) returns (StatusResponse);
+  rpc ListPeers(google.protobuf.Empty) returns (ListPeersResponse);
+  rpc GetPeerStats(google.protobuf.Empty) returns (GetPeerStatsResponse);
+  rpc CreatePeer(CreatePeerRequest) returns (Peer);
+  rpc AddPeer(AddPeerRequest) returns (Peer);
+  rpc RemovePeer(RemovePeerRequest) returns (RemovePeerResponse);
+  rpc GetClientConfig(GetClientConfigRequest) returns (ClientConfigResponse);
+  rpc ExportBackup(google.protobuf.Empty) returns (BackupResponse);
+  rpc RestoreBackup(RestoreBackupRequest) returns (RestoreBackupResponse);
+  rpc RenderClientConfig(RenderClientConfigRequest) returns (ClientConfigResponse);
+}
+
+message StatusResponse {
+  bool running = 1;
+  string public_key = 2;
+  int32 listen_port = 3;
+  string public_host = 4;
+  int32 public_port = 5;
+  int32 peer_count = 6;
+  string ipv4_network = 7;
+  string ipv6_network = 8;
+  string protocol = 9;
+  string service_version = 10;
+}
+
+message Peer {
+  string name = 1;
+  string public_key = 2;
+  string ipv4 = 3;
+  string ipv6 = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message ListPeersResponse {
+  repeated Peer peers = 1;
+}
+
+message PeerStats {
+  string name = 1;
+  string source_ip = 2;
+  google.protobuf.Timestamp last_handshake = 3;
+  int64 upload_bytes = 4;
+  int64 download_bytes = 5;
+}
+
+message GetPeerStatsResponse {
+  repeated PeerStats peers = 1;
+}
+
+message CreatePeerRequest {
+  string name = 1;
+}
+
+message AddPeerRequest {
+  string name = 1;
+  string public_key = 2;
+}
+
+message RemovePeerRequest {
+  string name = 1;
+}
+
+message RemovePeerResponse {
+  bool removed = 1;
+  string name = 2;
+}
+
+message GetClientConfigRequest {
+  string name = 1;
+}
+
+message RenderClientConfigRequest {
+  string name = 1;
+  string private_key = 2;
+}
+
+message ClientConfigResponse {
+  string config = 1;
+}
+
+message BackupResponse {
+  bytes data = 1;
+}
+
+message RestoreBackupRequest {
+  bytes data = 1;
+}
+
+message RestoreBackupResponse {
+  bool restored = 1;
+}

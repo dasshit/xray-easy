@@ -7,18 +7,22 @@ Replace dynamic `google.protobuf.Struct` payloads in the private gRPC links to
 contracts. Keep the existing process/container boundaries, authentication,
 request tracing, revision fencing, and application/domain APIs unchanged.
 
-## Current state
+## Baseline before migration
 
-- The Supervisor `.proto` contract exists at
+- The Supervisor `.proto` contract originally existed at
   `internal/supervisor/api/v1/supervisor.proto`, but almost every request and
   response is still `google.protobuf.Struct`. Its gRPC service descriptor is
   hand-written, and clients manually decode field names and types.
-- The AWG `.proto` contract exists at `awg-service/api/v1/control.proto`, but
+- The AWG `.proto` contract originally existed at `awg-service/api/v1/control.proto`, but
   every method uses `Struct`; the service descriptor is also hand-written.
   Both the Controller-side gateway and AWG CLI manually construct and decode
   maps.
 - The backend-to-Controller API is already generated and typed. This work does
   not change that public-to-the-project internal contract.
+
+The migration stages below record the implementation status; the AWG contract
+now lives in the shared `awg-contract` module and both runtime links use typed
+protobuf messages.
 
 ## Compatibility and rollout
 
@@ -67,25 +71,14 @@ required coordinated rebuild in the repository deployment notes.
 
 ### Stage 2 — Type the AmneziaWG service API
 
-- Replace the AWG `Struct` schema with request and response messages for
-  status, peers, peer telemetry, peer lifecycle, profile rendering, and
-  backup/restore. Use `int64` for counters, `Timestamp` for creation and
-  handshake times, and raw `bytes` for backup archives.
-- Put the generated AWG contract in a small dedicated Go module containing
-  only protobuf/gRPC dependencies. Both the root application module and the
-  separate AWG service module consume that one generated contract, avoiding
-  duplicated descriptors or a dependency on the AWG implementation module.
-- Replace the custom AWG service descriptor and dynamic service handlers with
-  generated gRPC registration and typed request/response implementations.
-- Replace map-based AWG client calls and response parsing in Controller and
-  CLI code with generated clients and typed messages. Retain bearer-token
-  authentication, request/operation correlation, and redaction-safe logging.
-- Keep JSON CLI output and persisted AWG `state.json` unchanged; protobuf is
-  only the private RPC transport contract.
-- Update the AWG Docker build to include the contract module. Add typed
-  transport tests and run root and AWG module tests, race tests, `go vet`,
-  coverage checks, and Docker Compose configuration/build checks where
-  available.
+- [x] Replace the dynamic AWG schema with typed request/response messages and
+  checked-in generated Go stubs in a lightweight shared module.
+- [x] Move the backend gateway, AWG service and CLI RPC transport to the
+  generated typed contract, retaining auth, trace metadata and safe logging.
+- [x] Change backup transport to raw protobuf `bytes` and counters/timestamps
+  to `int64`/`Timestamp`; update Docker build and user-facing contract docs.
+- [x] Verify both modules, tests, race detector, vet and coverage gates before
+  committing this stage independently.
 - Commit: `refactor: use typed protobuf for amneziawg service`.
 
 ## Acceptance criteria

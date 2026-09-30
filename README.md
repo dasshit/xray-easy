@@ -212,7 +212,7 @@ These internal links are authenticated but not encrypted, so keep them on the
 private Docker networks. Supervisor and Controller use generated, typed
 Protobuf contracts. Rebuild both sides of an internal RPC link from the same
 checkout revision when updating; `scripts/generate-protobuf.sh` regenerates the
-checked-in Controller and Supervisor bindings.
+checked-in Controller, Supervisor and AWG bindings.
 
 Backend, Controller, `xray-supervisor` and `awg-service` interaction logs carry
 the same random `X-Request-ID`. They record method, outcome and duration, but

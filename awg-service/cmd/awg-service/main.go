@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/structpb"
 	"xray-easy/awg-service/internal/control"
 )
 
@@ -39,7 +38,7 @@ const (
 var peerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 
 type controlRPC interface {
-	Invoke(context.Context, string, map[string]any) (*structpb.Struct, error)
+	Invoke(context.Context, string, map[string]any) (map[string]any, error)
 	Close() error
 }
 
@@ -228,7 +227,7 @@ func addPeer(args []string, stdout, stderr io.Writer) error {
 		rollbackPeer(client, *name)
 		return fmt.Errorf("render AWG client profile: %w", err)
 	}
-	config := profile.GetFields()["config"].GetStringValue()
+	config, _ := profile["config"].(string)
 	if config == "" {
 		rollbackPeer(client, *name)
 		return errors.New("AWG service returned an empty client profile")
@@ -239,7 +238,7 @@ func addPeer(args []string, stdout, stderr io.Writer) error {
 		return err
 	}
 	return json.NewEncoder(stdout).Encode(map[string]any{
-		"peer": peer.AsMap(), "profilePath": path,
+		"peer": peer, "profilePath": path,
 		"message": "Profile contains a private key; transfer it to the client securely.",
 	})
 }
@@ -267,7 +266,7 @@ func removePeer(args []string, stdout io.Writer) error {
 	if err := removeSavedProfile(envOr("AWG_DATA_DIR", defaultDataDir), *name); err != nil {
 		return fmt.Errorf("peer was revoked, but its saved client profile could not be deleted: %w", err)
 	}
-	return json.NewEncoder(stdout).Encode(result.AsMap())
+	return json.NewEncoder(stdout).Encode(result)
 }
 
 func removeSavedProfile(dataDir, name string) error {
@@ -312,7 +311,7 @@ func refreshProfile(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return fmt.Errorf("render refreshed AWG profile: %w", err)
 	}
-	updated := result.GetFields()["config"].GetStringValue()
+	updated, _ := result["config"].(string)
 	if updated == "" {
 		return errors.New("AWG service returned an empty client profile")
 	}
@@ -417,7 +416,7 @@ func printRPC(method string, fields map[string]any, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	return json.NewEncoder(stdout).Encode(result.AsMap())
+	return json.NewEncoder(stdout).Encode(result)
 }
 
 func checkHealth() error {

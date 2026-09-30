@@ -7,18 +7,20 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"sync"
-	"time"
+
+	awgapi "xray-easy/awg-contract/api/v1"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Service maps the prototype's gRPC methods onto the AWG lifecycle manager.
 type Service struct {
+	awgapi.UnimplementedControlServer
 	manager *Manager
 	options Options
 	mu      sync.Mutex
@@ -61,66 +63,60 @@ func (s *Service) removeOrphanedOperationKeys() {
 }
 
 // GetStatus returns the running device identity and its configured listener.
-func (s *Service) GetStatus(context.Context, *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) GetStatus(context.Context, *emptypb.Empty) (*awgapi.StatusResponse, error) {
 	publicKey, peers, err := s.manager.Status()
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return response(map[string]any{
-		"running":        true,
-		"publicKey":      publicKey,
-		"listenPort":     float64(s.options.ListenPort),
-		"publicHost":     s.options.PublicHost,
-		"publicPort":     float64(s.options.PublicPort),
-		"peerCount":      float64(peers),
-		"ipv4Network":    s.options.IPv4Prefix.String(),
-		"ipv6Network":    s.options.IPv6Prefix.String(),
-		"protocol":       "AmneziaWG",
-		"serviceVersion": "prototype-v1",
-	})
+	return &awgapi.StatusResponse{
+		Running: true, PublicKey: publicKey,
+		ListenPort: int32(s.options.ListenPort), PublicHost: s.options.PublicHost,
+		PublicPort: int32(s.options.PublicPort), PeerCount: int32(peers),
+		Ipv4Network: s.options.IPv4Prefix.String(), Ipv6Network: s.options.IPv6Prefix.String(),
+		Protocol: "AmneziaWG", ServiceVersion: "prototype-v1",
+	}, nil
 }
 
 // ListPeers returns current peer labels, public keys, and allocated tunnel addresses.
-func (s *Service) ListPeers(context.Context, *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) ListPeers(context.Context, *emptypb.Empty) (*awgapi.ListPeersResponse, error) {
 	peers := s.manager.Peers()
-	items := make([]any, 0, len(peers))
+	items := make([]*awgapi.Peer, 0, len(peers))
 	for _, peer := range peers {
-		items = append(items, peerMap(peer))
+		items = append(items, peerMessage(peer))
 	}
-	return response(map[string]any{"peers": items})
+	return &awgapi.ListPeersResponse{Peers: items}, nil
 }
 
 // GetPeerStats returns the live endpoint, handshake, and counters for each
 // managed peer without returning any private configuration material.
-func (s *Service) GetPeerStats(context.Context, *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) GetPeerStats(context.Context, *emptypb.Empty) (*awgapi.GetPeerStatsResponse, error) {
 	peers, err := s.manager.PeerTelemetry()
 	if err != nil {
 		return nil, mapError(err)
 	}
-	items := make([]any, 0, len(peers))
+	items := make([]*awgapi.PeerStats, 0, len(peers))
 	for _, peer := range peers {
-		lastHandshake := ""
+		var lastHandshake *timestamppb.Timestamp
 		if !peer.LastHandshake.IsZero() {
-			lastHandshake = peer.LastHandshake.UTC().Format(time.RFC3339Nano)
+			lastHandshake = timestamppb.New(peer.LastHandshake.UTC())
 		}
-		items = append(items, map[string]any{
-			"name": peer.Name, "sourceIp": peer.SourceIP,
-			"lastHandshake": lastHandshake,
-			"uploadBytes":   strconv.FormatInt(peer.UploadBytes, 10),
-			"downloadBytes": strconv.FormatInt(peer.DownloadBytes, 10),
+		items = append(items, &awgapi.PeerStats{
+			Name: peer.Name, SourceIp: peer.SourceIP, LastHandshake: lastHandshake,
+			UploadBytes: peer.UploadBytes, DownloadBytes: peer.DownloadBytes,
 		})
 	}
-	return response(map[string]any{"peers": items})
+	return &awgapi.GetPeerStatsResponse{Peers: items}, nil
 }
 
 // CreatePeer creates a keypair, registers its public key, and persists the
 // corresponding private client profile for later authenticated delivery.
-func (s *Service) CreatePeer(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) CreatePeer(ctx context.Context, request *awgapi.CreatePeerRequest) (*awgapi.Peer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, err := stringField(request, "name")
-	if err != nil {
-		return nil, err
+	name := request.GetName()
+	var err error
+	if name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 	if !servicePeerNamePattern.MatchString(name) {
 		return nil, mapError(fmt.Errorf("invalid peer name: %w", ErrInvalid))
@@ -138,7 +134,7 @@ func (s *Service) CreatePeer(ctx context.Context, request *structpb.Struct) (*st
 			}
 			if _, err := readClientProfile(s.options.DataDir, name); err == nil {
 				_ = removePendingOperationKey(s.options.DataDir, operationID)
-				return response(peerMap(peer))
+				return peerMessage(peer), nil
 			}
 			privateKey, err := readPendingOperationKey(s.options.DataDir, operationID)
 			if err != nil {
@@ -147,7 +143,7 @@ func (s *Service) CreatePeer(ctx context.Context, request *structpb.Struct) (*st
 			if err := s.persistPeerProfile(peer, privateKey, operationID); err != nil {
 				return nil, statusError("recover interrupted peer creation", err)
 			}
-			return response(peerMap(peer))
+			return peerMessage(peer), nil
 		}
 	}
 
@@ -187,7 +183,7 @@ func (s *Service) CreatePeer(ctx context.Context, request *structpb.Struct) (*st
 		}
 		return nil, statusError("persist client profile", err)
 	}
-	return response(peerMap(peer))
+	return peerMessage(peer), nil
 }
 
 func (s *Service) persistPeerProfile(peer Peer, privateKey, operationID string) error {
@@ -207,32 +203,28 @@ func (s *Service) persistPeerProfile(peer Peer, privateKey, operationID string) 
 }
 
 // AddPeer activates a peer immediately and persists it for process recovery.
-func (s *Service) AddPeer(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) AddPeer(_ context.Context, request *awgapi.AddPeerRequest) (*awgapi.Peer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, err := stringField(request, "name")
-	if err != nil {
-		return nil, err
+	if request.GetName() == "" || request.GetPublicKey() == "" {
+		return nil, status.Error(codes.InvalidArgument, "name and public key are required")
 	}
-	publicKey, err := stringField(request, "publicKey")
-	if err != nil {
-		return nil, err
-	}
-	peer, err := s.manager.AddPeer(name, publicKey)
+	peer, err := s.manager.AddPeer(request.GetName(), request.GetPublicKey())
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return response(peerMap(peer))
+	return peerMessage(peer), nil
 }
 
 // RemovePeer revokes the selected peer in the live device and persistent state.
-func (s *Service) RemovePeer(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) RemovePeer(ctx context.Context, request *awgapi.RemovePeerRequest) (*awgapi.RemovePeerResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, err := stringField(request, "name")
-	if err != nil {
-		return nil, err
+	name := request.GetName()
+	if name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
+	var err error
 	if operationID := OperationID(ctx); operationID != "" {
 		_, err = s.manager.RemovePeerForOperation(name, operationID)
 	} else {
@@ -244,17 +236,14 @@ func (s *Service) RemovePeer(ctx context.Context, request *structpb.Struct) (*st
 	if err := removeClientProfile(s.options.DataDir, name); err != nil {
 		return nil, statusError("remove saved client profile", err)
 	}
-	return response(map[string]any{"removed": true, "name": name})
+	return &awgapi.RemovePeerResponse{Removed: true, Name: name}, nil
 }
 
 // GetClientConfig returns the private client profile for an active peer.
-func (s *Service) GetClientConfig(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) GetClientConfig(_ context.Context, request *awgapi.GetClientConfigRequest) (*awgapi.ClientConfigResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	name, err := stringField(request, "name")
-	if err != nil {
-		return nil, err
-	}
+	name := request.GetName()
 	if !servicePeerNamePattern.MatchString(name) {
 		return nil, mapError(fmt.Errorf("invalid peer name: %w", ErrInvalid))
 	}
@@ -283,31 +272,28 @@ func (s *Service) GetClientConfig(_ context.Context, request *structpb.Struct) (
 	if err := writeClientProfile(s.options.DataDir, name, config); err != nil {
 		return nil, statusError("refresh saved client profile", err)
 	}
-	return response(map[string]any{"config": config})
+	return &awgapi.ClientConfigResponse{Config: config}, nil
 }
 
 // RenderClientConfig returns a native profile without ever persisting the client private key.
-func (s *Service) RenderClientConfig(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	name, err := stringField(request, "name")
-	if err != nil {
-		return nil, err
-	}
-	privateKey, err := stringField(request, "privateKey")
-	if err != nil {
-		return nil, err
+func (s *Service) RenderClientConfig(_ context.Context, request *awgapi.RenderClientConfigRequest) (*awgapi.ClientConfigResponse, error) {
+	name, privateKey := request.GetName(), request.GetPrivateKey()
+	if name == "" || privateKey == "" {
+		return nil, status.Error(codes.InvalidArgument, "name and private key are required")
 	}
 	config, err := s.manager.RenderClientConfig(name, privateKey)
 	if err != nil {
 		return nil, mapError(err)
 	}
-	return response(map[string]any{"config": config})
+	return &awgapi.ClientConfigResponse{Config: config}, nil
 }
 
-func peerMap(peer Peer) map[string]any {
-	return map[string]any{
-		"name": peer.Name, "publicKey": peer.PublicKey, "ipv4": peer.IPv4, "ipv6": peer.IPv6,
-		"createdAt": peer.CreatedAt.UTC().Format(time.RFC3339),
+func peerMessage(peer Peer) *awgapi.Peer {
+	var createdAt *timestamppb.Timestamp
+	if !peer.CreatedAt.IsZero() {
+		createdAt = timestamppb.New(peer.CreatedAt.UTC())
 	}
+	return &awgapi.Peer{Name: peer.Name, PublicKey: peer.PublicKey, Ipv4: peer.IPv4, Ipv6: peer.IPv6, CreatedAt: createdAt}
 }
 
 var _ API = (*Service)(nil)

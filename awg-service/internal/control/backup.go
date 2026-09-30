@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,9 +13,11 @@ import (
 	"path/filepath"
 	"strings"
 
+	awgapi "xray-easy/awg-contract/api/v1"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 const maxAWGBackupSize = 16 << 20
@@ -24,37 +25,30 @@ const maxAWGBackupSize = 16 << 20
 // ExportBackup returns a gzip-compressed tar archive of AWG state and private
 // client profiles. The control-plane backup manager wraps this file in its
 // authenticated manifest; the archive remains plaintext by product design.
-func (s *Service) ExportBackup(context.Context, *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) ExportBackup(context.Context, *emptypb.Empty) (*awgapi.BackupResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	archive, err := createAWGBackup(s.options.DataDir, s.manager)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "export AmneziaWG backup: %v", err)
 	}
-	return response(map[string]any{"data": base64.StdEncoding.EncodeToString(archive)})
+	return &awgapi.BackupResponse{Data: archive}, nil
 }
 
 // RestoreBackup validates and applies a complete state/profile archive. The
 // AWG interface and persistent state are restored together without restarting
 // the service container.
-func (s *Service) RestoreBackup(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+func (s *Service) RestoreBackup(_ context.Context, request *awgapi.RestoreBackupRequest) (*awgapi.RestoreBackupResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	encoded, err := stringField(request, "data")
-	if err != nil {
-		return nil, err
-	}
-	if len(encoded) > base64.StdEncoding.EncodedLen(maxAWGBackupSize) {
+	archive := request.GetData()
+	if len(archive) > maxAWGBackupSize {
 		return nil, status.Error(codes.InvalidArgument, "AmneziaWG backup exceeds the size limit")
-	}
-	archive, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil || len(archive) > maxAWGBackupSize {
-		return nil, status.Error(codes.InvalidArgument, "AmneziaWG backup encoding is invalid or too large")
 	}
 	if err := restoreAWGBackup(s.options.DataDir, s.manager, archive); err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "restore AmneziaWG backup: %v", err)
 	}
-	return response(map[string]any{"restored": true})
+	return &awgapi.RestoreBackupResponse{Restored: true}, nil
 }
 
 func createAWGBackup(dataDir string, manager *Manager) ([]byte, error) {

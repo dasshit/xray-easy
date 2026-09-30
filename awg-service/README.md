@@ -78,25 +78,28 @@ output.
 
 ## gRPC contract
 
-The contract is in [`api/v1/control.proto`](api/v1/control.proto).
-For now every request and response uses `google.protobuf.Struct` to keep the
-surface easy to call from the existing Go control plane while validating the
-lifecycle. The API is registered as
+The typed contract is in [`../awg-contract/api/v1/control.proto`](../awg-contract/api/v1/control.proto)
+and the Go stubs are generated in the lightweight `awg-contract` module. Run
+`scripts/generate-protobuf.sh` from the repository root to regenerate all
+private service bindings. The API is registered as
 `/xrayeasy.awg.v1.Control/{Method}`. Calls must include metadata:
 `authorization: Bearer <base64 token from /data/control.token>`.
 
-| Method | Request fields | Response |
+| Method | Typed request | Typed response |
 | --- | --- | --- |
-| `GetStatus` | none | Running state, server public key, public/listen endpoints, peer count and client networks |
-| `ListPeers` | none | `peers[]` with name, client public key, IPv4/IPv6 and creation time |
-| `GetPeerStats` | none | `peers[]` with name, observed source IP, last handshake, upload bytes and download bytes; no private profile data |
-| `AddPeer` | `name`, `publicKey` | Created peer metadata; activates it immediately |
-| `RemovePeer` | `name` | `{ "removed": true, "name": ... }` |
-| `CreatePeer` | `name` | Creates a keypair, activates the peer and saves its private profile |
-| `GetClientConfig` | `name` | `{ "config": "..." }`; returns the active peer's saved profile |
-| `ExportBackup` | none | `{ "data": "<base64 gzip tar>" }`; includes `state.json` and saved client profiles |
-| `RestoreBackup` | `data` | `{ "restored": true }`; validates and applies a complete snapshot without restarting the container |
-| `RenderClientConfig` | `name`, `privateKey` | `{ "config": "..." }`; verifies that the private key matches the registered peer |
+| `GetStatus` | `google.protobuf.Empty` | `StatusResponse`, including server key, endpoints, peer count and client networks |
+| `ListPeers` | `google.protobuf.Empty` | `ListPeersResponse`; each `Peer` has a `Timestamp` creation time |
+| `GetPeerStats` | `google.protobuf.Empty` | `GetPeerStatsResponse`; `int64` byte counters, source IP and optional handshake timestamp |
+| `AddPeer` | `AddPeerRequest` | `Peer`; activates it immediately |
+| `RemovePeer` | `RemovePeerRequest` | `RemovePeerResponse` |
+| `CreatePeer` | `CreatePeerRequest` | `Peer`; generates keys, activates the peer and saves its private profile |
+| `GetClientConfig` | `GetClientConfigRequest` | `ClientConfigResponse`; returns the active peer's saved profile |
+| `ExportBackup` | `google.protobuf.Empty` | `BackupResponse` with raw archive `bytes` (no base64 at the RPC layer) |
+| `RestoreBackup` | `RestoreBackupRequest` with archive `bytes` | `RestoreBackupResponse`; validates and applies a complete snapshot without restarting the container |
+| `RenderClientConfig` | `RenderClientConfigRequest` | `ClientConfigResponse`; verifies that the private key matches the registered peer |
+
+This private contract is wire-incompatible with the earlier Struct prototype;
+update the Controller/backend and AWG containers from the same checkout.
 
 Names contain 1–32 ASCII letters, digits or hyphens. Keys use standard
 base64-encoded 32-byte Curve25519 values. The control API never stores a client

@@ -228,7 +228,7 @@ func TestRestoreAWGBackupRejectsMissingOrMismatchedPeerProfiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	request, _ := structpb.NewStruct(map[string]any{"name": "phone"})
 	if _, err := service.CreatePeer(t.Context(), request); err != nil {
 		t.Fatal(err)
@@ -360,7 +360,7 @@ func TestRestoreAWGBackupRestoresPreviousProfilesWhenLiveApplyFails(t *testing.T
 		t.Fatal(err)
 	}
 	defer manager.Close()
-	service := NewService(manager, opts)
+	service := newStructService(manager, opts)
 	firstRequest, _ := structpb.NewStruct(map[string]any{"name": "phone"})
 	if _, err := service.CreatePeer(t.Context(), firstRequest); err != nil {
 		t.Fatal(err)

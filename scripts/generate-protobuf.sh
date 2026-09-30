@@ -17,3 +17,10 @@ docker run --rm \
   bufbuild/buf:1.57.2 \
   generate internal/supervisor/api/v1/supervisor.proto \
   --template buf.gen.supervisor.yaml
+
+docker run --rm \
+  -v "$repo_root:/workspace" \
+  -w /workspace \
+  bufbuild/buf:1.57.2 \
+  generate awg-contract/api/v1/control.proto \
+  --template buf.gen.awg.yaml

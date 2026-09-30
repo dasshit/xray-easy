@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/protobuf/types/known/structpb"
 	"xray-easy/awg-service/internal/control"
 )
 
@@ -100,9 +99,9 @@ type inertAWGFactory struct{}
 
 func (inertAWGFactory) Open(string, int) (control.Device, error) { return inertAWGDevice{}, nil }
 
-func (c *recordingControlRPC) Invoke(_ context.Context, method string, _ map[string]any) (*structpb.Struct, error) {
+func (c *recordingControlRPC) Invoke(_ context.Context, method string, _ map[string]any) (map[string]any, error) {
 	c.methods = append(c.methods, method)
-	return structpb.NewStruct(map[string]any{"removed": true})
+	return map[string]any{"removed": true}, nil
 }
 func (*recordingControlRPC) Close() error { return nil }
 

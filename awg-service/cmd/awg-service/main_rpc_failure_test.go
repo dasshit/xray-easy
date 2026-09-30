@@ -7,17 +7,15 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type scriptedRPC struct {
-	responses map[string]*structpb.Struct
+	responses map[string]map[string]any
 	errors    map[string]error
 	calls     []string
 }
 
-func (c *scriptedRPC) Invoke(_ context.Context, method string, _ map[string]any) (*structpb.Struct, error) {
+func (c *scriptedRPC) Invoke(_ context.Context, method string, _ map[string]any) (map[string]any, error) {
 	c.calls = append(c.calls, method)
 	if err := c.errors[method]; err != nil {
 		return nil, err
@@ -26,9 +24,9 @@ func (c *scriptedRPC) Invoke(_ context.Context, method string, _ map[string]any)
 		return response, nil
 	}
 	if method == "RenderClientConfig" {
-		return structpb.NewStruct(map[string]any{"config": "[Interface]\nPrivateKey = key\n[Peer]\n"})
+		return map[string]any{"config": "[Interface]\nPrivateKey = key\n[Peer]\n"}, nil
 	}
-	return structpb.NewStruct(map[string]any{"name": "phone", "removed": true})
+	return map[string]any{"name": "phone", "removed": true}, nil
 }
 func (*scriptedRPC) Close() error { return nil }
 
@@ -40,10 +38,7 @@ func useScriptedRPC(t *testing.T, client controlRPC) {
 }
 
 func TestCLIReportsRPCFailuresAndRollsBackIncompletePeerCreation(t *testing.T) {
-	emptyProfile, err := structpb.NewStruct(map[string]any{"config": ""})
-	if err != nil {
-		t.Fatal(err)
-	}
+	emptyProfile := map[string]any{"config": ""}
 	for _, test := range []struct {
 		name        string
 		client      *scriptedRPC
@@ -52,7 +47,7 @@ func TestCLIReportsRPCFailuresAndRollsBackIncompletePeerCreation(t *testing.T) {
 	}{
 		{name: "add rejected", client: &scriptedRPC{errors: map[string]error{"AddPeer": errors.New("unavailable")}}, wantMessage: "add AWG peer"},
 		{name: "profile render rejected", client: &scriptedRPC{errors: map[string]error{"RenderClientConfig": errors.New("render failed")}}, wantMessage: "render AWG client profile", wantRemove: true},
-		{name: "empty profile", client: &scriptedRPC{responses: map[string]*structpb.Struct{"RenderClientConfig": emptyProfile}}, wantMessage: "empty client profile", wantRemove: true},
+		{name: "empty profile", client: &scriptedRPC{responses: map[string]map[string]any{"RenderClientConfig": emptyProfile}}, wantMessage: "empty client profile", wantRemove: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dataDir := t.TempDir()

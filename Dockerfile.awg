@@ -1,8 +1,10 @@
 FROM golang:1.25-alpine AS build
 WORKDIR /src
-COPY awg-service/go.mod awg-service/go.sum ./
+COPY awg-contract /src/awg-contract
+COPY awg-service/go.mod awg-service/go.sum /src/awg-service/
+WORKDIR /src/awg-service
 RUN go mod download
-COPY awg-service ./
+COPY awg-service/ ./
 ARG TARGETOS
 ARG TARGETARCH
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags='-s -w' -o /out/awg-service ./cmd/awg-service

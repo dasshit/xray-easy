@@ -5,6 +5,7 @@ go 1.24.0
 toolchain go1.24.13
 
 require (
+	xray-easy/awg-contract v0.0.0
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	golang.org/x/crypto v0.40.0
 	google.golang.org/grpc v1.76.0
@@ -28,3 +29,5 @@ require (
 )
 
 replace github.com/skip2/go-qrcode => ./third_party/go-qrcode
+
+replace xray-easy/awg-contract => ./awg-contract
