@@ -2273,7 +2273,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 
 func newHysteriaAuth() (string, error) {
 	value := make([]byte, 32)
-	if _, err := rand.Read(value); err != nil {
+	if _, err := io.ReadFull(rand.Reader, value); err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(value), nil
@@ -3397,7 +3397,7 @@ func publicSettings(settings domain.Settings, vmessPublicPort int) map[string]an
 
 func randomID() (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
