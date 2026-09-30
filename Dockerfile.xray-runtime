@@ -22,7 +22,7 @@ RUN if [ "$XRAY_VERSION" != "26.7.28" ]; then \
       exit 1; \
     fi
 RUN go mod download
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -mod=readonly -buildmode=pie \
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -mod=readonly \
     -trimpath -ldflags='-s -w' -o /out/xray-runtime ./cmd/xray-runtime
 
 FROM ${RUNTIME_IMAGE} AS runtime

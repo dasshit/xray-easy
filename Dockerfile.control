@@ -6,10 +6,10 @@ COPY third_party ./third_party
 RUN for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -buildmode=pie -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
 
 FROM golang:1.27.1-alpine AS mkcert-build
-RUN GOBIN=/out go install -buildmode=pie filippo.io/mkcert@v1.4.4
+RUN GOBIN=/out go install filippo.io/mkcert@v1.4.4
 
 FROM node:24-alpine AS web-build
 WORKDIR /web
