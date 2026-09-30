@@ -6,6 +6,7 @@ import (
 	"compress/gzip"
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -15,6 +16,7 @@ import (
 	"testing"
 
 	"xray-easy/internal/domain"
+	"xray-easy/internal/interaction"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/supervisor"
@@ -29,6 +31,8 @@ type doctorSupervisorStub struct {
 	probeErr     error
 	ipv6Err      error
 	validatePath string
+	validateID   string
+	validateRev  int64
 	validateCall int
 	probeCall    int
 	ipv6Call     int
@@ -97,9 +101,11 @@ func (s *doctorSupervisorStub) Status(context.Context) (supervisor.Status, error
 	return s.status, s.statusErr
 }
 
-func (s *doctorSupervisorStub) Validate(_ context.Context, path, _ string) error {
+func (s *doctorSupervisorStub) Validate(ctx context.Context, path, operationID string) error {
 	s.validateCall++
 	s.validatePath = path
+	s.validateID = operationID
+	s.validateRev = interaction.StateRevision(ctx)
 	return s.validateErr
 }
 
@@ -335,6 +341,23 @@ func TestDoctorReportsEmbeddedRuntimeDiagnostics(t *testing.T) {
 		if !strings.Contains(output.String(), check) {
 			t.Errorf("doctor output omits %q:\n%s", check, output.String())
 		}
+	}
+	if len(sup.validateID) != 32 {
+		t.Fatalf("config validation operation ID has length %d, want a 128-bit hex ID", len(sup.validateID))
+	}
+	if _, err := hex.DecodeString(sup.validateID); err != nil {
+		t.Fatalf("config validation operation ID is not hexadecimal: %q", sup.validateID)
+	}
+	if sup.validateRev != 12 {
+		t.Fatalf("config validation revision = %d, want active revision 12", sup.validateRev)
+	}
+	sup.status.ActiveRevision = 0
+	var legacyOutput bytes.Buffer
+	if err := runDoctor(context.Background(), dataDir, configDir, &legacyOutput, sup, &doctorHandlerStub{}, &doctorStatsStub{}); err != nil {
+		t.Fatalf("runDoctor() with a runtime that has no revision: %v\n%s", err, legacyOutput.String())
+	}
+	if sup.validateRev != 1 {
+		t.Fatalf("config validation revision without an active revision = %d, want positive sentinel 1", sup.validateRev)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"xray-easy/internal/controller"
 	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/domain"
+	"xray-easy/internal/interaction"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/supervisor"
@@ -465,10 +466,24 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		appendCheck(doctorWarn, "Active Xray config", "validation skipped because the Xray runtime is unavailable", "Fix the runtime checks above.")
 	} else if supervisorStatus.State == "no-config" {
 		appendCheck(doctorWarn, "Active Xray config", "supervisor has no active configuration", "Complete the first-run setup in the Web UI.")
-	} else if err := sup.Validate(ctx, activeConfig, "doctor"); err != nil {
-		appendCheck(doctorFail, "Active Xray config", "Xray rejected the active configuration", "Review xray container logs and correct the configuration in the Web UI.")
 	} else {
-		appendCheck(doctorPass, "Active Xray config", "Xray config test passed", "")
+		operationID, operationErr := interaction.NewRequestID()
+		if operationErr != nil {
+			appendCheck(doctorFail, "Active Xray config", "could not create a validation operation ID", "Check system entropy and rerun doctor.")
+		} else {
+			revision := supervisorStatus.ActiveRevision
+			if revision < 1 {
+				// Config validation is read-only. A positive sentinel keeps older
+				// runtimes with no persisted revision compatible with Controller.
+				revision = 1
+			}
+			validationContext := interaction.WithStateRevision(ctx, revision)
+			if err := sup.Validate(validationContext, activeConfig, operationID); err != nil {
+				appendCheck(doctorFail, "Active Xray config", "Xray rejected the active configuration", "Review xray container logs and correct the configuration in the Web UI.")
+			} else {
+				appendCheck(doctorPass, "Active Xray config", "Xray config test passed", "")
+			}
+		}
 	}
 
 	if !settingsReady {
