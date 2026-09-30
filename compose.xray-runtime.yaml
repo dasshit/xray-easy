@@ -68,6 +68,7 @@ services:
   controller:
     environment:
       XRAY_ADAPTER: embedded
+      XRAY_CONTROLLER_ADDR: 127.0.0.1:10088
       XRAY_RUNTIME_ADDR: ${XRAY_EASY_XRAY_IP:-172.31.241.2}:10086
       XRAY_RUNTIME_TOKEN_FILE: /run/runtime-auth/xray_runtime_token
       XRAY_CONFIG_DIR: /etc/xray
