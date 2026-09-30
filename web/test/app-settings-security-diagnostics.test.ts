@@ -217,7 +217,7 @@ describe('backups and TOTP security', () => {
     await flushPromises()
 
     expect(wrapper.get('[role="alert"]').text()).toContain('Current password is incorrect')
-    expect(wrapper.findAll('.security-card')).toHaveLength(3)
+    expect(wrapper.findAll('.security-card')).toHaveLength(4)
     expect(itemAt(eventSources, 0).closed).toBe(false)
     expect((itemAt(card.findAll('input'), 0).element as HTMLInputElement).value).toBe('wrong-password')
   })

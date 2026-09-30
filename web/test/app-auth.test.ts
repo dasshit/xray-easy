@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultHandler, flushPromises, itemAt, mountApp, submitLogin } from './appHarness'
+import { defaultHandler, flushPromises, itemAt, mountApp, openTab, submitLogin } from './appHarness'
 
 describe('setup and authentication screens', () => {
   it('shows an initial setup status error', async () => {
@@ -159,7 +159,7 @@ describe('setup and authentication screens', () => {
     })
     await submitLogin(wrapper)
     expect(wrapper.get('[role="alert"]').text()).toContain('Client service unavailable')
-    expect((wrapper.findAll('button.secondary').find(button => button.text() === 'Sign out all sessions')!.element as HTMLButtonElement).disabled).toBe(false)
+    expect((wrapper.findAll('button.secondary').find(button => button.text() === 'Sign out')!.element as HTMLButtonElement).disabled).toBe(false)
   })
 })
 
@@ -172,6 +172,7 @@ describe('session exit', () => {
       if (request.url === path) return { status: 204 }
       return defaultHandler({ authenticated: true })(request)
     })
+    if (label === 'Sign out all sessions') await openTab(wrapper, 'Security')
     await wrapper.findAll('button.secondary').find(button => button.text() === label)!.trigger('click')
     await flushPromises()
     expect(requests.some(request => request.url === path && request.method === 'POST')).toBe(true)
@@ -184,6 +185,7 @@ describe('session exit', () => {
       if (request.url === '/api/auth/logout-all') return { status: 500, body: { error: 'Could not revoke sessions' } }
       return defaultHandler({ authenticated: true })(request)
     })
+    await openTab(wrapper, 'Security')
     const button = wrapper.findAll('button.secondary').find(item => item.text() === 'Sign out all sessions')!
     await button.trigger('click')
     await flushPromises()
