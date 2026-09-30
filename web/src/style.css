@@ -218,7 +218,7 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .profile-modal { width: min(100%, 760px); }
 .modal-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; margin-bottom: 20px; }
 .modal-header h2 { margin-bottom: 0; }
-.icon-button { width: 34px; height: 34px; padding: 0; border-radius: 50%; background: var(--surface-muted); color: var(--label); font-size: 1.4rem; line-height: 1; }
+.icon-button { width: 34px; min-width: 34px; height: 34px; min-height: 34px; flex: 0 0 34px; padding: 0; border-radius: 50%; background: var(--surface-muted); color: var(--label); font-size: 1.4rem; line-height: 1; }
 .icon-button:hover:not(:disabled) { background: var(--border); color: var(--text); }
 .modal-actions { display: flex; justify-content: flex-end; gap: 16px; margin-top: 24px; }
 .profile-hint { margin: -4px 0 18px; }
