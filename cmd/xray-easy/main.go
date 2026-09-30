@@ -280,8 +280,14 @@ func runControlPlane(ctx context.Context, initialize func(context.Context) (*ser
 		return err
 	}
 	defer cleanup()
-	s.stats.Start(ctx)
-	s.startReconciler(ctx)
+	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
+	statsDone := s.stats.Start(runtimeCtx)
+	reconcilerDone := s.startReconciler(runtimeCtx)
+	defer func() {
+		cancelRuntime()
+		<-statsDone
+		<-reconcilerDone
+	}()
 	mux := newMux(s)
 	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: interaction.HTTPMiddleware(requestLimit(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second}
 	fmt.Fprintf(os.Stderr, "xray-easy control plane listening on %s\n", serverHTTP.Addr)
@@ -2598,12 +2604,14 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 	return result
 }
 
-func (s *server) startReconciler(ctx context.Context) {
-	s.startReconcilerWithInterval(ctx, 30*time.Second)
+func (s *server) startReconciler(ctx context.Context) <-chan struct{} {
+	return s.startReconcilerWithInterval(ctx, 30*time.Second)
 }
 
-func (s *server) startReconcilerWithInterval(ctx context.Context, interval time.Duration) {
+func (s *server) startReconcilerWithInterval(ctx context.Context, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		reconcileCtx, cancel := context.WithTimeout(ctx, 8*time.Second)
 		if err := s.reconcileRunning(reconcileCtx); err != nil {
 			s.recordDiagnostic("warn", "initial Xray reconciliation skipped: "+err.Error())
@@ -2626,6 +2634,7 @@ func (s *server) startReconcilerWithInterval(ctx context.Context, interval time.
 			}
 		}
 	}()
+	return done
 }
 
 func (s *server) reconcileRunning(ctx context.Context) error {

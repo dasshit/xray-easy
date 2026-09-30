@@ -5,6 +5,7 @@ package control
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os/exec"
 	"strings"
 
@@ -15,12 +16,18 @@ import (
 
 // KernelFactory creates a userspace AmneziaWG engine on Linux.
 type KernelFactory struct {
-	Options Options
+	Options   Options
+	createTUN func(string, int) (tun.Device, error)
+	newEngine func(tun.Device) kernelEngine
 }
 
 // Open creates the TUN interface, installs routes and NAT, then wraps amneziawg-go.
 func (f KernelFactory) Open(name string, mtu int) (Device, error) {
-	tunDevice, err := tun.CreateTUN(name, mtu)
+	createTUN := f.createTUN
+	if createTUN == nil {
+		createTUN = tun.CreateTUN
+	}
+	tunDevice, err := createTUN(name, mtu)
 	if err != nil {
 		return nil, fmt.Errorf("create /dev/net/tun interface (requires device access and effective NET_ADMIN; rootless or restricted Docker may block TUN ioctls): %w", err)
 	}
@@ -37,12 +44,23 @@ func (f KernelFactory) Open(name string, mtu int) (Device, error) {
 		tunDevice.Close()
 		return nil, err
 	}
-	engine := device.NewDevice(tunDevice, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "(awg) "))
-	return &kernelDevice{engine: engine}, nil
+	engine := f.newEngine
+	if engine != nil {
+		return &kernelDevice{engine: engine(tunDevice)}, nil
+	}
+	engineInstance := device.NewDevice(tunDevice, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, "(awg) "))
+	return &kernelDevice{engine: engineInstance}, nil
 }
 
 type kernelDevice struct {
-	engine *device.Device
+	engine kernelEngine
+}
+
+type kernelEngine interface {
+	IpcSetOperation(io.Reader) error
+	Up() error
+	IpcGetOperation(io.Writer) error
+	Close()
 }
 
 func (d *kernelDevice) Set(config string) error {

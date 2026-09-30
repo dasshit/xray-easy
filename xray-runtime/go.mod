@@ -1,12 +1,11 @@
 module xray-easy/xray-runtime
 
-go 1.26.0
+go 1.27.0
 
 toolchain go1.27.1
 
-require github.com/xtls/xray-core v1.260327.1-0.20260728075948-5ca6f4b7d4dc
-
 require (
+	github.com/xtls/xray-core v1.260327.1-0.20260728075948-5ca6f4b7d4dc
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 	xray-easy v0.0.0

@@ -1,13 +1,15 @@
 module xray-easy/awg-service
 
-go 1.25.0
+go 1.27.0
+
+toolchain go1.27.1
 
 require (
-	xray-easy/awg-contract v0.0.0
 	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
 	golang.org/x/crypto v0.42.0
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.6
+	xray-easy/awg-contract v0.0.0
 )
 
 replace xray-easy/awg-contract => ../awg-contract

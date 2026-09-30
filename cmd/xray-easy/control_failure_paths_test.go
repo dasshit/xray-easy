@@ -184,7 +184,11 @@ func TestStartReconcilerRetriesAndReportsBackgroundFailure(t *testing.T) {
 	app.handler.usersErr = errors.New("stats API temporarily unavailable")
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	app.server.startReconcilerWithInterval(ctx, 5*time.Millisecond)
+	done := app.server.startReconcilerWithInterval(ctx, 5*time.Millisecond)
+	defer func() {
+		cancel()
+		<-done
+	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		for _, entry := range app.server.diagnosticBuffer.Snapshot(10) {

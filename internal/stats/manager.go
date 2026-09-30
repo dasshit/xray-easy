@@ -59,8 +59,10 @@ func NewManager(db *store.Store, api StatsAPI, awg ...AWGStatsAPI) *Manager {
 	return manager
 }
 
-func (m *Manager) Start(ctx context.Context) {
+func (m *Manager) Start(ctx context.Context) <-chan struct{} {
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		_ = m.Poll(ctx)
 		ticker := time.NewTicker(m.interval)
 		defer ticker.Stop()
@@ -73,6 +75,7 @@ func (m *Manager) Start(ctx context.Context) {
 			}
 		}
 	}()
+	return done
 }
 
 func (m *Manager) Poll(ctx context.Context) error {

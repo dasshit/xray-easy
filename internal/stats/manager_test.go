@@ -435,8 +435,11 @@ func TestStartPollsImmediatelyAndOnIntervalUntilCanceled(t *testing.T) {
 	channel, unsubscribe := manager.Subscribe()
 	defer unsubscribe()
 	ctx, cancel := context.WithCancel(context.Background())
-	manager.Start(ctx)
-	defer cancel()
+	done := manager.Start(ctx)
+	defer func() {
+		cancel()
+		<-done
+	}()
 	deadline := time.After(time.Second)
 	for api.callCount() < 2 {
 		select {
@@ -446,8 +449,8 @@ func TestStartPollsImmediatelyAndOnIntervalUntilCanceled(t *testing.T) {
 		}
 	}
 	cancel()
+	<-done
 	calls := api.callCount()
-	time.Sleep(20 * time.Millisecond)
 	if got := api.callCount(); got != calls {
 		t.Fatalf("poll loop continued after cancellation: calls %d -> %d", calls, got)
 	}

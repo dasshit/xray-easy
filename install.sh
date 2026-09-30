@@ -47,7 +47,7 @@ docker run --rm --network none \
   -e GOOS="$target_os" -e GOARCH="$target_arch" \
   -e GOTOOLCHAIN=local -e GOPROXY=off -e GOCACHE=/tmp/go-build \
   -v "$project_dir:/src:ro" -v "$build_dir:/out" -w /src \
-  golang:1.24-alpine \
-  sh -ec 'CGO_ENABLED=0 go build -trimpath -o /out/xray-easy-install ./cmd/xray-easy-install'
+  golang:1.27.1-alpine \
+  sh -ec 'CGO_ENABLED=0 go build -mod=readonly -buildmode=pie -trimpath -o /out/xray-easy-install ./cmd/xray-easy-install'
 
 XRAY_EASY_BUILD_VERSION="$app_version" "$build_dir/xray-easy-install" "$project_dir"

@@ -414,7 +414,11 @@ func TestStartReconcilerPerformsInitialSyncAndHonorsCancellation(t *testing.T) {
 	client := seedTestClient(t, app, "initial-sync")
 	app.handler.users = []string{"stale@xray-easy"}
 	ctx, cancel := context.WithCancel(context.Background())
-	app.server.startReconciler(ctx)
+	done := app.server.startReconciler(ctx)
+	defer func() {
+		cancel()
+		<-done
+	}()
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		app.handler.mu.Lock()
