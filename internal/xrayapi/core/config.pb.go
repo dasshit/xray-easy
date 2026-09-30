@@ -7,12 +7,12 @@
 package core
 
 import (
-	serial "xray-easy/internal/xrayapi/serial"
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
+	serial "xray-easy/internal/xrayapi/serial"
 )
 
 const (

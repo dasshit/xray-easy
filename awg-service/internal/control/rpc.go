@@ -2,10 +2,14 @@ package control
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -85,6 +89,49 @@ func AuthInterceptor(token string) grpc.UnaryServerInterceptor {
 		}
 		return handler(ctx, request)
 	}
+}
+
+// LoggingInterceptor records request correlation and outcome without logging
+// protobuf payloads, peer credentials, or raw error messages.
+func LoggingInterceptor() grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		requestID := ""
+		if values, ok := metadata.FromIncomingContext(ctx); ok {
+			items := values.Get("x-request-id")
+			if len(items) == 1 && validRequestID(items[0]) {
+				requestID = strings.ToLower(items[0])
+			}
+		}
+		if requestID == "" {
+			bytes := make([]byte, 16)
+			if _, err := rand.Read(bytes); err == nil {
+				requestID = hex.EncodeToString(bytes)
+			} else {
+				requestID = "unavailable"
+			}
+		}
+		started := time.Now()
+		response, err := handler(ctx, request)
+		code, result, level := codes.OK.String(), "success", slog.LevelInfo
+		if err != nil {
+			code, result, level = status.Code(err).String(), "failure", slog.LevelError
+		}
+		slog.Default().LogAttrs(context.Background(), level, "grpc interaction",
+			slog.String("service", "awg-service"), slog.String("method", info.FullMethod),
+			slog.String("request_id", requestID), slog.String("protocol", "amneziawg"),
+			slog.String("result", result), slog.String("grpc_code", code),
+			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
+		)
+		return response, err
+	}
+}
+
+func validRequestID(value string) bool {
+	if len(value) != 32 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
 
 // Field helpers keep decoding strict and return safe gRPC validation errors.

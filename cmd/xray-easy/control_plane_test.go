@@ -27,6 +27,12 @@ func configureControlPlaneEnvironment(t *testing.T) (string, string) {
 	t.Setenv("XRAY_EASY_UI_PORT", "8080")
 	t.Setenv("XRAY_API_LISTEN", "passthrough:///xray-api-test")
 	t.Setenv("XRAY_HYSTERIA2_ENABLED", "false")
+	tokenPath := filepath.Join(root, "controller.token")
+	if err := os.WriteFile(tokenPath, []byte("controller-test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///controller-test")
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
 	t.Setenv("AWG_PUBLIC_HOST", "")
 	t.Setenv("AWG_CONTROL_ADDR", "")
 	return dataDir, configDir
@@ -85,7 +91,7 @@ func TestInitializeControlPlaneRejectsFilesystemPortsAndAWGConfiguration(t *test
 		}
 		_ = db.Close()
 	})
-	t.Run("AWG token inspection failure", func(t *testing.T) {
+	t.Run("Controller token inspection failure", func(t *testing.T) {
 		dataDir, _ := configureControlPlaneEnvironment(t)
 		if err := os.MkdirAll(dataDir, 0o700); err != nil {
 			t.Fatal(err)
@@ -94,63 +100,47 @@ func TestInitializeControlPlaneRejectsFilesystemPortsAndAWGConfiguration(t *test
 		if err := os.WriteFile(blocked, []byte("block"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
-		t.Setenv("AWG_CONTROL_ADDR", "127.0.0.1:1")
-		t.Setenv("AWG_CONTROL_TOKEN_FILE", filepath.Join(blocked, "token"))
-		if _, _, err := initializeControlPlane(context.Background()); err == nil || !strings.Contains(err.Error(), "inspect AmneziaWG control token") {
-			t.Fatalf("AWG token inspection error = %v", err)
+		t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", filepath.Join(blocked, "token"))
+		if _, _, err := initializeControlPlane(context.Background()); err == nil || !strings.Contains(err.Error(), "initialize Controller gRPC client") {
+			t.Fatalf("Controller token inspection error = %v", err)
 		}
 	})
-	t.Run("AWG token is optional when it has not been provisioned", func(t *testing.T) {
+	t.Run("AWG token is not exposed to backend", func(t *testing.T) {
 		configureControlPlaneEnvironment(t)
 		t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
-		t.Setenv("AWG_CONTROL_ADDR", "passthrough:///awg-init-test")
 		t.Setenv("AWG_CONTROL_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
 		runtime, cleanup, err := initializeControlPlane(context.Background())
 		if err != nil {
-			t.Fatalf("initialize before optional token provisioning: %v", err)
+			t.Fatalf("initialize without a direct AWG token: %v", err)
 		}
 		defer cleanup()
-		if runtime.awg != nil {
-			t.Fatal("AWG gateway was created without a token file")
+		if runtime.awg == nil {
+			t.Fatal("Controller-backed AWG gateway was not configured")
 		}
 	})
-	t.Run("empty AWG token is rejected and runtime is cleaned", func(t *testing.T) {
-		dataDir, _ := configureControlPlaneEnvironment(t)
-		tokenPath := filepath.Join(t.TempDir(), "control.token")
-		if err := os.WriteFile(tokenPath, []byte("  \n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
-		t.Setenv("AWG_CONTROL_ADDR", "passthrough:///awg-init-test")
-		t.Setenv("AWG_CONTROL_TOKEN_FILE", tokenPath)
-		if _, _, err := initializeControlPlane(context.Background()); err == nil || !strings.Contains(err.Error(), "AWG control token is empty") {
-			t.Fatalf("initialize with empty AWG token = %v", err)
-		}
-		db, err := store.Open(context.Background(), filepath.Join(dataDir, "state.db"))
-		if err != nil {
-			t.Fatalf("failed AWG initialization did not close SQLite: %v", err)
-		}
-		_ = db.Close()
-	})
-	t.Run("valid AWG token creates and closes its gateway", func(t *testing.T) {
-		configureControlPlaneEnvironment(t)
-		tokenPath := filepath.Join(t.TempDir(), "control.token")
-		if err := os.WriteFile(tokenPath, []byte("private-token\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
-		t.Setenv("AWG_CONTROL_ADDR", "passthrough:///awg-init-test")
-		t.Setenv("AWG_CONTROL_TOKEN_FILE", tokenPath)
-		runtime, cleanup, err := initializeControlPlane(context.Background())
-		if err != nil {
-			t.Fatalf("initialize AWG gateway: %v", err)
-		}
-		if runtime.awg == nil || runtime.stats == nil {
-			t.Fatal("initialized runtime omitted AWG gateway or AWG-aware stats")
-		}
-		cleanup()
-	})
+}
+
+func TestDialRuntimeControlRequiresAndOpensController(t *testing.T) {
+	t.Setenv("XRAY_CONTROLLER_ADDR", "")
+	if _, _, err := dialRuntimeControl(); err == nil || !strings.Contains(err.Error(), "direct runtime connections from the backend are disabled") {
+		t.Fatalf("missing Controller address error = %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "controller.token")
+	if err := os.WriteFile(path, []byte("controller-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///controller-test")
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", path)
+	client, closeClient, err := dialRuntimeControl()
+	if err != nil {
+		t.Fatalf("dial Controller runtime: %v", err)
+	}
+	if client == nil || closeClient == nil {
+		t.Fatal("Controller client or cleanup function is nil")
+	}
+	if err := closeClient(); err != nil {
+		t.Fatalf("close Controller client: %v", err)
+	}
 }
 
 func TestRunControlPlaneCleansRuntimeAndHandlesListenerResults(t *testing.T) {

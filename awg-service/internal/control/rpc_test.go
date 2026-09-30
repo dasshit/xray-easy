@@ -1,10 +1,12 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -20,6 +22,35 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func TestLoggingInterceptorCorrelatesWithoutLoggingPayloads(t *testing.T) {
+	previous := slog.Default()
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	defer slog.SetDefault(previous)
+	requestID := "abcdef0123456789abcdef0123456789"
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", requestID))
+	secret := "private-key-never-log"
+	response, err := LoggingInterceptor()(ctx, map[string]string{"secret": secret}, &grpc.UnaryServerInfo{FullMethod: "/test/Operation"}, func(context.Context, any) (any, error) {
+		return "ok", errors.New(secret)
+	})
+	if response != "ok" || err == nil {
+		t.Fatalf("interceptor result = %v, %v", response, err)
+	}
+	for _, expected := range []string{requestID, "/test/Operation", "failure", "Unknown"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("log %q does not contain %q", output.String(), expected)
+		}
+	}
+	if strings.Contains(output.String(), secret) {
+		t.Fatalf("log contains request/error secret: %s", output.String())
+	}
+	output.Reset()
+	_, err = LoggingInterceptor()(metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "bad")), nil, &grpc.UnaryServerInfo{FullMethod: "/test/Health"}, func(context.Context, any) (any, error) { return nil, nil })
+	if err != nil || !strings.Contains(output.String(), "request_id") || strings.Contains(output.String(), "request_id=bad") {
+		t.Fatalf("invalid incoming ID was not replaced safely: %s, %v", output.String(), err)
+	}
+}
 
 func TestGRPCLifecycleRequiresTokenAndChangesPeerWithoutRestart(t *testing.T) {
 	opts := testOptions(t)
@@ -142,6 +173,26 @@ func TestRPCValidationAndErrorMapping(t *testing.T) {
 	}
 	if _, err := response(map[string]any{"invalid": make(chan int)}); err == nil {
 		t.Fatal("response accepted an unsupported protobuf value")
+	}
+}
+
+func TestMethodDecoderAndDirectHandlerPath(t *testing.T) {
+	method := method("GetStatus", func(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+		if len(request.GetFields()) != 0 {
+			return nil, errors.New("unexpected request fields")
+		}
+		return response(map[string]any{"ok": true})
+	})
+	handler := method.Handler
+	result, err := handler(nil, context.Background(), func(value any) error {
+		value.(*structpb.Struct).Reset()
+		return nil
+	}, nil)
+	if err != nil || !result.(*structpb.Struct).GetFields()["ok"].GetBoolValue() {
+		t.Fatalf("direct method handler = %v, %v", result, err)
+	}
+	if _, err := handler(nil, context.Background(), func(any) error { return errors.New("decode error") }, nil); err == nil {
+		t.Fatal("decode error was ignored")
 	}
 }
 

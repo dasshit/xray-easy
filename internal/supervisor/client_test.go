@@ -34,6 +34,9 @@ type testRPCServer struct {
 	probeRequest    *structpb.Struct
 	statusResponse  *structpb.Struct
 	logsResponse    *structpb.Struct
+	usersResponse   *structpb.Struct
+	statsResponse   *structpb.Struct
+	runtimeRequest  *structpb.Struct
 	methodError     error
 }
 
@@ -50,6 +53,9 @@ func (s *testRPCServer) GetStatus(context.Context, *emptypb.Empty) (*structpb.St
 	return structpb.NewStruct(map[string]any{"protocol": "v1", "xray_version": "Xray test", "state": "running", "pid": 123, "config_path": "/etc/xray/active.json", "last_error": "", "last_exit": "", "restart_count": 4, "started_at": "2026-09-30T10:00:00Z"})
 }
 func (s *testRPCServer) GetLogs(context.Context, *emptypb.Empty) (*structpb.Struct, error) {
+	if s.methodError != nil {
+		return nil, s.methodError
+	}
 	if s.logsResponse != nil {
 		return s.logsResponse, nil
 	}
@@ -73,6 +79,35 @@ func (s *testRPCServer) ProbeTarget(_ context.Context, request *structpb.Struct)
 }
 func (s *testRPCServer) ProbeIPv6(context.Context, *emptypb.Empty) (*structpb.Struct, error) {
 	return structpb.NewStruct(map[string]any{"ok": true})
+}
+func (s *testRPCServer) AlterUser(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	s.runtimeRequest = request
+	if s.methodError != nil {
+		return nil, s.methodError
+	}
+	return structpb.NewStruct(map[string]any{"ok": true})
+}
+func (s *testRPCServer) ListUsers(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	s.runtimeRequest = request
+	if s.methodError != nil {
+		return nil, s.methodError
+	}
+	if s.usersResponse != nil {
+		return s.usersResponse, nil
+	}
+	return structpb.NewStruct(map[string]any{"users": []any{"device@example.test"}})
+}
+func (s *testRPCServer) GetUserStats(_ context.Context, request *structpb.Struct) (*structpb.Struct, error) {
+	s.runtimeRequest = request
+	if s.methodError != nil {
+		return nil, s.methodError
+	}
+	if s.statsResponse != nil {
+		return s.statsResponse, nil
+	}
+	return structpb.NewStruct(map[string]any{"users": []any{
+		map[string]any{"email": "device@example.test", "upload_bytes": "123", "download_bytes": "456", "last_seen": "2026-09-30T10:00:00Z", "source_ips": []any{map[string]any{"address": "203.0.113.2", "last_seen": "2026-09-30T09:59:00Z"}}},
+	}})
 }
 
 func newBufconnClient(t *testing.T, api RPCServer, tokenFile string, interceptor grpc.UnaryServerInterceptor) *Client {
@@ -123,6 +158,37 @@ func TestClientMethodsSignAndUseSupervisorGRPCContract(t *testing.T) {
 	if err := client.ProbeIPv6(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.AddUser(ctx, "vless@example.test", "uuid", "xtls-rprx-vision"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.AddHysteriaUser(ctx, "hy2@example.test", "password"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.AddVMessUser(ctx, "vmess@example.test", "uuid"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RemoveUser(ctx, "vless@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RemoveHysteriaUser(ctx, "hy2@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.RemoveVMessUser(ctx, "vmess@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if users, err := client.Users(ctx); err != nil || len(users) != 1 || users[0] != "device@example.test" {
+		t.Fatalf("Users() = %v, %v", users, err)
+	}
+	if users, err := client.UsersInInbound(ctx, "hysteria2"); err != nil || len(users) != 1 {
+		t.Fatalf("UsersInInbound() = %v, %v", users, err)
+	}
+	if _, err := client.UsersInInbound(ctx, "unsupported"); err == nil {
+		t.Fatal("unsupported inbound was accepted")
+	}
+	stats, err := client.Poll(ctx)
+	if err != nil || len(stats) != 1 || stats[0].UploadBytes != 123 || stats[0].DownloadBytes != 456 || len(stats[0].SourceIPs) != 1 || stats[0].SourceIPs[0].Address != "203.0.113.2" {
+		t.Fatalf("Poll() = %+v, %v", stats, err)
+	}
 	if err := client.Health(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -139,6 +205,39 @@ func TestClientMethodsSignAndUseSupervisorGRPCContract(t *testing.T) {
 	}
 	if server.applyRequest.GetFields()["operation_id"].GetStringValue() != "op-2" || server.replaceRequest.GetFields()["tag"].GetStringValue() != "vless-reality" || server.probeRequest.GetFields()["sni"].GetStringValue() != "example.com" {
 		t.Fatalf("unexpected RPC payloads: apply=%v replace=%v probe=%v", server.applyRequest, server.replaceRequest, server.probeRequest)
+	}
+}
+
+func TestRuntimeClientRejectsMalformedUserAndStatsResponses(t *testing.T) {
+	server := &testRPCServer{}
+	client := newBufconnClient(t, server, writeToken(t, testToken), verifyTestSignature(testToken))
+	server.usersResponse, _ = structpb.NewStruct(map[string]any{"users": "not-list"})
+	if _, err := client.Users(context.Background()); err == nil || !strings.Contains(err.Error(), "users must be a list") {
+		t.Fatalf("invalid users response = %v", err)
+	}
+	server.usersResponse, _ = structpb.NewStruct(map[string]any{"users": []any{4}})
+	if _, err := client.Users(context.Background()); err == nil || !strings.Contains(err.Error(), "item 0 must be a string") {
+		t.Fatalf("invalid user item response = %v", err)
+	}
+	for _, response := range []map[string]any{
+		{"users": "not-list"},
+		{"users": []any{"invalid-user"}},
+		{"users": []any{map[string]any{"email": "device@example.test"}}},
+		{"users": []any{map[string]any{"email": "device@example.test", "upload_bytes": "-1", "download_bytes": "0", "source_ips": []any{}}}},
+		{"users": []any{map[string]any{"email": "device@example.test", "upload_bytes": "0", "download_bytes": "0", "last_seen": "invalid", "source_ips": []any{}}}},
+		{"users": []any{map[string]any{"email": "device@example.test", "upload_bytes": "0", "download_bytes": "0", "source_ips": "not-list"}}},
+		{"users": []any{map[string]any{"email": "device@example.test", "upload_bytes": "0", "download_bytes": "0", "source_ips": []any{4}}}},
+		{"users": []any{map[string]any{"email": "device@example.test", "upload_bytes": "0", "download_bytes": "0", "source_ips": []any{map[string]any{}}}}},
+		{"users": []any{map[string]any{"email": "device@example.test", "upload_bytes": "0", "download_bytes": "0", "source_ips": []any{map[string]any{"address": "203.0.113.2", "last_seen": "bad"}}}}},
+	} {
+		server.statsResponse, _ = structpb.NewStruct(response)
+		if _, err := client.Poll(context.Background()); err == nil {
+			t.Fatalf("malformed stats response accepted: %v", response)
+		}
+	}
+	server.methodError = status.Error(codes.Unavailable, "runtime down")
+	if err := client.AddUser(context.Background(), "email", "id", "flow"); status.Code(err) != codes.Unavailable {
+		t.Fatalf("runtime RPC error = %v", err)
 	}
 }
 
@@ -199,6 +298,11 @@ func TestClientReportsTokenAndConnectionErrors(t *testing.T) {
 	if _, err := DialWithOperation("127.0.0.1:1", emptyToken, "admin"); err == nil {
 		t.Fatal("unknown operation identity accepted")
 	}
+	for _, address := range []string{" ", "localhost", ":10086", "localhost:0", "localhost:65536", "localhost:abc", "[::1]"} {
+		if _, err := DialWithOperation(address, emptyToken, operationControlPlane); err == nil {
+			t.Errorf("invalid supervisor address %q accepted", address)
+		}
+	}
 }
 
 type noopConn struct{}
@@ -222,6 +326,9 @@ func TestClientRestrictsHealthcheckIdentityAndMapsRPCError(t *testing.T) {
 	_, err := client.Status(context.Background())
 	if status.Code(err) != codes.Unavailable || !strings.Contains(err.Error(), "xray stopped") {
 		t.Fatalf("RPC failure = %v", err)
+	}
+	if _, err := client.Logs(context.Background()); status.Code(err) != codes.Unavailable {
+		t.Fatalf("logs RPC failure = %v", err)
 	}
 }
 
@@ -253,6 +360,45 @@ func TestClientRejectsMalformedStatusAndLogsResponses(t *testing.T) {
 	server.logsResponse, _ = structpb.NewStruct(map[string]any{"lines": []any{nil}})
 	if _, err := client.Logs(context.Background()); err == nil {
 		t.Fatal("null log line accepted")
+	}
+	server.statusResponse, _ = structpb.NewStruct(map[string]any{
+		"protocol": "v1", "xray_version": "Xray", "state": "running", "pid": 1, "restart_count": 0,
+	})
+	if got, err := client.Status(context.Background()); err != nil || !got.StartedAt.IsZero() || got.ConfigPath != "" {
+		t.Fatalf("optional status fields = %+v, %v", got, err)
+	}
+	server.statusResponse, _ = structpb.NewStruct(map[string]any{
+		"protocol": "v1", "xray_version": "Xray", "state": 1, "pid": 1, "restart_count": 0,
+	})
+	if _, err := client.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "state must be a string") {
+		t.Fatalf("invalid status state = %v", err)
+	}
+	server.statusResponse, _ = structpb.NewStruct(map[string]any{
+		"protocol": "v1", "xray_version": "Xray", "state": "running", "restart_count": 0,
+	})
+	if _, err := client.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "missing pid") {
+		t.Fatalf("missing status pid = %v", err)
+	}
+	server.statusResponse, _ = structpb.NewStruct(map[string]any{
+		"protocol": "v1", "xray_version": "Xray", "state": "running", "pid": "not-number", "restart_count": 0,
+	})
+	if _, err := client.Status(context.Background()); err == nil || !strings.Contains(err.Error(), "pid must be an integer") {
+		t.Fatalf("invalid status pid = %v", err)
+	}
+	for _, fields := range []map[string]any{
+		{"xray_version": "Xray", "state": "running", "pid": 0, "restart_count": 0},
+		{"protocol": 1, "xray_version": "Xray", "state": "running", "pid": 0, "restart_count": 0},
+		{"protocol": "v1", "xray_version": "Xray", "state": "running", "pid": 0, "restart_count": 0, "config_path": 1},
+		{"protocol": "v1", "xray_version": "Xray", "state": "running", "pid": 0, "restart_count": 0, "last_error": 1},
+		{"protocol": "v1", "xray_version": "Xray", "state": "running", "pid": 0, "restart_count": 0, "last_exit": 1},
+		{"protocol": "v1", "xray_version": "Xray", "state": "running", "pid": 0},
+		{"protocol": "v1", "xray_version": "Xray", "state": "running", "pid": 0, "restart_count": "bad"},
+		{"protocol": "v1", "xray_version": "Xray", "state": "running", "pid": 0, "restart_count": 0, "started_at": 1},
+	} {
+		server.statusResponse, _ = structpb.NewStruct(fields)
+		if _, err := client.Status(context.Background()); err == nil {
+			t.Errorf("malformed status accepted: %v", fields)
+		}
 	}
 }
 

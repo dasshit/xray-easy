@@ -3,10 +3,12 @@ package xrayapi
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net/netip"
 	"sync"
 	"time"
 
+	"xray-easy/internal/interaction"
 	statscommand "xray-easy/internal/xrayapi/stats"
 
 	"google.golang.org/grpc"
@@ -48,7 +50,13 @@ func (c *StatsClient) Poll(ctx context.Context) ([]UserStats, error) {
 	if err != nil {
 		return nil, err
 	}
-	response, err := client.GetUsersStats(ctx, &statscommand.GetUsersStatsRequest{IncludeTraffic: true})
+	rpcContext, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Xray stats request ID: %w", err)
+	}
+	started := time.Now()
+	response, err := client.GetUsersStats(rpcContext, &statscommand.GetUsersStatsRequest{IncludeTraffic: true})
+	interaction.LogRPC(slog.Default(), "xray-stats-client", "/xray.app.stats.command.StatsService/GetUsersStats", requestID, "xray", started, err)
 	if err != nil {
 		c.reset()
 		return nil, fmt.Errorf("get users stats: %w", err)

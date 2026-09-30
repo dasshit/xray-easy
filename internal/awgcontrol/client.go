@@ -7,12 +7,14 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"xray-easy/internal/domain"
+	"xray-easy/internal/interaction"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -220,11 +222,19 @@ func (c *Client) call(ctx context.Context, method string, fields map[string]any)
 	if err != nil {
 		return nil, fmt.Errorf("encode AWG request: %w", err)
 	}
+	ctx, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create AWG request ID: %w", err)
+	}
 	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
 	response := new(structpb.Struct)
-	if err := c.connection.Invoke(ctx, serviceName+method, request, response); err != nil {
+	fullMethod := serviceName + method
+	started := time.Now()
+	if err := c.connection.Invoke(ctx, fullMethod, request, response); err != nil {
+		interaction.LogRPC(slog.Default(), "awg-client", fullMethod, requestID, "amneziawg", started, err)
 		return nil, fmt.Errorf("AWG %s failed: %w", method, err)
 	}
+	interaction.LogRPC(slog.Default(), "awg-client", fullMethod, requestID, "amneziawg", started, nil)
 	return response, nil
 }
 

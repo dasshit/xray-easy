@@ -158,8 +158,8 @@ func TestDoctorPassesFreshInstallAndWarnsSetupPending(t *testing.T) {
 	t.Setenv("XRAY_EASY_VERSION", "0.4.1-abc123")
 	t.Setenv("XRAY_VERSION", "26.7.28")
 	t.Setenv("XRAY_EASY_UI_PORT", "8080")
-	tokenPath := writeDoctorToken(t, 0o400)
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", tokenPath)
+	tokenPath := writeControllerToken(t, 0o400)
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
 	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}}
 	handler := &doctorHandlerStub{}
 	stats := &doctorStatsStub{}
@@ -209,7 +209,7 @@ func TestDoctorHeaderRejectsInvalidEnvironmentText(t *testing.T) {
 func TestDoctorBundleContainsRedactedReportStatusLogsAndConfig(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, false)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	t.Setenv("XRAY_EASY_VERSION", "v0.4.1-12-gabc123")
 	t.Setenv("XRAY_VERSION", "26.7.28")
 	t.Setenv("XRAY_PUBLIC_PORT", "4443")
@@ -288,8 +288,8 @@ func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
 	t.Setenv("XRAY_VERSION", "26.7.28")
-	tokenPath := writeDoctorToken(t, 0o400)
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", tokenPath)
+	tokenPath := writeControllerToken(t, 0o400)
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
 	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running", XrayVersion: "Xray 26.7.28"}}
 	handler := &doctorHandlerStub{}
 	stats := &doctorStatsStub{err: errors.New("unknown method GetUsersStats")}
@@ -327,7 +327,7 @@ func TestXrayVersionVerifiedRequiresConfiguredAndRunningBinary(t *testing.T) {
 func TestDoctorReportsIPv6EgressFailureAsWarning(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	sup := &doctorSupervisorStub{
 		status:  supervisor.Status{State: "running"},
 		ipv6Err: errors.New("private network diagnostic detail"),
@@ -363,7 +363,7 @@ func TestDoctorReportsIPv6PublicHostType(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	var output bytes.Buffer
 	if err := runDoctor(context.Background(), dataDir, configDir, &output, &doctorSupervisorStub{status: supervisor.Status{State: "running"}}, &doctorHandlerStub{}, &doctorStatsStub{}); err != nil {
 		t.Fatalf("doctor failed: %v\n%s", err, output.String())
@@ -377,8 +377,9 @@ func TestDoctorFailureDoesNotPrintSecrets(t *testing.T) {
 	dataDir, configDir, _ := prepareDoctorState(t, false)
 	secretValue := "private-master-key-material"
 	t.Setenv("XRAY_EASY_MASTER_KEY", secretValue)
-	tokenPath := writeDoctorToken(t, 0o600)
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", tokenPath)
+	tokenPath := writeControllerToken(t, 0o600)
+	t.Setenv("XRAY_CONTROLLER_ADDR", "controller.test:10088")
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
 	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}}
 	var output bytes.Buffer
 
@@ -386,18 +387,18 @@ func TestDoctorFailureDoesNotPrintSecrets(t *testing.T) {
 	if err == nil {
 		t.Fatal("invalid master key and secret permissions should fail doctor")
 	}
-	if strings.Contains(output.String(), secretValue) || strings.Contains(output.String(), "supervisor-secret-should-not-leak") {
+	if strings.Contains(output.String(), secretValue) || strings.Contains(output.String(), "controller-secret-should-not-leak") {
 		t.Fatalf("doctor output leaked secret material: %s", output.String())
 	}
 	if strings.Contains(output.String(), "mode is 0400") || !strings.Contains(output.String(), "expected mode 0400") {
-		t.Fatalf("incorrect supervisor secret mode was not diagnosed: %s", output.String())
+		t.Fatalf("incorrect Controller secret mode was not diagnosed: %s", output.String())
 	}
 }
 
 func TestDoctorFailsWhenRealityTargetCannotBeReached(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	sup := &doctorSupervisorStub{
 		status:   supervisor.Status{State: "running"},
 		probeErr: errors.New("target hostname and connection details are private diagnostic data"),
@@ -421,7 +422,7 @@ func TestDoctorRejectsUnexpectedArguments(t *testing.T) {
 func TestDoctorFailsInvalidPublicPort(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, false)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	t.Setenv("XRAY_PUBLIC_PORT", "not-a-port")
 	var output bytes.Buffer
 	err := runDoctor(context.Background(), dataDir, configDir, &output, &doctorSupervisorStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
@@ -472,10 +473,10 @@ func prepareDoctorState(t *testing.T, configured bool) (string, string, []byte) 
 	return dataDir, configDir, key
 }
 
-func writeDoctorToken(t *testing.T, mode os.FileMode) string {
+func writeControllerToken(t *testing.T, mode os.FileMode) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "xray_supervisor_token")
-	if err := os.WriteFile(path, []byte("supervisor-secret-should-not-leak\n"), mode); err != nil {
+	path := filepath.Join(t.TempDir(), "controller.token")
+	if err := os.WriteFile(path, []byte("controller-secret-should-not-leak\n"), mode); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Chmod(path, mode); err != nil {

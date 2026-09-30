@@ -230,7 +230,7 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 	runner := &fakeRunner{failOn: "up -d"}
 	var output bytes.Buffer
 	err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n"), &output, runner)
-	if err == nil || !strings.Contains(err.Error(), "troubleshooting") || !strings.Contains(err.Error(), "docker compose -f compose.yaml logs --tail=100 --timestamps xray xray-easy") {
+	if err == nil || !strings.Contains(err.Error(), "troubleshooting") || !strings.Contains(err.Error(), "docker compose -f compose.yaml logs --tail=100 --timestamps") {
 		t.Fatalf("expected retryable Compose error, got %v", err)
 	}
 	for _, recoveryCommand := range []string{
@@ -241,7 +241,7 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 			t.Errorf("Compose failure omitted recovery command %q: %v", recoveryCommand, err)
 		}
 	}
-	if !strings.Contains(strings.Join(runner.calls, "\n"), "compose -f compose.yaml ps --all") || !strings.Contains(strings.Join(runner.calls, "\n"), "compose -f compose.yaml logs --tail=100 --timestamps xray xray-easy") {
+	if !strings.Contains(strings.Join(runner.calls, "\n"), "compose -f compose.yaml ps --all") || !strings.Contains(strings.Join(runner.calls, "\n"), "compose -f compose.yaml logs --tail=100 --timestamps") {
 		t.Fatalf("startup diagnostics were not collected: %v", runner.calls)
 	}
 	firstEnv := readPrivateFile(t, filepath.Join(root, ".env"))

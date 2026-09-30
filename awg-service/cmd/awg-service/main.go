@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -47,6 +48,7 @@ var openControlManager = control.Open
 var listenControl = net.Listen
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -107,7 +109,7 @@ func serve() error {
 
 func serveControlService(manager *control.Manager, opts control.Options, token string, listener net.Listener, shutdown <-chan os.Signal) error {
 	server := grpc.NewServer(
-		grpc.UnaryInterceptor(control.AuthInterceptor(token)),
+		grpc.ChainUnaryInterceptor(control.LoggingInterceptor(), control.AuthInterceptor(token)),
 		grpc.MaxRecvMsgSize(24<<20),
 		grpc.MaxSendMsgSize(24<<20),
 	)

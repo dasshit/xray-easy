@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -26,9 +27,11 @@ import (
 	"xray-easy/internal/auth"
 	"xray-easy/internal/awgcontrol"
 	"xray-easy/internal/backup"
+	"xray-easy/internal/controller"
 	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/hysteria"
+	"xray-easy/internal/interaction"
 	"xray-easy/internal/maintenance"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/stats"
@@ -37,7 +40,6 @@ import (
 	"xray-easy/internal/totp"
 	"xray-easy/internal/ui"
 	"xray-easy/internal/xray"
-	"xray-easy/internal/xrayapi"
 )
 
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
@@ -73,6 +75,13 @@ type supervisorAPI interface {
 	ProbeTarget(context.Context, string, string) error
 	Status(context.Context) (supervisor.Status, error)
 	Logs(context.Context) ([]string, error)
+}
+
+type runtimeControl interface {
+	supervisorAPI
+	Health(context.Context) error
+	ProbeIPv6(context.Context) error
+	ReplaceInbound(context.Context, string, string, string, string) error
 }
 
 type xrayHandlerAPI interface {
@@ -252,6 +261,7 @@ type clientAccessResponse struct {
 }
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if len(os.Args) > 1 {
 		if err := runCLI(context.Background(), os.Args[1:]); err != nil {
 			fatal(err)
@@ -274,7 +284,7 @@ func runControlPlane(ctx context.Context, initialize func(context.Context) (*ser
 	s.stats.Start(ctx)
 	s.startReconciler(ctx)
 	mux := newMux(s)
-	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: requestLimit(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second}
+	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: interaction.HTTPMiddleware(requestLimit(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second}
 	fmt.Fprintf(os.Stderr, "xray-easy control plane listening on %s\n", serverHTTP.Addr)
 	if err := listen(serverHTTP); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -314,40 +324,20 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		_ = db.Close()
 		return nil, nil, err
 	}
-	apiListen := envOr("XRAY_API_LISTEN", "127.0.0.1:10085")
-	statsClient := xrayapi.NewStatsClient(apiListen)
-	defer statsClient.Close()
-	handlerClient := xrayapi.NewHandlerClient(apiListen)
-	defer handlerClient.Close()
-	var awgClient *awgcontrol.Client
-	awgAddress := strings.TrimSpace(os.Getenv("AWG_CONTROL_ADDR"))
-	awgTokenPath := envOr("AWG_CONTROL_TOKEN_FILE", "/run/awg-auth/control.token")
-	if awgAddress != "" && strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
-		if _, statErr := os.Stat(awgTokenPath); statErr == nil {
-			awgClient, err = awgcontrol.Dial(awgAddress, awgTokenPath)
-			if err != nil {
-				_ = db.Close()
-				return nil, nil, fmt.Errorf("initialize AmneziaWG control client: %w", err)
-			}
-		} else if !errors.Is(statErr, os.ErrNotExist) {
-			_ = db.Close()
-			return nil, nil, fmt.Errorf("inspect AmneziaWG control token: %w", statErr)
-		}
+	apiListen := envOr("XRAY_API_LISTEN", "172.31.241.2:10085")
+	address := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR"))
+	if address == "" {
+		_ = db.Close()
+		return nil, nil, errors.New("XRAY_CONTROLLER_ADDR must be configured; direct runtime connections from the backend are disabled")
+	}
+	controllerClient, dialErr := controller.Dial(address, envOr("XRAY_CONTROLLER_TOKEN_FILE", "/run/controller-auth/controller.token"))
+	if dialErr != nil {
+		_ = db.Close()
+		return nil, nil, fmt.Errorf("initialize Controller gRPC client: %w", dialErr)
 	}
 	var awgGateway awgcontrol.Gateway
-	if awgClient != nil {
-		awgGateway = awgClient
-	}
-	supervisorClient, err := supervisor.Dial(
-		envOr("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086"),
-		envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
-	)
-	if err != nil {
-		if awgClient != nil {
-			_ = awgClient.Close()
-		}
-		_ = db.Close()
-		return nil, nil, fmt.Errorf("initialize Xray supervisor gRPC client: %w", err)
+	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
+		awgGateway = controllerClient.AWG()
 	}
 	s := &server{
 		store:            db,
@@ -358,8 +348,8 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		dataDir:          dataDir,
 		maintenancePath:  filepath.Join(dataDir, "maintenance.lock"),
 		defaultAPIListen: apiListen,
-		supervisor:       supervisorClient,
-		handler:          handlerClient,
+		supervisor:       controllerClient,
+		handler:          controllerClient,
 		awg:              awgGateway,
 		pendingSettings:  make(map[string]pendingSettingsChange),
 		pendingHysteria:  make(map[string]pendingHysteriaChange),
@@ -367,21 +357,27 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		diagnosticBuffer: diagnostics.NewBuffer(200),
 		pendingTOTP:      make(map[string]pendingTOTP),
 	}
-	if awgClient != nil {
-		s.stats = stats.NewManager(db, statsClient, awgClient)
+	if awgStats, ok := awgGateway.(stats.AWGStatsAPI); ok {
+		s.stats = stats.NewManager(db, controllerClient, awgStats)
 	} else {
-		s.stats = stats.NewManager(db, statsClient)
+		s.stats = stats.NewManager(db, controllerClient)
 	}
 	cleanup := func() {
-		_ = statsClient.Close()
-		_ = handlerClient.Close()
-		_ = supervisorClient.Close()
-		if awgClient != nil {
-			_ = awgClient.Close()
-		}
+		_ = controllerClient.Close()
 		_ = db.Close()
 	}
 	return s, cleanup, nil
+}
+
+func dialRuntimeControl() (runtimeControl, func() error, error) {
+	if address := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR")); address != "" {
+		client, err := controller.Dial(address, envOr("XRAY_CONTROLLER_TOKEN_FILE", "/run/controller-auth/controller.token"))
+		if err != nil {
+			return nil, nil, fmt.Errorf("initialize Controller gRPC client: %w", err)
+		}
+		return client, client.Close, nil
+	}
+	return nil, nil, errors.New("XRAY_CONTROLLER_ADDR must be configured; direct runtime connections from the backend are disabled")
 }
 
 func newMux(s *server) *http.ServeMux {
@@ -688,18 +684,23 @@ func runRestoreCLIWithApplierAndAWG(ctx context.Context, dataDir, configDir stri
 	return nil
 }
 
-func dialConfiguredAWGBackup() (*awgcontrol.Client, error) {
+type awgBackupGateway interface {
+	backup.AWGBackup
+	Close() error
+}
+
+func dialConfiguredAWGBackup() (awgBackupGateway, error) {
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) == "" {
 		return nil, nil
 	}
-	client, err := awgcontrol.Dial(
-		envOr("AWG_CONTROL_ADDR", "172.31.241.4:10087"),
-		envOr("AWG_CONTROL_TOKEN_FILE", "/run/awg-auth/control.token"),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("initialize AmneziaWG backup client: %w", err)
+	if address := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR")); address != "" {
+		client, err := controller.Dial(address, envOr("XRAY_CONTROLLER_TOKEN_FILE", "/run/controller-auth/controller.token"))
+		if err != nil {
+			return nil, fmt.Errorf("initialize Controller AmneziaWG backup gateway: %w", err)
+		}
+		return client.AWG(), nil
 	}
-	return client, nil
+	return nil, errors.New("XRAY_CONTROLLER_ADDR must be configured for AmneziaWG backup operations")
 }
 
 func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
@@ -716,11 +717,11 @@ func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
 }
 
 func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int) error {
-	sup, err := supervisor.Dial(envOr("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086"), envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"))
+	sup, closeRuntime, err := dialRuntimeControl()
 	if err != nil {
-		return fmt.Errorf("initialize Xray supervisor gRPC client: %w", err)
+		return err
 	}
-	defer sup.Close()
+	defer closeRuntime()
 	return applyRestoredStateWithSupervisor(ctx, db, masterKey, configDir, publicPort, sup)
 }
 

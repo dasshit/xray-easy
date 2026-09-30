@@ -45,20 +45,20 @@ func TestDoctorChecksExplainVolumeDatabaseTokenAndRuntimeFailures(t *testing.T) 
 				t.Fatal(err)
 			}
 		}},
-		{"missing token", "Supervisor secret", "missing or inaccessible", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
-			t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
+		{"missing token", "Controller secret", "missing or inaccessible", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", filepath.Join(t.TempDir(), "missing"))
 		}},
-		{"token directory", "Supervisor secret", "not a regular file", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
-			t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", t.TempDir())
+		{"token directory", "Controller secret", "not a regular file", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", t.TempDir())
 		}},
-		{"empty token", "Supervisor secret", "unreadable or empty", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"empty token", "Controller secret", "unreadable or empty", func(t *testing.T, _, _ *string, _ *doctorSupervisorStub, _ *doctorHandlerStub) {
 			path := filepath.Join(t.TempDir(), "empty-token")
 			if err := os.WriteFile(path, nil, 0o400); err != nil {
 				t.Fatal(err)
 			}
-			t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", path)
+			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", path)
 		}},
-		{"health failure", "Supervisor connection", "health check failed", func(_ *testing.T, _, _ *string, sup *doctorSupervisorStub, _ *doctorHandlerStub) {
+		{"health failure", "Controller connection", "health check failed", func(_ *testing.T, _, _ *string, sup *doctorSupervisorStub, _ *doctorHandlerStub) {
 			sup.healthErr = errors.New("offline")
 		}},
 		{"no config state", "Supervisor status", "waiting for its first", func(_ *testing.T, _, _ *string, sup *doctorSupervisorStub, _ *doctorHandlerStub) {
@@ -89,7 +89,8 @@ func TestDoctorChecksExplainVolumeDatabaseTokenAndRuntimeFailures(t *testing.T) 
 		t.Run(testcase.name, func(t *testing.T) {
 			dataDir, configDir, key := prepareDoctorState(t, true)
 			t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-			t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+			t.Setenv("XRAY_CONTROLLER_ADDR", "controller.test:10088")
+			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 			t.Setenv("XRAY_VERSION", "26.7.28")
 			t.Setenv("XRAY_HYSTERIA2_ENABLED", "false")
 			sup := &doctorSupervisorStub{status: supervisor.Status{State: "running", XrayVersion: "Xray 26.7.28"}}
@@ -148,7 +149,8 @@ func TestDoctorChecksExplainIncompleteSettingsAndWrongMasterKey(t *testing.T) {
 		t.Run(testcase.name, func(t *testing.T) {
 			dataDir, configDir, key := prepareDoctorState(t, true)
 			t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-			t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+			t.Setenv("XRAY_CONTROLLER_ADDR", "controller.test:10088")
+			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 			testcase.mutate(t, dataDir)
 			checks := collectDoctorChecks(context.Background(), dataDir, configDir, &doctorSupervisorStub{status: supervisor.Status{State: "running"}}, &doctorHandlerStub{}, &doctorStatsStub{})
 			if !doctorCheckContains(checks, testcase.wantCheck, testcase.wantDetail) {

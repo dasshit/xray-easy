@@ -59,8 +59,8 @@ new transport must retain those properties.
   signatures and duplicate nonces, prune expired nonce records, and compare
   signatures in constant time. Load the token from the mounted token file and
   keep the existing restrictive file permissions.
-- Apply explicit gRPC receive/send limits equivalent to the current 1 MiB HTTP
-  request cap. Propagate RPC cancellation/deadlines into validation, DNS/TLS
+- Apply explicit 24 MiB gRPC receive/send limits to bound large telemetry
+  responses while supporting installations with many devices. Propagate RPC cancellation/deadlines into validation, DNS/TLS
   probes, Xray API commands, and process apply where possible.
 - Map invalid input, failed preconditions, unavailable Xray, and internal
   failures to stable gRPC status codes. Redact sensitive subprocess output
@@ -130,12 +130,16 @@ new transport must retain those properties.
 - Commit the plan before implementation and keep implementation changes in a
   later commit. Do not push unless explicitly requested.
 
-## Protocol-neutral Controller direction
+## Protocol-neutral Controller direction (historical)
 
-The Controller is a useful next architectural boundary, but it is not part of
-the supervisor transport-only change. Adding a new service while also changing
-the supervisor API would obscure failures and introduce a second runtime hop
-before its ownership rules are defined.
+> Update (2026-09-30): The Controller implementation is now under way and its
+> current phases are tracked in [controller-service-plan.md](controller-service-plan.md).
+> Xray HandlerService and StatsService calls are being moved into
+> `xray-supervisor`, so the Controller uses the supervisor as the Xray runtime
+> adapter and correlation IDs are logged inside the Xray container.
+
+The paragraphs below record the original architectural direction and have been
+superseded by the Controller plan above.
 
 The proposed end state is:
 

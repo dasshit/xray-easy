@@ -96,17 +96,17 @@ func TestDialConfiguredAWGBackupHonorsOptionalServiceConfiguration(t *testing.T)
 	}
 
 	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
-	t.Setenv("AWG_CONTROL_ADDR", "passthrough:///awg-test")
-	t.Setenv("AWG_CONTROL_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
-	if _, err := dialConfiguredAWGBackup(); err == nil || !strings.Contains(err.Error(), "initialize AmneziaWG backup client") {
-		t.Fatalf("dialConfiguredAWGBackup without token = %v", err)
+	t.Setenv("XRAY_CONTROLLER_ADDR", "")
+	if _, err := dialConfiguredAWGBackup(); err == nil || !strings.Contains(err.Error(), "XRAY_CONTROLLER_ADDR must be configured") {
+		t.Fatalf("dialConfiguredAWGBackup without Controller = %v", err)
 	}
 
 	tokenPath := filepath.Join(t.TempDir(), "control.token")
-	if err := os.WriteFile(tokenPath, []byte("test-token\n"), 0o600); err != nil {
+	if err := os.WriteFile(tokenPath, []byte("test-controller-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("AWG_CONTROL_TOKEN_FILE", tokenPath)
+	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///controller-test")
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
 	client, err = dialConfiguredAWGBackup()
 	if err != nil || client == nil {
 		t.Fatalf("dialConfiguredAWGBackup with configured AWG = %v, %v", client, err)

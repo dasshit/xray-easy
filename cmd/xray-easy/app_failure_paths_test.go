@@ -433,6 +433,12 @@ func TestStartReconcilerPerformsInitialSyncAndHonorsCancellation(t *testing.T) {
 
 func TestApplyRestoredStateWrapperReturnsStorageErrorsBeforeNetwork(t *testing.T) {
 	app := newTestApp(t, false)
+	tokenPath := filepath.Join(t.TempDir(), "controller.token")
+	if err := os.WriteFile(tokenPath, []byte("test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///controller-test")
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
 	if err := applyRestoredState(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443); err == nil || !strings.Contains(err.Error(), "settings are not initialized") {
 		t.Fatalf("applyRestoredState missing settings error = %v", err)
 	}

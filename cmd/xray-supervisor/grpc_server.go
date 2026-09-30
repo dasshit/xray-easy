@@ -14,8 +14,8 @@ import (
 
 func newSupervisorGRPCServer(instance *supervisor) *grpc.Server {
 	server := grpc.NewServer(
-		grpc.MaxRecvMsgSize(1<<20),
-		grpc.MaxSendMsgSize(1<<20),
+		grpc.MaxRecvMsgSize(24<<20),
+		grpc.MaxSendMsgSize(24<<20),
 		grpc.UnaryInterceptor(instance.unaryAuthInterceptor),
 	)
 	supervisorapi.RegisterRPC(server, instance)
@@ -24,6 +24,7 @@ func newSupervisorGRPCServer(instance *supervisor) *grpc.Server {
 
 func runSupervisor(cfg *config, signals <-chan os.Signal) error {
 	instance := newSupervisor(cfg)
+	defer instance.closeRuntimeClients()
 	if err := instance.startInitial(); err != nil {
 		return err
 	}

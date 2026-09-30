@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -15,6 +16,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"xray-easy/internal/interaction"
 
 	supervisorapi "xray-easy/internal/supervisor"
 )
@@ -22,14 +24,23 @@ import (
 const supervisorNonceTTL = 2 * time.Minute
 
 func (s *supervisor) unaryAuthInterceptor(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	ctx, requestID, traceErr := interaction.EnsureIncoming(ctx)
+	if traceErr != nil {
+		return nil, status.Error(codes.Internal, "could not create request identifier")
+	}
+	started := time.Now()
 	operation, nonce, signature, err := rpcAuthMetadata(ctx)
 	if err != nil {
+		interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, status.Error(codes.Unauthenticated, err.Error()))
 		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
 	if err := s.authenticateRPC(request, info.FullMethod, operation, nonce, signature); err != nil {
+		interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, status.Error(codes.Unauthenticated, err.Error()))
 		return nil, status.Error(codes.Unauthenticated, err.Error())
 	}
-	return handler(ctx, request)
+	response, callErr := handler(ctx, request)
+	interaction.LogRPC(slog.Default(), "xray-supervisor", info.FullMethod, requestID, "xray", started, callErr)
+	return response, callErr
 }
 
 func rpcAuthMetadata(ctx context.Context) (operation, nonce, signature string, err error) {
@@ -113,7 +124,7 @@ func allowedSupervisorMethod(method, operation string) bool {
 	switch operation {
 	case "control-plane":
 		switch method {
-		case servicePrefix + "Health", servicePrefix + "GetStatus", servicePrefix + "GetLogs", servicePrefix + "ValidateConfig", servicePrefix + "ApplyConfig", servicePrefix + "ReplaceInbound", servicePrefix + "ProbeTarget", servicePrefix + "ProbeIPv6":
+		case servicePrefix + "Health", servicePrefix + "GetStatus", servicePrefix + "GetLogs", servicePrefix + "ValidateConfig", servicePrefix + "ApplyConfig", servicePrefix + "ReplaceInbound", servicePrefix + "ProbeTarget", servicePrefix + "ProbeIPv6", servicePrefix + "AlterUser", servicePrefix + "ListUsers", servicePrefix + "GetUserStats":
 			return true
 		}
 	case "healthcheck":

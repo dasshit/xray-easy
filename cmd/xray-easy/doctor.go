@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"xray-easy/internal/awgcontrol"
+	"xray-easy/internal/controller"
 	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/secret"
@@ -77,29 +77,25 @@ func runDoctorCLI(ctx context.Context, args []string, dataDir, configDir string,
 	if len(args) > 1 || len(args) == 1 && args[0] != "bundle" {
 		return cliUsageError()
 	}
-	handler := xrayapi.NewHandlerClient(envOr("XRAY_API_LISTEN", "127.0.0.1:10085"))
-	defer handler.Close()
-	stats := xrayapi.NewStatsClient(envOr("XRAY_API_LISTEN", "127.0.0.1:10085"))
-	defer stats.Close()
-	sup, err := supervisor.Dial(
-		envOr("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086"),
-		envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token"),
-	)
-	if err != nil {
-		return fmt.Errorf("initialize Xray supervisor gRPC client: %w", err)
-	}
-	defer sup.Close()
+	var handler doctorHandler
+	var stats doctorStats
+	var sup doctorBundleSupervisor
+	var closeRuntime func()
 	var awg doctorAWG
 	var awgErr error
-	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
-		awg, awgErr = awgcontrol.Dial(
-			envOr("AWG_CONTROL_ADDR", "172.31.241.4:10087"),
-			envOr("AWG_CONTROL_TOKEN_FILE", "/run/awg-auth/control.token"),
-		)
-		if client, ok := awg.(*awgcontrol.Client); ok {
-			defer client.Close()
-		}
+	address := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR"))
+	if address == "" {
+		return errors.New("XRAY_CONTROLLER_ADDR must be configured; direct runtime connections from the backend are disabled")
 	}
+	client, err := controller.Dial(address, envOr("XRAY_CONTROLLER_TOKEN_FILE", "/run/controller-auth/controller.token"))
+	if err != nil {
+		return fmt.Errorf("initialize Controller gRPC client: %w", err)
+	}
+	sup, handler, stats, closeRuntime = client, client, client, func() { _ = client.Close() }
+	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
+		awg = client.AWG()
+	}
+	defer closeRuntime()
 	if len(args) == 1 {
 		return runDoctorBundleWithAWG(ctx, dataDir, configDir, out, sup, handler, stats, awg, awgErr)
 	}
@@ -358,33 +354,43 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		appendCheck(doctorWarn, "Application setup", "database state could not be inspected", "Start xray-easy and inspect its startup logs.")
 	}
 
-	tokenPath := envOr("XRAY_SUPERVISOR_TOKEN_FILE", "/run/secrets/xray_supervisor_token")
-	tokenReady := false
-	info, err := os.Lstat(tokenPath)
-	switch {
-	case err != nil:
-		appendCheck(doctorFail, "Supervisor secret", "secret file is missing or inaccessible", "Check init-supervisor-secret and the xray_supervisor_token_data volume.")
-	case !info.Mode().IsRegular():
-		appendCheck(doctorFail, "Supervisor secret", "secret path is not a regular file", "Recreate the supervisor secret from the host-side secret file.")
-	case info.Mode().Perm() != 0o400:
-		appendCheck(doctorFail, "Supervisor secret", "expected mode 0400 inside the container", "Recreate the supervisor secret volume with the Compose init-supervisor-secret service.")
-	default:
-		contents, readErr := os.ReadFile(tokenPath)
-		if readErr != nil || len(strings.TrimSpace(string(contents))) == 0 {
-			appendCheck(doctorFail, "Supervisor secret", "secret file is unreadable or empty", "Check the secret file and xray_supervisor_token_data volume.")
-		} else {
-			tokenReady = true
-			appendCheck(doctorPass, "Supervisor secret", "readable and mode is 0400", "")
+	controllerConfigured := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR")) != ""
+	// Tests and embedded doctor callers may inject fake runtime adapters without
+	// a Controller address. The executable always requires Controller config in
+	// runDoctorCLI, so secret validation is meaningful whenever it is configured.
+	controllerTokenReady := true
+	if controllerConfigured {
+		controllerTokenPath := envOr("XRAY_CONTROLLER_TOKEN_FILE", "/run/controller-auth/controller.token")
+		controllerInfo, controllerErr := os.Lstat(controllerTokenPath)
+		switch {
+		case controllerErr != nil:
+			controllerTokenReady = false
+			appendCheck(doctorFail, "Controller secret", "secret file is missing or inaccessible", "Check init-controller-token and the controller_token volume.")
+		case !controllerInfo.Mode().IsRegular():
+			controllerTokenReady = false
+			appendCheck(doctorFail, "Controller secret", "secret path is not a regular file", "Recreate the Controller token volume through Compose.")
+		case controllerInfo.Mode().Perm() != 0o400:
+			controllerTokenReady = false
+			appendCheck(doctorFail, "Controller secret", "expected mode 0400 inside the container", "Recreate the Controller token volume through Compose.")
+		default:
+			contents, readErr := os.ReadFile(controllerTokenPath)
+			if readErr != nil || len(strings.TrimSpace(string(contents))) == 0 {
+				controllerTokenReady = false
+				appendCheck(doctorFail, "Controller secret", "secret file is unreadable or empty", "Check init-controller-token and the controller_token volume.")
+			} else {
+				appendCheck(doctorPass, "Controller secret", "readable and mode is 0400", "")
+			}
 		}
 	}
 
 	var supervisorStatus supervisor.Status
 	supervisorReady := false
-	if !tokenReady {
-		appendCheck(doctorFail, "Supervisor connection", "not checked because the secret file is unavailable", "Fix the Supervisor secret check above.")
+	if !controllerTokenReady {
+		appendCheck(doctorFail, "Controller connection", "not checked because the secret file is unavailable", "Fix the Controller secret check above.")
 	} else if err := sup.Health(ctx); err != nil {
-		appendCheck(doctorFail, "Supervisor connection", "authenticated health check failed", "Check xray container health, the supervisor URL, and the shared secret.")
+		appendCheck(doctorFail, "Controller connection", "authenticated health check failed", "Check controller container health, its private address/token, and the Xray supervisor dependency.")
 	} else {
+		appendCheck(doctorPass, "Controller connection", "authenticated runtime health check succeeded", "")
 		supervisorStatus, err = sup.Status(ctx)
 		if err != nil {
 			appendCheck(doctorFail, "Supervisor status", "status request failed", "Inspect xray container logs and verify the supervisor API is healthy.")
@@ -481,9 +487,9 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		} else if _, portErr := doctorConfiguredPort("AWG_PUBLIC_PORT", "1234"); portErr != nil {
 			appendCheck(doctorFail, "AmneziaWG public endpoint", "AWG_PUBLIC_PORT is invalid", "Set AWG_PUBLIC_PORT to a UDP port from 1 to 65535 in .env, then rerun the installer.")
 		} else if awgErr != nil {
-			appendCheck(doctorFail, "AmneziaWG control API", "configured service cannot be reached", "Check the awg container, AWG control token volume, and its private control address.")
+			appendCheck(doctorFail, "AmneziaWG control API", "configured service cannot be reached", "Check the Controller and awg container health, then inspect their private gRPC logs.")
 		} else if awg == nil {
-			appendCheck(doctorFail, "AmneziaWG control API", "client is not configured", "Check AWG_CONTROL_ADDR and AWG_CONTROL_TOKEN_FILE in the Compose service environment.")
+			appendCheck(doctorFail, "AmneziaWG control API", "client is not configured", "Check the Controller configuration and AWG_PUBLIC_HOST in the Compose environment.")
 		} else {
 			status, statusErr := awg.Status(ctx)
 			if statusErr != nil {

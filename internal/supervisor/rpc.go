@@ -20,6 +20,9 @@ type RPCServer interface {
 	ReplaceInbound(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ProbeTarget(context.Context, *structpb.Struct) (*structpb.Struct, error)
 	ProbeIPv6(context.Context, *emptypb.Empty) (*structpb.Struct, error)
+	AlterUser(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	ListUsers(context.Context, *structpb.Struct) (*structpb.Struct, error)
+	GetUserStats(context.Context, *structpb.Struct) (*structpb.Struct, error)
 }
 
 // RegisterRPC registers the supervisor service without generated code, matching
@@ -41,6 +44,9 @@ func rpcServiceDescription(api RPCServer) *grpc.ServiceDesc {
 			structMethod("ReplaceInbound", api.ReplaceInbound),
 			structMethod("ProbeTarget", api.ProbeTarget),
 			emptyMethod("ProbeIPv6", api.ProbeIPv6),
+			structMethod("AlterUser", api.AlterUser),
+			structMethod("ListUsers", api.ListUsers),
+			structMethod("GetUserStats", api.GetUserStats),
 		},
 	}
 }

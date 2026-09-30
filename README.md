@@ -1,11 +1,12 @@
 # Xray-easy
 
-Xray-easy is a private web panel for one Xray server. It runs Xray and the Go
-control plane in separate Docker containers and helps one administrator create
-VLESS + REALITY + TCP/RAW + XTLS Vision profiles, plus optional VMess + TLS and
-Hysteria 2 inbounds in the same Xray process. AmneziaWG is an optional,
-independent container with its own Web UI section and UDP port. The panel is
-bound to the server's loopback address; open it through an SSH tunnel.
+Xray-easy is a private web panel for one Xray server. It runs Xray, its Go
+control plane, and protocol runtime services in separate Docker containers.
+One administrator can create VLESS + REALITY + TCP/RAW + XTLS Vision profiles,
+plus optional VMess + TLS and Hysteria 2 inbounds in the same Xray process.
+AmneziaWG is an optional independent container with its own UDP port and a
+shared profile workflow. The panel is bound to the server's loopback address;
+open it through an SSH tunnel.
 
 The pinned and verified Xray version is **26.7.28**. The panel reports both
 `XRAY_VERSION` from Compose and the version reported by the running binary, and
@@ -50,9 +51,9 @@ mode `0600`, then runs `docker compose up -d --build --wait`. It waits for the
 services to become healthy, then runs the final `xray-easy doctor` check. A
 repeat run reuses the existing keys and Docker volumes. After the first start,
 manage Hysteria 2 settings and certificates in the Web UI. If Compose cannot make
-the services healthy, the installer displays `compose ps --all` and the latest
-100 lines from both service logs in the terminal. It leaves containers and
-configuration in place and prints recovery commands.
+the services healthy, the installer displays `compose ps --all` and recent logs
+from the control plane, Controller, Xray and any enabled optional services. It
+leaves containers and configuration in place and prints recovery commands.
 
 The installer builds the application images locally from this checkout for the
 VPS architecture. Prebuilt images are not distributed.
@@ -192,16 +193,30 @@ VLESS TCP port is published on the VPS and mapped to container port `8443`;
 the VMess TCP port is mapped to container port `8444`. Docker publishes them on
 IPv4 and IPv6 host addresses when the host daemon supports
 dual-stack port publishing. The panel remains mapped only to `127.0.0.1` on the
-VPS. Xray and the control plane share a private supervisor token, and their
-persistent state lives in Docker named volumes. IPv6 handling in Compose,
+VPS. The Controller and Xray supervisor share a private supervisor token;
+the Controller and optional AWG service use a separate AWG token. The backend
+does not mount either runtime token. Persistent state lives in Docker named
+volumes. IPv6 handling in Compose,
 profiles and `doctor` is implemented; actual reachability still depends on the
 VPS IPv6 route, Docker daemon and firewall, so verify it with the checks below.
 
-The control plane communicates with `xray-supervisor` over authenticated gRPC
-on the private Compose `control` network. The gRPC port is not published on the
-VPS. Requests use HMAC-SHA256 signatures and replay-protected nonces; this
-authenticates requests but does not encrypt traffic, so keep the service on the
-private Docker network. The in-container healthcheck uses the same gRPC API.
+Runtime services are isolated on private Compose networks. The backend is on a
+dedicated internal `backend` network with the Controller; it cannot address
+Xray or AWG directly. The Controller also joins the separate internal `control`
+network with Xray and optional AWG. It routes Xray process/configuration,
+HandlerService, StatsService and AmneziaWG operations to their runtime adapters.
+`xray-supervisor` owns the Xray process and its Handler/Stats clients. No gRPC
+port is published on the VPS. Each service hop authenticates independently;
+supervisor requests use HMAC-SHA256 signatures and replay-protected nonces.
+These internal links are authenticated but not encrypted, so keep them on the
+private Docker networks.
+
+Backend, Controller, `xray-supervisor` and `awg-service` interaction logs carry
+the same random `X-Request-ID`. They record method, outcome and duration, but
+never RPC payloads or credential-bearing profiles. Xray core's own connection
+logs do not include this request ID. To trace a control operation, use
+`docker compose logs controller xray awg xray-easy`; `doctor` reports
+Controller and runtime availability.
 
 ## IPv6 checks
 
@@ -246,7 +261,7 @@ Run commands from the repository directory on the VPS:
 
 ```sh
 docker compose ps
-docker compose logs --tail=100 xray xray-easy
+docker compose logs --tail=100
 docker compose logs -f xray
 docker compose down                         # stop, preserving named volumes
 docker compose up -d --build --wait          # start again
@@ -254,7 +269,7 @@ docker compose exec -T xray-easy xray-easy doctor
 docker compose exec -T xray-easy xray-easy doctor bundle
 ```
 
-`./install.sh` runs the same doctor command after Compose reports both services
+`./install.sh` runs the same doctor command after Compose reports its services
 healthy. `PASS` completes installation; warnings are shown for follow-up (for
 example, pending first-run setup, an unavailable optional stats RPC, IPv6
 egress, or the VDS firewall, which cannot be checked from inside Compose). A
@@ -354,7 +369,7 @@ token under `secrets/`. The old stage 0 prototype had no panel state to
 migrate.
 
 If startup fails, inspect `docker compose ps` and
-`docker compose logs --tail=100 xray xray-easy`. Installer failures retain
+`docker compose logs --tail=100`. Installer failures retain
 `.env` and the token so you can correct the problem and rerun `./install.sh`.
 
 ## Optional AmneziaWG transport

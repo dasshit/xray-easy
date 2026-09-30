@@ -76,7 +76,7 @@ func TestDoctorBundleRecordsUnavailableSupervisorAndInvalidConfig(t *testing.T) 
 		t.Run(testcase.name, func(t *testing.T) {
 			dataDir, configDir, key := prepareDoctorState(t, true)
 			t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-			t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+			t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 			if err := os.WriteFile(filepath.Join(configDir, "active.json"), testcase.content, 0o600); err != nil {
 				t.Fatal(err)
 			}
@@ -96,7 +96,7 @@ func TestDoctorBundleRecordsUnavailableSupervisorAndInvalidConfig(t *testing.T) 
 func TestDoctorBundleReportsOutputAndFilesystemFailures(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	sup := &doctorSupervisorStub{status: supervisor.Status{State: "running"}}
 	if err := runDoctorBundle(context.Background(), dataDir, configDir, rejectingDoctorWriter{}, sup, &doctorHandlerStub{}, &doctorStatsStub{}); err == nil || !strings.Contains(err.Error(), "write doctor report") {
 		t.Fatalf("output failure = %v", err)
@@ -113,8 +113,8 @@ func TestDoctorBundleReportsOutputAndFilesystemFailures(t *testing.T) {
 func TestDoctorCLIDispatchesChecksAndRequestedBundle(t *testing.T) {
 	dataDir := t.TempDir()
 	configDir := t.TempDir()
-	t.Setenv("XRAY_SUPERVISOR_ADDR", "127.0.0.1:1")
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
+	t.Setenv("XRAY_CONTROLLER_ADDR", "127.0.0.1:1")
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	t.Setenv("XRAY_EASY_MASTER_KEY", "")
 	for _, args := range [][]string{nil, {"bundle"}} {
 		var output bytes.Buffer
@@ -131,7 +131,7 @@ func TestDoctorCLIDispatchesChecksAndRequestedBundle(t *testing.T) {
 func TestDoctorBundleKeepsOnlyRecentBoundedLogs(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
-	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", writeDoctorToken(t, 0o400))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
 	logs := make([]string, 101)
 	logs[0] = "oldest entry must be removed"
 	for i := 1; i < len(logs); i++ {

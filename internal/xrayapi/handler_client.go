@@ -3,9 +3,11 @@ package xrayapi
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
+	"xray-easy/internal/interaction"
 	handlercommand "xray-easy/internal/xrayapi/handler"
 	"xray-easy/internal/xrayapi/protocol"
 	"xray-easy/internal/xrayapi/serial"
@@ -85,6 +87,10 @@ func (c *HandlerClient) Users(ctx context.Context) ([]string, error) {
 
 // UsersInInbound lists currently loaded account emails for one tagged inbound.
 func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) ([]string, error) {
+	ctx, _, traceErr := interaction.OutgoingContext(ctx)
+	if traceErr != nil {
+		return nil, fmt.Errorf("create Xray Handler request ID: %w", traceErr)
+	}
 	client, err := c.service(ctx)
 	if err != nil {
 		return nil, err
@@ -93,7 +99,13 @@ func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) (
 	if err != nil {
 		return nil, err
 	}
-	response, err := client.GetInboundUsers(ctx, &handlercommand.GetInboundUserRequest{Tag: tag})
+	rpcContext, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Xray Handler request ID: %w", err)
+	}
+	started := time.Now()
+	response, err := client.GetInboundUsers(rpcContext, &handlercommand.GetInboundUserRequest{Tag: tag})
+	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/GetInboundUsers", requestID, "xray", started, err)
 	if err != nil {
 		c.reset()
 		return nil, fmt.Errorf("get inbound users: %w", err)
@@ -108,6 +120,10 @@ func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) (
 }
 
 func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation *serial.TypedMessage) error {
+	ctx, _, traceErr := interaction.OutgoingContext(ctx)
+	if traceErr != nil {
+		return fmt.Errorf("create Xray Handler request ID: %w", traceErr)
+	}
 	client, err := c.service(ctx)
 	if err != nil {
 		return err
@@ -116,15 +132,28 @@ func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation 
 	if err != nil {
 		return err
 	}
-	if _, err := client.AlterInbound(ctx, &handlercommand.AlterInboundRequest{Tag: tag, Operation: operation}); err != nil {
+	rpcContext, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return fmt.Errorf("create Xray Handler request ID: %w", err)
+	}
+	started := time.Now()
+	if _, err := client.AlterInbound(rpcContext, &handlercommand.AlterInboundRequest{Tag: tag, Operation: operation}); err != nil {
+		interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/AlterInbound", requestID, "xray", started, err)
 		c.reset()
 		return fmt.Errorf("alter inbound: %w", err)
 	}
+	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/AlterInbound", requestID, "xray", started, nil)
 	return nil
 }
 
 func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercommand.HandlerServiceClient, preferredTag string) (string, error) {
-	tags, err := client.ListInbounds(ctx, &handlercommand.ListInboundsRequest{IsOnlyTags: true})
+	rpcContext, requestID, traceErr := interaction.OutgoingContext(ctx)
+	if traceErr != nil {
+		return "", fmt.Errorf("create Xray Handler request ID: %w", traceErr)
+	}
+	started := time.Now()
+	tags, err := client.ListInbounds(rpcContext, &handlercommand.ListInboundsRequest{IsOnlyTags: true})
+	interaction.LogRPC(slog.Default(), "xray-handler-client", "/xray.app.proxyman.command.HandlerService/ListInbounds", requestID, "xray", started, err)
 	if err != nil {
 		c.reset()
 		return "", fmt.Errorf("list Xray inbounds: %w", err)

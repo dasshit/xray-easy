@@ -23,7 +23,7 @@ const (
 	oldTokenPath            = "./prototype/secrets/xray_supervisor_token"
 	startupRecoveryCommands = `Useful commands from the repository directory:
   docker compose -f compose.yaml ps --all
-  docker compose -f compose.yaml logs --tail=100 --timestamps xray xray-easy
+  docker compose -f compose.yaml logs --tail=100 --timestamps
   docker compose -f compose.yaml exec -T xray-easy xray-easy doctor
   docker compose -f compose.yaml exec -T xray-easy xray-easy doctor bundle
 
@@ -312,7 +312,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 func collectStartupDiagnostics(ctx context.Context, root string, runner commandRunner, ui *wizard) {
 	commands := [][]string{
 		{"compose", "-f", "compose.yaml", "ps", "--all"},
-		{"compose", "-f", "compose.yaml", "logs", "--tail=100", "--timestamps", "xray", "xray-easy"},
+		{"compose", "-f", "compose.yaml", "logs", "--tail=100", "--timestamps"},
 	}
 	for _, args := range commands {
 		ui.message("Running docker " + strings.Join(args, " "))

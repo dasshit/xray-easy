@@ -155,7 +155,7 @@ func TestSupervisorGRPCReplaceInboundAndProbeMethods(t *testing.T) {
 func TestSupervisorGRPCReceiveMessageLimit(t *testing.T) {
 	instance, _ := newProcessTestSupervisor(t)
 	client := newSupervisorTestClient(t, instance)
-	largePath := strings.Repeat("x", (1<<20)+100)
+	largePath := strings.Repeat("x", (24<<20)+100)
 	if err := client.Validate(context.Background(), largePath, "oversized"); status.Code(err) != codes.ResourceExhausted {
 		t.Fatalf("oversized request status = %v", err)
 	}

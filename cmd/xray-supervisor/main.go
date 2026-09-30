@@ -14,6 +14,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -27,6 +28,7 @@ import (
 
 	"xray-easy/internal/diagnostics"
 	supervisorapi "xray-easy/internal/supervisor"
+	"xray-easy/internal/xrayapi"
 )
 
 const protocolVersion = "v1"
@@ -77,6 +79,8 @@ type supervisor struct {
 	cfg         *config
 	log         *logBuffer
 	xrayVersion string
+	handler     xrayHandlerRuntime
+	stats       xrayStatsRuntime
 
 	applyMu      sync.Mutex
 	mu           sync.Mutex
@@ -93,6 +97,21 @@ type supervisor struct {
 	ipv6ProbeFn  func(context.Context) error
 }
 
+type xrayHandlerRuntime interface {
+	AddUser(context.Context, string, string, string) error
+	RemoveUser(context.Context, string) error
+	Users(context.Context) ([]string, error)
+	AddHysteriaUser(context.Context, string, string) error
+	RemoveHysteriaUser(context.Context, string) error
+	AddVMessUser(context.Context, string, string) error
+	RemoveVMessUser(context.Context, string) error
+	UsersInInbound(context.Context, string) ([]string, error)
+}
+
+type xrayStatsRuntime interface {
+	Poll(context.Context) ([]xrayapi.UserStats, error)
+}
+
 func newSupervisor(cfg *config) *supervisor {
 	version := "unknown"
 	if output, err := exec.Command(cfg.xrayBinary, "version").Output(); err == nil {
@@ -101,12 +120,24 @@ func newSupervisor(cfg *config) *supervisor {
 			version = strings.TrimSpace(lines[0])
 		}
 	}
-	return &supervisor{
+	instance := &supervisor{
 		cfg:         cfg,
 		log:         newLogBuffer(cfg.logSize),
 		xrayVersion: version,
 		state:       "starting",
 		usedNonces:  make(map[string]time.Time),
+	}
+	instance.handler = xrayapi.NewHandlerClient(cfg.xrayAPI)
+	instance.stats = xrayapi.NewStatsClient(cfg.xrayAPI)
+	return instance
+}
+
+func (s *supervisor) closeRuntimeClients() {
+	if client, ok := s.handler.(*xrayapi.HandlerClient); ok {
+		_ = client.Close()
+	}
+	if client, ok := s.stats.(*xrayapi.StatsClient); ok {
+		_ = client.Close()
 	}
 }
 
@@ -520,6 +551,7 @@ func runHealthcheck(address, tokenFile string) error {
 }
 
 func main() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if len(os.Args) > 1 && os.Args[1] == "healthcheck" {
 		fs := flag.NewFlagSet("healthcheck", flag.ExitOnError)
 		address := fs.String("addr", "127.0.0.1:10086", "supervisor gRPC address")

@@ -1,0 +1,33 @@
+syntax = "proto3";
+
+package xrayeasy.controller.v1;
+
+option go_package = "xray-easy/internal/controller";
+
+import "google/protobuf/struct.proto";
+
+// Private runtime orchestration boundary. Struct fields are validated by the
+// Go adapter and documented in docs/controller-service-plan.md.
+service Controller {
+  rpc Health(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetCapabilities(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetStatus(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetLogs(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ValidateConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ApplyConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ReplaceInbound(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ProbeTarget(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ProbeIPv6(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc AddDeviceUser(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc RemoveDeviceUser(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ListDeviceUsers(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetXrayTelemetry(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetAmneziaWGStatus(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ListAmneziaWGPeers(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc CreateAmneziaWGPeer(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc RemoveAmneziaWGPeer(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetAmneziaWGPeerStats(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetAmneziaWGClientConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ExportAmneziaWGBackup(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc RestoreAmneziaWGBackup(google.protobuf.Struct) returns (google.protobuf.Struct);
+}

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"strconv"
@@ -21,6 +22,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
+	"xray-easy/internal/interaction"
 )
 
 const (
@@ -72,7 +74,10 @@ func DialWithOperation(address, tokenFile, operation string) (*Client, error) {
 	if operation != operationControlPlane && operation != operationHealthcheck {
 		return nil, errors.New("invalid supervisor operation identity")
 	}
-	conn, err := grpc.NewClient(address, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(address,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(24<<20), grpc.MaxCallSendMsgSize(24<<20)),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("create supervisor gRPC connection: %w", err)
 	}
@@ -207,15 +212,22 @@ func (c *Client) call(ctx context.Context, method string, request proto.Message)
 	if operation == operationHealthcheck && method != "Health" {
 		return nil, errors.New("healthcheck identity cannot invoke supervisor control methods")
 	}
-	metadataContext, err := signRequest(ctx, c.TokenFile, operation, "/"+RPCServiceName+"/"+method, request)
+	metadataContext, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create supervisor request ID: %w", err)
+	}
+	metadataContext, err = signRequest(metadataContext, c.TokenFile, operation, "/"+RPCServiceName+"/"+method, request)
 	if err != nil {
 		return nil, err
 	}
 	response := new(structpb.Struct)
 	fullMethod := "/" + RPCServiceName + "/" + method
+	started := time.Now()
 	if err := c.conn.Invoke(metadataContext, fullMethod, request, response); err != nil {
+		interaction.LogRPC(slog.Default(), "xray-supervisor-client", fullMethod, requestID, "xray", started, err)
 		return nil, fmt.Errorf("supervisor %s: %w", method, err)
 	}
+	interaction.LogRPC(slog.Default(), "xray-supervisor-client", fullMethod, requestID, "xray", started, nil)
 	return response, nil
 }
 

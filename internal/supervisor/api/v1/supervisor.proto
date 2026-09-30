@@ -18,4 +18,7 @@ service Supervisor {
   rpc ReplaceInbound(google.protobuf.Struct) returns (google.protobuf.Struct);
   rpc ProbeTarget(google.protobuf.Struct) returns (google.protobuf.Struct);
   rpc ProbeIPv6(google.protobuf.Empty) returns (google.protobuf.Struct);
+  rpc AlterUser(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc ListUsers(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc GetUserStats(google.protobuf.Struct) returns (google.protobuf.Struct);
 }
