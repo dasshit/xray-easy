@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -388,34 +389,55 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 	if !controllerTokenReady {
 		appendCheck(doctorFail, "Controller connection", "not checked because the secret file is unavailable", "Fix the Controller secret check above.")
 	} else if err := sup.Health(ctx); err != nil {
-		appendCheck(doctorFail, "Controller connection", "authenticated health check failed", "Check controller container health, its private address/token, and the Xray supervisor dependency.")
+		appendCheck(doctorFail, "Controller connection", "authenticated health check failed", "Check controller container health, its private address/token, and the Xray runtime dependency.")
 	} else {
 		appendCheck(doctorPass, "Controller connection", "authenticated runtime health check succeeded", "")
 		supervisorStatus, err = sup.Status(ctx)
 		if err != nil {
-			appendCheck(doctorFail, "Supervisor status", "status request failed", "Inspect xray container logs and verify the supervisor API is healthy.")
+			appendCheck(doctorFail, "Xray runtime status", "status request failed", "Inspect xray and Controller container logs, then verify the private runtime API is healthy.")
 		} else {
+			statusCheckName := "Supervisor status"
+			if supervisorStatus.Protocol == "embedded-core" {
+				statusCheckName = "Embedded Xray runtime"
+			}
 			switch supervisorStatus.State {
 			case "running":
 				supervisorReady = true
-				appendCheck(doctorPass, "Supervisor status", "Xray process is running", "")
+				appendCheck(doctorPass, statusCheckName, "Xray core is running", "")
 			case "no-config":
 				supervisorReady = true
-				appendCheck(doctorWarn, "Supervisor status", "Xray is waiting for its first active configuration", "Complete the first-run setup in the Web UI.")
+				appendCheck(doctorWarn, statusCheckName, "Xray is waiting for its first active configuration", "Complete the first-run setup in the Web UI.")
 			default:
-				appendCheck(doctorFail, "Supervisor status", "Xray process is not running", "Inspect xray container logs and the active Xray configuration.")
+				appendCheck(doctorFail, statusCheckName, "Xray core is not running", "Inspect xray container logs and the active Xray configuration.")
 			}
 			runtimeVersion := safeRuntimeXrayVersion(supervisorStatus.XrayVersion)
 			configuredVersion := safeRuntimeXrayVersion(envOr("XRAY_VERSION", ""))
 			switch {
 			case runtimeVersion == "unknown":
-				appendCheck(doctorWarn, "Xray compatibility", "supervisor could not identify the running Xray binary version", "Rebuild and recreate the Xray container, then rerun doctor.")
+				appendCheck(doctorWarn, "Xray compatibility", "runtime could not identify the running Xray core version", "Rebuild and recreate the Xray container, then rerun doctor.")
 			case configuredVersion != "unknown" && configuredVersion != runtimeVersion:
 				appendCheck(doctorWarn, "Xray compatibility", fmt.Sprintf("Compose selects %s but the running binary is %s", configuredVersion, runtimeVersion), "Rebuild and recreate the Xray container so its binary matches XRAY_VERSION.")
 			case runtimeVersion != xray.VerifiedCoreVersion:
 				appendCheck(doctorWarn, "Xray compatibility", fmt.Sprintf("Xray %s is outside the project's verified compatibility matrix", runtimeVersion), fmt.Sprintf("Use the verified XRAY_VERSION=%s or verify this exact Xray and V2RAGE combination before relying on it.", xray.VerifiedCoreVersion))
 			default:
 				appendCheck(doctorPass, "Xray compatibility", fmt.Sprintf("runtime binary matches the verified Xray %s compatibility entry", xray.VerifiedCoreVersion), "")
+			}
+			if supervisorStatus.Protocol == "embedded-core" {
+				if supervisorStatus.ActiveRevision > 0 {
+					appendCheck(doctorPass, "Embedded config revision", fmt.Sprintf("runtime has applied revision %d", supervisorStatus.ActiveRevision), "")
+				} else {
+					appendCheck(doctorWarn, "Embedded config revision", "runtime has not applied a persisted configuration revision yet", "Complete first-run setup in the Web UI, then refresh diagnostics.")
+				}
+				if err := matchEmbeddedInboundTags(filepath.Join(configDir, "active.json"), supervisorStatus.InboundTags); err != nil {
+					appendCheck(doctorFail, "Embedded inbound tags", "runtime inbound tags do not match active.json", "Apply the active configuration again and inspect Controller/Xray runtime logs.")
+				} else {
+					appendCheck(doctorPass, "Embedded inbound tags", "runtime reports the same supported inbound tags as active.json", "")
+				}
+				if supervisorStatus.StatsAvailable {
+					appendCheck(doctorPass, "Embedded statistics capability", "runtime reports per-user statistics support", "")
+				} else {
+					appendCheck(doctorWarn, "Embedded statistics capability", "runtime reports per-user statistics as unavailable", "Verify the active Xray stats and policy configuration, then rebuild with the verified Xray version.")
+				}
 			}
 		}
 	}
@@ -440,7 +462,7 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 	} else if err != nil {
 		appendCheck(doctorFail, "Active Xray config", "active.json cannot be inspected", "Check the xray_config volume permissions.")
 	} else if !supervisorReady {
-		appendCheck(doctorWarn, "Active Xray config", "validation skipped because supervisor is unavailable", "Fix the supervisor checks above.")
+		appendCheck(doctorWarn, "Active Xray config", "validation skipped because the Xray runtime is unavailable", "Fix the runtime checks above.")
 	} else if supervisorStatus.State == "no-config" {
 		appendCheck(doctorWarn, "Active Xray config", "supervisor has no active configuration", "Complete the first-run setup in the Web UI.")
 	} else if err := sup.Validate(ctx, activeConfig, "doctor"); err != nil {
@@ -509,6 +531,59 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 	}
 
 	return checks
+}
+
+func matchEmbeddedInboundTags(configPath string, runtimeTags []string) error {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return err
+	}
+	var configuration struct {
+		Inbounds []struct {
+			Protocol string `json:"protocol"`
+			Tag      string `json:"tag"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &configuration); err != nil {
+		return err
+	}
+	expected := make([]string, 0, len(configuration.Inbounds))
+	for _, inbound := range configuration.Inbounds {
+		if inbound.Protocol != "vless" && inbound.Protocol != "vmess" && inbound.Protocol != "hysteria" {
+			continue
+		}
+		if strings.TrimSpace(inbound.Tag) == "" {
+			return errors.New("supported inbound tag is empty")
+		}
+		expected = append(expected, strings.TrimSpace(inbound.Tag))
+	}
+	return sameSortedStrings(expected, runtimeTags)
+}
+
+func sameSortedStrings(left, right []string) error {
+	left = append([]string(nil), left...)
+	right = append([]string(nil), right...)
+	sort.Strings(left)
+	sort.Strings(right)
+	for index := 1; index < len(left); index++ {
+		if left[index] == left[index-1] {
+			return errors.New("active configuration contains duplicate inbound tags")
+		}
+	}
+	for index := 1; index < len(right); index++ {
+		if right[index] == right[index-1] {
+			return errors.New("runtime reports duplicate inbound tags")
+		}
+	}
+	if len(left) != len(right) {
+		return errors.New("inbound tag count differs")
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return errors.New("inbound tags differ")
+		}
+	}
+	return nil
 }
 
 func publicHostKind(host string) string {

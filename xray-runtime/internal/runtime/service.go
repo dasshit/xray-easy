@@ -87,6 +87,8 @@ type Service struct {
 	inboundTags    map[xrayruntimev1.Protocol]string
 	telemetry      telemetryCapabilities
 	lastSeen       map[string]time.Time
+	probeTarget    func(context.Context, string, string) error
+	probeIPv6      func(context.Context) error
 	fence          *RevisionFence
 	fatal          chan error
 	logs           []logRecord
@@ -122,6 +124,7 @@ func NewService(loader Loader, serviceVersion string, activeConfiguration []byte
 		state: xrayruntimev1.RuntimeState_RUNTIME_STATE_NO_CONFIGURATION, logLimit: 200,
 		activeConfig: append([]byte(nil), activeConfiguration...), inboundTags: make(map[xrayruntimev1.Protocol]string),
 		fence: fence, fatal: make(chan error, 1), activeRevision: activeRevision, lastSeen: make(map[string]time.Time),
+		probeTarget: probeRealityTarget, probeIPv6: probeIPv6Egress,
 	}
 	if loader == nil {
 		loader = coreLoader{writeLog: service.addLog}
@@ -261,6 +264,7 @@ func (s *Service) GetCapabilities(_ context.Context, _ *xrayruntimev1.EmptyReque
 			Protocol: protocol, Configured: true,
 			UserManagement: true, TrafficCounters: s.telemetry.trafficCounters,
 			OnlineStatus: s.telemetry.onlineStatus, SourceIp: s.telemetry.sourceIP,
+			InboundTag: s.inboundTags[protocol],
 		})
 	}
 	return response, nil
@@ -458,8 +462,8 @@ func (s *Service) ReplaceInbound(ctx context.Context, request *xrayruntimev1.Rep
 
 // AddUser adds a user through the inbound's native in-process manager.
 func (s *Service) AddUser(ctx context.Context, request *xrayruntimev1.AddUserRequest) (*xrayruntimev1.OperationResponse, error) {
-	if request == nil || strings.TrimSpace(request.GetEmail()) == "" || len(request.GetEmail()) > maxUserEmailBytes || strings.TrimSpace(request.GetCredential()) == "" || len(request.GetCredential()) > maxCredentialBytes || len(request.GetFlow()) > maxUserFlowBytes || strings.TrimSpace(request.GetOperationId()) == "" || len(request.GetOperationId()) > maxOperationIDBytes || request.GetRevision() < 1 || !supportedProtocol(request.GetProtocol()) {
-		return nil, status.Error(codes.InvalidArgument, "protocol, email, credential, operation ID, and positive revision are required")
+	if request == nil || strings.TrimSpace(request.GetEmail()) == "" || len(request.GetEmail()) > maxUserEmailBytes || strings.TrimSpace(request.GetCredential()) == "" || len(request.GetCredential()) > maxCredentialBytes || len(request.GetFlow()) > maxUserFlowBytes || strings.TrimSpace(request.GetOperationId()) == "" || len(request.GetOperationId()) > maxOperationIDBytes || request.GetRevision() < 0 || !supportedProtocol(request.GetProtocol()) {
+		return nil, status.Error(codes.InvalidArgument, "protocol, email, credential, operation ID, and non-negative revision are required")
 	}
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
@@ -473,28 +477,32 @@ func (s *Service) AddUser(ctx context.Context, request *xrayruntimev1.AddUserReq
 	key := userMutationKey("add-user", request.GetProtocol(), request.GetEmail())
 	fingerprint := payloadFingerprint(request.GetProtocol().String(), request.GetEmail(), request.GetCredential(), request.GetFlow())
 	key, fingerprint = mutationIdentity(request.GetOperationId(), key, fingerprint)
-	already, err := s.fence.Begin(request.GetRevision(), request.GetOperationId(), key, fingerprint)
-	if err != nil {
-		return nil, revisionStatus(err)
-	}
-	if already {
-		return operationResponse(request.GetOperationId(), request.GetRevision(), true), nil
+	if request.GetRevision() > 0 {
+		already, err := s.fence.Begin(request.GetRevision(), request.GetOperationId(), key, fingerprint)
+		if err != nil {
+			return nil, revisionStatus(err)
+		}
+		if already {
+			return operationResponse(request.GetOperationId(), request.GetRevision(), true), nil
+		}
 	}
 	wasPresent, err := engine.AddUser(ctx, request.GetProtocol(), tag, request.GetEmail(), request.GetCredential(), request.GetFlow())
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "Xray user could not be added")
 	}
-	if err := s.commit(request.GetRevision(), request.GetOperationId(), key, fingerprint); err != nil {
-		s.markFatal(err)
-		return nil, status.Error(codes.Unavailable, "Xray revision state could not be committed; runtime is restarting")
+	if request.GetRevision() > 0 {
+		if err := s.commit(request.GetRevision(), request.GetOperationId(), key, fingerprint); err != nil {
+			s.markFatal(err)
+			return nil, status.Error(codes.Unavailable, "Xray revision state could not be committed; runtime is restarting")
+		}
 	}
 	return operationResponse(request.GetOperationId(), request.GetRevision(), wasPresent), nil
 }
 
 // RemoveUser revokes a user through the inbound's native in-process manager.
 func (s *Service) RemoveUser(ctx context.Context, request *xrayruntimev1.RemoveUserRequest) (*xrayruntimev1.OperationResponse, error) {
-	if request == nil || strings.TrimSpace(request.GetEmail()) == "" || len(request.GetEmail()) > maxUserEmailBytes || strings.TrimSpace(request.GetOperationId()) == "" || len(request.GetOperationId()) > maxOperationIDBytes || request.GetRevision() < 1 || !supportedProtocol(request.GetProtocol()) {
-		return nil, status.Error(codes.InvalidArgument, "protocol, email, operation ID, and positive revision are required")
+	if request == nil || strings.TrimSpace(request.GetEmail()) == "" || len(request.GetEmail()) > maxUserEmailBytes || strings.TrimSpace(request.GetOperationId()) == "" || len(request.GetOperationId()) > maxOperationIDBytes || request.GetRevision() < 0 || !supportedProtocol(request.GetProtocol()) {
+		return nil, status.Error(codes.InvalidArgument, "protocol, email, operation ID, and non-negative revision are required")
 	}
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
@@ -508,21 +516,25 @@ func (s *Service) RemoveUser(ctx context.Context, request *xrayruntimev1.RemoveU
 	key := userMutationKey("remove-user", request.GetProtocol(), request.GetEmail())
 	fingerprint := payloadFingerprint(request.GetProtocol().String(), request.GetEmail())
 	key, fingerprint = mutationIdentity(request.GetOperationId(), key, fingerprint)
-	already, err := s.fence.Begin(request.GetRevision(), request.GetOperationId(), key, fingerprint)
-	if err != nil {
-		return nil, revisionStatus(err)
-	}
-	if already {
-		return operationResponse(request.GetOperationId(), request.GetRevision(), true), nil
+	if request.GetRevision() > 0 {
+		already, err := s.fence.Begin(request.GetRevision(), request.GetOperationId(), key, fingerprint)
+		if err != nil {
+			return nil, revisionStatus(err)
+		}
+		if already {
+			return operationResponse(request.GetOperationId(), request.GetRevision(), true), nil
+		}
 	}
 	wasAbsent, err := engine.RemoveUser(ctx, tag, request.GetEmail())
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "Xray user could not be removed")
 	}
 	delete(s.lastSeen, request.GetEmail())
-	if err := s.commit(request.GetRevision(), request.GetOperationId(), key, fingerprint); err != nil {
-		s.markFatal(err)
-		return nil, status.Error(codes.Unavailable, "Xray revision state could not be committed; runtime is restarting")
+	if request.GetRevision() > 0 {
+		if err := s.commit(request.GetRevision(), request.GetOperationId(), key, fingerprint); err != nil {
+			s.markFatal(err)
+			return nil, status.Error(codes.Unavailable, "Xray revision state could not be committed; runtime is restarting")
+		}
 	}
 	return operationResponse(request.GetOperationId(), request.GetRevision(), wasAbsent), nil
 }
@@ -617,12 +629,44 @@ func (s *Service) GetTelemetry(ctx context.Context, _ *xrayruntimev1.EmptyReques
 	return response, nil
 }
 
-func (s *Service) ProbeRealityTarget(context.Context, *xrayruntimev1.ProbeRealityTargetRequest) (*xrayruntimev1.ProbeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "REALITY probing is not available yet")
+func (s *Service) ProbeRealityTarget(ctx context.Context, request *xrayruntimev1.ProbeRealityTargetRequest) (*xrayruntimev1.ProbeResponse, error) {
+	if request == nil || strings.TrimSpace(request.GetTarget()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "REALITY target is required")
+	}
+	probe := s.probeTarget
+	if probe == nil {
+		probe = probeRealityTarget
+	}
+	if err := probe(ctx, request.GetTarget(), request.GetServerName()); err != nil {
+		if errors.Is(err, errInvalidProbeTarget) {
+			return nil, status.Error(codes.InvalidArgument, "REALITY target is invalid")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.Error(codes.DeadlineExceeded, "REALITY target probe timed out")
+		}
+		if errors.Is(err, context.Canceled) {
+			return nil, status.Error(codes.Canceled, "REALITY target probe was canceled")
+		}
+		return nil, status.Error(codes.Unavailable, "REALITY target probe failed")
+	}
+	return &xrayruntimev1.ProbeResponse{Ok: true, CheckedAt: timestamppb.New(time.Now().UTC())}, nil
 }
 
-func (s *Service) ProbeIPv6Egress(context.Context, *xrayruntimev1.EmptyRequest) (*xrayruntimev1.ProbeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "IPv6 probing is not available yet")
+func (s *Service) ProbeIPv6Egress(ctx context.Context, _ *xrayruntimev1.EmptyRequest) (*xrayruntimev1.ProbeResponse, error) {
+	probe := s.probeIPv6
+	if probe == nil {
+		probe = probeIPv6Egress
+	}
+	if err := probe(ctx); err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.Error(codes.DeadlineExceeded, "IPv6 egress probe timed out")
+		}
+		if errors.Is(err, context.Canceled) {
+			return nil, status.Error(codes.Canceled, "IPv6 egress probe was canceled")
+		}
+		return nil, status.Error(codes.Unavailable, "IPv6 egress probe failed")
+	}
+	return &xrayruntimev1.ProbeResponse{Ok: true, CheckedAt: timestamppb.New(time.Now().UTC())}, nil
 }
 
 func protocolFromName(name string) (xrayruntimev1.Protocol, bool) {

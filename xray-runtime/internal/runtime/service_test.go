@@ -140,6 +140,15 @@ func TestNewServiceStartsActiveSnapshotAndReportsState(t *testing.T) {
 	if got := capabilities.GetProtocols()[0].GetProtocol(); got != xrayruntimev1.Protocol_PROTOCOL_VLESS {
 		t.Fatalf("first protocol = %v, want VLESS", got)
 	}
+	gotTags := make(map[string]bool)
+	for _, capability := range capabilities.GetProtocols() {
+		gotTags[capability.GetInboundTag()] = true
+	}
+	for _, tag := range []string{"vless-reality", "hysteria2", "vmess-tls"} {
+		if !gotTags[tag] {
+			t.Errorf("runtime capabilities omit inbound tag %q: %+v", tag, gotTags)
+		}
+	}
 	health, err := service.Health(context.Background(), &xrayruntimev1.HealthRequest{})
 	if err != nil || !health.GetReady() || health.GetXrayCoreVersion() != "Xray test" {
 		t.Fatalf("health = %+v, %v", health, err)
@@ -306,7 +315,7 @@ func TestValidateConfigurationChecksSnapshotWithoutConstructingCoreAndRedactsFai
 	}
 }
 
-func TestTelemetryRequiresAnActiveConfigurationAndProbesRemainForNextStage(t *testing.T) {
+func TestTelemetryRequiresAnActiveConfiguration(t *testing.T) {
 	service, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "v", nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -319,19 +328,70 @@ func TestTelemetryRequiresAnActiveConfigurationAndProbesRemainForNextStage(t *te
 			_, err := service.GetTelemetry(context.Background(), &xrayruntimev1.EmptyRequest{})
 			return err
 		}},
-		{"reality probe", func() error {
-			_, err := service.ProbeRealityTarget(context.Background(), &xrayruntimev1.ProbeRealityTargetRequest{})
-			return err
-		}},
-		{"ipv6 probe", func() error {
-			_, err := service.ProbeIPv6Egress(context.Background(), &xrayruntimev1.EmptyRequest{})
-			return err
-		}},
 	}
 	for _, check := range checks {
 		t.Run(check.name, func(t *testing.T) {
-			if err := check.call(); status.Code(err) != codes.FailedPrecondition && !(check.name != "telemetry" && status.Code(err) == codes.Unimplemented) {
-				t.Fatalf("error = %v, want FailedPrecondition for telemetry or Unimplemented for probe", err)
+			if err := check.call(); status.Code(err) != codes.FailedPrecondition {
+				t.Fatalf("error = %v, want FailedPrecondition", err)
+			}
+		})
+	}
+}
+
+func TestRuntimeProbesMapErrorsAndReturnTimestamps(t *testing.T) {
+	service, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "test", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetRequest := &xrayruntimev1.ProbeRealityTargetRequest{Target: "front.example:443", ServerName: "front.example"}
+	service.probeTarget = func(_ context.Context, target, serverName string) error {
+		if target != targetRequest.GetTarget() || serverName != targetRequest.GetServerName() {
+			t.Fatalf("target probe got %q %q", target, serverName)
+		}
+		return nil
+	}
+	response, err := service.ProbeRealityTarget(context.Background(), targetRequest)
+	if err != nil || !response.GetOk() || response.GetCheckedAt() == nil {
+		t.Fatalf("successful REALITY probe = %+v, %v", response, err)
+	}
+	if _, err := service.ProbeRealityTarget(context.Background(), nil); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("nil REALITY probe status = %v", err)
+	}
+	for _, test := range []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{name: "invalid target", err: errInvalidProbeTarget, code: codes.InvalidArgument},
+		{name: "deadline", err: context.DeadlineExceeded, code: codes.DeadlineExceeded},
+		{name: "canceled", err: context.Canceled, code: codes.Canceled},
+		{name: "unavailable", err: errors.New("private probe error"), code: codes.Unavailable},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service.probeTarget = func(context.Context, string, string) error { return test.err }
+			if _, callErr := service.ProbeRealityTarget(context.Background(), targetRequest); status.Code(callErr) != test.code {
+				t.Fatalf("REALITY probe status = %v, want %s", callErr, test.code)
+			}
+		})
+	}
+	service.probeIPv6 = func(context.Context) error { return nil }
+	response, err = service.ProbeIPv6Egress(context.Background(), new(xrayruntimev1.EmptyRequest))
+	if err != nil || !response.GetOk() || response.GetCheckedAt() == nil {
+		t.Fatalf("successful IPv6 probe = %+v, %v", response, err)
+	}
+	for _, test := range []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{name: "deadline", err: context.DeadlineExceeded, code: codes.DeadlineExceeded},
+		{name: "canceled", err: context.Canceled, code: codes.Canceled},
+		{name: "unavailable", err: errors.New("private probe error"), code: codes.Unavailable},
+	} {
+		t.Run("IPv6 "+test.name, func(t *testing.T) {
+			service.probeIPv6 = func(context.Context) error { return test.err }
+			if _, callErr := service.ProbeIPv6Egress(context.Background(), new(xrayruntimev1.EmptyRequest)); status.Code(callErr) != test.code {
+				t.Fatalf("IPv6 probe status = %v, want %s", callErr, test.code)
 			}
 		})
 	}
@@ -354,7 +414,7 @@ func TestTelemetryReportsCountersOnlineSourceAndKeepsLastSeen(t *testing.T) {
 		t.Fatalf("capabilities=%+v error=%v", capabilities, err)
 	}
 	capability := capabilities.GetProtocols()[0]
-	if !capability.GetTrafficCounters() || !capability.GetOnlineStatus() || !capability.GetSourceIp() {
+	if !capability.GetTrafficCounters() || !capability.GetOnlineStatus() || !capability.GetSourceIp() || capability.GetInboundTag() != "vless-reality" {
 		t.Fatalf("telemetry capabilities=%+v", capability)
 	}
 	response, err := service.GetTelemetry(context.Background(), new(xrayruntimev1.EmptyRequest))
@@ -568,7 +628,7 @@ func TestUserRPCsValidateInputsAndMapManagerErrors(t *testing.T) {
 		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: " ", OperationId: "bad", Revision: 1},
 		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: "secret", Flow: strings.Repeat("f", maxUserFlowBytes+1), OperationId: "bad", Revision: 1},
 		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: "secret", OperationId: " ", Revision: 1},
-		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: "secret", OperationId: "bad", Revision: 0},
+		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: "secret", OperationId: "bad", Revision: -1},
 	} {
 		if _, err := service.AddUser(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("invalid add request status=%v", err)
@@ -582,7 +642,7 @@ func TestUserRPCsValidateInputsAndMapManagerErrors(t *testing.T) {
 		{Protocol: xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, Email: "device", OperationId: "bad", Revision: 2},
 		{Protocol: validAdd.GetProtocol(), Email: " ", OperationId: "bad", Revision: 2},
 		{Protocol: validAdd.GetProtocol(), Email: "device", OperationId: " ", Revision: 2},
-		{Protocol: validAdd.GetProtocol(), Email: "device", OperationId: "bad", Revision: 0},
+		{Protocol: validAdd.GetProtocol(), Email: "device", OperationId: "bad", Revision: -1},
 	} {
 		if _, err := service.RemoveUser(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("invalid remove request status=%v", err)
@@ -770,6 +830,36 @@ func TestUserManagementUsesProtocolInboundAndRevisionFence(t *testing.T) {
 	}
 	if _, err := service.AddUser(context.Background(), &xrayruntimev1.AddUserRequest{Protocol: xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, Email: "e", Credential: "c", OperationId: "bad", Revision: 3}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("unsupported protocol status=%v", err)
+	}
+}
+
+func TestLiveUserMutationsCanUseDesiredStateWithoutConfigRevision(t *testing.T) {
+	configuration := []byte(`{"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)
+	engine := &fakeEngine{users: map[string]string{}}
+	service, err := NewService(&fakeLoader{engine: engine}, "v", configuration, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = service.Close() })
+	add := &xrayruntimev1.AddUserRequest{
+		Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, Email: "device-live@xray-easy",
+		Credential: "12345678-1234-4234-8234-123456789012", OperationId: "live-add", Revision: 0,
+	}
+	response, err := service.AddUser(context.Background(), add)
+	if err != nil || response.GetRevision() != 0 || response.GetAlreadyApplied() || engine.users[add.GetEmail()] != add.GetCredential() {
+		t.Fatalf("revisionless add = %+v, users=%v, error=%v", response, engine.users, err)
+	}
+	response, err = service.AddUser(context.Background(), add)
+	if err != nil || !response.GetAlreadyApplied() {
+		t.Fatalf("revisionless repeated add = %+v, error=%v", response, err)
+	}
+	remove := &xrayruntimev1.RemoveUserRequest{Protocol: add.GetProtocol(), Email: add.GetEmail(), OperationId: "live-remove"}
+	response, err = service.RemoveUser(context.Background(), remove)
+	if err != nil || response.GetRevision() != 0 || response.GetAlreadyApplied() || len(engine.users) != 0 {
+		t.Fatalf("revisionless remove = %+v, users=%v, error=%v", response, engine.users, err)
+	}
+	if service.fence.Latest() != 0 {
+		t.Fatalf("live user operations advanced config revision to %d", service.fence.Latest())
 	}
 }
 

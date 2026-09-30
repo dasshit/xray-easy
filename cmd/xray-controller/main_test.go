@@ -26,6 +26,15 @@ type fakeAWGRuntime struct {
 
 func (f *fakeAWGRuntime) Close() error { f.closed = true; return nil }
 
+type fakeEmbeddedXray struct {
+	controller.XrayRuntime
+	controller.XrayHandlerRuntime
+	controller.XrayStatsRuntime
+	closed bool
+}
+
+func (f *fakeEmbeddedXray) Close() error { f.closed = true; return nil }
+
 func TestRunDispatchAndHealthcheck(t *testing.T) {
 	if err := run(nil); err == nil {
 		t.Fatal("serve unexpectedly returned nil without setup")
@@ -92,6 +101,7 @@ func TestServeValidationListenerAndShutdown(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
+	t.Setenv("XRAY_ADAPTER", "supervisor")
 	t.Setenv("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086")
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", filepath.Join(dir, "supervisor-token"))
 	t.Setenv("XRAY_CONTROLLER_LISTEN", "127.0.0.1:0")
@@ -128,6 +138,7 @@ func TestServeRejectsInvalidSupervisorAddress(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", token)
+	t.Setenv("XRAY_ADAPTER", "supervisor")
 	t.Setenv("XRAY_SUPERVISOR_ADDR", "invalid")
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", filepath.Join(dir, "supervisor-token"))
 	if err := serve(); err == nil {
@@ -152,6 +163,7 @@ func TestServeRejectsSupervisorAndAWGAdapterFailures(t *testing.T) {
 		}
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
+	t.Setenv("XRAY_ADAPTER", "supervisor")
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", supervisorToken)
 	t.Setenv("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086")
 	oldDialSupervisor, oldDialAWG := dialSupervisor, dialAWG
@@ -178,6 +190,7 @@ func TestServeClosesConfiguredAWGAdapterOnShutdown(t *testing.T) {
 		}
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
+	t.Setenv("XRAY_ADAPTER", "supervisor")
 	t.Setenv("XRAY_SUPERVISOR_TOKEN_FILE", supervisorToken)
 	t.Setenv("XRAY_SUPERVISOR_ADDR", "127.0.0.1:10086")
 	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
@@ -197,6 +210,55 @@ func TestServeClosesConfiguredAWGAdapterOnShutdown(t *testing.T) {
 	}
 	if !adapter.closed {
 		t.Fatal("Controller did not close its AWG adapter")
+	}
+}
+
+func TestServeUsesEmbeddedXrayAdapterAndClosesItOnShutdown(t *testing.T) {
+	dir := t.TempDir()
+	controllerToken := filepath.Join(dir, "controller-token")
+	runtimeToken := filepath.Join(dir, "xray-runtime-token")
+	for path, value := range map[string]string{controllerToken: "controller-secret", runtimeToken: "runtime-secret"} {
+		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
+	t.Setenv("XRAY_ADAPTER", "embedded")
+	t.Setenv("XRAY_RUNTIME_ADDR", "127.0.0.1:10086")
+	t.Setenv("XRAY_RUNTIME_TOKEN_FILE", runtimeToken)
+	t.Setenv("XRAY_CONFIG_DIR", filepath.Join(dir, "config"))
+	oldListener, oldSignals, oldDial := listenController, controllerSignalContext, dialEmbeddedXray
+	defer func() { listenController, controllerSignalContext, dialEmbeddedXray = oldListener, oldSignals, oldDial }()
+	listenController = func(string, string) (net.Listener, error) { return bufconn.Listen(1024), nil }
+	controllerSignalContext = func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx, cancel
+	}
+	adapter := &fakeEmbeddedXray{}
+	dialEmbeddedXray = func(address, token, configDir string) (closeableXrayRuntime, error) {
+		if address != "127.0.0.1:10086" || token != runtimeToken || configDir != filepath.Join(dir, "config") {
+			t.Fatalf("embedded Xray adapter config = %q %q %q", address, token, configDir)
+		}
+		return adapter, nil
+	}
+	if err := serve(); err != nil {
+		t.Fatalf("serve with embedded Xray adapter: %v", err)
+	}
+	if !adapter.closed {
+		t.Fatal("Controller did not close the embedded Xray adapter")
+	}
+}
+
+func TestServeRejectsUnknownXrayAdapter(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "controller-token")
+	if err := os.WriteFile(token, []byte("controller-secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", token)
+	t.Setenv("XRAY_ADAPTER", "unknown")
+	if err := serve(); err == nil {
+		t.Fatal("unknown Xray adapter was accepted")
 	}
 }
 

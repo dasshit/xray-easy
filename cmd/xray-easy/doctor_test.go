@@ -313,6 +313,61 @@ func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsEmbeddedRuntimeDiagnostics(t *testing.T) {
+	dataDir, configDir, key := prepareDoctorState(t, true)
+	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
+	t.Setenv("XRAY_VERSION", "26.7.28")
+	t.Setenv("AWG_PUBLIC_HOST", "")
+	activeConfig := `{"inbounds":[{"tag":"vless-reality","protocol":"vless"},{"tag":"vmess-tls","protocol":"vmess"},{"tag":"ignored","protocol":"dokodemo-door"}]}`
+	if err := os.WriteFile(filepath.Join(configDir, "active.json"), []byte(activeConfig), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sup := &doctorSupervisorStub{status: supervisor.Status{
+		Protocol: "embedded-core", XrayVersion: "Xray 26.7.28", State: "running",
+		ActiveRevision: 12, InboundTags: []string{"vmess-tls", "vless-reality"}, StatsAvailable: true,
+	}}
+	var output bytes.Buffer
+	if err := runDoctor(context.Background(), dataDir, configDir, &output, sup, &doctorHandlerStub{}, &doctorStatsStub{}); err != nil {
+		t.Fatalf("runDoctor() = %v\n%s", err, output.String())
+	}
+	for _, check := range []string{"PASS  Embedded Xray runtime", "PASS  Embedded config revision", "PASS  Embedded inbound tags", "PASS  Embedded statistics capability"} {
+		if !strings.Contains(output.String(), check) {
+			t.Errorf("doctor output omits %q:\n%s", check, output.String())
+		}
+	}
+}
+
+func TestMatchEmbeddedInboundTags(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		configuration string
+		runtimeTags   []string
+		wantError     bool
+	}{
+		{name: "matching supported tags", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"},{"tag":"vmess","protocol":"vmess"},{"tag":"hysteria","protocol":"hysteria"},{"tag":"ignored","protocol":"dokodemo-door"}]}`, runtimeTags: []string{"hysteria", "vless", "vmess"}},
+		{name: "different tags", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"}]}`, runtimeTags: []string{"wrong"}, wantError: true},
+		{name: "duplicate configured tag", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"},{"tag":"vless","protocol":"vmess"}]}`, runtimeTags: []string{"vless"}, wantError: true},
+		{name: "duplicate runtime tag", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"}]}`, runtimeTags: []string{"vless", "vless"}, wantError: true},
+		{name: "empty supported tag", configuration: `{"inbounds":[{"protocol":"vless"}]}`, wantError: true},
+		{name: "invalid json", configuration: `{`, wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "active.json")
+			if err := os.WriteFile(path, []byte(test.configuration), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			err := matchEmbeddedInboundTags(path, test.runtimeTags)
+			if (err != nil) != test.wantError {
+				t.Fatalf("matchEmbeddedInboundTags() error = %v, wantError=%t", err, test.wantError)
+			}
+		})
+	}
+	if err := matchEmbeddedInboundTags(filepath.Join(t.TempDir(), "missing.json"), nil); err == nil {
+		t.Fatal("missing active config was accepted")
+	}
+}
+
 func TestXrayVersionVerifiedRequiresConfiguredAndRunningBinary(t *testing.T) {
 	if !xrayVersionVerified("Xray 26.7.28 (Xray, Penetrates Everything.)", "26.7.28") {
 		t.Fatal("verified runtime and configured version were marked experimental")

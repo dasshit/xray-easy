@@ -111,6 +111,7 @@ func (s *Service) GetStatus(ctx context.Context, _ *controllerv1.EmptyRequest) (
 		Protocol: value.Protocol, XrayVersion: value.XrayVersion, State: value.State,
 		Pid: int32(value.PID), ConfigPath: value.ConfigPath, LastError: value.LastError,
 		LastExit: value.LastExit, RestartCount: int32(value.RestartCount), StartedAt: protobufTime(value.StartedAt),
+		ActiveRevision: value.ActiveRevision, InboundTags: append([]string(nil), value.InboundTags...), StatsAvailable: value.StatsAvailable,
 	}, nil
 }
 

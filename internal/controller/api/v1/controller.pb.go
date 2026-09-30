@@ -283,18 +283,21 @@ func (x *CapabilitiesResponse) GetAmneziawg() *ProtocolCapability {
 }
 
 type StatusResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Protocol      string                 `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`
-	XrayVersion   string                 `protobuf:"bytes,2,opt,name=xray_version,json=xrayVersion,proto3" json:"xray_version,omitempty"`
-	State         string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
-	Pid           int32                  `protobuf:"varint,4,opt,name=pid,proto3" json:"pid,omitempty"`
-	ConfigPath    string                 `protobuf:"bytes,5,opt,name=config_path,json=configPath,proto3" json:"config_path,omitempty"`
-	LastError     string                 `protobuf:"bytes,6,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
-	LastExit      string                 `protobuf:"bytes,7,opt,name=last_exit,json=lastExit,proto3" json:"last_exit,omitempty"`
-	RestartCount  int32                  `protobuf:"varint,8,opt,name=restart_count,json=restartCount,proto3" json:"restart_count,omitempty"`
-	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Protocol       string                 `protobuf:"bytes,1,opt,name=protocol,proto3" json:"protocol,omitempty"`
+	XrayVersion    string                 `protobuf:"bytes,2,opt,name=xray_version,json=xrayVersion,proto3" json:"xray_version,omitempty"`
+	State          string                 `protobuf:"bytes,3,opt,name=state,proto3" json:"state,omitempty"`
+	Pid            int32                  `protobuf:"varint,4,opt,name=pid,proto3" json:"pid,omitempty"`
+	ConfigPath     string                 `protobuf:"bytes,5,opt,name=config_path,json=configPath,proto3" json:"config_path,omitempty"`
+	LastError      string                 `protobuf:"bytes,6,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	LastExit       string                 `protobuf:"bytes,7,opt,name=last_exit,json=lastExit,proto3" json:"last_exit,omitempty"`
+	RestartCount   int32                  `protobuf:"varint,8,opt,name=restart_count,json=restartCount,proto3" json:"restart_count,omitempty"`
+	StartedAt      *timestamppb.Timestamp `protobuf:"bytes,9,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
+	ActiveRevision int64                  `protobuf:"varint,10,opt,name=active_revision,json=activeRevision,proto3" json:"active_revision,omitempty"`
+	InboundTags    []string               `protobuf:"bytes,11,rep,name=inbound_tags,json=inboundTags,proto3" json:"inbound_tags,omitempty"`
+	StatsAvailable bool                   `protobuf:"varint,12,opt,name=stats_available,json=statsAvailable,proto3" json:"stats_available,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *StatusResponse) Reset() {
@@ -388,6 +391,27 @@ func (x *StatusResponse) GetStartedAt() *timestamppb.Timestamp {
 		return x.StartedAt
 	}
 	return nil
+}
+
+func (x *StatusResponse) GetActiveRevision() int64 {
+	if x != nil {
+		return x.ActiveRevision
+	}
+	return 0
+}
+
+func (x *StatusResponse) GetInboundTags() []string {
+	if x != nil {
+		return x.InboundTags
+	}
+	return nil
+}
+
+func (x *StatusResponse) GetStatsAvailable() bool {
+	if x != nil {
+		return x.StatsAvailable
+	}
+	return false
 }
 
 type LogsResponse struct {
@@ -1747,7 +1771,7 @@ const file_controller_proto_rawDesc = "" +
 	"\tprotocols\x18\x02 \x03(\tR\tprotocols\"\xa0\x01\n" +
 	"\x14CapabilitiesResponse\x12>\n" +
 	"\x04xray\x18\x01 \x01(\v2*.xrayeasy.controller.v1.ProtocolCapabilityR\x04xray\x12H\n" +
-	"\tamneziawg\x18\x02 \x01(\v2*.xrayeasy.controller.v1.ProtocolCapabilityR\tamneziawg\"\xb4\x02\n" +
+	"\tamneziawg\x18\x02 \x01(\v2*.xrayeasy.controller.v1.ProtocolCapabilityR\tamneziawg\"\xa9\x03\n" +
 	"\x0eStatusResponse\x12\x1a\n" +
 	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12!\n" +
 	"\fxray_version\x18\x02 \x01(\tR\vxrayVersion\x12\x14\n" +
@@ -1760,7 +1784,11 @@ const file_controller_proto_rawDesc = "" +
 	"\tlast_exit\x18\a \x01(\tR\blastExit\x12#\n" +
 	"\rrestart_count\x18\b \x01(\x05R\frestartCount\x129\n" +
 	"\n" +
-	"started_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\"$\n" +
+	"started_at\x18\t \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12'\n" +
+	"\x0factive_revision\x18\n" +
+	" \x01(\x03R\x0eactiveRevision\x12!\n" +
+	"\finbound_tags\x18\v \x03(\tR\vinboundTags\x12'\n" +
+	"\x0fstats_available\x18\f \x01(\bR\x0estatsAvailable\"$\n" +
 	"\fLogsResponse\x12\x14\n" +
 	"\x05lines\x18\x01 \x03(\tR\x05lines\"u\n" +
 	"\x15ValidateConfigRequest\x12\x12\n" +

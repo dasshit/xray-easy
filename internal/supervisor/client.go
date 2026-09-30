@@ -42,15 +42,18 @@ type Client struct {
 }
 
 type Status struct {
-	Protocol     string    `json:"protocol"`
-	XrayVersion  string    `json:"xray_version"`
-	State        string    `json:"state"`
-	PID          int       `json:"pid"`
-	ConfigPath   string    `json:"config_path"`
-	LastError    string    `json:"last_error"`
-	LastExit     string    `json:"last_exit"`
-	RestartCount int       `json:"restart_count"`
-	StartedAt    time.Time `json:"started_at"`
+	Protocol       string    `json:"protocol"`
+	XrayVersion    string    `json:"xray_version"`
+	State          string    `json:"state"`
+	PID            int       `json:"pid"`
+	ConfigPath     string    `json:"config_path"`
+	LastError      string    `json:"last_error"`
+	LastExit       string    `json:"last_exit"`
+	RestartCount   int       `json:"restart_count"`
+	StartedAt      time.Time `json:"started_at"`
+	ActiveRevision int64     `json:"active_revision,omitempty"`
+	InboundTags    []string  `json:"inbound_tags,omitempty"`
+	StatsAvailable bool      `json:"stats_available,omitempty"`
 }
 
 // Dial creates a long-lived private gRPC connection authenticated with the

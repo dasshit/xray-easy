@@ -6,6 +6,7 @@ ARG RUNTIME_IMAGE=alpine:3.22
 FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build
 ARG TARGETOS
 ARG TARGETARCH
+ARG XRAY_VERSION=26.7.28
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -16,6 +17,10 @@ COPY internal/xrayruntime/api/v1 ./internal/xrayruntime/api/v1
 COPY xray-runtime ./xray-runtime
 
 WORKDIR /src/xray-runtime
+RUN if [ "$XRAY_VERSION" != "26.7.28" ]; then \
+      echo "embedded Xray runtime currently pins Xray 26.7.28; got XRAY_VERSION=$XRAY_VERSION" >&2; \
+      exit 1; \
+    fi
 RUN go mod download
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
     -trimpath -ldflags='-s -w' -o /out/xray-runtime ./cmd/xray-runtime

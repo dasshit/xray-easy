@@ -65,6 +65,9 @@ message StatusResponse {
   string last_exit = 7;
   int32 restart_count = 8;
   google.protobuf.Timestamp started_at = 9;
+  int64 active_revision = 10;
+  repeated string inbound_tags = 11;
+  bool stats_available = 12;
 }
 
 message LogsResponse { repeated string lines = 1; }

@@ -1,0 +1,28 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(dirname "$0")
+repo_root=$(CDPATH= cd "$script_dir/.." && pwd)
+
+# Keep the opt-in test stack isolated from the normal installation by default.
+export XRAY_EASY_PROJECT_NAME="${XRAY_EASY_RUNTIME_PROJECT_NAME:-xray-easy-runtime-test}"
+export XRAY_PUBLIC_PORT="${XRAY_EASY_RUNTIME_PUBLIC_PORT:-18443}"
+export XRAY_VMESS_PORT="${XRAY_EASY_RUNTIME_VMESS_PORT:-19443}"
+export XRAY_EASY_UI_PORT="${XRAY_EASY_RUNTIME_UI_PORT:-18080}"
+export AWG_PUBLIC_PORT="${XRAY_EASY_RUNTIME_AWG_PORT:-11234}"
+export AWG_PUBLIC_HOST="${XRAY_EASY_RUNTIME_AWG_PUBLIC_HOST:-}"
+export COMPOSE_PROFILES="${XRAY_EASY_RUNTIME_PROFILES:-}"
+
+export XRAY_EASY_CONTROL_SUBNET="${XRAY_EASY_RUNTIME_CONTROL_SUBNET:-172.31.243.0/24}"
+export XRAY_EASY_BACKEND_SUBNET="${XRAY_EASY_RUNTIME_BACKEND_SUBNET:-172.31.244.0/24}"
+export XRAY_EASY_XRAY_IP="${XRAY_EASY_RUNTIME_XRAY_IP:-172.31.243.2}"
+export XRAY_EASY_AWG_IP="${XRAY_EASY_RUNTIME_AWG_IP:-172.31.243.4}"
+export XRAY_EASY_CONTROLLER_CONTROL_IP="${XRAY_EASY_RUNTIME_CONTROLLER_CONTROL_IP:-172.31.243.5}"
+export XRAY_EASY_CONTROLLER_BACKEND_IP="${XRAY_EASY_RUNTIME_CONTROLLER_BACKEND_IP:-172.31.244.2}"
+export XRAY_EASY_BACKEND_IP="${XRAY_EASY_RUNTIME_BACKEND_IP:-172.31.244.3}"
+
+exec docker compose \
+  --project-directory "$repo_root" \
+  -f "$repo_root/compose.yaml" \
+  -f "$repo_root/compose.xray-runtime.yaml" \
+  "$@"

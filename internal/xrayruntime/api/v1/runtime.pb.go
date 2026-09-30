@@ -365,6 +365,7 @@ type ProtocolCapability struct {
 	TrafficCounters bool                   `protobuf:"varint,4,opt,name=traffic_counters,json=trafficCounters,proto3" json:"traffic_counters,omitempty"`
 	OnlineStatus    bool                   `protobuf:"varint,5,opt,name=online_status,json=onlineStatus,proto3" json:"online_status,omitempty"`
 	SourceIp        bool                   `protobuf:"varint,6,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	InboundTag      string                 `protobuf:"bytes,7,opt,name=inbound_tag,json=inboundTag,proto3" json:"inbound_tag,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -439,6 +440,13 @@ func (x *ProtocolCapability) GetSourceIp() bool {
 		return x.SourceIp
 	}
 	return false
+}
+
+func (x *ProtocolCapability) GetInboundTag() string {
+	if x != nil {
+		return x.InboundTag
+	}
+	return ""
 }
 
 type CapabilitiesResponse struct {
@@ -808,10 +816,12 @@ type AddUserRequest struct {
 	Protocol Protocol               `protobuf:"varint,1,opt,name=protocol,proto3,enum=xrayeasy.xray.v1.Protocol" json:"protocol,omitempty"`
 	Email    string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
 	// VLESS/VMess use a UUID; Hysteria 2 uses its per-user auth credential.
-	Credential    string `protobuf:"bytes,3,opt,name=credential,proto3" json:"credential,omitempty"`
-	Flow          string `protobuf:"bytes,4,opt,name=flow,proto3" json:"flow,omitempty"`
-	OperationId   string `protobuf:"bytes,5,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	Revision      int64  `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
+	Credential  string `protobuf:"bytes,3,opt,name=credential,proto3" json:"credential,omitempty"`
+	Flow        string `protobuf:"bytes,4,opt,name=flow,proto3" json:"flow,omitempty"`
+	OperationId string `protobuf:"bytes,5,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	// Zero denotes idempotent runtime user-roster convergence without a
+	// persisted config revision. Positive revisions are fenced and committed.
+	Revision      int64 `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -889,11 +899,13 @@ func (x *AddUserRequest) GetRevision() int64 {
 }
 
 type RemoveUserRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Protocol      Protocol               `protobuf:"varint,1,opt,name=protocol,proto3,enum=xrayeasy.xray.v1.Protocol" json:"protocol,omitempty"`
-	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
-	OperationId   string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
-	Revision      int64                  `protobuf:"varint,4,opt,name=revision,proto3" json:"revision,omitempty"`
+	state       protoimpl.MessageState `protogen:"open.v1"`
+	Protocol    Protocol               `protobuf:"varint,1,opt,name=protocol,proto3,enum=xrayeasy.xray.v1.Protocol" json:"protocol,omitempty"`
+	Email       string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
+	OperationId string                 `protobuf:"bytes,3,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	// Zero denotes idempotent runtime user-roster convergence without a
+	// persisted config revision. Positive revisions are fenced and committed.
+	Revision      int64 `protobuf:"varint,4,opt,name=revision,proto3" json:"revision,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1416,7 +1428,7 @@ const file_runtime_proto_rawDesc = "" +
 	"\n" +
 	"last_error\x18\x05 \x01(\tR\tlastError\x129\n" +
 	"\n" +
-	"started_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\"\x82\x02\n" +
+	"started_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\"\xa3\x02\n" +
 	"\x12ProtocolCapability\x126\n" +
 	"\bprotocol\x18\x01 \x01(\x0e2\x1a.xrayeasy.xray.v1.ProtocolR\bprotocol\x12\x1e\n" +
 	"\n" +
@@ -1425,7 +1437,9 @@ const file_runtime_proto_rawDesc = "" +
 	"\x0fuser_management\x18\x03 \x01(\bR\x0euserManagement\x12)\n" +
 	"\x10traffic_counters\x18\x04 \x01(\bR\x0ftrafficCounters\x12#\n" +
 	"\ronline_status\x18\x05 \x01(\bR\fonlineStatus\x12\x1b\n" +
-	"\tsource_ip\x18\x06 \x01(\bR\bsourceIp\"Z\n" +
+	"\tsource_ip\x18\x06 \x01(\bR\bsourceIp\x12\x1f\n" +
+	"\vinbound_tag\x18\a \x01(\tR\n" +
+	"inboundTag\"Z\n" +
 	"\x14CapabilitiesResponse\x12B\n" +
 	"\tprotocols\x18\x01 \x03(\v2$.xrayeasy.xray.v1.ProtocolCapabilityR\tprotocols\"\x92\x01\n" +
 	"\bLogEntry\x128\n" +

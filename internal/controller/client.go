@@ -86,14 +86,19 @@ func (c *Client) Status(ctx context.Context) (supervisor.Status, error) {
 		return supervisor.Status{}, err
 	}
 	value := result.(*controllerv1.StatusResponse)
-	if value.Protocol == "" || value.XrayVersion == "" || value.State == "" || value.Pid < 0 || value.RestartCount < 0 {
+	if value.Protocol == "" || value.XrayVersion == "" || value.State == "" || value.Pid < 0 || value.RestartCount < 0 || value.ActiveRevision < 0 {
 		return supervisor.Status{}, errors.New("decode Controller status: required fields are invalid")
 	}
 	startedAt, err := protobufTimeToTime("started_at", value.StartedAt)
 	if err != nil {
 		return supervisor.Status{}, err
 	}
-	return supervisor.Status{Protocol: value.Protocol, XrayVersion: value.XrayVersion, State: value.State, PID: int(value.Pid), ConfigPath: value.ConfigPath, LastError: value.LastError, LastExit: value.LastExit, RestartCount: int(value.RestartCount), StartedAt: startedAt}, nil
+	return supervisor.Status{
+		Protocol: value.Protocol, XrayVersion: value.XrayVersion, State: value.State, PID: int(value.Pid),
+		ConfigPath: value.ConfigPath, LastError: value.LastError, LastExit: value.LastExit,
+		RestartCount: int(value.RestartCount), StartedAt: startedAt, ActiveRevision: value.ActiveRevision,
+		InboundTags: append([]string(nil), value.InboundTags...), StatsAvailable: value.StatsAvailable,
+	}, nil
 }
 
 // Logs returns the supervisor's redacted recent log lines.

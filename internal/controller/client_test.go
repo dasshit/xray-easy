@@ -38,7 +38,7 @@ func controllerTestClient(t *testing.T, runtime *fakeRuntime, token string) (*Cl
 }
 
 func TestClientInvokesControllerAndForwardsRequestID(t *testing.T) {
-	runtime := &fakeRuntime{status: supervisor.Status{Protocol: "v1", XrayVersion: "26.7.28", State: "running", PID: 5, RestartCount: 1, StartedAt: time.Date(2026, 9, 30, 11, 0, 0, 0, time.UTC)}, logs: []string{"line"}}
+	runtime := &fakeRuntime{status: supervisor.Status{Protocol: "embedded-core", XrayVersion: "26.7.28", State: "running", PID: 5, RestartCount: 1, StartedAt: time.Date(2026, 9, 30, 11, 0, 0, 0, time.UTC), ActiveRevision: 42, InboundTags: []string{"vless-reality"}, StatsAvailable: true}, logs: []string{"line"}}
 	client, _ := controllerTestClient(t, runtime, "test-token")
 	wantID := "abcdef0123456789abcdef0123456789"
 	wantOperationID := "0123456789abcdef0123456789abcdef"
@@ -49,7 +49,7 @@ func TestClientInvokesControllerAndForwardsRequestID(t *testing.T) {
 		t.Fatalf("Health() trace=%q/%q/%d/%d, err=%v", runtime.requestID, runtime.operationID, runtime.attempt, runtime.stateRevision, err)
 	}
 	statusValue, err := client.Status(ctx)
-	if err != nil || statusValue.XrayVersion != "26.7.28" || statusValue.PID != 5 || !statusValue.StartedAt.Equal(runtime.status.StartedAt) {
+	if err != nil || statusValue.XrayVersion != "26.7.28" || statusValue.PID != 5 || !statusValue.StartedAt.Equal(runtime.status.StartedAt) || statusValue.ActiveRevision != 42 || len(statusValue.InboundTags) != 1 || !statusValue.StatsAvailable {
 		t.Fatalf("Status() = %+v, %v", statusValue, err)
 	}
 	lines, err := client.Logs(ctx)

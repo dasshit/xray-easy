@@ -480,6 +480,77 @@ Docker multiarch build и Compose validation выполняются перед o
 - Добавить Doctor checks для embedded core version, gRPC health, активной
   revision, inbound tags, stats capability и runtime state.
 
+**Реализация opt-in пути:**
+
+- `XRAY_ADAPTER=embedded` подключает Controller к типизированному runtime API;
+  штатное значение остаётся `supervisor`.
+- Controller монтирует Xray snapshots только для чтения, проверяет, что путь
+  остаётся внутри `/etc/xray`, и передаёт runtime содержимое файла. Пути и JSON
+  конфигурации в RPC-логи не попадают.
+- Live add/remove пользователей передают revision, если операция создана
+  backend и связана с persisted apply-operation. Нулевая revision разрешена
+  только для идемпотентной сверки roster после запуска Controller и не меняет
+  config revision fence.
+- `compose.xray-runtime.yaml` заменяет процесс в сервисе `xray` на embedded
+  runtime, создаёт отдельные token/state volumes и оставляет обычный Compose
+  stack без изменений.
+- Embedded core пока закреплён на проверенной версии Xray `26.7.28` из
+  `xray-runtime/go.mod`. Build проверяет `XRAY_VERSION` и останавливается при
+  несовпадении, чтобы backend не сообщал версию, отличающуюся от встроенного
+  core.
+- `scripts/xray-runtime-test-stack.sh` задаёт отдельные project name, host ports
+  и private subnets по умолчанию. Тестовый стек использует данные из локального
+  `.env`, но не использует production named volumes или опубликованные порты.
+- До ручного принятия embedded runtime на VDS штатный путь через supervisor и
+  этап 8 остаются без изменений.
+
+Для ручной проверки opt-in стека после отправки изменений:
+
+```sh
+./scripts/xray-runtime-test-stack.sh up -d --build --wait --wait-timeout 180
+./scripts/xray-runtime-test-stack.sh ps
+./scripts/xray-runtime-test-stack.sh exec xray-easy /usr/local/bin/xray-easy doctor
+```
+
+Web UI будет доступен через SSH tunnel на `http://127.0.0.1:18080`; по
+умолчанию тестовый стек публикует Xray TCP/UDP на `18443`, VMess TCP на `19443`
+и AmneziaWG UDP на `11234`, если соответствующий профиль включён через
+`XRAY_EASY_RUNTIME_PROFILES=awg XRAY_EASY_RUNTIME_AWG_PUBLIC_HOST=<public-ip>`.
+По умолчанию AWG выключен для этого Xray-only теста. После теста
+остановить контейнеры можно командой
+`./scripts/xray-runtime-test-stack.sh down` — не добавляй `-v`, чтобы сохранить
+изолированное тестовое состояние до анализа результатов.
+
+Если стандартные тестовые subnets заняты на VDS, перед запуском задай
+`XRAY_EASY_RUNTIME_CONTROL_SUBNET` и `XRAY_EASY_RUNTIME_BACKEND_SUBNET` на две
+свободные непересекающиеся сети. Тестовые host ports и project name можно
+переопределить переменными `XRAY_EASY_RUNTIME_*` из launcher.
+
+**Результат локальной реализации от 2026-09-30:**
+
+- Добавлены adapter и тесты Controller ↔ embedded runtime. Проверены
+  authentication, runtime failures, path traversal/symlink rejection, ответы
+  с неожиданными revisions/operation IDs, Xray telemetry и нормализация IPv4.
+- Runtime capabilities теперь возвращают tag каждого inbound. Controller
+  передаёт в Doctor активную revision, список tag-ов и статистическую
+  capability; Doctor сверяет поддерживаемые tag-и с `active.json`.
+- Coverage: handwritten backend — 90.5% overall, Controller — 92.2%, новый
+  `embedded_xray.go` — 90.4%, `doctor.go` — 93.0%. В embedded runtime каждый
+  handwritten Go-файл остаётся выше 90%.
+- Прошли `go test ./...`, runtime `go test -race -count=1 ./...`, `go vet ./...`
+  в обоих Go-модулях и backend/runtime coverage gates.
+- Compose test launcher прошёл shell syntax и `docker compose config --quiet`.
+  Проверены отдельные test ports/subnets, Controller adapter selection,
+  read-only snapshot mount и writable `/etc/xray` volume embedded runtime.
+- Docker Buildx собрал runtime и Controller для `linux/amd64` и `linux/arm64`;
+  образы не публиковались в registry. Тестовые контейнеры локально не запускались.
+- Production Compose остаётся на supervisor по умолчанию. Opt-in конфигурация
+  и все результаты зафиксированы отдельным stage-коммитом до ручного VDS теста.
+
+**Текущий статус:** локальная реализация этапа 7 готова; проверка реального
+подключения, создания/отзыва профилей, статистики и restart recovery на VDS
+остаётся ручным шагом владельца. К этапу 8 переходить только после этой приёмки.
+
 **Готово, когда:** opt-in Compose stack полностью проходит функциональные,
 регрессионные, diagnostics и restore сценарии, а переключение можно отменить
 сменой Compose профиля без потери `/data`.

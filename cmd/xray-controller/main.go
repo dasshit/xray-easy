@@ -24,6 +24,9 @@ const (
 	defaultControllerToken = "/run/controller-auth/controller.token"
 	defaultSupervisorAddr  = "172.31.241.2:10086"
 	defaultSupervisorToken = "/run/secrets/xray_supervisor_token"
+	defaultRuntimeAddr     = "172.31.241.2:10086"
+	defaultRuntimeToken    = "/run/runtime-auth/xray_runtime_token"
+	defaultConfigDir       = "/etc/xray"
 )
 
 type healthClient interface {
@@ -36,10 +39,20 @@ type closeableAWGRuntime interface {
 	Close() error
 }
 
+type closeableXrayRuntime interface {
+	controller.XrayRuntime
+	controller.XrayHandlerRuntime
+	controller.XrayStatsRuntime
+	Close() error
+}
+
 var dialHealthClient = func(address, tokenPath string) (healthClient, error) {
 	return controller.Dial(address, tokenPath)
 }
 var dialSupervisor = supervisor.Dial
+var dialEmbeddedXray = func(address, tokenPath, configDir string) (closeableXrayRuntime, error) {
+	return controller.DialEmbeddedXray(address, tokenPath, configDir)
+}
 var dialAWG = func(address, tokenPath string) (closeableAWGRuntime, error) {
 	return awgcontrol.Dial(address, tokenPath)
 }
@@ -81,11 +94,28 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("load Controller token: %w", err)
 	}
-	sup, err := dialSupervisor(envOr("XRAY_SUPERVISOR_ADDR", defaultSupervisorAddr), envOr("XRAY_SUPERVISOR_TOKEN_FILE", defaultSupervisorToken))
-	if err != nil {
-		return fmt.Errorf("initialize Xray supervisor adapter: %w", err)
+	adapterKind := strings.ToLower(envOr("XRAY_ADAPTER", "supervisor"))
+	var xrayRuntime controller.XrayRuntime
+	var handler controller.XrayHandlerRuntime
+	var stats controller.XrayStatsRuntime
+	var closeXray func() error
+	switch adapterKind {
+	case "supervisor":
+		sup, dialErr := dialSupervisor(envOr("XRAY_SUPERVISOR_ADDR", defaultSupervisorAddr), envOr("XRAY_SUPERVISOR_TOKEN_FILE", defaultSupervisorToken))
+		if dialErr != nil {
+			return fmt.Errorf("initialize Xray supervisor adapter: %w", dialErr)
+		}
+		xrayRuntime, handler, stats, closeXray = sup, sup, sup, sup.Close
+	case "embedded":
+		runtime, dialErr := dialEmbeddedXray(envOr("XRAY_RUNTIME_ADDR", defaultRuntimeAddr), envOr("XRAY_RUNTIME_TOKEN_FILE", defaultRuntimeToken), envOr("XRAY_CONFIG_DIR", defaultConfigDir))
+		if dialErr != nil {
+			return fmt.Errorf("initialize embedded Xray runtime adapter: %w", dialErr)
+		}
+		xrayRuntime, handler, stats, closeXray = runtime, runtime, runtime, runtime.Close
+	default:
+		return fmt.Errorf("unsupported XRAY_ADAPTER %q; expected supervisor or embedded", adapterKind)
 	}
-	defer sup.Close()
+	defer closeXray()
 	listener, err := listenController("tcp", envOr("XRAY_CONTROLLER_LISTEN", defaultListenAddr))
 	if err != nil {
 		return fmt.Errorf("listen for Controller gRPC: %w", err)
@@ -95,8 +125,6 @@ func serve() error {
 		grpc.MaxSendMsgSize(24<<20),
 		grpc.ChainUnaryInterceptor(controller.LoggingInterceptor("xray-controller"), controller.AuthInterceptor(token)),
 	)
-	var handler controller.XrayHandlerRuntime = sup
-	var stats controller.XrayStatsRuntime = sup
 	var awg controller.AmneziaWGRuntime
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
 		client, dialErr := dialAWG(envOr("AWG_CONTROL_ADDR", "172.31.241.4:10087"), envOr("AWG_CONTROL_TOKEN_FILE", "/run/awg-auth/control.token"))
@@ -106,7 +134,7 @@ func serve() error {
 		defer client.Close()
 		awg = client
 	}
-	controller.RegisterRPC(server, controller.NewServiceWithAdapters(sup, handler, stats, awg))
+	controller.RegisterRPC(server, controller.NewServiceWithAdapters(xrayRuntime, handler, stats, awg))
 	slog.Info("Controller gRPC listening", "service", "xray-controller", "address", listener.Addr().String())
 	shutdown, stop := controllerSignalContext()
 	defer stop()
