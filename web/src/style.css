@@ -180,6 +180,13 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .diagnostics-list { list-style: none; padding: 0; margin: 20px 0 0; border-top: 1px solid var(--border); }
 .diagnostics-list li { display: grid; gap: 5px; padding: 12px 0; border-bottom: 1px solid var(--border); overflow-wrap: anywhere; }
 .diagnostics-list small { color: var(--muted); font: 11px ui-monospace, monospace; }
+.diagnostics-subsection { margin-top: 28px; padding-top: 24px; border-top: 1px solid var(--border); }
+.diagnostics-subsection-heading { display: flex; align-items: baseline; justify-content: space-between; gap: 14px; margin-bottom: 14px; }
+.diagnostics-subsection-heading h3 { margin: 0; }
+.diagnostics-subsection-heading p { margin: 0; text-align: right; }
+.diagnostics-subsection .diagnostics-feed { margin-top: 20px; }
+.diagnostics-amneziawg .diagnostics-awg-card { margin-top: 0; }
+.diagnostics-control-plane .diagnostics-list { margin-top: 0; }
 .diagnostics-overview { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); gap: 14px; align-items: stretch; }
 .diagnostic-status-card { display: flex; align-items: center; gap: 12px; padding: 17px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface-muted); }
 .diagnostic-status-card.diagnostic-positive { border-color: color-mix(in srgb, var(--success) 35%, var(--border)); background: color-mix(in srgb, var(--success) 10%, var(--surface)); }
@@ -265,6 +272,8 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .device-actions { width: 100%; flex-wrap: wrap; gap: 12px 18px; }
   .header-actions { gap: 12px; }
   .settings-grid, .settings-fields-grid, .security-grid, .diagnostics-overview { grid-template-columns: 1fr; }
+  .diagnostics-subsection-heading { align-items: flex-start; flex-direction: column; }
+  .diagnostics-subsection-heading p { text-align: left; }
   .hysteria-file-grid { grid-template-columns: 1fr; gap: 0; }
   .vmess-settings-list > div { grid-template-columns: 1fr; gap: 4px; }
   .totp-setup-grid { grid-template-columns: 1fr; }

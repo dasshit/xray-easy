@@ -381,7 +381,7 @@ describe('diagnostics', () => {
     expect(section.text()).not.toContain('AmneziaWG is not enabled')
   })
 
-  it('combines available logs, sorts them, and counts warn and warning levels', async () => {
+  it('keeps Xray and control plane events in separate diagnostic sections', async () => {
     const { wrapper } = await mountApp(request => {
       if (request.url === '/api/logs?component=xray&limit=100') return { body: { entries: [
         { at: '2026-09-28T03:00:00Z', component: 'xray', level: 'warning', message: 'late warning' },
@@ -393,12 +393,18 @@ describe('diagnostics', () => {
       return defaultHandler({ authenticated: true })(request)
     })
     await openTab(wrapper, 'Diagnostics')
-    expect(wrapper.get('.diagnostic-summary').text()).toContain('2 warnings')
-    expect(wrapper.get('.diagnostic-summary').text()).toContain('1 errors')
-    expect(wrapper.findAll('.diagnostic-event').map(event => event.text())).toEqual([
+    const xraySection = wrapper.get('[data-testid="xray-diagnostics"]')
+    const controlPlaneSection = wrapper.get('[data-testid="control-plane-diagnostics"]')
+    expect(xraySection.get('h3').text()).toBe('Xray')
+    expect(controlPlaneSection.get('h3').text()).toBe('Control plane events')
+    expect(xraySection.get('.diagnostic-summary').text()).toContain('2 warnings')
+    expect(xraySection.get('.diagnostic-summary').text()).toContain('0 errors')
+    expect(xraySection.findAll('.diagnostic-event').map(event => event.text())).toEqual([
       expect.stringContaining('early warning'),
-      expect.stringContaining('middle error'),
       expect.stringContaining('late warning'),
+    ])
+    expect(controlPlaneSection.findAll('.diagnostic-event').map(event => event.text())).toEqual([
+      expect.stringContaining('middle error'),
     ])
   })
 
