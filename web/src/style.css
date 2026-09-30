@@ -91,7 +91,6 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .danger-fill { background: var(--error); color: var(--surface); }
 .danger-fill:hover:not(:disabled) { background: var(--danger-hover); color: var(--page-bg); }
 .dashboard { padding: 0; overflow: hidden; box-shadow: 0 18px 48px var(--shadow); }
-.dashboard-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; padding: 28px 30px 22px; }
 .header-actions { display: flex; align-items: center; gap: 18px; white-space: nowrap; }
 .eyebrow { margin-bottom: 5px; color: var(--muted); font-size: .75rem; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
 .tabs { display: flex; gap: 4px; padding: 0 30px; border-bottom: 1px solid var(--border); overflow-x: auto; }
@@ -261,7 +260,6 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .topbar-actions { gap: 10px; }
   .node-pill { padding: 5px 8px; }
   .dashboard { padding: 0; }
-  .dashboard-header { padding: 22px 20px 18px; }
   .tabs { padding: 0 14px; }
   .section-panel { padding: 22px 20px 26px; }
   .device-card { padding: 16px; }
@@ -278,7 +276,6 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
   .topbar-actions { gap: 10px; }
   .theme-toggle span { display: none; }
   .node-pill { display: none; }
-  .dashboard-header { flex-direction: column; }
   .section-heading { flex-direction: column; }
   .section-heading > button { width: 100%; }
   .header-actions { width: 100%; justify-content: space-between; }

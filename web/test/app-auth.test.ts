@@ -60,6 +60,8 @@ describe('setup and authentication screens', () => {
   it('restores an existing session and loads the dashboard', async () => {
     const { wrapper, requests, eventSources } = await mountApp(defaultHandler({ authenticated: true }))
     expect(wrapper.text()).toContain('Profiles')
+    expect(wrapper.find('.dashboard-header').exists()).toBe(false)
+    expect(wrapper.find('.dashboard > .tabs').exists()).toBe(true)
     expect(requests.map(request => request.url)).toEqual(expect.arrayContaining([
       '/api/clients',
       '/api/auth/totp/status',
