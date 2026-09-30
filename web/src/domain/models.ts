@@ -17,7 +17,7 @@ export type Client = {
   /** Whether the profile was permanently revoked and cannot be re-enabled. */
   revoked: boolean
   fingerprint?: string
-  /** Whether Xray has seen traffic from this device in the last five minutes. */
+  /** Whether the device's protocol has reported activity in the last five minutes. */
   online: boolean
   /** RFC 3339 timestamp of the last observed traffic, when available. */
   lastSeen?: string

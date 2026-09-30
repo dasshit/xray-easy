@@ -227,7 +227,15 @@ func (m *Manager) updateAWG(ctx context.Context, previousLatest, next map[string
 		if peer.LastSeen.After(snapshot.LastSeenAt) {
 			snapshot.LastSeenAt = peer.LastSeen
 		}
-		if peer.SourceIP != "" && !peer.LastSeen.IsZero() {
+		trafficObserved := uploadDelta > 0 || downloadDelta > 0
+		// A WireGuard handshake is not a reliable activity signal: it may be
+		// older than the online window while an established tunnel continues to
+		// carry traffic. Counter movement is direct evidence that this peer was
+		// active during the current poll window.
+		if trafficObserved && now.After(snapshot.LastSeenAt) {
+			snapshot.LastSeenAt = now
+		}
+		if peer.SourceIP != "" && (!peer.LastSeen.IsZero() || trafficObserved) {
 			snapshot.SourceIP = peer.SourceIP
 		}
 		elapsed := now.Sub(previousPoll)

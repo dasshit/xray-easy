@@ -264,6 +264,39 @@ func TestAWGStatsAreComposedPersistedAndRateLimitedToFreshPolls(t *testing.T) {
 	}
 }
 
+func TestAWGTrafficKeepsPeerOnlineWhenHandshakeIsStale(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	staleHandshake := now.Add(-onlineWindow - time.Minute)
+	if err := db.UpsertAWGTrafficSnapshot(context.Background(), store.AWGTrafficSnapshot{
+		PeerName: "iphone", RawUpload: 1000, RawDownload: 2000,
+		TotalUpload: 100, TotalDownload: 200, LastSeenAt: staleHandshake,
+		LastPolledAt: now.Add(-10 * time.Second),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	awg := &fakeAWGStatsAPI{peers: []domain.AmneziaWGPeerStats{{
+		Name: "iphone", SourceIP: "203.0.113.7", LastSeen: staleHandshake,
+		UploadBytes: 1060, DownloadBytes: 2070,
+	}}}
+	manager := NewManager(db, &fakeStatsAPI{}, awg)
+	manager.now = func() time.Time { return now }
+	if err := manager.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	got := manager.Snapshot()["awg:iphone"]
+	if !got.Online || got.LastSeen == nil || !got.LastSeen.Equal(now) {
+		t.Fatalf("peer with fresh traffic and stale handshake should be online with sampled last-seen: %+v", got)
+	}
+	if got.UploadBytes != 160 || got.DownloadBytes != 270 || got.UploadBytesPerSecond != 6 || got.DownloadBytesPerSecond != 7 {
+		t.Fatalf("AWG counters/rates did not advance from the observed deltas: %+v", got)
+	}
+	if len(got.SourceIPs) != 1 || got.SourceIPs[0] != "203.0.113.7" {
+		t.Fatalf("active peer source IP was not retained: %+v", got)
+	}
+}
+
 func TestAWGStatsFailureDoesNotBlockXrayAndStalePeersLoseSourceIP(t *testing.T) {
 	db, _ := openStatsTestStore(t)
 	createStatsClient(t, db, "phone", "phone@example.test")

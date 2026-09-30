@@ -3,6 +3,7 @@ package control
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -144,7 +145,11 @@ func TestPeerTelemetryJoinsLiveUAPICountersToManagedPeer(t *testing.T) {
 	if _, err := manager.AddPeer("iphone", publicKey); err != nil {
 		t.Fatal(err)
 	}
-	device.snapshot = "private_key=must-not-be-returned\n\npublic_key=" + publicKey + "\nendpoint=198.51.100.23:53122\nlast_handshake_time_sec=1790798400\nlast_handshake_time_nsec=0\nrx_bytes=420\ntx_bytes=840\n"
+	publicKeyBytes, err := decodeKey(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device.snapshot = "private_key=must-not-be-returned\n\npublic_key=" + hex.EncodeToString(publicKeyBytes) + "\nendpoint=198.51.100.23:53122\nlast_handshake_time_sec=1790798400\nlast_handshake_time_nsec=0\nrx_bytes=420\ntx_bytes=840\n"
 	rows, err := manager.PeerTelemetry()
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("PeerTelemetry() = %+v, %v", rows, err)

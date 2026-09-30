@@ -3,6 +3,7 @@ package control
 import (
 	"context"
 	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"net"
 	"os"
@@ -88,7 +89,11 @@ func TestGRPCLifecycleRequiresTokenAndChangesPeerWithoutRestart(t *testing.T) {
 	if engine.ups != 1 {
 		t.Fatalf("adding peer restarted the engine %d times", engine.ups-1)
 	}
-	engine.snapshot = "public_key=" + clientPublicKey + "\nendpoint=203.0.113.9:4567\nlast_handshake_time_sec=1790798400\nlast_handshake_time_nsec=0\nrx_bytes=11\ntx_bytes=22\n"
+	clientPublicKeyBytes, err := decodeKey(clientPublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.snapshot = "public_key=" + hex.EncodeToString(clientPublicKeyBytes) + "\nendpoint=203.0.113.9:4567\nlast_handshake_time_sec=1790798400\nlast_handshake_time_nsec=0\nrx_bytes=11\ntx_bytes=22\n"
 	statsRequest, _ := structpb.NewStruct(nil)
 	statsResponse := new(structpb.Struct)
 	if err := connection.Invoke(ctx, "/xrayeasy.awg.v1.Control/GetPeerStats", statsRequest, statsResponse); status.Code(err) != codes.Unauthenticated {

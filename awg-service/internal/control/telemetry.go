@@ -1,6 +1,8 @@
 package control
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"fmt"
 	"net"
 	"net/netip"
@@ -47,7 +49,14 @@ func ParsePeerTelemetry(snapshot string) ([]PeerTelemetry, error) {
 			if value == "" {
 				return nil, fmt.Errorf("AWG UAPI peer has an empty public key")
 			}
-			current = &PeerTelemetry{PublicKey: value}
+			publicKey, err := hex.DecodeString(value)
+			if err != nil || len(publicKey) != 32 {
+				return nil, fmt.Errorf("invalid AWG UAPI peer public key %q", value)
+			}
+			// The engine's UAPI serializes keys as lowercase hex, while the
+			// persisted peer model and service API use standard base64. Normalize
+			// here so PeerTelemetry can join live records to managed peers.
+			current = &PeerTelemetry{PublicKey: base64.StdEncoding.EncodeToString(publicKey)}
 			continue
 		}
 		if current == nil {
