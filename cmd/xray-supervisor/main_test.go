@@ -46,7 +46,7 @@ while :; do sleep 0.02; done
 	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config{configDir: configDir, xrayBinary: binary, tokenFile: tokenFile, grace: 250 * time.Millisecond, logSize: 3}
+	cfg := &config{configDir: configDir, revisionState: filepath.Join(root, "state", "revision.json"), xrayBinary: binary, tokenFile: tokenFile, grace: 250 * time.Millisecond, logSize: 3}
 	s := newSupervisor(cfg)
 	t.Cleanup(s.stopChild)
 	return s, configDir

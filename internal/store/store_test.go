@@ -789,3 +789,46 @@ func TestDatabaseBackupValidationSettingsReadAndRestore(t *testing.T) {
 		t.Fatalf("incomplete DB validation error = %v", err)
 	}
 }
+
+func TestApplyOperationRevisionAllocationIsMonotonicAndDurable(t *testing.T) {
+	db, ctx := openTestStore(t, "apply-revisions.db")
+	now := time.Now().UTC()
+	if err := db.CreateApplyOperation(ctx, ApplyOperation{ID: "legacy-revision", Revision: 41, State: "committed", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	for index, expected := range []int64{42, 43, 44} {
+		id := fmt.Sprintf("allocated-%d", index)
+		revision, err := db.CreateApplyOperationWithNextRevision(ctx, ApplyOperation{ID: id, State: "pending", CreatedAt: now, UpdatedAt: now})
+		if err != nil || revision != expected {
+			t.Fatalf("allocated revision = %d, %v; want %d", revision, err, expected)
+		}
+		operation, err := db.GetApplyOperation(ctx, id)
+		if err != nil || operation.Revision != expected {
+			t.Fatalf("persisted allocated operation = %+v, %v; want revision %d", operation, err, expected)
+		}
+	}
+}
+
+func TestApplyRevisionHighWaterMarkSurvivesRestoringOlderDatabase(t *testing.T) {
+	db, ctx := openTestStore(t, "apply-revision-restore.db")
+	now := time.Now().UTC()
+	first, err := db.CreateApplyOperationWithNextRevision(ctx, ApplyOperation{ID: "before-backup", State: "committed", CreatedAt: now, UpdatedAt: now})
+	if err != nil || first != 1 {
+		t.Fatalf("first allocated revision = %d, %v", first, err)
+	}
+	olderSnapshot := filepath.Join(t.TempDir(), "older-state.db")
+	if err := db.BackupTo(olderSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	second, err := db.CreateApplyOperationWithNextRevision(ctx, ApplyOperation{ID: "after-backup", State: "committed", CreatedAt: now, UpdatedAt: now})
+	if err != nil || second != 2 {
+		t.Fatalf("second allocated revision = %d, %v", second, err)
+	}
+	if err := db.RestoreFrom(olderSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	restored, err := db.CreateApplyOperationWithNextRevision(ctx, ApplyOperation{ID: "after-restore", State: "pending", CreatedAt: now, UpdatedAt: now})
+	if err != nil || restored != 3 {
+		t.Fatalf("revision after older-state restore = %d, %v; want 3", restored, err)
+	}
+}

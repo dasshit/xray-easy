@@ -2,31 +2,31 @@ package controller
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"reflect"
-	"strings"
 	"testing"
+	"time"
 
+	"xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/interaction"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type responseInvoker struct {
-	responses map[string]*structpb.Struct
+	responses map[string]proto.Message
 	errors    map[string]error
 	methods   []string
-	requests  []*structpb.Struct
+	requests  []proto.Message
 }
 
 func (i *responseInvoker) Invoke(_ context.Context, method string, request any, response any, _ ...grpc.CallOption) error {
 	i.methods = append(i.methods, method)
-	i.requests = append(i.requests, proto.Clone(request.(*structpb.Struct)).(*structpb.Struct))
+	i.requests = append(i.requests, proto.Clone(request.(proto.Message)))
 	if err := i.errors[method]; err != nil {
 		return err
 	}
@@ -37,24 +37,13 @@ func (i *responseInvoker) Invoke(_ context.Context, method string, request any, 
 }
 func (*responseInvoker) Close() error { return nil }
 
-func responseValue(t *testing.T, fields map[string]any) *structpb.Struct {
-	t.Helper()
-	value, err := structpb.NewStruct(fields)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return value
-}
-
 func TestClientRoutesXrayUserAndTelemetryOperations(t *testing.T) {
-	users := responseValue(t, map[string]any{"users": []any{"vless@example.test", "vmess@example.test"}})
-	stats := responseValue(t, map[string]any{"users": []any{map[string]any{
-		"email": "vless@example.test", "upload_bytes": "100", "download_bytes": "200", "last_seen": "2026-09-30T10:00:00Z",
-		"source_ips": []any{map[string]any{"address": "203.0.113.3", "last_seen": "2026-09-30T09:59:00Z"}},
-	}}})
-	invoker := &responseInvoker{responses: map[string]*structpb.Struct{
-		"/" + RPCServiceName + "/ListDeviceUsers":  users,
-		"/" + RPCServiceName + "/GetXrayTelemetry": stats,
+	now := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	listMethod := "/" + RPCServiceName + "/ListDeviceUsers"
+	statsMethod := "/" + RPCServiceName + "/GetXrayTelemetry"
+	invoker := &responseInvoker{responses: map[string]proto.Message{
+		listMethod:  &controllerv1.ListDeviceUsersResponse{Users: []string{"vless@example.test", "vmess@example.test"}},
+		statsMethod: &controllerv1.XrayTelemetryResponse{Users: []*controllerv1.XrayUserTelemetry{{Email: "vless@example.test", UploadBytes: 100, DownloadBytes: 200, LastSeen: timestamppb.New(now), SourceIps: []*controllerv1.IPObservation{{Address: "203.0.113.3", LastSeen: timestamppb.New(now)}}}}},
 	}}
 	client := NewClientWithConn(invoker, "token")
 	id := "abcdef0123456789abcdef0123456789"
@@ -81,41 +70,27 @@ func TestClientRoutesXrayUserAndTelemetryOperations(t *testing.T) {
 		t.Fatal("unsupported Xray inbound accepted")
 	}
 	observed, err := client.Poll(ctx)
-	if err != nil || len(observed) != 1 || observed[0].UploadBytes != 100 || observed[0].DownloadBytes != 200 || len(observed[0].SourceIPs) != 1 || observed[0].SourceIPs[0].Address != "203.0.113.3" {
+	if err != nil || len(observed) != 1 || observed[0].UploadBytes != 100 || observed[0].DownloadBytes != 200 || observed[0].LastSeen != now || len(observed[0].SourceIPs) != 1 || observed[0].SourceIPs[0].Address != "203.0.113.3" {
 		t.Fatalf("Poll() = %+v, %v", observed, err)
 	}
 	for _, call := range invoker.methods {
-		if !strings.HasPrefix(call, "/"+RPCServiceName+"/") {
+		if len(call) < len("/"+RPCServiceName+"/") || call[:len("/"+RPCServiceName+"/")] != "/"+RPCServiceName+"/" {
 			t.Errorf("unexpected RPC method %q", call)
 		}
 	}
 }
 
-func TestClientRejectsMalformedXrayListsAndTelemetry(t *testing.T) {
-	listMethod := "/" + RPCServiceName + "/ListDeviceUsers"
+func TestClientRejectsMalformedTypedXrayTelemetryAndAdapterErrors(t *testing.T) {
 	statsMethod := "/" + RPCServiceName + "/GetXrayTelemetry"
-	for _, malformed := range []map[string]any{
-		{}, {"users": "not-list"}, {"users": []any{4}},
+	for _, response := range []*controllerv1.XrayTelemetryResponse{
+		{Users: []*controllerv1.XrayUserTelemetry{nil}},
+		{Users: []*controllerv1.XrayUserTelemetry{{Email: "device", UploadBytes: -1}}},
+		{Users: []*controllerv1.XrayUserTelemetry{{Email: "device", SourceIps: []*controllerv1.IPObservation{nil}}}},
+		{Users: []*controllerv1.XrayUserTelemetry{{Email: "device", SourceIps: []*controllerv1.IPObservation{{Address: "203.0.113.1", LastSeen: &timestamppb.Timestamp{Seconds: 999999999999}}}}}},
 	} {
-		invoker := &responseInvoker{responses: map[string]*structpb.Struct{listMethod: responseValue(t, malformed)}}
-		if _, err := NewClientWithConn(invoker, "token").Users(context.Background()); err == nil {
-			t.Errorf("malformed user response accepted: %v", malformed)
-		}
-	}
-	for _, malformed := range []map[string]any{
-		{},
-		{"users": "not-list"},
-		{"users": []any{4}},
-		{"users": []any{map[string]any{"upload_bytes": "0", "download_bytes": "0", "source_ips": []any{}}}},
-		{"users": []any{map[string]any{"email": "device", "upload_bytes": "-1", "download_bytes": "0", "source_ips": []any{}}}},
-		{"users": []any{map[string]any{"email": "device", "upload_bytes": "0", "download_bytes": "0", "last_seen": "bad", "source_ips": []any{}}}},
-		{"users": []any{map[string]any{"email": "device", "upload_bytes": "0", "download_bytes": "0", "source_ips": "bad"}}},
-		{"users": []any{map[string]any{"email": "device", "upload_bytes": "0", "download_bytes": "0", "source_ips": []any{4}}}},
-		{"users": []any{map[string]any{"email": "device", "upload_bytes": "0", "download_bytes": "0", "source_ips": []any{map[string]any{"last_seen": ""}}}}},
-	} {
-		invoker := &responseInvoker{responses: map[string]*structpb.Struct{statsMethod: responseValue(t, malformed)}}
+		invoker := &responseInvoker{responses: map[string]proto.Message{statsMethod: response}}
 		if _, err := NewClientWithConn(invoker, "token").Poll(context.Background()); err == nil {
-			t.Errorf("malformed telemetry response accepted: %v", malformed)
+			t.Errorf("malformed telemetry response accepted: %+v", response)
 		}
 	}
 	invoker := &responseInvoker{errors: map[string]error{statsMethod: status.Error(codes.Unavailable, "private adapter failure")}}
@@ -128,15 +103,16 @@ func TestClientRejectsMalformedXrayListsAndTelemetry(t *testing.T) {
 	}
 }
 
-func TestAWGClientRoutesOperationsAndDecodesResponses(t *testing.T) {
-	peer := map[string]any{"name": "phone", "public_key": "peer-key", "ipv4": "10.0.0.2", "ipv6": "fd00::2", "created_at": "2026-09-30T10:00:00Z"}
-	invoker := &responseInvoker{responses: map[string]*structpb.Struct{
-		"/" + RPCServiceName + "/GetAmneziaWGStatus":       responseValue(t, map[string]any{"running": true, "public_key": "server-key", "listen_port": 1234, "public_host": "vpn.example.test", "public_port": 1234, "peer_count": 1, "ipv4_network": "10.0.0.0/24", "ipv6_network": "fd00::/64", "service_version": "v1"}),
-		"/" + RPCServiceName + "/ListAmneziaWGPeers":       responseValue(t, map[string]any{"peers": []any{peer}}),
-		"/" + RPCServiceName + "/CreateAmneziaWGPeer":      responseValue(t, peer),
-		"/" + RPCServiceName + "/GetAmneziaWGClientConfig": responseValue(t, map[string]any{"config": "private-client-profile"}),
-		"/" + RPCServiceName + "/GetAmneziaWGPeerStats":    responseValue(t, map[string]any{"peers": []any{map[string]any{"name": "phone", "source_ip": "203.0.113.4", "last_seen": "2026-09-30T10:00:00Z", "upload_bytes": "99", "download_bytes": "101"}}}),
-		"/" + RPCServiceName + "/ExportAmneziaWGBackup":    responseValue(t, map[string]any{"data": base64.StdEncoding.EncodeToString([]byte("archive"))}),
+func TestAWGClientRoutesTypedOperations(t *testing.T) {
+	createdAt := time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC)
+	peer := &controllerv1.AmneziaWGPeer{Name: "phone", PublicKey: "peer-key", Ipv4: "10.0.0.2", Ipv6: "fd00::2", CreatedAt: timestamppb.New(createdAt)}
+	invoker := &responseInvoker{responses: map[string]proto.Message{
+		"/" + RPCServiceName + "/GetAmneziaWGStatus":       &controllerv1.AmneziaWGStatusResponse{Running: true, PublicKey: "server-key", ListenPort: 1234, PublicHost: "vpn.example.test", PublicPort: 1234, PeerCount: 1, Ipv4Network: "10.0.0.0/24", Ipv6Network: "fd00::/64", ServiceVersion: "v1"},
+		"/" + RPCServiceName + "/ListAmneziaWGPeers":       &controllerv1.ListAmneziaWGPeersResponse{Peers: []*controllerv1.AmneziaWGPeer{peer}},
+		"/" + RPCServiceName + "/CreateAmneziaWGPeer":      peer,
+		"/" + RPCServiceName + "/GetAmneziaWGClientConfig": &controllerv1.AmneziaWGClientConfigResponse{Config: "private-client-profile"},
+		"/" + RPCServiceName + "/GetAmneziaWGPeerStats":    &controllerv1.AmneziaWGPeerStatsResponse{Peers: []*controllerv1.AmneziaWGPeerStats{{Name: "phone", SourceIp: "203.0.113.4", LastSeen: timestamppb.New(createdAt), UploadBytes: 99, DownloadBytes: 101}}},
+		"/" + RPCServiceName + "/ExportAmneziaWGBackup":    &controllerv1.AmneziaWGBackupResponse{Data: []byte("archive")},
 	}}
 	client := NewClientWithConn(invoker, "token")
 	awg := client.AWG()
@@ -145,7 +121,7 @@ func TestAWGClientRoutesOperationsAndDecodesResponses(t *testing.T) {
 		t.Fatalf("AWG Status() = %+v, %v", serverStatus, err)
 	}
 	peers, err := awg.ListPeers(context.Background())
-	if err != nil || len(peers) != 1 || peers[0].Name != "phone" {
+	if err != nil || len(peers) != 1 || peers[0].Name != "phone" || peers[0].CreatedAt != createdAt {
 		t.Fatalf("ListPeers() = %+v, %v", peers, err)
 	}
 	created, err := awg.CreatePeer(context.Background(), "phone")
@@ -169,6 +145,9 @@ func TestAWGClientRoutesOperationsAndDecodesResponses(t *testing.T) {
 	if err := awg.RestoreBackup(context.Background(), []byte("restore")); err != nil {
 		t.Fatal(err)
 	}
+	if len(invoker.requests) == 0 {
+		t.Fatal("typed AWG request messages were not recorded")
+	}
 	if err := awg.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -180,34 +159,36 @@ func TestAWGClientRoutesOperationsAndDecodesResponses(t *testing.T) {
 	}
 }
 
-func TestAWGClientRejectsMalformedResponsesAndRPCFailures(t *testing.T) {
-	methods := map[string]*structpb.Struct{
-		"/" + RPCServiceName + "/GetAmneziaWGStatus": responseValue(t, map[string]any{"running": "yes"}),
-	}
-	if _, err := NewClientWithConn(&responseInvoker{responses: methods}, "token").AWG().Status(context.Background()); err == nil {
-		t.Fatal("malformed AWG status accepted")
-	}
-	for _, response := range []map[string]any{{}, {"peers": "bad"}, {"peers": []any{4}}, {"peers": []any{map[string]any{"name": "phone"}}}} {
-		invoker := &responseInvoker{responses: map[string]*structpb.Struct{"/" + RPCServiceName + "/ListAmneziaWGPeers": responseValue(t, response)}}
-		if _, err := NewClientWithConn(invoker, "token").AWG().ListPeers(context.Background()); err == nil {
-			t.Errorf("malformed peer response accepted: %v", response)
+func TestAWGClientRejectsInvalidTypedResponses(t *testing.T) {
+	for _, response := range []*controllerv1.AmneziaWGStatusResponse{
+		{ListenPort: -1},
+		{PublicPort: 65536},
+		{PeerCount: -1},
+	} {
+		if _, err := NewClientWithConn(&responseInvoker{responses: map[string]proto.Message{"/" + RPCServiceName + "/GetAmneziaWGStatus": response}}, "token").AWG().Status(context.Background()); err == nil {
+			t.Errorf("invalid AWG status accepted: %+v", response)
 		}
 	}
-	for _, response := range []map[string]any{{}, {"peers": "bad"}, {"peers": []any{4}}, {"peers": []any{map[string]any{"upload_bytes": "0", "download_bytes": "0"}}}} {
-		invoker := &responseInvoker{responses: map[string]*structpb.Struct{"/" + RPCServiceName + "/GetAmneziaWGPeerStats": responseValue(t, response)}}
-		if _, err := NewClientWithConn(invoker, "token").AWG().PeerStats(context.Background()); err == nil {
-			t.Errorf("malformed peer stats accepted: %v", response)
+	for _, response := range []*controllerv1.ListAmneziaWGPeersResponse{
+		{Peers: []*controllerv1.AmneziaWGPeer{nil}},
+		{Peers: []*controllerv1.AmneziaWGPeer{{Name: "phone"}}},
+		{Peers: []*controllerv1.AmneziaWGPeer{{Name: "phone", PublicKey: "key", Ipv4: "10.0.0.2", Ipv6: "fd00::2", CreatedAt: &timestamppb.Timestamp{Seconds: 999999999999}}}},
+	} {
+		if _, err := NewClientWithConn(&responseInvoker{responses: map[string]proto.Message{"/" + RPCServiceName + "/ListAmneziaWGPeers": response}}, "token").AWG().ListPeers(context.Background()); err == nil {
+			t.Errorf("invalid AWG peer accepted: %+v", response)
 		}
 	}
-	badBackup := &responseInvoker{responses: map[string]*structpb.Struct{"/" + RPCServiceName + "/ExportAmneziaWGBackup": responseValue(t, map[string]any{"data": "not-base64"})}}
-	if _, err := NewClientWithConn(badBackup, "token").AWG().ExportBackup(context.Background()); err == nil {
-		t.Fatal("malformed backup accepted")
+	for _, response := range []*controllerv1.AmneziaWGPeerStatsResponse{
+		{Peers: []*controllerv1.AmneziaWGPeerStats{nil}},
+		{Peers: []*controllerv1.AmneziaWGPeerStats{{Name: "phone", UploadBytes: -1}}},
+		{Peers: []*controllerv1.AmneziaWGPeerStats{{Name: "phone", LastSeen: &timestamppb.Timestamp{Seconds: 999999999999}}}},
+	} {
+		if _, err := NewClientWithConn(&responseInvoker{responses: map[string]proto.Message{"/" + RPCServiceName + "/GetAmneziaWGPeerStats": response}}, "token").AWG().PeerStats(context.Background()); err == nil {
+			t.Errorf("invalid AWG peer stats accepted: %+v", response)
+		}
 	}
 	for method, call := range map[string]func(*AWGClient) error{
-		"CreateAmneziaWGPeer": func(client *AWGClient) error {
-			_, err := client.CreatePeer(context.Background(), "phone")
-			return err
-		},
+		"CreateAmneziaWGPeer": func(client *AWGClient) error { _, err := client.CreatePeer(context.Background(), "phone"); return err },
 		"GetAmneziaWGClientConfig": func(client *AWGClient) error {
 			_, err := client.ClientConfig(context.Background(), "phone")
 			return err
@@ -220,63 +201,7 @@ func TestAWGClientRejectsMalformedResponsesAndRPCFailures(t *testing.T) {
 			t.Errorf("%s error = %v", method, err)
 		}
 	}
-	if _, err := NewClientWithConn(&responseInvoker{responses: map[string]*structpb.Struct{"/" + RPCServiceName + "/GetAmneziaWGClientConfig": responseValue(t, map[string]any{"config": 1})}}, "token").AWG().ClientConfig(context.Background(), "phone"); err == nil {
-		t.Fatal("non-string client config accepted")
-	}
-}
-
-func TestAWGClientRejectsMalformedFields(t *testing.T) {
-	statusMethod := "/" + RPCServiceName + "/GetAmneziaWGStatus"
-	for _, value := range []map[string]any{
-		{},
-		{"running": "yes"},
-		{"running": false, "public_key": 1},
-		{"running": false, "listen_port": "bad"},
-	} {
-		client := NewClientWithConn(&responseInvoker{responses: map[string]*structpb.Struct{statusMethod: responseValue(t, value)}}, "token").AWG()
-		if _, err := client.Status(context.Background()); err == nil {
-			t.Errorf("malformed status accepted: %v", value)
-		}
-	}
-
-	validPeer := map[string]any{"name": "phone", "public_key": "key", "ipv4": "10.0.0.2", "ipv6": "fd00::2"}
-	for _, value := range []map[string]any{
-		{},
-		{"name": 1, "public_key": "key", "ipv4": "10.0.0.2", "ipv6": "fd00::2"},
-		{"name": "phone", "ipv4": "10.0.0.2", "ipv6": "fd00::2"},
-		{"name": "phone", "public_key": "key", "ipv6": "fd00::2"},
-		{"name": "phone", "public_key": "key", "ipv4": "10.0.0.2"},
-		{"name": "phone", "public_key": "key", "ipv4": "10.0.0.2", "ipv6": "fd00::2", "created_at": "bad"},
-	} {
-		_, err := parsePeer(responseValue(t, value).GetFields())
-		if err == nil {
-			t.Errorf("malformed peer accepted: %v", value)
-		}
-	}
-	if _, err := parsePeer(responseValue(t, validPeer).GetFields()); err != nil {
-		t.Fatalf("valid peer rejected: %v", err)
-	}
-
-	statsMethod := "/" + RPCServiceName + "/GetAmneziaWGPeerStats"
-	for _, peer := range []map[string]any{
-		{"name": 1, "upload_bytes": "0", "download_bytes": "0"},
-		{"name": "phone", "upload_bytes": "bad", "download_bytes": "0"},
-		{"name": "phone", "upload_bytes": "-1", "download_bytes": "0"},
-		{"name": "phone", "upload_bytes": "0", "download_bytes": "bad"},
-		{"name": "phone", "upload_bytes": "0", "download_bytes": "0", "last_seen": "bad"},
-	} {
-		response := responseValue(t, map[string]any{"peers": []any{peer}})
-		client := NewClientWithConn(&responseInvoker{responses: map[string]*structpb.Struct{statsMethod: response}}, "token").AWG()
-		if _, err := client.PeerStats(context.Background()); err == nil {
-			t.Errorf("malformed peer stats accepted: %v", peer)
-		}
-	}
-
-	backupMethod := "/" + RPCServiceName + "/ExportAmneziaWGBackup"
-	for _, response := range []map[string]any{{}, {"data": 1}} {
-		client := NewClientWithConn(&responseInvoker{responses: map[string]*structpb.Struct{backupMethod: responseValue(t, response)}}, "token").AWG()
-		if _, err := client.ExportBackup(context.Background()); err == nil {
-			t.Errorf("malformed AWG backup accepted: %v", response)
-		}
+	if _, err := NewClientWithConn(&responseInvoker{errors: map[string]error{"/" + RPCServiceName + "/ExportAmneziaWGBackup": errors.New("closed")}}, "token").AWG().ExportBackup(context.Background()); err == nil {
+		t.Fatal("AWG backup RPC failure ignored")
 	}
 }

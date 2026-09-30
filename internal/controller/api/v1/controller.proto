@@ -2,32 +2,167 @@ syntax = "proto3";
 
 package xrayeasy.controller.v1;
 
-option go_package = "xray-easy/internal/controller";
+option go_package = "xray-easy/internal/controller/api/v1;controllerv1";
 
-import "google/protobuf/struct.proto";
+import "google/protobuf/timestamp.proto";
 
-// Private runtime orchestration boundary. Struct fields are validated by the
-// Go adapter and documented in docs/controller-service-plan.md.
+// Private runtime orchestration API between the backend and Controller.
 service Controller {
-  rpc Health(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc GetCapabilities(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc GetStatus(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc GetLogs(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ValidateConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ApplyConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ReplaceInbound(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ProbeTarget(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ProbeIPv6(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc AddDeviceUser(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc RemoveDeviceUser(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ListDeviceUsers(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc GetXrayTelemetry(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc GetAmneziaWGStatus(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ListAmneziaWGPeers(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc CreateAmneziaWGPeer(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc RemoveAmneziaWGPeer(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc GetAmneziaWGPeerStats(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc GetAmneziaWGClientConfig(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc ExportAmneziaWGBackup(google.protobuf.Struct) returns (google.protobuf.Struct);
-  rpc RestoreAmneziaWGBackup(google.protobuf.Struct) returns (google.protobuf.Struct);
+  rpc Health(EmptyRequest) returns (HealthResponse);
+  rpc GetCapabilities(EmptyRequest) returns (CapabilitiesResponse);
+  rpc GetStatus(EmptyRequest) returns (StatusResponse);
+  rpc GetLogs(EmptyRequest) returns (LogsResponse);
+  rpc ValidateConfig(ValidateConfigRequest) returns (OperationResponse);
+  rpc ApplyConfig(ApplyConfigRequest) returns (OperationResponse);
+  rpc ReplaceInbound(ReplaceInboundRequest) returns (OperationResponse);
+  rpc ProbeTarget(ProbeTargetRequest) returns (OperationResponse);
+  rpc ProbeIPv6(EmptyRequest) returns (ProbeIPv6Response);
+  rpc AddDeviceUser(AddDeviceUserRequest) returns (OperationResponse);
+  rpc RemoveDeviceUser(RemoveDeviceUserRequest) returns (OperationResponse);
+  rpc ListDeviceUsers(ListDeviceUsersRequest) returns (ListDeviceUsersResponse);
+  rpc GetXrayTelemetry(EmptyRequest) returns (XrayTelemetryResponse);
+  rpc GetAmneziaWGStatus(EmptyRequest) returns (AmneziaWGStatusResponse);
+  rpc ListAmneziaWGPeers(EmptyRequest) returns (ListAmneziaWGPeersResponse);
+  rpc CreateAmneziaWGPeer(CreateAmneziaWGPeerRequest) returns (AmneziaWGPeer);
+  rpc RemoveAmneziaWGPeer(RemoveAmneziaWGPeerRequest) returns (OperationResponse);
+  rpc GetAmneziaWGPeerStats(EmptyRequest) returns (AmneziaWGPeerStatsResponse);
+  rpc GetAmneziaWGClientConfig(GetAmneziaWGClientConfigRequest) returns (AmneziaWGClientConfigResponse);
+  rpc ExportAmneziaWGBackup(EmptyRequest) returns (AmneziaWGBackupResponse);
+  rpc RestoreAmneziaWGBackup(RestoreAmneziaWGBackupRequest) returns (OperationResponse);
 }
+
+message EmptyRequest {}
+
+message OperationResponse {
+  bool ok = 1;
+  string operation_id = 2;
+  bool already_applied = 3;
+  int64 state_revision = 4;
+}
+
+message HealthResponse {
+  bool ok = 1;
+  string controller_version = 2;
+}
+
+message ProtocolCapability {
+  bool configured = 1;
+  repeated string protocols = 2;
+}
+
+message CapabilitiesResponse {
+  ProtocolCapability xray = 1;
+  ProtocolCapability amneziawg = 2;
+}
+
+message StatusResponse {
+  string protocol = 1;
+  string xray_version = 2;
+  string state = 3;
+  int32 pid = 4;
+  string config_path = 5;
+  string last_error = 6;
+  string last_exit = 7;
+  int32 restart_count = 8;
+  google.protobuf.Timestamp started_at = 9;
+}
+
+message LogsResponse { repeated string lines = 1; }
+
+message ValidateConfigRequest {
+  string path = 1;
+  string operation_id = 2;
+  int64 state_revision = 3;
+}
+
+message ApplyConfigRequest {
+  string path = 1;
+  string operation_id = 2;
+  int64 state_revision = 3;
+}
+
+message ReplaceInboundRequest {
+  string candidate_path = 1;
+  string previous_path = 2;
+  string tag = 3;
+  string operation_id = 4;
+  int64 state_revision = 5;
+}
+
+message ProbeTargetRequest {
+  string target = 1;
+  string sni = 2;
+}
+
+message ProbeIPv6Response {
+  bool ok = 1;
+  google.protobuf.Timestamp checked_at = 2;
+}
+
+message AddDeviceUserRequest {
+  string protocol = 1;
+  string email = 2;
+  string id = 3;
+  string flow = 4;
+}
+
+message RemoveDeviceUserRequest {
+  string protocol = 1;
+  string email = 2;
+}
+
+message ListDeviceUsersRequest { string protocol = 1; }
+message ListDeviceUsersResponse { repeated string users = 1; }
+
+message IPObservation {
+  string address = 1;
+  google.protobuf.Timestamp last_seen = 2;
+}
+
+message XrayUserTelemetry {
+  string email = 1;
+  int64 upload_bytes = 2;
+  int64 download_bytes = 3;
+  google.protobuf.Timestamp last_seen = 4;
+  repeated IPObservation source_ips = 5;
+}
+
+message XrayTelemetryResponse { repeated XrayUserTelemetry users = 1; }
+
+message AmneziaWGStatusResponse {
+  bool running = 1;
+  string public_key = 2;
+  int32 listen_port = 3;
+  string public_host = 4;
+  int32 public_port = 5;
+  int32 peer_count = 6;
+  string ipv4_network = 7;
+  string ipv6_network = 8;
+  string service_version = 9;
+}
+
+message AmneziaWGPeer {
+  string name = 1;
+  string public_key = 2;
+  string ipv4 = 3;
+  string ipv6 = 4;
+  google.protobuf.Timestamp created_at = 5;
+}
+
+message ListAmneziaWGPeersResponse { repeated AmneziaWGPeer peers = 1; }
+message CreateAmneziaWGPeerRequest { string name = 1; }
+message RemoveAmneziaWGPeerRequest { string name = 1; }
+
+message AmneziaWGPeerStats {
+  string name = 1;
+  string source_ip = 2;
+  google.protobuf.Timestamp last_seen = 3;
+  int64 upload_bytes = 4;
+  int64 download_bytes = 5;
+}
+
+message AmneziaWGPeerStatsResponse { repeated AmneziaWGPeerStats peers = 1; }
+message GetAmneziaWGClientConfigRequest { string name = 1; }
+message AmneziaWGClientConfigResponse { string config = 1; }
+message AmneziaWGBackupResponse { bytes data = 1; }
+message RestoreAmneziaWGBackupRequest { bytes data = 1; }

@@ -9,6 +9,8 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -35,6 +37,7 @@ const protocolVersion = "v1"
 
 type config struct {
 	configDir     string
+	revisionState string
 	xrayBinary    string
 	xrayAPI       string
 	tokenFile     string
@@ -95,6 +98,7 @@ type supervisor struct {
 	usedNoncesMu sync.Mutex
 	usedNonces   map[string]time.Time
 	ipv6ProbeFn  func(context.Context) error
+	revisions    revisionFence
 }
 
 type xrayHandlerRuntime interface {
@@ -113,6 +117,9 @@ type xrayStatsRuntime interface {
 }
 
 func newSupervisor(cfg *config) *supervisor {
+	if strings.TrimSpace(cfg.revisionState) == "" {
+		cfg.revisionState = filepath.Join(cfg.configDir, "revision-state.json")
+	}
 	version := "unknown"
 	if output, err := exec.Command(cfg.xrayBinary, "version").Output(); err == nil {
 		lines := strings.Split(strings.TrimSpace(string(output)), "\n")
@@ -126,6 +133,7 @@ func newSupervisor(cfg *config) *supervisor {
 		xrayVersion: version,
 		state:       "starting",
 		usedNonces:  make(map[string]time.Time),
+		revisions:   newRevisionFence(cfg.revisionState),
 	}
 	instance.handler = xrayapi.NewHandlerClient(cfg.xrayAPI)
 	instance.stats = xrayapi.NewStatsClient(cfg.xrayAPI)
@@ -248,7 +256,10 @@ func (s *supervisor) apply(path string) error {
 func (s *supervisor) applyContext(ctx context.Context, path string) error {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+	return s.applyLocked(ctx, path)
+}
 
+func (s *supervisor) applyLocked(ctx context.Context, path string) error {
 	if err := s.validateContext(ctx, path); err != nil {
 		return err
 	}
@@ -373,6 +384,10 @@ func (s *supervisor) replaceInbound(req replaceInboundRequest) error {
 func (s *supervisor) replaceInboundContext(parent context.Context, req replaceInboundRequest) error {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
+	return s.replaceInboundLocked(parent, req)
+}
+
+func (s *supervisor) replaceInboundLocked(parent context.Context, req replaceInboundRequest) error {
 	if s.cfg.xrayAPI == "" {
 		return errors.New("Xray API address is not configured in supervisor")
 	}
@@ -438,6 +453,70 @@ func (s *supervisor) replaceInboundContext(parent context.Context, req replaceIn
 	}
 	s.logf("removed inbound %s without restarting the Xray process", req.Tag)
 	return nil
+}
+
+func (s *supervisor) applyRevisionContext(ctx context.Context, path, operationID string, revision int64) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	fingerprint, err := s.configFingerprint(path)
+	if err != nil {
+		return err
+	}
+	mutationKey := "apply"
+	if operationID == s.revisions.latest.OperationID+"-rollback" {
+		mutationKey = "rollback:apply"
+	}
+	complete, err := s.revisions.begin(revision, operationID, mutationKey, fingerprint)
+	if err != nil || complete {
+		return err
+	}
+	if err := s.applyLocked(ctx, path); err != nil {
+		return err
+	}
+	return s.revisions.commit(revision, operationID, mutationKey, fingerprint)
+}
+
+func (s *supervisor) replaceInboundRevisionContext(ctx context.Context, req replaceInboundRequest, revision int64) error {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	candidateFingerprint, err := s.configFingerprint(req.CandidatePath)
+	if err != nil {
+		return err
+	}
+	previousFingerprint, err := s.configFingerprint(req.PreviousPath)
+	if err != nil {
+		return err
+	}
+	fingerprint := req.Tag + "\n" + candidateFingerprint + "\n" + previousFingerprint
+	mutationKey := "replace:" + req.Tag
+	if req.OperationID == s.revisions.latest.OperationID+"-rollback" {
+		mutationKey = "rollback:replace:" + req.Tag + ":" + fingerprint
+	}
+	complete, err := s.revisions.begin(revision, req.OperationID, mutationKey, fingerprint)
+	if err != nil || complete {
+		return err
+	}
+	if err := s.replaceInboundLocked(ctx, req); err != nil {
+		return err
+	}
+	return s.revisions.commit(revision, req.OperationID, mutationKey, fingerprint)
+}
+
+// configFingerprint binds an operation replay to both the validated path and
+// the exact file contents without persisting configuration or credentials in
+// the revision journal.
+func (s *supervisor) configFingerprint(path string) (string, error) {
+	resolved, err := s.safePath(path)
+	if err != nil {
+		return "", err
+	}
+	data, err := os.ReadFile(resolved)
+	if err != nil {
+		return "", fmt.Errorf("read config for revision fingerprint: %w", err)
+	}
+	content := append([]byte(filepath.Clean(resolved)+"\x00"), data...)
+	fingerprint := sha256.Sum256(content)
+	return hex.EncodeToString(fingerprint[:]), nil
 }
 
 func (s *supervisor) runXrayAPI(ctx context.Context, args ...string) error {
@@ -567,6 +646,7 @@ func main() {
 	fs := flag.NewFlagSet("xray-supervisor", flag.ExitOnError)
 	cfg := &config{}
 	fs.StringVar(&cfg.configDir, "config-dir", "/etc/xray", "directory containing active and candidate configs")
+	fs.StringVar(&cfg.revisionState, "revision-state", "/var/lib/xray-supervisor/revision.json", "durable Xray config revision fence")
 	fs.StringVar(&cfg.xrayBinary, "xray-bin", "/usr/local/bin/xray", "Xray binary")
 	fs.StringVar(&cfg.xrayAPI, "xray-api", "127.0.0.1:10085", "private Xray gRPC API address")
 	fs.StringVar(&cfg.tokenFile, "token-file", "/run/secrets/xray_supervisor_token", "HMAC token file")

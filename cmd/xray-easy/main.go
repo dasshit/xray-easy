@@ -764,20 +764,37 @@ func applyRestoredStateWithSupervisor(ctx context.Context, db *store.Store, mast
 	if err != nil {
 		return err
 	}
+	now := time.Now().UTC()
+	applyOperation := store.ApplyOperation{ID: operationID, State: "pending", CreatedAt: now, UpdatedAt: now}
+	revision, err := db.CreateApplyOperationWithNextRevision(ctx, applyOperation)
+	if err != nil {
+		return fmt.Errorf("record restored Xray configuration apply: %w", err)
+	}
+	applyContext := interaction.WithStateRevision(interaction.WithOperationID(ctx, operationID), revision)
 	candidate := filepath.Join(configDir, "candidates", operationID+".json")
 	defer os.Remove(candidate)
 	if err := writeAtomic(candidate, rendered); err != nil {
+		_ = db.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
-	if err := sup.Validate(ctx, candidate, operationID); err != nil {
+	if err := sup.Validate(applyContext, candidate, operationID); err != nil {
+		_ = db.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
-	if err := sup.Apply(ctx, candidate, operationID); err != nil {
+	_ = db.UpdateApplyOperation(ctx, operationID, "applying", "")
+	if err := sup.Apply(applyContext, candidate, operationID); err != nil {
+		_ = db.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
 		return err
 	}
 	if err := os.Rename(candidate, filepath.Join(configDir, "active.json")); err != nil {
-		return err
+		rollbackErr := sup.Apply(applyContext, filepath.Join(configDir, "active.json"), operationID+"-rollback")
+		_ = db.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
+		if rollbackErr != nil {
+			return fmt.Errorf("promote restored Xray config: %w; rollback failed: %v", err, rollbackErr)
+		}
+		return fmt.Errorf("promote restored Xray config: %w", err)
 	}
+	_ = db.UpdateApplyOperation(ctx, operationID, "committed", "")
 	return nil
 }
 
@@ -3132,8 +3149,8 @@ func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, setting
 		return "", "", err
 	}
 	now := time.Now().UTC()
-	operation := store.ApplyOperation{ID: operationID, Revision: now.UnixNano(), State: "pending", CreatedAt: now, UpdatedAt: now}
-	if err := s.store.CreateApplyOperation(ctx, operation); err != nil {
+	operation := store.ApplyOperation{ID: operationID, State: "pending", CreatedAt: now, UpdatedAt: now}
+	if _, err := s.store.CreateApplyOperationWithNextRevision(ctx, operation); err != nil {
 		return "", "", err
 	}
 	path := filepath.Join(s.configDir, "candidates", operationID+".json")

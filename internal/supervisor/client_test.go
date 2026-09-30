@@ -23,6 +23,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
+	"xray-easy/internal/interaction"
 )
 
 const testToken = "shared-supervisor-token"
@@ -142,7 +143,7 @@ func writeToken(t *testing.T, value string) string {
 func TestClientMethodsSignAndUseSupervisorGRPCContract(t *testing.T) {
 	server := &testRPCServer{}
 	client := newBufconnClient(t, server, writeToken(t, "  "+testToken+"\n"), verifyTestSignature(testToken))
-	ctx := context.Background()
+	ctx := interaction.WithStateRevision(context.Background(), 23)
 	if err := client.Validate(ctx, "/etc/xray/candidate.json", "op-1"); err != nil {
 		t.Fatal(err)
 	}
@@ -200,10 +201,10 @@ func TestClientMethodsSignAndUseSupervisorGRPCContract(t *testing.T) {
 	if err != nil || len(logs) != 2 || logs[0] != "one" || logs[1] != "two" {
 		t.Fatalf("Logs() = %v, %v", logs, err)
 	}
-	if server.validateRequest.GetFields()["path"].GetStringValue() != "/etc/xray/candidate.json" || server.validateRequest.GetFields()["operation_id"].GetStringValue() != "op-1" {
+	if server.validateRequest.GetFields()["path"].GetStringValue() != "/etc/xray/candidate.json" || server.validateRequest.GetFields()["operation_id"].GetStringValue() != "op-1" || server.validateRequest.GetFields()["state_revision"].GetStringValue() != "23" {
 		t.Fatalf("ValidateConfig payload = %v", server.validateRequest)
 	}
-	if server.applyRequest.GetFields()["operation_id"].GetStringValue() != "op-2" || server.replaceRequest.GetFields()["tag"].GetStringValue() != "vless-reality" || server.probeRequest.GetFields()["sni"].GetStringValue() != "example.com" {
+	if server.applyRequest.GetFields()["operation_id"].GetStringValue() != "op-2" || server.applyRequest.GetFields()["state_revision"].GetStringValue() != "23" || server.replaceRequest.GetFields()["tag"].GetStringValue() != "vless-reality" || server.replaceRequest.GetFields()["state_revision"].GetStringValue() != "23" || server.probeRequest.GetFields()["sni"].GetStringValue() != "example.com" {
 		t.Fatalf("unexpected RPC payloads: apply=%v replace=%v probe=%v", server.applyRequest, server.replaceRequest, server.probeRequest)
 	}
 }

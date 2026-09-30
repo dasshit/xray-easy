@@ -29,23 +29,23 @@ runtime adapter accesses the control plane database.
   device, read capabilities/status, and collect telemetry. Engine-specific
   details stay inside protocol adapters.
 - The control plane remains authoritative for desired state. It passes stable
-  operation IDs to Controller and includes the persisted config revision on
-  config apply operations. The Controller forwards revision metadata for
-  tracing; stale-revision fencing is a later requirement before enabling
-  automatic retries. No second copy of product state or SQLite database is
-  added to Controller.
+  operation IDs to Controller and includes the persisted config revision in
+  typed config requests and tracing metadata. The Controller forwards the same
+  revision to the Xray supervisor, which rejects stale revisions and
+  changed-payload replays.
+  Automatic RPC retries remain disabled. No second copy of product state or
+  SQLite database is added to Controller.
 - During migration, the backend may keep an adapter call for an operation only
   until its Controller route has passed parity tests. A given operation must
   have one active write path at a time; do not dual-write runtime state.
 - Xray remains one engine adapter for VLESS, VMess, and Hysteria 2. AmneziaWG
   remains a separate engine adapter. Adding more Xray inbounds does not imply
   adding more containers.
-- Use a versioned gRPC contract. Keep protobuf request/response conversion
-  strict; reject missing fields, invalid enum values, unexpected fields, and
-  malformed counters. The current repository avoids a protoc build dependency
-  for private APIs, so the first implementation may use `Struct` with explicit
-  schemas and validators; promote stable/high-volume contracts to typed
-  protobuf messages when the generation toolchain is introduced.
+- Use versioned, typed Protobuf messages for every Controller RPC. Generated Go
+  sources come from the pinned Buf plugins using
+  `scripts/generate-controller-proto.sh`; generation tooling is not included
+  in runtime images. Keep the internal Xray-supervisor and AWG service
+  contracts separately versioned; they are not the Controller API.
 - All gRPC listeners stay on private internal Compose networks and are
   unpublished on the host. Each hop authenticates independently using its own
   mounted secret; request correlation metadata is not an authentication
@@ -68,8 +68,8 @@ Controller, and the relevant runtime adapter.
 - Controller and the runtime adapters validate or replace malformed IDs and
   forward the trace metadata. No automatic RPC retries are enabled. Calls use
   attempt `1`; any future retry must retain the operation ID and increment the
-  attempt. The current state revision is correlation metadata only: services
-  log it but do not yet reject stale revisions.
+  attempt. The Xray supervisor also enforces the revision fence for config
+  mutations; revision values remain correlation metadata on other RPCs.
 - Xray supervisor and AWG service include the same correlation fields in their
   structured operation logs. Existing authentication metadata remains
   independent and is never copied into logs.
@@ -118,18 +118,15 @@ The current implementation has completed the routing and isolation milestones:
   can be resumed.
 - [x] Attach the persisted apply-operation revision to config validation/apply
   calls and include it in structured logs at each gRPC layer.
-- [ ] Add stale-revision fencing and define durable deduplication behavior for
-  every mutating operation before enabling automatic RPC retries. Revision is
-  currently propagated for diagnostics but not enforced by Controller or
-  runtime adapters.
-- [ ] Finish broader Controller restart/deadline/partial-failure fault
-  injection and VDS installation/runtime verification. Local replay/recovery
-  tests, race checks, coverage, vet, and Compose validation pass; VDS validation
-  remains a manual step.
-- [x] Local verification passed: root and AWG Go tests, targeted race detector,
-  `go vet`, and `docker compose config`. Root handwritten coverage is 90.8%; AWG
-  handwritten coverage is 90.11%; Controller and supervisor packages exceed
-  90% statement coverage.
+- [x] Add durable stale-revision fencing at the Xray supervisor; allocate
+  revisions monotonically in SQLite and preserve the high-water mark through
+  restore of an older database snapshot. Bind same-operation replay to the
+  exact candidate file content.
+- [x] Add Controller restart, adapter outage, deadline/cancellation, and
+  response-loss integration tests. Automatic RPC retries remain disabled.
+- [ ] Validate the full updated stack on a VDS. Local tests, coverage, vet,
+  generated-protobuf checks, and Compose validation are handled with the
+  implementation; VDS validation remains a manual deployment step.
 
 The checkboxes describe repository state after implementation begins; they do
 not replace the full acceptance criteria at the end of this plan.
@@ -144,9 +141,10 @@ not replace the full acceptance criteria at the end of this plan.
   the same name. The journal grows with create/revoke operations; any future
   compaction policy must preserve the required replay window and be tested
   against backup/restore.
-- Config revisions are logged and propagated but are not yet a stale-write
-  fence. Keep automatic retries disabled until revision fencing and durable
-  deduplication semantics are defined for every mutation.
+- Config revisions are fenced for Xray config apply and inbound replacement.
+  Live user/peer mutations have their own operation replay semantics. Keep
+  automatic retries disabled until those semantics are proven for all future
+  mutating RPCs.
 
 ### 1. Freeze current behavior and define the runtime contract
 

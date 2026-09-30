@@ -5,11 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math"
 	"os"
 	"strings"
 	"time"
 
+	"xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/supervisor"
 	"xray-easy/internal/xrayapi"
@@ -17,7 +17,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type rpcInvoker interface {
@@ -65,141 +66,131 @@ func (c *Client) Close() error {
 
 // Health verifies that Controller and its required Xray adapter respond.
 func (c *Client) Health(ctx context.Context) error {
-	_, err := c.call(ctx, "Health", nil)
+	_, err := c.call(ctx, "Health", &controllerv1.EmptyRequest{})
 	return err
+}
+
+// Capabilities returns the protocol adapters configured in Controller.
+func (c *Client) Capabilities(ctx context.Context) (*controllerv1.CapabilitiesResponse, error) {
+	response, err := c.call(ctx, "GetCapabilities", &controllerv1.EmptyRequest{})
+	if err != nil {
+		return nil, err
+	}
+	return response.(*controllerv1.CapabilitiesResponse), nil
 }
 
 // Status returns the current Xray process state.
 func (c *Client) Status(ctx context.Context) (supervisor.Status, error) {
-	result, err := c.call(ctx, "GetStatus", nil)
+	result, err := c.call(ctx, "GetStatus", &controllerv1.EmptyRequest{})
 	if err != nil {
 		return supervisor.Status{}, err
 	}
-	fields := result.GetFields()
-	var value supervisor.Status
-	if value.Protocol, err = responseString(fields, "protocol", true); err != nil {
-		return value, err
+	value := result.(*controllerv1.StatusResponse)
+	if value.Protocol == "" || value.XrayVersion == "" || value.State == "" || value.Pid < 0 || value.RestartCount < 0 {
+		return supervisor.Status{}, errors.New("decode Controller status: required fields are invalid")
 	}
-	if value.XrayVersion, err = responseString(fields, "xray_version", true); err != nil {
-		return value, err
-	}
-	if value.State, err = responseString(fields, "state", true); err != nil {
-		return value, err
-	}
-	if value.ConfigPath, err = responseString(fields, "config_path", false); err != nil {
-		return value, err
-	}
-	if value.LastError, err = responseString(fields, "last_error", false); err != nil {
-		return value, err
-	}
-	if value.LastExit, err = responseString(fields, "last_exit", false); err != nil {
-		return value, err
-	}
-	if value.PID, err = responseInt(fields, "pid"); err != nil {
-		return value, err
-	}
-	if value.RestartCount, err = responseInt(fields, "restart_count"); err != nil {
-		return value, err
-	}
-	startedAt, err := responseString(fields, "started_at", false)
+	startedAt, err := protobufTimeToTime("started_at", value.StartedAt)
 	if err != nil {
-		return value, err
+		return supervisor.Status{}, err
 	}
-	if startedAt != "" {
-		value.StartedAt, err = time.Parse(time.RFC3339Nano, startedAt)
-		if err != nil {
-			return value, fmt.Errorf("decode Controller started_at: %w", err)
-		}
-	}
-	return value, nil
+	return supervisor.Status{Protocol: value.Protocol, XrayVersion: value.XrayVersion, State: value.State, PID: int(value.Pid), ConfigPath: value.ConfigPath, LastError: value.LastError, LastExit: value.LastExit, RestartCount: int(value.RestartCount), StartedAt: startedAt}, nil
 }
 
 // Logs returns the supervisor's redacted recent log lines.
 func (c *Client) Logs(ctx context.Context) ([]string, error) {
-	result, err := c.call(ctx, "GetLogs", nil)
+	result, err := c.call(ctx, "GetLogs", &controllerv1.EmptyRequest{})
 	if err != nil {
 		return nil, err
 	}
-	value := result.GetFields()["lines"]
-	if value == nil || value.GetListValue() == nil {
-		return nil, errors.New("decode Controller logs: lines must be a list")
-	}
-	lines := make([]string, 0, len(value.GetListValue().GetValues()))
-	for index, line := range value.GetListValue().GetValues() {
-		if _, ok := line.GetKind().(*structpb.Value_StringValue); !ok {
-			return nil, fmt.Errorf("decode Controller logs: line %d must be a string", index)
-		}
-		lines = append(lines, line.GetStringValue())
-	}
-	return lines, nil
+	return append([]string{}, result.(*controllerv1.LogsResponse).Lines...), nil
 }
 
 // Validate asks the Xray adapter to validate a candidate config.
 func (c *Client) Validate(ctx context.Context, path, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
-	_, err := c.call(ctx, "ValidateConfig", map[string]any{"path": path, "operation_id": operationID})
-	return err
+	revision := interaction.StateRevision(ctx)
+	response, err := c.call(ctx, "ValidateConfig", &controllerv1.ValidateConfigRequest{Path: path, OperationId: operationID, StateRevision: revision})
+	if err != nil {
+		return err
+	}
+	return verifyOperationRevision(response, revision, "ValidateConfig")
 }
 
 // Apply activates a validated Xray config.
 func (c *Client) Apply(ctx context.Context, path, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
-	_, err := c.call(ctx, "ApplyConfig", map[string]any{"path": path, "operation_id": operationID})
-	return err
+	revision := interaction.StateRevision(ctx)
+	response, err := c.call(ctx, "ApplyConfig", &controllerv1.ApplyConfigRequest{Path: path, OperationId: operationID, StateRevision: revision})
+	if err != nil {
+		return err
+	}
+	return verifyOperationRevision(response, revision, "ApplyConfig")
 }
 
 // ReplaceInbound updates one running Xray inbound without restarting Xray.
 func (c *Client) ReplaceInbound(ctx context.Context, candidatePath, previousPath, tag, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
-	_, err := c.call(ctx, "ReplaceInbound", map[string]any{"candidate_path": candidatePath, "previous_path": previousPath, "tag": tag, "operation_id": operationID})
-	return err
+	revision := interaction.StateRevision(ctx)
+	response, err := c.call(ctx, "ReplaceInbound", &controllerv1.ReplaceInboundRequest{CandidatePath: candidatePath, PreviousPath: previousPath, Tag: tag, OperationId: operationID, StateRevision: revision})
+	if err != nil {
+		return err
+	}
+	return verifyOperationRevision(response, revision, "ReplaceInbound")
+}
+
+func verifyOperationRevision(response proto.Message, revision int64, method string) error {
+	value, ok := response.(*controllerv1.OperationResponse)
+	if !ok || value.StateRevision != revision {
+		return fmt.Errorf("Controller %s returned a different config revision", method)
+	}
+	return nil
 }
 
 // ProbeTarget checks the configured REALITY target through the Xray adapter.
 func (c *Client) ProbeTarget(ctx context.Context, target, sni string) error {
-	_, err := c.call(ctx, "ProbeTarget", map[string]any{"target": target, "sni": sni})
+	_, err := c.call(ctx, "ProbeTarget", &controllerv1.ProbeTargetRequest{Target: target, Sni: sni})
 	return err
 }
 
 // ProbeIPv6 checks outbound IPv6 connectivity from the Xray container.
 func (c *Client) ProbeIPv6(ctx context.Context) error {
-	_, err := c.call(ctx, "ProbeIPv6", nil)
+	_, err := c.call(ctx, "ProbeIPv6", &controllerv1.EmptyRequest{})
 	return err
 }
 
 // AddUser installs a VLESS user in the running Xray inbound.
 func (c *Client) AddUser(ctx context.Context, email, id, flow string) error {
-	_, err := c.call(ctx, "AddDeviceUser", map[string]any{"protocol": "vless", "email": email, "id": id, "flow": flow})
+	_, err := c.call(ctx, "AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "vless", Email: email, Id: id, Flow: flow})
 	return err
 }
 
 // RemoveUser removes a VLESS user from the running Xray inbound.
 func (c *Client) RemoveUser(ctx context.Context, email string) error {
-	_, err := c.call(ctx, "RemoveDeviceUser", map[string]any{"protocol": "vless", "email": email})
+	_, err := c.call(ctx, "RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{Protocol: "vless", Email: email})
 	return err
 }
 
 // AddHysteriaUser installs a Hysteria 2 credential into Xray.
 func (c *Client) AddHysteriaUser(ctx context.Context, email, password string) error {
-	_, err := c.call(ctx, "AddDeviceUser", map[string]any{"protocol": "hysteria2", "email": email, "id": password})
+	_, err := c.call(ctx, "AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "hysteria2", Email: email, Id: password})
 	return err
 }
 
 // RemoveHysteriaUser revokes a Hysteria 2 credential from Xray.
 func (c *Client) RemoveHysteriaUser(ctx context.Context, email string) error {
-	_, err := c.call(ctx, "RemoveDeviceUser", map[string]any{"protocol": "hysteria2", "email": email})
+	_, err := c.call(ctx, "RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{Protocol: "hysteria2", Email: email})
 	return err
 }
 
 // AddVMessUser installs a VMess UUID into Xray.
 func (c *Client) AddVMessUser(ctx context.Context, email, id string) error {
-	_, err := c.call(ctx, "AddDeviceUser", map[string]any{"protocol": "vmess", "email": email, "id": id})
+	_, err := c.call(ctx, "AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "vmess", Email: email, Id: id})
 	return err
 }
 
 // RemoveVMessUser revokes a VMess user from Xray.
 func (c *Client) RemoveVMessUser(ctx context.Context, email string) error {
-	_, err := c.call(ctx, "RemoveDeviceUser", map[string]any{"protocol": "vmess", "email": email})
+	_, err := c.call(ctx, "RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{Protocol: "vmess", Email: email})
 	return err
 }
 
@@ -214,149 +205,134 @@ func (c *Client) UsersInInbound(ctx context.Context, inbound string) ([]string, 
 	if protocol == "" {
 		return nil, fmt.Errorf("unsupported Xray inbound %q", inbound)
 	}
-	response, err := c.call(ctx, "ListDeviceUsers", map[string]any{"protocol": protocol})
+	result, err := c.call(ctx, "ListDeviceUsers", &controllerv1.ListDeviceUsersRequest{Protocol: protocol})
 	if err != nil {
 		return nil, err
 	}
-	items, err := listField(response.GetFields(), "users")
-	if err != nil {
-		return nil, err
-	}
-	users := make([]string, 0, len(items))
-	for index, item := range items {
-		value, ok := item.GetKind().(*structpb.Value_StringValue)
-		if !ok {
-			return nil, fmt.Errorf("decode Controller users: item %d must be a string", index)
-		}
-		users = append(users, value.StringValue)
-	}
-	return users, nil
+	return append([]string{}, result.(*controllerv1.ListDeviceUsersResponse).Users...), nil
 }
 
 // Poll reads normalized user counters and source IP observations from Xray.
 func (c *Client) Poll(ctx context.Context) ([]xrayapi.UserStats, error) {
-	response, err := c.call(ctx, "GetXrayTelemetry", nil)
+	result, err := c.call(ctx, "GetXrayTelemetry", &controllerv1.EmptyRequest{})
 	if err != nil {
 		return nil, err
 	}
-	items, err := listField(response.GetFields(), "users")
-	if err != nil {
-		return nil, err
-	}
-	users := make([]xrayapi.UserStats, 0, len(items))
-	for index, item := range items {
-		fields := item.GetStructValue()
-		if fields == nil {
-			return nil, fmt.Errorf("decode Controller telemetry: user %d must be an object", index)
+	users := result.(*controllerv1.XrayTelemetryResponse).Users
+	values := make([]xrayapi.UserStats, 0, len(users))
+	for index, user := range users {
+		if user == nil || user.Email == "" || user.UploadBytes < 0 || user.DownloadBytes < 0 {
+			return nil, fmt.Errorf("decode Controller telemetry: user %d has invalid fields", index)
 		}
-		values := fields.GetFields()
-		email, err := responseString(values, "email", true)
+		lastSeen, err := protobufTimeToTime("last_seen", user.LastSeen)
 		if err != nil {
 			return nil, err
 		}
-		upload, err := responseCounter(values, "upload_bytes")
-		if err != nil {
-			return nil, err
-		}
-		download, err := responseCounter(values, "download_bytes")
-		if err != nil {
-			return nil, err
-		}
-		lastSeen, err := responseTime(values, "last_seen")
-		if err != nil {
-			return nil, err
-		}
-		ipValues, err := listField(values, "source_ips")
-		if err != nil {
-			return nil, err
-		}
-		ips := make([]xrayapi.IPObservation, 0, len(ipValues))
-		for ipIndex, ipValue := range ipValues {
-			ipFields := ipValue.GetStructValue()
-			if ipFields == nil {
-				return nil, fmt.Errorf("decode Controller telemetry: source IP %d must be an object", ipIndex)
+		value := xrayapi.UserStats{Email: user.Email, UploadBytes: user.UploadBytes, DownloadBytes: user.DownloadBytes, LastSeen: lastSeen}
+		for ipIndex, ip := range user.SourceIps {
+			if ip == nil || ip.Address == "" {
+				return nil, fmt.Errorf("decode Controller telemetry: source IP %d for user %d is invalid", ipIndex, index)
 			}
-			address, err := responseString(ipFields.GetFields(), "address", true)
+			seen, err := protobufTimeToTime("source_ips.last_seen", ip.LastSeen)
 			if err != nil {
 				return nil, err
 			}
-			seen, err := responseTime(ipFields.GetFields(), "last_seen")
-			if err != nil {
-				return nil, err
-			}
-			ips = append(ips, xrayapi.IPObservation{Address: address, LastSeen: seen})
+			value.SourceIPs = append(value.SourceIPs, xrayapi.IPObservation{Address: ip.Address, LastSeen: seen})
 		}
-		users = append(users, xrayapi.UserStats{Email: email, UploadBytes: upload, DownloadBytes: download, LastSeen: lastSeen, SourceIPs: ips})
+		values = append(values, value)
 	}
-	return users, nil
+	return values, nil
 }
 
-func (c *Client) call(ctx context.Context, method string, fields map[string]any) (*structpb.Struct, error) {
+func (c *Client) call(ctx context.Context, method string, request proto.Message) (proto.Message, error) {
 	if c == nil || c.connection == nil {
 		return nil, errors.New("Controller gRPC connection is not initialized")
 	}
-	request, err := structpb.NewStruct(fields)
+	if request == nil {
+		request = &controllerv1.EmptyRequest{}
+	}
+	response, err := newRPCResponse(method)
 	if err != nil {
-		return nil, fmt.Errorf("encode Controller request: %w", err)
+		return nil, err
 	}
 	outgoing, requestID, err := interaction.OutgoingContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create Controller request ID: %w", err)
 	}
-	outgoing = metadata.AppendToOutgoingContext(outgoing, "authorization", "Bearer "+c.token)
-	response := new(structpb.Struct)
+	outgoing = metadataAppendAuth(outgoing, c.token)
 	fullMethod := "/" + RPCServiceName + "/" + method
 	started := time.Now()
 	err = c.connection.Invoke(outgoing, fullMethod, request, response)
-	interaction.LogRPC(c.logger, "xray-easy", fullMethod, requestID, protocolForClientCall(method, fields), started, err, interaction.TraceFromContext(outgoing))
+	interaction.LogRPC(c.logger, "xray-easy", fullMethod, requestID, protocolForClientCall(method, request), started, err, interaction.TraceFromContext(outgoing))
 	if err != nil {
 		return nil, fmt.Errorf("Controller %s: %w", method, err)
 	}
 	return response, nil
 }
 
-func protocolForClientCall(method string, fields map[string]any) string {
+func newRPCResponse(method string) (proto.Message, error) {
+	switch method {
+	case "Health":
+		return &controllerv1.HealthResponse{}, nil
+	case "GetCapabilities":
+		return &controllerv1.CapabilitiesResponse{}, nil
+	case "GetStatus":
+		return &controllerv1.StatusResponse{}, nil
+	case "GetLogs":
+		return &controllerv1.LogsResponse{}, nil
+	case "ValidateConfig", "ApplyConfig", "ReplaceInbound", "ProbeTarget", "AddDeviceUser", "RemoveDeviceUser", "RemoveAmneziaWGPeer", "RestoreAmneziaWGBackup":
+		return &controllerv1.OperationResponse{}, nil
+	case "ProbeIPv6":
+		return &controllerv1.ProbeIPv6Response{}, nil
+	case "ListDeviceUsers":
+		return &controllerv1.ListDeviceUsersResponse{}, nil
+	case "GetXrayTelemetry":
+		return &controllerv1.XrayTelemetryResponse{}, nil
+	case "GetAmneziaWGStatus":
+		return &controllerv1.AmneziaWGStatusResponse{}, nil
+	case "ListAmneziaWGPeers":
+		return &controllerv1.ListAmneziaWGPeersResponse{}, nil
+	case "CreateAmneziaWGPeer":
+		return &controllerv1.AmneziaWGPeer{}, nil
+	case "GetAmneziaWGPeerStats":
+		return &controllerv1.AmneziaWGPeerStatsResponse{}, nil
+	case "GetAmneziaWGClientConfig":
+		return &controllerv1.AmneziaWGClientConfigResponse{}, nil
+	case "ExportAmneziaWGBackup":
+		return &controllerv1.AmneziaWGBackupResponse{}, nil
+	default:
+		return nil, fmt.Errorf("unknown Controller RPC method %q", method)
+	}
+}
+
+func protocolForClientCall(method string, request proto.Message) string {
 	if strings.Contains(method, "AmneziaWG") {
 		return "amneziawg"
 	}
 	if method == "Health" || method == "GetCapabilities" {
 		return "runtime"
 	}
-	if protocol, ok := fields["protocol"].(string); ok {
-		switch protocol {
-		case "vless", "vmess", "hysteria2", "amneziawg":
-			return protocol
-		}
+	switch value := request.(type) {
+	case *controllerv1.AddDeviceUserRequest:
+		return safeProtocolName(value.GetProtocol())
+	case *controllerv1.RemoveDeviceUserRequest:
+		return safeProtocolName(value.GetProtocol())
+	case *controllerv1.ListDeviceUsersRequest:
+		return safeProtocolName(value.GetProtocol())
 	}
 	return "xray"
 }
 
-func responseString(fields map[string]*structpb.Value, name string, required bool) (string, error) {
-	value := fields[name]
+func protobufTimeToTime(field string, value *timestamppb.Timestamp) (time.Time, error) {
 	if value == nil {
-		if required {
-			return "", fmt.Errorf("decode Controller response: missing %s", name)
-		}
-		return "", nil
+		return time.Time{}, nil
 	}
-	if _, ok := value.GetKind().(*structpb.Value_StringValue); !ok {
-		return "", fmt.Errorf("decode Controller response: %s must be a string", name)
+	if err := value.CheckValid(); err != nil {
+		return time.Time{}, fmt.Errorf("decode Controller %s: %w", field, err)
 	}
-	return value.GetStringValue(), nil
+	return value.AsTime().UTC(), nil
 }
 
-func responseInt(fields map[string]*structpb.Value, name string) (int, error) {
-	value := fields[name]
-	if value == nil {
-		return 0, fmt.Errorf("decode Controller response: missing %s", name)
-	}
-	numeric, ok := value.GetKind().(*structpb.Value_NumberValue)
-	if !ok {
-		return 0, fmt.Errorf("decode Controller response: %s must be a number", name)
-	}
-	number := numeric.NumberValue
-	if number < 0 || number >= float64(int(^uint(0)>>1)) || math.Trunc(number) != number {
-		return 0, fmt.Errorf("decode Controller response: %s must be a non-negative integer", name)
-	}
-	return int(number), nil
+func metadataAppendAuth(ctx context.Context, token string) context.Context {
+	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 }

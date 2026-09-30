@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -52,7 +53,7 @@ func (s *supervisor) GetLogs(_ context.Context, _ *emptypb.Empty) (*structpb.Str
 }
 
 func (s *supervisor) ValidateConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "path", "operation_id"); err != nil {
+	if err := rpcFields(request, "path", "operation_id", "state_revision"); err != nil {
 		return nil, err
 	}
 	path, err := rpcString(request, "path", true)
@@ -70,7 +71,7 @@ func (s *supervisor) ValidateConfig(ctx context.Context, request *structpb.Struc
 }
 
 func (s *supervisor) ApplyConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "path", "operation_id"); err != nil {
+	if err := rpcFields(request, "path", "operation_id", "state_revision"); err != nil {
 		return nil, err
 	}
 	path, err := rpcString(request, "path", true)
@@ -81,14 +82,18 @@ func (s *supervisor) ApplyConfig(ctx context.Context, request *structpb.Struct) 
 	if err != nil {
 		return nil, err
 	}
-	if err := s.applyContext(ctx, path); err != nil {
+	revision, err := rpcRevision(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.applyRevisionContext(ctx, path, operationID, revision); err != nil {
 		return nil, rpcOperationError(codes.FailedPrecondition, err)
 	}
 	return rpcResponse(map[string]any{"ok": true, "operation_id": operationID, "protocol": protocolVersion})
 }
 
 func (s *supervisor) ReplaceInbound(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := rpcFields(request, "candidate_path", "previous_path", "tag", "operation_id"); err != nil {
+	if err := rpcFields(request, "candidate_path", "previous_path", "tag", "operation_id", "state_revision"); err != nil {
 		return nil, err
 	}
 	candidatePath, err := rpcString(request, "candidate_path", true)
@@ -108,10 +113,26 @@ func (s *supervisor) ReplaceInbound(ctx context.Context, request *structpb.Struc
 		return nil, err
 	}
 	input := replaceInboundRequest{CandidatePath: candidatePath, PreviousPath: previousPath, Tag: tag, OperationID: operationID}
-	if err := s.replaceInboundContext(ctx, input); err != nil {
+	revision, err := rpcRevision(request)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.replaceInboundRevisionContext(ctx, input, revision); err != nil {
 		return nil, rpcOperationError(codes.FailedPrecondition, err)
 	}
 	return rpcResponse(map[string]any{"ok": true, "operation_id": operationID, "protocol": protocolVersion})
+}
+
+func rpcRevision(request *structpb.Struct) (int64, error) {
+	value, err := rpcString(request, "state_revision", true)
+	if err != nil {
+		return 0, err
+	}
+	revision, err := strconv.ParseInt(value, 10, 64)
+	if err != nil || revision < 1 {
+		return 0, status.Error(codes.InvalidArgument, "state_revision must be a positive integer")
+	}
+	return revision, nil
 }
 
 func (s *supervisor) ProbeTarget(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {

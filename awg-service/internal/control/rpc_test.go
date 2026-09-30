@@ -951,10 +951,26 @@ func TestGRPCPeerMutationsReplaySafelyAcrossServiceRestart(t *testing.T) {
 	}
 	createID := "0123456789abcdef0123456789abcdef"
 	createRequest, _ := structpb.NewStruct(map[string]any{"name": "iphone"})
+	lossyConnection := &loseFirstGRPCResponse{ClientConnInterface: connection, method: "/xrayeasy.awg.v1.Control/CreatePeer"}
+	if err := lossyConnection.Invoke(trace(createID), "/xrayeasy.awg.v1.Control/CreatePeer", createRequest, new(structpb.Struct)); status.Code(err) != codes.Unavailable {
+		t.Fatalf("CreatePeer response-loss attempt = %v, want Unavailable", err)
+	}
+	server.Stop()
+	_ = connection.Close()
+	_ = listener.Close()
+	manager.Close()
+
+	restarted, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager = restarted
+	server, listener, connection = newConnection(NewService(manager, opts))
 	var firstCreate map[string]any
 	for attempt := 0; attempt < 2; attempt++ {
 		response := new(structpb.Struct)
-		if err := connection.Invoke(trace(createID), "/xrayeasy.awg.v1.Control/CreatePeer", createRequest, response); err != nil {
+		err := connection.Invoke(trace(createID), "/xrayeasy.awg.v1.Control/CreatePeer", createRequest, response)
+		if err != nil {
 			t.Fatalf("CreatePeer attempt %d = %v", attempt, err)
 		}
 		if attempt == 0 {
@@ -981,12 +997,16 @@ func TestGRPCPeerMutationsReplaySafelyAcrossServiceRestart(t *testing.T) {
 	_ = listener.Close()
 	manager.Close()
 
-	restarted, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	server.Stop()
+	_ = connection.Close()
+	_ = listener.Close()
+	manager.Close()
+	afterRestart, err := Open(opts, fakeFactory{device: &fakeDevice{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.Close()
-	server, listener, connection = newConnection(NewService(restarted, opts))
+	defer afterRestart.Close()
+	server, listener, connection = newConnection(NewService(afterRestart, opts))
 	defer server.Stop()
 	defer connection.Close()
 	defer listener.Close()
@@ -998,9 +1018,24 @@ func TestGRPCPeerMutationsReplaySafelyAcrossServiceRestart(t *testing.T) {
 	if err := connection.Invoke(trace(removeID), "/xrayeasy.awg.v1.Control/RemovePeer", removeRequest, new(structpb.Struct)); err != nil {
 		t.Fatalf("replay old revoke after restart = %v", err)
 	}
-	if len(restarted.Peers()) != 1 || restarted.Peers()[0].OperationID != newCreateID {
-		t.Fatalf("old revoke removed a replacement peer: %+v", restarted.Peers())
+	if len(afterRestart.Peers()) != 1 || afterRestart.Peers()[0].OperationID != newCreateID {
+		t.Fatalf("old revoke removed a replacement peer: %+v", afterRestart.Peers())
 	}
+}
+
+type loseFirstGRPCResponse struct {
+	grpc.ClientConnInterface
+	method string
+	lost   bool
+}
+
+func (c *loseFirstGRPCResponse) Invoke(ctx context.Context, method string, request, response any, options ...grpc.CallOption) error {
+	err := c.ClientConnInterface.Invoke(ctx, method, request, response, options...)
+	if err == nil && method == c.method && !c.lost {
+		c.lost = true
+		return status.Error(codes.Unavailable, "simulated response loss after peer persistence")
+	}
+	return err
 }
 
 func TestAWGBackupRestoresPeersAndPrivateProfiles(t *testing.T) {

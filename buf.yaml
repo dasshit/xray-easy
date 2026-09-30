@@ -1,0 +1,5 @@
+version: v2
+modules:
+  - path: internal/controller/api/v1
+    name: buf.build/xray-easy/controller
+deps: []

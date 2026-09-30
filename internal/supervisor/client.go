@@ -99,13 +99,13 @@ func (c *Client) Close() error {
 
 func (c *Client) Validate(ctx context.Context, path, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
-	_, err := c.call(ctx, "ValidateConfig", stringRequest(map[string]string{"path": path, "operation_id": operationID}))
+	_, err := c.call(ctx, "ValidateConfig", stringRequest(map[string]string{"path": path, "operation_id": operationID, "state_revision": strconv.FormatInt(interaction.StateRevision(ctx), 10)}))
 	return err
 }
 
 func (c *Client) Apply(ctx context.Context, path, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
-	_, err := c.call(ctx, "ApplyConfig", stringRequest(map[string]string{"path": path, "operation_id": operationID}))
+	_, err := c.call(ctx, "ApplyConfig", stringRequest(map[string]string{"path": path, "operation_id": operationID, "state_revision": strconv.FormatInt(interaction.StateRevision(ctx), 10)}))
 	return err
 }
 
@@ -117,6 +117,7 @@ func (c *Client) ReplaceInbound(ctx context.Context, candidatePath, previousPath
 		"previous_path":  previousPath,
 		"tag":            tag,
 		"operation_id":   operationID,
+		"state_revision": strconv.FormatInt(interaction.StateRevision(ctx), 10),
 	})
 	_, err := c.call(ctx, "ReplaceInbound", request)
 	return err

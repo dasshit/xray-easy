@@ -2,15 +2,11 @@ package controller
 
 import (
 	"context"
-	"encoding/base64"
 	"fmt"
-	"strconv"
-	"time"
 
 	"xray-easy/internal/awgcontrol"
+	"xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/domain"
-
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // AWGClient exposes the AmneziaWG subset through the shared Controller gRPC
@@ -29,49 +25,28 @@ func (c *AWGClient) Close() error {
 }
 
 func (c *AWGClient) Status(ctx context.Context) (domain.AmneziaWGStatus, error) {
-	response, err := c.controller.call(ctx, "GetAmneziaWGStatus", nil)
+	response, err := c.controller.call(ctx, "GetAmneziaWGStatus", &controllerv1.EmptyRequest{})
 	if err != nil {
 		return domain.AmneziaWGStatus{}, err
 	}
-	fields := response.GetFields()
-	var value domain.AmneziaWGStatus
-	if value.Running, err = responseBool(fields, "running"); err != nil {
-		return value, err
+	value := response.(*controllerv1.AmneziaWGStatusResponse)
+	if value.ListenPort < 0 || value.ListenPort > 65535 || value.PublicPort < 0 || value.PublicPort > 65535 || value.PeerCount < 0 {
+		return domain.AmneziaWGStatus{}, fmt.Errorf("decode Controller AmneziaWG status: numeric field out of range")
 	}
-	for key, target := range map[string]*string{"public_key": &value.PublicKey, "public_host": &value.PublicHost, "ipv4_network": &value.IPv4Network, "ipv6_network": &value.IPv6Network, "service_version": &value.ServiceVersion} {
-		*target, err = responseString(fields, key, false)
-		if err != nil {
-			return value, err
-		}
-	}
-	for key, target := range map[string]*int{"listen_port": &value.ListenPort, "public_port": &value.PublicPort, "peer_count": &value.PeerCount} {
-		*target, err = responseInt(fields, key)
-		if err != nil {
-			return value, err
-		}
-	}
-	return value, nil
+	return domain.AmneziaWGStatus{Running: value.Running, PublicKey: value.PublicKey, ListenPort: int(value.ListenPort), PublicHost: value.PublicHost, PublicPort: int(value.PublicPort), PeerCount: int(value.PeerCount), IPv4Network: value.Ipv4Network, IPv6Network: value.Ipv6Network, ServiceVersion: value.ServiceVersion}, nil
 }
 
 func (c *AWGClient) ListPeers(ctx context.Context) ([]domain.AmneziaWGPeer, error) {
-	response, err := c.controller.call(ctx, "ListAmneziaWGPeers", nil)
+	response, err := c.controller.call(ctx, "ListAmneziaWGPeers", &controllerv1.EmptyRequest{})
 	if err != nil {
 		return nil, err
 	}
-	items, err := listField(response.GetFields(), "peers")
-	if err != nil {
-		return nil, err
-	}
+	items := response.(*controllerv1.ListAmneziaWGPeersResponse).Peers
 	peers := make([]domain.AmneziaWGPeer, 0, len(items))
 	for index, item := range items {
-		fields := item.GetStructValue()
-		if fields == nil {
-			return nil, fmt.Errorf("decode Controller AWG peers: item %d must be an object", index)
-		}
-		values := fields.GetFields()
-		peer, err := parsePeer(values)
+		peer, err := fromProtoPeer(item)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("decode Controller AWG peer %d: %w", index, err)
 		}
 		peers = append(peers, peer)
 	}
@@ -79,154 +54,68 @@ func (c *AWGClient) ListPeers(ctx context.Context) ([]domain.AmneziaWGPeer, erro
 }
 
 func (c *AWGClient) CreatePeer(ctx context.Context, name string) (domain.AmneziaWGPeer, error) {
-	response, err := c.controller.call(ctx, "CreateAmneziaWGPeer", map[string]any{"name": name})
+	response, err := c.controller.call(ctx, "CreateAmneziaWGPeer", &controllerv1.CreateAmneziaWGPeerRequest{Name: name})
 	if err != nil {
 		return domain.AmneziaWGPeer{}, err
 	}
-	return parsePeer(response.GetFields())
+	return fromProtoPeer(response.(*controllerv1.AmneziaWGPeer))
 }
 
 func (c *AWGClient) RemovePeer(ctx context.Context, name string) error {
-	_, err := c.controller.call(ctx, "RemoveAmneziaWGPeer", map[string]any{"name": name})
+	_, err := c.controller.call(ctx, "RemoveAmneziaWGPeer", &controllerv1.RemoveAmneziaWGPeerRequest{Name: name})
 	return err
 }
 
 func (c *AWGClient) ClientConfig(ctx context.Context, name string) (string, error) {
-	response, err := c.controller.call(ctx, "GetAmneziaWGClientConfig", map[string]any{"name": name})
+	response, err := c.controller.call(ctx, "GetAmneziaWGClientConfig", &controllerv1.GetAmneziaWGClientConfigRequest{Name: name})
 	if err != nil {
 		return "", err
 	}
-	return responseString(response.GetFields(), "config", true)
+	return response.(*controllerv1.AmneziaWGClientConfigResponse).Config, nil
 }
 
 func (c *AWGClient) PeerStats(ctx context.Context) ([]domain.AmneziaWGPeerStats, error) {
-	response, err := c.controller.call(ctx, "GetAmneziaWGPeerStats", nil)
+	response, err := c.controller.call(ctx, "GetAmneziaWGPeerStats", &controllerv1.EmptyRequest{})
 	if err != nil {
 		return nil, err
 	}
-	items, err := listField(response.GetFields(), "peers")
-	if err != nil {
-		return nil, err
-	}
+	items := response.(*controllerv1.AmneziaWGPeerStatsResponse).Peers
 	peers := make([]domain.AmneziaWGPeerStats, 0, len(items))
 	for index, item := range items {
-		fields := item.GetStructValue()
-		if fields == nil {
-			return nil, fmt.Errorf("decode Controller AWG stats: item %d must be an object", index)
+		if item == nil || item.Name == "" || item.UploadBytes < 0 || item.DownloadBytes < 0 {
+			return nil, fmt.Errorf("decode Controller AWG stats: peer %d has invalid fields", index)
 		}
-		values := fields.GetFields()
-		name, err := responseString(values, "name", true)
+		lastSeen, err := protobufTimeToTime("last_seen", item.LastSeen)
 		if err != nil {
 			return nil, err
 		}
-		source, err := responseString(values, "source_ip", false)
-		if err != nil {
-			return nil, err
-		}
-		lastSeen, err := responseTime(values, "last_seen")
-		if err != nil {
-			return nil, err
-		}
-		upload, err := responseCounter(values, "upload_bytes")
-		if err != nil {
-			return nil, err
-		}
-		download, err := responseCounter(values, "download_bytes")
-		if err != nil {
-			return nil, err
-		}
-		peers = append(peers, domain.AmneziaWGPeerStats{Name: name, SourceIP: source, LastSeen: lastSeen, UploadBytes: upload, DownloadBytes: download})
+		peers = append(peers, domain.AmneziaWGPeerStats{Name: item.Name, SourceIP: item.SourceIp, LastSeen: lastSeen, UploadBytes: item.UploadBytes, DownloadBytes: item.DownloadBytes})
 	}
 	return peers, nil
 }
 
 func (c *AWGClient) ExportBackup(ctx context.Context) ([]byte, error) {
-	response, err := c.controller.call(ctx, "ExportAmneziaWGBackup", nil)
+	response, err := c.controller.call(ctx, "ExportAmneziaWGBackup", &controllerv1.EmptyRequest{})
 	if err != nil {
 		return nil, err
 	}
-	value, err := responseString(response.GetFields(), "data", true)
-	if err != nil {
-		return nil, err
-	}
-	data, err := base64.StdEncoding.DecodeString(value)
-	if err != nil {
-		return nil, fmt.Errorf("decode Controller AWG backup: %w", err)
-	}
-	return data, nil
+	return append([]byte{}, response.(*controllerv1.AmneziaWGBackupResponse).Data...), nil
 }
 
 func (c *AWGClient) RestoreBackup(ctx context.Context, data []byte) error {
-	_, err := c.controller.call(ctx, "RestoreAmneziaWGBackup", map[string]any{"data": base64.StdEncoding.EncodeToString(data)})
+	_, err := c.controller.call(ctx, "RestoreAmneziaWGBackup", &controllerv1.RestoreAmneziaWGBackupRequest{Data: data})
 	return err
 }
 
-func parsePeer(fields map[string]*structpb.Value) (domain.AmneziaWGPeer, error) {
-	var peer domain.AmneziaWGPeer
-	var err error
-	if peer.Name, err = responseString(fields, "name", true); err != nil {
-		return peer, err
+func fromProtoPeer(value *controllerv1.AmneziaWGPeer) (domain.AmneziaWGPeer, error) {
+	if value == nil || value.Name == "" || value.PublicKey == "" || value.Ipv4 == "" || value.Ipv6 == "" {
+		return domain.AmneziaWGPeer{}, fmt.Errorf("required peer field is empty")
 	}
-	if peer.PublicKey, err = responseString(fields, "public_key", true); err != nil {
-		return peer, err
-	}
-	if peer.IPv4, err = responseString(fields, "ipv4", true); err != nil {
-		return peer, err
-	}
-	if peer.IPv6, err = responseString(fields, "ipv6", true); err != nil {
-		return peer, err
-	}
-	if peer.CreatedAt, err = responseTime(fields, "created_at"); err != nil {
-		return peer, err
-	}
-	return peer, nil
-}
-
-func responseBool(fields map[string]*structpb.Value, key string) (bool, error) {
-	value := fields[key]
-	if value == nil {
-		return false, fmt.Errorf("decode Controller response: missing %s", key)
-	}
-	boolean, ok := value.GetKind().(*structpb.Value_BoolValue)
-	if !ok {
-		return false, fmt.Errorf("decode Controller response: %s must be a boolean", key)
-	}
-	return boolean.BoolValue, nil
-}
-
-func listField(fields map[string]*structpb.Value, key string) ([]*structpb.Value, error) {
-	value := fields[key]
-	if value == nil || value.GetListValue() == nil {
-		return nil, fmt.Errorf("decode Controller response: %s must be a list", key)
-	}
-	return value.GetListValue().GetValues(), nil
-}
-
-func responseCounter(fields map[string]*structpb.Value, key string) (int64, error) {
-	value, err := responseString(fields, key, true)
+	createdAt, err := protobufTimeToTime("created_at", value.CreatedAt)
 	if err != nil {
-		return 0, err
+		return domain.AmneziaWGPeer{}, err
 	}
-	counter, err := strconv.ParseInt(value, 10, 64)
-	if err != nil || counter < 0 {
-		return 0, fmt.Errorf("decode Controller response: %s must be a non-negative integer", key)
-	}
-	return counter, nil
-}
-
-func responseTime(fields map[string]*structpb.Value, key string) (time.Time, error) {
-	value, err := responseString(fields, key, false)
-	if err != nil {
-		return time.Time{}, err
-	}
-	if value == "" {
-		return time.Time{}, nil
-	}
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return time.Time{}, fmt.Errorf("decode Controller response: %s must be RFC3339", key)
-	}
-	return parsed, nil
+	return domain.AmneziaWGPeer{Name: value.Name, PublicKey: value.PublicKey, IPv4: value.Ipv4, IPv6: value.Ipv6, CreatedAt: createdAt}, nil
 }
 
 var _ awgcontrol.Gateway = (*AWGClient)(nil)

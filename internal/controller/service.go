@@ -2,13 +2,13 @@ package controller
 
 import (
 	"context"
-	"encoding/base64"
-	"fmt"
-	"strconv"
+	"encoding/hex"
+	"strings"
 	"sync"
 	"time"
 
 	"xray-easy/internal/awgcontrol"
+	"xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/supervisor"
@@ -16,7 +16,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // XrayRuntime is the current Xray adapter contract. It intentionally excludes
@@ -59,8 +59,9 @@ type AmneziaWGRuntime interface {
 	RestoreBackup(context.Context, []byte) error
 }
 
-// Service orchestrates runtime adapters behind the Controller API.
+// Service orchestrates runtime adapters behind the typed Controller API.
 type Service struct {
+	controllerv1.UnimplementedControllerServer
 	xray           XrayRuntime
 	handler        XrayHandlerRuntime
 	stats          XrayStatsRuntime
@@ -79,10 +80,7 @@ func NewServiceWithAdapters(xray XrayRuntime, handler XrayHandlerRuntime, stats 
 	return &Service{xray: xray, handler: handler, stats: stats, awg: awg, now: time.Now}
 }
 
-func (s *Service) Health(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) Health(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.HealthResponse, error) {
 	xray, err := s.runtime()
 	if err != nil {
 		return nil, err
@@ -90,24 +88,17 @@ func (s *Service) Health(ctx context.Context, request *structpb.Struct) (*struct
 	if err := xray.Health(ctx); err != nil {
 		return nil, status.Error(codes.Unavailable, "Xray adapter is unavailable")
 	}
-	return response(map[string]any{"ok": true, "controller_version": "v1"})
+	return &controllerv1.HealthResponse{Ok: true, ControllerVersion: "v1"}, nil
 }
 
-func (s *Service) GetCapabilities(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
-	capabilities := map[string]any{
-		"xray":      map[string]any{"configured": s != nil && s.xray != nil, "protocols": []any{"vless", "vmess", "hysteria2"}},
-		"amneziawg": map[string]any{"configured": s != nil && s.awg != nil, "protocols": []any{"amneziawg"}},
-	}
-	return response(capabilities)
+func (s *Service) GetCapabilities(context.Context, *controllerv1.EmptyRequest) (*controllerv1.CapabilitiesResponse, error) {
+	return &controllerv1.CapabilitiesResponse{
+		Xray:      &controllerv1.ProtocolCapability{Configured: s != nil && s.xray != nil, Protocols: []string{"vless", "vmess", "hysteria2"}},
+		Amneziawg: &controllerv1.ProtocolCapability{Configured: s != nil && s.awg != nil, Protocols: []string{"amneziawg"}},
+	}, nil
 }
 
-func (s *Service) GetStatus(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) GetStatus(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.StatusResponse, error) {
 	xray, err := s.runtime()
 	if err != nil {
 		return nil, err
@@ -116,22 +107,14 @@ func (s *Service) GetStatus(ctx context.Context, request *structpb.Struct) (*str
 	if err != nil {
 		return nil, err
 	}
-	startedAt := ""
-	if !value.StartedAt.IsZero() {
-		startedAt = value.StartedAt.UTC().Format(time.RFC3339Nano)
-	}
-	return response(map[string]any{
-		"protocol": value.Protocol, "xray_version": value.XrayVersion,
-		"state": value.State, "pid": value.PID, "config_path": value.ConfigPath,
-		"last_error": value.LastError, "last_exit": value.LastExit,
-		"restart_count": value.RestartCount, "started_at": startedAt,
-	})
+	return &controllerv1.StatusResponse{
+		Protocol: value.Protocol, XrayVersion: value.XrayVersion, State: value.State,
+		Pid: int32(value.PID), ConfigPath: value.ConfigPath, LastError: value.LastError,
+		LastExit: value.LastExit, RestartCount: int32(value.RestartCount), StartedAt: protobufTime(value.StartedAt),
+	}, nil
 }
 
-func (s *Service) GetLogs(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) GetLogs(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.LogsResponse, error) {
 	xray, err := s.runtime()
 	if err != nil {
 		return nil, err
@@ -140,23 +123,14 @@ func (s *Service) GetLogs(ctx context.Context, request *structpb.Struct) (*struc
 	if err != nil {
 		return nil, err
 	}
-	values := make([]any, len(lines))
-	for index, line := range lines {
-		values[index] = line
-	}
-	return response(map[string]any{"lines": values})
+	return &controllerv1.LogsResponse{Lines: append([]string{}, lines...)}, nil
 }
 
-func (s *Service) ValidateConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "path", "operation_id")
-	if err != nil {
-		return nil, err
+func (s *Service) ValidateConfig(ctx context.Context, request *controllerv1.ValidateConfigRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || request.Path == "" || request.OperationId == "" {
+		return nil, status.Error(codes.InvalidArgument, "path and operation_id are required")
 	}
-	path, err := stringField(values, "path", true)
-	if err != nil {
-		return nil, err
-	}
-	operation, err := stringField(values, "operation_id", false)
+	ctx, err := configOperationContext(ctx, request.OperationId, request.StateRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -164,22 +138,17 @@ func (s *Service) ValidateConfig(ctx context.Context, request *structpb.Struct) 
 	if err != nil {
 		return nil, err
 	}
-	if err := xray.Validate(ctx, path, operation); err != nil {
+	if err := xray.Validate(ctx, request.Path, request.OperationId); err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"ok": true, "operation_id": operation})
+	return &controllerv1.OperationResponse{Ok: true, OperationId: request.OperationId, StateRevision: request.StateRevision}, nil
 }
 
-func (s *Service) ApplyConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "path", "operation_id")
-	if err != nil {
-		return nil, err
+func (s *Service) ApplyConfig(ctx context.Context, request *controllerv1.ApplyConfigRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || request.Path == "" || request.OperationId == "" {
+		return nil, status.Error(codes.InvalidArgument, "path and operation_id are required")
 	}
-	path, err := stringField(values, "path", true)
-	if err != nil {
-		return nil, err
-	}
-	operation, err := stringField(values, "operation_id", true)
+	ctx, err := configOperationContext(ctx, request.OperationId, request.StateRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -187,30 +156,17 @@ func (s *Service) ApplyConfig(ctx context.Context, request *structpb.Struct) (*s
 	if err != nil {
 		return nil, err
 	}
-	if err := xray.Apply(ctx, path, operation); err != nil {
+	if err := xray.Apply(ctx, request.Path, request.OperationId); err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"ok": true, "operation_id": operation})
+	return &controllerv1.OperationResponse{Ok: true, OperationId: request.OperationId, StateRevision: request.StateRevision}, nil
 }
 
-func (s *Service) ReplaceInbound(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "candidate_path", "previous_path", "tag", "operation_id")
-	if err != nil {
-		return nil, err
+func (s *Service) ReplaceInbound(ctx context.Context, request *controllerv1.ReplaceInboundRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || request.CandidatePath == "" || request.PreviousPath == "" || request.Tag == "" || request.OperationId == "" {
+		return nil, status.Error(codes.InvalidArgument, "candidate_path, previous_path, tag, and operation_id are required")
 	}
-	candidate, err := stringField(values, "candidate_path", true)
-	if err != nil {
-		return nil, err
-	}
-	previous, err := stringField(values, "previous_path", true)
-	if err != nil {
-		return nil, err
-	}
-	tag, err := stringField(values, "tag", true)
-	if err != nil {
-		return nil, err
-	}
-	operation, err := stringField(values, "operation_id", true)
+	ctx, err := configOperationContext(ctx, request.OperationId, request.StateRevision)
 	if err != nil {
 		return nil, err
 	}
@@ -218,39 +174,46 @@ func (s *Service) ReplaceInbound(ctx context.Context, request *structpb.Struct) 
 	if err != nil {
 		return nil, err
 	}
-	if err := xray.ReplaceInbound(ctx, candidate, previous, tag, operation); err != nil {
+	if err := xray.ReplaceInbound(ctx, request.CandidatePath, request.PreviousPath, request.Tag, request.OperationId); err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"ok": true, "operation_id": operation})
+	return &controllerv1.OperationResponse{Ok: true, OperationId: request.OperationId, StateRevision: request.StateRevision}, nil
 }
 
-func (s *Service) ProbeTarget(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "target", "sni")
-	if err != nil {
-		return nil, err
+func configOperationContext(ctx context.Context, operationID string, revision int64) (context.Context, error) {
+	if revision < 1 {
+		return nil, status.Error(codes.InvalidArgument, "state_revision must be positive")
 	}
-	target, err := stringField(values, "target", true)
-	if err != nil {
-		return nil, err
+	operationBytes, err := hex.DecodeString(operationID)
+	if len(operationID) != 32 || err != nil || len(operationBytes) != 16 {
+		return nil, status.Error(codes.InvalidArgument, "operation_id must be a 128-bit hexadecimal ID")
 	}
-	sni, err := stringField(values, "sni", false)
-	if err != nil {
-		return nil, err
+	operationID = strings.ToLower(operationID)
+	if traceOperationID := interaction.OperationID(ctx); traceOperationID != "" && traceOperationID != operationID {
+		return nil, status.Error(codes.InvalidArgument, "operation_id does not match request metadata")
+	}
+	if traceRevision := interaction.StateRevision(ctx); traceRevision > 0 && traceRevision != revision {
+		return nil, status.Error(codes.InvalidArgument, "state_revision does not match request metadata")
+	}
+	ctx = interaction.WithOperationID(ctx, operationID)
+	return interaction.WithStateRevision(ctx, revision), nil
+}
+
+func (s *Service) ProbeTarget(ctx context.Context, request *controllerv1.ProbeTargetRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || request.Target == "" {
+		return nil, status.Error(codes.InvalidArgument, "target is required")
 	}
 	xray, err := s.runtime()
 	if err != nil {
 		return nil, err
 	}
-	if err := xray.ProbeTarget(ctx, target, sni); err != nil {
+	if err := xray.ProbeTarget(ctx, request.Target, request.Sni); err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"ok": true})
+	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
-func (s *Service) ProbeIPv6(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) ProbeIPv6(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.ProbeIPv6Response, error) {
 	xray, err := s.runtime()
 	if err != nil {
 		return nil, err
@@ -258,32 +221,15 @@ func (s *Service) ProbeIPv6(ctx context.Context, request *structpb.Struct) (*str
 	if err := xray.ProbeIPv6(ctx); err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"ok": true, "checked_at": s.now().UTC().Format(time.RFC3339Nano)})
+	return &controllerv1.ProbeIPv6Response{Ok: true, CheckedAt: protobufTime(s.now().UTC())}, nil
 }
 
-func (s *Service) AddDeviceUser(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "protocol", "email", "id", "flow")
-	if err != nil {
-		return nil, err
+func (s *Service) AddDeviceUser(ctx context.Context, request *controllerv1.AddDeviceUserRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || request.Protocol == "" || request.Email == "" || request.Id == "" {
+		return nil, status.Error(codes.InvalidArgument, "protocol, email, and id are required")
 	}
-	protocol, err := stringField(values, "protocol", true)
-	if err != nil {
-		return nil, err
-	}
-	email, err := stringField(values, "email", true)
-	if err != nil {
-		return nil, err
-	}
-	id, err := stringField(values, "id", true)
-	if err != nil {
-		return nil, err
-	}
-	flow, err := stringField(values, "flow", false)
-	if err != nil {
-		return nil, err
-	}
-	if !supportedXrayProtocol(protocol) {
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", protocol)
+	if !supportedXrayProtocol(request.Protocol) {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", request.Protocol)
 	}
 	handler, err := s.xrayHandler()
 	if err != nil {
@@ -292,43 +238,35 @@ func (s *Service) AddDeviceUser(ctx context.Context, request *structpb.Struct) (
 	s.userMutationMu.Lock()
 	defer s.userMutationMu.Unlock()
 	if interaction.OperationID(ctx) != "" {
-		users, err := deviceUsers(ctx, handler, protocol)
+		users, err := deviceUsers(ctx, handler, request.Protocol)
 		if err != nil {
 			return nil, err
 		}
-		if containsUser(users, email) {
-			return response(map[string]any{"ok": true, "already_applied": true})
+		if containsUser(users, request.Email) {
+			return &controllerv1.OperationResponse{Ok: true, AlreadyApplied: true}, nil
 		}
 	}
-	switch protocol {
+	var mutationErr error
+	switch request.Protocol {
 	case "vless":
-		err = handler.AddUser(ctx, email, id, flow)
+		mutationErr = handler.AddUser(ctx, request.Email, request.Id, request.Flow)
 	case "hysteria2":
-		err = handler.AddHysteriaUser(ctx, email, id)
+		mutationErr = handler.AddHysteriaUser(ctx, request.Email, request.Id)
 	case "vmess":
-		err = handler.AddVMessUser(ctx, email, id)
+		mutationErr = handler.AddVMessUser(ctx, request.Email, request.Id)
 	}
-	if err != nil {
-		return nil, err
+	if mutationErr != nil {
+		return nil, mutationErr
 	}
-	return response(map[string]any{"ok": true})
+	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
-func (s *Service) RemoveDeviceUser(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "protocol", "email")
-	if err != nil {
-		return nil, err
+func (s *Service) RemoveDeviceUser(ctx context.Context, request *controllerv1.RemoveDeviceUserRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || request.Protocol == "" || request.Email == "" {
+		return nil, status.Error(codes.InvalidArgument, "protocol and email are required")
 	}
-	protocol, err := stringField(values, "protocol", true)
-	if err != nil {
-		return nil, err
-	}
-	email, err := stringField(values, "email", true)
-	if err != nil {
-		return nil, err
-	}
-	if !supportedXrayProtocol(protocol) {
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", protocol)
+	if !supportedXrayProtocol(request.Protocol) {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", request.Protocol)
 	}
 	handler, err := s.xrayHandler()
 	if err != nil {
@@ -337,26 +275,27 @@ func (s *Service) RemoveDeviceUser(ctx context.Context, request *structpb.Struct
 	s.userMutationMu.Lock()
 	defer s.userMutationMu.Unlock()
 	if interaction.OperationID(ctx) != "" {
-		users, err := deviceUsers(ctx, handler, protocol)
+		users, err := deviceUsers(ctx, handler, request.Protocol)
 		if err != nil {
 			return nil, err
 		}
-		if !containsUser(users, email) {
-			return response(map[string]any{"ok": true, "already_applied": true})
+		if !containsUser(users, request.Email) {
+			return &controllerv1.OperationResponse{Ok: true, AlreadyApplied: true}, nil
 		}
 	}
-	switch protocol {
+	var mutationErr error
+	switch request.Protocol {
 	case "vless":
-		err = handler.RemoveUser(ctx, email)
+		mutationErr = handler.RemoveUser(ctx, request.Email)
 	case "hysteria2":
-		err = handler.RemoveHysteriaUser(ctx, email)
+		mutationErr = handler.RemoveHysteriaUser(ctx, request.Email)
 	case "vmess":
-		err = handler.RemoveVMessUser(ctx, email)
+		mutationErr = handler.RemoveVMessUser(ctx, request.Email)
 	}
-	if err != nil {
-		return nil, err
+	if mutationErr != nil {
+		return nil, mutationErr
 	}
-	return response(map[string]any{"ok": true})
+	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
 func deviceUsers(ctx context.Context, handler XrayHandlerRuntime, protocol string) ([]string, error) {
@@ -381,45 +320,25 @@ func containsUser(users []string, email string) bool {
 	return false
 }
 
-func (s *Service) ListDeviceUsers(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "protocol")
-	if err != nil {
-		return nil, err
+func (s *Service) ListDeviceUsers(ctx context.Context, request *controllerv1.ListDeviceUsersRequest) (*controllerv1.ListDeviceUsersResponse, error) {
+	if request == nil || request.Protocol == "" {
+		return nil, status.Error(codes.InvalidArgument, "protocol is required")
 	}
-	protocol, err := stringField(values, "protocol", true)
-	if err != nil {
-		return nil, err
-	}
-	if !supportedXrayProtocol(protocol) {
-		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", protocol)
+	if !supportedXrayProtocol(request.Protocol) {
+		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", request.Protocol)
 	}
 	handler, err := s.xrayHandler()
 	if err != nil {
 		return nil, err
 	}
-	var users []string
-	switch protocol {
-	case "vless":
-		users, err = handler.Users(ctx)
-	case "hysteria2":
-		users, err = handler.UsersInInbound(ctx, "hysteria2")
-	case "vmess":
-		users, err = handler.UsersInInbound(ctx, "vmess-tls")
-	}
+	users, err := deviceUsers(ctx, handler, request.Protocol)
 	if err != nil {
 		return nil, err
 	}
-	valuesList := make([]any, len(users))
-	for index, user := range users {
-		valuesList[index] = user
-	}
-	return response(map[string]any{"users": valuesList})
+	return &controllerv1.ListDeviceUsersResponse{Users: append([]string{}, users...)}, nil
 }
 
-func (s *Service) GetXrayTelemetry(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) GetXrayTelemetry(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.XrayTelemetryResponse, error) {
 	if s == nil || s.stats == nil {
 		return nil, status.Error(codes.Unavailable, "Xray statistics adapter is unavailable")
 	}
@@ -427,21 +346,18 @@ func (s *Service) GetXrayTelemetry(ctx context.Context, request *structpb.Struct
 	if err != nil {
 		return nil, err
 	}
-	items := make([]any, 0, len(users))
+	response := &controllerv1.XrayTelemetryResponse{Users: make([]*controllerv1.XrayUserTelemetry, 0, len(users))}
 	for _, user := range users {
-		ips := make([]any, 0, len(user.SourceIPs))
+		item := &controllerv1.XrayUserTelemetry{Email: user.Email, UploadBytes: user.UploadBytes, DownloadBytes: user.DownloadBytes, LastSeen: protobufTime(user.LastSeen)}
 		for _, address := range user.SourceIPs {
-			ips = append(ips, map[string]any{"address": address.Address, "last_seen": runtimeTime(address.LastSeen)})
+			item.SourceIps = append(item.SourceIps, &controllerv1.IPObservation{Address: address.Address, LastSeen: protobufTime(address.LastSeen)})
 		}
-		items = append(items, map[string]any{"email": user.Email, "upload_bytes": strconv.FormatInt(user.UploadBytes, 10), "download_bytes": strconv.FormatInt(user.DownloadBytes, 10), "last_seen": runtimeTime(user.LastSeen), "source_ips": ips})
+		response.Users = append(response.Users, item)
 	}
-	return response(map[string]any{"users": items})
+	return response, nil
 }
 
-func (s *Service) GetAmneziaWGStatus(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) GetAmneziaWGStatus(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.AmneziaWGStatusResponse, error) {
 	awg, err := s.awgRuntime()
 	if err != nil {
 		return nil, err
@@ -450,13 +366,10 @@ func (s *Service) GetAmneziaWGStatus(ctx context.Context, request *structpb.Stru
 	if err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"running": value.Running, "public_key": value.PublicKey, "listen_port": value.ListenPort, "public_host": value.PublicHost, "public_port": value.PublicPort, "peer_count": value.PeerCount, "ipv4_network": value.IPv4Network, "ipv6_network": value.IPv6Network, "service_version": value.ServiceVersion})
+	return &controllerv1.AmneziaWGStatusResponse{Running: value.Running, PublicKey: value.PublicKey, ListenPort: int32(value.ListenPort), PublicHost: value.PublicHost, PublicPort: int32(value.PublicPort), PeerCount: int32(value.PeerCount), Ipv4Network: value.IPv4Network, Ipv6Network: value.IPv6Network, ServiceVersion: value.ServiceVersion}, nil
 }
 
-func (s *Service) ListAmneziaWGPeers(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) ListAmneziaWGPeers(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.ListAmneziaWGPeersResponse, error) {
 	awg, err := s.awgRuntime()
 	if err != nil {
 		return nil, err
@@ -465,56 +378,43 @@ func (s *Service) ListAmneziaWGPeers(ctx context.Context, request *structpb.Stru
 	if err != nil {
 		return nil, err
 	}
-	items := make([]any, 0, len(peers))
+	response := &controllerv1.ListAmneziaWGPeersResponse{Peers: make([]*controllerv1.AmneziaWGPeer, 0, len(peers))}
 	for _, peer := range peers {
-		items = append(items, map[string]any{"name": peer.Name, "public_key": peer.PublicKey, "ipv4": peer.IPv4, "ipv6": peer.IPv6, "created_at": runtimeTime(peer.CreatedAt)})
+		response.Peers = append(response.Peers, toProtoPeer(peer))
 	}
-	return response(map[string]any{"peers": items})
+	return response, nil
 }
 
-func (s *Service) CreateAmneziaWGPeer(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "name")
-	if err != nil {
-		return nil, err
-	}
-	name, err := stringField(values, "name", true)
-	if err != nil {
-		return nil, err
+func (s *Service) CreateAmneziaWGPeer(ctx context.Context, request *controllerv1.CreateAmneziaWGPeerRequest) (*controllerv1.AmneziaWGPeer, error) {
+	if request == nil || request.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 	awg, err := s.awgRuntime()
 	if err != nil {
 		return nil, err
 	}
-	peer, err := awg.CreatePeer(ctx, name)
+	peer, err := awg.CreatePeer(ctx, request.Name)
 	if err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"name": peer.Name, "public_key": peer.PublicKey, "ipv4": peer.IPv4, "ipv6": peer.IPv6, "created_at": runtimeTime(peer.CreatedAt)})
+	return toProtoPeer(peer), nil
 }
 
-func (s *Service) RemoveAmneziaWGPeer(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "name")
-	if err != nil {
-		return nil, err
-	}
-	name, err := stringField(values, "name", true)
-	if err != nil {
-		return nil, err
+func (s *Service) RemoveAmneziaWGPeer(ctx context.Context, request *controllerv1.RemoveAmneziaWGPeerRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || request.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 	awg, err := s.awgRuntime()
 	if err != nil {
 		return nil, err
 	}
-	if err := awg.RemovePeer(ctx, name); err != nil {
+	if err := awg.RemovePeer(ctx, request.Name); err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"ok": true})
+	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
-func (s *Service) GetAmneziaWGPeerStats(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) GetAmneziaWGPeerStats(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.AmneziaWGPeerStatsResponse, error) {
 	awg, err := s.awgRuntime()
 	if err != nil {
 		return nil, err
@@ -523,37 +423,29 @@ func (s *Service) GetAmneziaWGPeerStats(ctx context.Context, request *structpb.S
 	if err != nil {
 		return nil, err
 	}
-	items := make([]any, 0, len(peers))
+	response := &controllerv1.AmneziaWGPeerStatsResponse{Peers: make([]*controllerv1.AmneziaWGPeerStats, 0, len(peers))}
 	for _, peer := range peers {
-		items = append(items, map[string]any{"name": peer.Name, "source_ip": peer.SourceIP, "last_seen": runtimeTime(peer.LastSeen), "upload_bytes": strconv.FormatInt(peer.UploadBytes, 10), "download_bytes": strconv.FormatInt(peer.DownloadBytes, 10)})
+		response.Peers = append(response.Peers, &controllerv1.AmneziaWGPeerStats{Name: peer.Name, SourceIp: peer.SourceIP, LastSeen: protobufTime(peer.LastSeen), UploadBytes: peer.UploadBytes, DownloadBytes: peer.DownloadBytes})
 	}
-	return response(map[string]any{"peers": items})
+	return response, nil
 }
 
-func (s *Service) GetAmneziaWGClientConfig(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "name")
-	if err != nil {
-		return nil, err
-	}
-	name, err := stringField(values, "name", true)
-	if err != nil {
-		return nil, err
+func (s *Service) GetAmneziaWGClientConfig(ctx context.Context, request *controllerv1.GetAmneziaWGClientConfigRequest) (*controllerv1.AmneziaWGClientConfigResponse, error) {
+	if request == nil || request.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
 	}
 	awg, err := s.awgRuntime()
 	if err != nil {
 		return nil, err
 	}
-	config, err := awg.ClientConfig(ctx, name)
+	config, err := awg.ClientConfig(ctx, request.Name)
 	if err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"config": config})
+	return &controllerv1.AmneziaWGClientConfigResponse{Config: config}, nil
 }
 
-func (s *Service) ExportAmneziaWGBackup(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	if err := fields(request); err != nil {
-		return nil, err
-	}
+func (s *Service) ExportAmneziaWGBackup(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.AmneziaWGBackupResponse, error) {
 	awg, err := s.awgRuntime()
 	if err != nil {
 		return nil, err
@@ -562,30 +454,21 @@ func (s *Service) ExportAmneziaWGBackup(ctx context.Context, request *structpb.S
 	if err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"data": base64.StdEncoding.EncodeToString(data)})
+	return &controllerv1.AmneziaWGBackupResponse{Data: data}, nil
 }
 
-func (s *Service) RestoreAmneziaWGBackup(ctx context.Context, request *structpb.Struct) (*structpb.Struct, error) {
-	values, err := requireFields(request, "data")
-	if err != nil {
-		return nil, err
-	}
-	encoded, err := stringField(values, "data", true)
-	if err != nil {
-		return nil, err
-	}
-	data, err := base64.StdEncoding.DecodeString(encoded)
-	if err != nil {
-		return nil, status.Error(codes.InvalidArgument, "backup data must be base64")
+func (s *Service) RestoreAmneziaWGBackup(ctx context.Context, request *controllerv1.RestoreAmneziaWGBackupRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || len(request.Data) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "backup data is required")
 	}
 	awg, err := s.awgRuntime()
 	if err != nil {
 		return nil, err
 	}
-	if err := awg.RestoreBackup(ctx, data); err != nil {
+	if err := awg.RestoreBackup(ctx, request.Data); err != nil {
 		return nil, err
 	}
-	return response(map[string]any{"ok": true})
+	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
 func (s *Service) xrayHandler() (XrayHandlerRuntime, error) {
@@ -611,61 +494,15 @@ func (s *Service) awgRuntime() (AmneziaWGRuntime, error) {
 	return s.awg, nil
 }
 
-func runtimeTime(value time.Time) string {
+func protobufTime(value time.Time) *timestamppb.Timestamp {
 	if value.IsZero() {
-		return ""
+		return nil
 	}
-	return value.UTC().Format(time.RFC3339Nano)
+	return timestamppb.New(value.UTC())
 }
 
-func fields(request *structpb.Struct) error {
-	if request != nil && len(request.GetFields()) != 0 {
-		return status.Error(codes.InvalidArgument, "unexpected request fields")
-	}
-	return nil
-}
-
-func requireFields(request *structpb.Struct, allowed ...string) (map[string]*structpb.Value, error) {
-	if request == nil {
-		return nil, status.Error(codes.InvalidArgument, "request is required")
-	}
-	values := request.GetFields()
-	allowlist := make(map[string]struct{}, len(allowed))
-	for _, key := range allowed {
-		allowlist[key] = struct{}{}
-	}
-	for key := range values {
-		if _, ok := allowlist[key]; !ok {
-			return nil, status.Errorf(codes.InvalidArgument, "unexpected request field %q", key)
-		}
-	}
-	return values, nil
-}
-
-func stringField(values map[string]*structpb.Value, key string, required bool) (string, error) {
-	value := values[key]
-	if value == nil {
-		if required {
-			return "", status.Errorf(codes.InvalidArgument, "%s is required", key)
-		}
-		return "", nil
-	}
-	if _, ok := value.GetKind().(*structpb.Value_StringValue); !ok {
-		return "", status.Errorf(codes.InvalidArgument, "%s must be a string", key)
-	}
-	result := value.GetStringValue()
-	if required && result == "" {
-		return "", status.Errorf(codes.InvalidArgument, "%s is required", key)
-	}
-	return result, nil
-}
-
-func response(values map[string]any) (*structpb.Struct, error) {
-	result, err := structpb.NewStruct(values)
-	if err != nil {
-		return nil, fmt.Errorf("encode Controller response: %w", err)
-	}
-	return result, nil
+func toProtoPeer(peer domain.AmneziaWGPeer) *controllerv1.AmneziaWGPeer {
+	return &controllerv1.AmneziaWGPeer{Name: peer.Name, PublicKey: peer.PublicKey, Ipv4: peer.IPv4, Ipv6: peer.IPv6, CreatedAt: protobufTime(peer.CreatedAt)}
 }
 
 func (s *Service) runtime() (XrayRuntime, error) {
@@ -674,3 +511,5 @@ func (s *Service) runtime() (XrayRuntime, error) {
 	}
 	return s.xray, nil
 }
+
+var _ controllerv1.ControllerServer = (*Service)(nil)

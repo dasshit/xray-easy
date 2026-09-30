@@ -3,12 +3,12 @@ package controller
 import (
 	"context"
 	"errors"
-	"reflect"
 	"sync"
 	"testing"
 	"time"
 
 	"xray-easy/internal/awgcontrol"
+	"xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/xrayapi"
@@ -46,7 +46,6 @@ func (f *fakeXrayHandler) Users(ctx context.Context) ([]string, error) {
 	f.captureTrace(ctx)
 	return f.users, f.err
 }
-
 func (f *fakeXrayHandler) captureTrace(ctx context.Context) {
 	f.traces = append(f.traces, interaction.TraceFromContext(ctx))
 	f.requestIDs = append(f.requestIDs, interaction.RequestID(ctx))
@@ -135,7 +134,7 @@ func (f *fakeAWGRuntime) RestoreBackup(_ context.Context, data []byte) error {
 
 var _ awgcontrol.Gateway = (*fakeAWGRuntime)(nil)
 
-func TestServiceRoutesXrayHandlerAndTelemetryOperations(t *testing.T) {
+func TestServiceRoutesXrayHandlerAndTypedTelemetry(t *testing.T) {
 	handler := &fakeXrayHandler{users: []string{"one@example.test", "two@example.test"}}
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	stats := fakeXrayStats{users: []xrayapi.UserStats{{
@@ -143,95 +142,71 @@ func TestServiceRoutesXrayHandlerAndTelemetryOperations(t *testing.T) {
 		SourceIPs: []xrayapi.IPObservation{{Address: "203.0.113.8", LastSeen: now}, {Address: "203.0.113.9"}},
 	}, {Email: "two@example.test"}}}
 	service := NewServiceWithAdapters(&fakeRuntime{}, handler, stats, nil)
-	if _, err := service.GetCapabilities(context.Background(), emptyRequest()); err != nil {
+	if _, err := service.GetCapabilities(context.Background(), &controllerv1.EmptyRequest{}); err != nil {
 		t.Fatal(err)
 	}
-	for _, test := range []struct {
-		protocol, expected string
-	}{
-		{"vless", "add-vless"}, {"vmess", "add-vmess"}, {"hysteria2", "add-hysteria2"},
-	} {
-		if _, err := service.AddDeviceUser(context.Background(), request(map[string]any{"protocol": test.protocol, "email": "device@example.test", "id": "credential", "flow": "vision"})); err != nil {
-			t.Fatalf("AddDeviceUser(%s): %v", test.protocol, err)
-		}
-		if handler.called != test.expected {
-			t.Fatalf("AddDeviceUser(%s) dispatched to %q", test.protocol, handler.called)
+	for _, test := range []struct{ protocol, expected string }{{"vless", "add-vless"}, {"vmess", "add-vmess"}, {"hysteria2", "add-hysteria2"}} {
+		if _, err := service.AddDeviceUser(context.Background(), &controllerv1.AddDeviceUserRequest{Protocol: test.protocol, Email: "device@example.test", Id: "credential", Flow: "vision"}); err != nil || handler.called != test.expected {
+			t.Fatalf("AddDeviceUser(%s) dispatch=%q error=%v", test.protocol, handler.called, err)
 		}
 	}
-	for _, test := range []struct {
-		protocol, expected string
-	}{
-		{"vless", "remove-vless"}, {"vmess", "remove-vmess"}, {"hysteria2", "remove-hysteria2"},
-	} {
-		if _, err := service.RemoveDeviceUser(context.Background(), request(map[string]any{"protocol": test.protocol, "email": "device@example.test"})); err != nil {
-			t.Fatalf("RemoveDeviceUser(%s): %v", test.protocol, err)
-		}
-		if handler.called != test.expected {
-			t.Fatalf("RemoveDeviceUser(%s) dispatched to %q", test.protocol, handler.called)
+	for _, test := range []struct{ protocol, expected string }{{"vless", "remove-vless"}, {"vmess", "remove-vmess"}, {"hysteria2", "remove-hysteria2"}} {
+		if _, err := service.RemoveDeviceUser(context.Background(), &controllerv1.RemoveDeviceUserRequest{Protocol: test.protocol, Email: "device@example.test"}); err != nil || handler.called != test.expected {
+			t.Fatalf("RemoveDeviceUser(%s) dispatch=%q error=%v", test.protocol, handler.called, err)
 		}
 	}
-	for _, test := range []struct {
-		protocol, expected string
-	}{
-		{"vless", "list-vless"}, {"vmess", "list-vmess-tls"}, {"hysteria2", "list-hysteria2"},
-	} {
-		response, err := service.ListDeviceUsers(context.Background(), request(map[string]any{"protocol": test.protocol}))
-		if err != nil || len(response.GetFields()["users"].GetListValue().GetValues()) != 2 {
-			t.Fatalf("ListDeviceUsers(%s) = %v, %v", test.protocol, response, err)
-		}
-		if handler.called != test.expected {
-			t.Fatalf("ListDeviceUsers(%s) dispatched to %q", test.protocol, handler.called)
+	for _, test := range []struct{ protocol, expected string }{{"vless", "list-vless"}, {"vmess", "list-vmess-tls"}, {"hysteria2", "list-hysteria2"}} {
+		response, err := service.ListDeviceUsers(context.Background(), &controllerv1.ListDeviceUsersRequest{Protocol: test.protocol})
+		if err != nil || len(response.GetUsers()) != 2 || handler.called != test.expected {
+			t.Fatalf("ListDeviceUsers(%s) = %+v, %v; called=%s", test.protocol, response, err, handler.called)
 		}
 	}
-	response, err := service.GetXrayTelemetry(context.Background(), emptyRequest())
-	if err != nil {
-		t.Fatal(err)
+	response, err := service.GetXrayTelemetry(context.Background(), &controllerv1.EmptyRequest{})
+	if err != nil || len(response.GetUsers()) != 2 {
+		t.Fatalf("GetXrayTelemetry() = %+v, %v", response, err)
 	}
-	users := response.GetFields()["users"].GetListValue().GetValues()
-	first := users[0].GetStructValue().GetFields()
-	if first["upload_bytes"].GetStringValue() != "17" || first["download_bytes"].GetStringValue() != "29" || first["last_seen"].GetStringValue() == "" || len(first["source_ips"].GetListValue().GetValues()) != 2 {
-		t.Fatalf("Xray telemetry response = %v", first)
-	}
-	if runtimeTime(time.Time{}) != "" {
-		t.Fatal("zero runtime time should be empty")
+	first := response.Users[0]
+	if first.UploadBytes != 17 || first.DownloadBytes != 29 || first.LastSeen.AsTime() != now || len(first.SourceIps) != 2 || first.SourceIps[0].Address != "203.0.113.8" || first.SourceIps[1].LastSeen != nil {
+		t.Fatalf("Xray telemetry response = %+v", first)
 	}
 }
 
 func TestServiceRoutesAllAmneziaWGRuntimeOperations(t *testing.T) {
 	createdAt := time.Date(2026, 9, 30, 13, 0, 0, 0, time.UTC)
+	backup := []byte{0, 1, 2, 255}
 	awg := &fakeAWGRuntime{
 		status:    domain.AmneziaWGStatus{Running: true, PublicKey: "public", ListenPort: 1234, PublicHost: "vpn.example.test", PublicPort: 1234, PeerCount: 1, IPv4Network: "10.0.0.0/24", IPv6Network: "fd00::/64", ServiceVersion: "v1"},
 		peers:     []domain.AmneziaWGPeer{{Name: "phone", PublicKey: "peer-public", IPv4: "10.0.0.2", IPv6: "fd00::2", CreatedAt: createdAt}},
 		peerStats: []domain.AmneziaWGPeerStats{{Name: "phone", SourceIP: "203.0.113.8", LastSeen: createdAt, UploadBytes: 12, DownloadBytes: 34}},
-		config:    "[Interface]\nPrivateKey=redacted", backup: []byte("archive"),
+		config:    "[Interface]\\nPrivateKey=redacted", backup: backup,
 	}
 	service := NewServiceWithAdapters(&fakeRuntime{}, nil, nil, awg)
-	if response, err := service.GetCapabilities(context.Background(), emptyRequest()); err != nil || !response.GetFields()["amneziawg"].GetStructValue().GetFields()["configured"].GetBoolValue() {
+	if response, err := service.GetCapabilities(context.Background(), &controllerv1.EmptyRequest{}); err != nil || !response.Amneziawg.Configured {
 		t.Fatalf("AWG capability = %v, %v", response, err)
 	}
-	if _, err := service.GetAmneziaWGStatus(context.Background(), emptyRequest()); err != nil {
-		t.Fatal(err)
+	if response, err := service.GetAmneziaWGStatus(context.Background(), &controllerv1.EmptyRequest{}); err != nil || !response.Running || response.ListenPort != 1234 {
+		t.Fatalf("GetAmneziaWGStatus() = %+v, %v", response, err)
 	}
-	if response, err := service.ListAmneziaWGPeers(context.Background(), emptyRequest()); err != nil || len(response.GetFields()["peers"].GetListValue().GetValues()) != 1 {
-		t.Fatalf("ListAmneziaWGPeers() = %v, %v", response, err)
+	if response, err := service.ListAmneziaWGPeers(context.Background(), &controllerv1.EmptyRequest{}); err != nil || len(response.Peers) != 1 || response.Peers[0].CreatedAt.AsTime() != createdAt {
+		t.Fatalf("ListAmneziaWGPeers() = %+v, %v", response, err)
 	}
-	if response, err := service.CreateAmneziaWGPeer(context.Background(), request(map[string]any{"name": "tablet"})); err != nil || response.GetFields()["name"].GetStringValue() != "tablet" {
-		t.Fatalf("CreateAmneziaWGPeer() = %v, %v", response, err)
+	if response, err := service.CreateAmneziaWGPeer(context.Background(), &controllerv1.CreateAmneziaWGPeerRequest{Name: "tablet"}); err != nil || response.Name != "tablet" {
+		t.Fatalf("CreateAmneziaWGPeer() = %+v, %v", response, err)
 	}
-	if _, err := service.RemoveAmneziaWGPeer(context.Background(), request(map[string]any{"name": "phone"})); err != nil || awg.removed != "phone" {
+	if _, err := service.RemoveAmneziaWGPeer(context.Background(), &controllerv1.RemoveAmneziaWGPeerRequest{Name: "phone"}); err != nil || awg.removed != "phone" {
 		t.Fatalf("RemoveAmneziaWGPeer() = %v, removed=%q", err, awg.removed)
 	}
-	if response, err := service.GetAmneziaWGPeerStats(context.Background(), emptyRequest()); err != nil || response.GetFields()["peers"].GetListValue().GetValues()[0].GetStructValue().GetFields()["upload_bytes"].GetStringValue() != "12" {
-		t.Fatalf("GetAmneziaWGPeerStats() = %v, %v", response, err)
+	if response, err := service.GetAmneziaWGPeerStats(context.Background(), &controllerv1.EmptyRequest{}); err != nil || response.Peers[0].UploadBytes != 12 || response.Peers[0].LastSeen.AsTime() != createdAt {
+		t.Fatalf("GetAmneziaWGPeerStats() = %+v, %v", response, err)
 	}
-	if response, err := service.GetAmneziaWGClientConfig(context.Background(), request(map[string]any{"name": "phone"})); err != nil || response.GetFields()["config"].GetStringValue() != awg.config {
-		t.Fatalf("GetAmneziaWGClientConfig() = %v, %v", response, err)
+	if response, err := service.GetAmneziaWGClientConfig(context.Background(), &controllerv1.GetAmneziaWGClientConfigRequest{Name: "phone"}); err != nil || response.Config != awg.config {
+		t.Fatalf("GetAmneziaWGClientConfig() = %+v, %v", response, err)
 	}
-	if response, err := service.ExportAmneziaWGBackup(context.Background(), emptyRequest()); err != nil || response.GetFields()["data"].GetStringValue() == "" {
-		t.Fatalf("ExportAmneziaWGBackup() = %v, %v", response, err)
+	if response, err := service.ExportAmneziaWGBackup(context.Background(), &controllerv1.EmptyRequest{}); err != nil || string(response.Data) != string(backup) {
+		t.Fatalf("ExportAmneziaWGBackup() = %+v, %v", response, err)
 	}
-	if _, err := service.RestoreAmneziaWGBackup(context.Background(), request(map[string]any{"data": "YXJjaGl2ZQ=="})); err != nil || !reflect.DeepEqual(awg.restored, []byte("archive")) {
-		t.Fatalf("RestoreAmneziaWGBackup() = %v, restored=%q", err, awg.restored)
+	if _, err := service.RestoreAmneziaWGBackup(context.Background(), &controllerv1.RestoreAmneziaWGBackupRequest{Data: backup}); err != nil || string(awg.restored) != string(backup) {
+		t.Fatalf("RestoreAmneziaWGBackup() = %v, restored=%v", err, awg.restored)
 	}
 }
 
@@ -271,14 +246,10 @@ func (h *concurrentAddHandler) AddUser(_ context.Context, email, _, _ string) er
 }
 
 func TestXrayDeviceMutationCheckAndApplyAreSerialized(t *testing.T) {
-	handler := &concurrentAddHandler{
-		firstList:    make(chan struct{}),
-		secondList:   make(chan struct{}),
-		releaseFirst: make(chan struct{}),
-	}
+	handler := &concurrentAddHandler{firstList: make(chan struct{}), secondList: make(chan struct{}), releaseFirst: make(chan struct{})}
 	service := NewServiceWithAdapters(&fakeRuntime{}, handler, nil, nil)
 	ctx := interaction.WithOperationID(context.Background(), "abcdef0123456789abcdef0123456789")
-	request := request(map[string]any{"protocol": "vless", "email": "device@xray-easy", "id": "stable-uuid", "flow": "vision"})
+	request := &controllerv1.AddDeviceUserRequest{Protocol: "vless", Email: "device@xray-easy", Id: "stable-uuid", Flow: "vision"}
 	results := make(chan error, 2)
 	go func() { _, err := service.AddDeviceUser(ctx, request); results <- err }()
 	select {
@@ -321,42 +292,51 @@ func TestServiceRejectsUnavailableAndMalformedRuntimeAdapters(t *testing.T) {
 		fn   func() error
 	}{
 		{"add user", func() error {
-			_, err := service.AddDeviceUser(context.Background(), request(map[string]any{"protocol": "vless", "email": "x", "id": "id"}))
+			_, err := service.AddDeviceUser(context.Background(), &controllerv1.AddDeviceUserRequest{Protocol: "vless", Email: "x", Id: "id"})
 			return err
 		}},
 		{"remove user", func() error {
-			_, err := service.RemoveDeviceUser(context.Background(), request(map[string]any{"protocol": "vless", "email": "x"}))
+			_, err := service.RemoveDeviceUser(context.Background(), &controllerv1.RemoveDeviceUserRequest{Protocol: "vless", Email: "x"})
 			return err
 		}},
 		{"list user", func() error {
-			_, err := service.ListDeviceUsers(context.Background(), request(map[string]any{"protocol": "vless"}))
+			_, err := service.ListDeviceUsers(context.Background(), &controllerv1.ListDeviceUsersRequest{Protocol: "vless"})
 			return err
 		}},
-		{"stats", func() error { _, err := service.GetXrayTelemetry(context.Background(), emptyRequest()); return err }},
-		{"awg status", func() error { _, err := service.GetAmneziaWGStatus(context.Background(), emptyRequest()); return err }},
-		{"awg peers", func() error { _, err := service.ListAmneziaWGPeers(context.Background(), emptyRequest()); return err }},
+		{"stats", func() error {
+			_, err := service.GetXrayTelemetry(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		}},
+		{"awg status", func() error {
+			_, err := service.GetAmneziaWGStatus(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		}},
+		{"awg peers", func() error {
+			_, err := service.ListAmneziaWGPeers(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		}},
 		{"awg create", func() error {
-			_, err := service.CreateAmneziaWGPeer(context.Background(), request(map[string]any{"name": "phone"}))
+			_, err := service.CreateAmneziaWGPeer(context.Background(), &controllerv1.CreateAmneziaWGPeerRequest{Name: "phone"})
 			return err
 		}},
 		{"awg remove", func() error {
-			_, err := service.RemoveAmneziaWGPeer(context.Background(), request(map[string]any{"name": "phone"}))
+			_, err := service.RemoveAmneziaWGPeer(context.Background(), &controllerv1.RemoveAmneziaWGPeerRequest{Name: "phone"})
 			return err
 		}},
 		{"awg stats", func() error {
-			_, err := service.GetAmneziaWGPeerStats(context.Background(), emptyRequest())
+			_, err := service.GetAmneziaWGPeerStats(context.Background(), &controllerv1.EmptyRequest{})
 			return err
 		}},
 		{"awg config", func() error {
-			_, err := service.GetAmneziaWGClientConfig(context.Background(), request(map[string]any{"name": "phone"}))
+			_, err := service.GetAmneziaWGClientConfig(context.Background(), &controllerv1.GetAmneziaWGClientConfigRequest{Name: "phone"})
 			return err
 		}},
 		{"awg export", func() error {
-			_, err := service.ExportAmneziaWGBackup(context.Background(), emptyRequest())
+			_, err := service.ExportAmneziaWGBackup(context.Background(), &controllerv1.EmptyRequest{})
 			return err
 		}},
 		{"awg restore", func() error {
-			_, err := service.RestoreAmneziaWGBackup(context.Background(), request(map[string]any{"data": "eA=="}))
+			_, err := service.RestoreAmneziaWGBackup(context.Background(), &controllerv1.RestoreAmneziaWGBackupRequest{Data: []byte("x")})
 			return err
 		}},
 	} {
@@ -368,35 +348,33 @@ func TestServiceRejectsUnavailableAndMalformedRuntimeAdapters(t *testing.T) {
 	}
 	for _, call := range []func() error{
 		func() error {
-			_, err := service.AddDeviceUser(context.Background(), request(map[string]any{"protocol": "invalid", "email": "x", "id": "id"}))
+			_, err := service.AddDeviceUser(context.Background(), &controllerv1.AddDeviceUserRequest{Protocol: "invalid", Email: "x", Id: "id"})
 			return err
 		},
 		func() error {
-			_, err := service.RemoveDeviceUser(context.Background(), request(map[string]any{"protocol": "invalid", "email": "x"}))
+			_, err := service.RemoveDeviceUser(context.Background(), &controllerv1.RemoveDeviceUserRequest{Protocol: "invalid", Email: "x"})
 			return err
 		},
 		func() error {
-			_, err := service.ListDeviceUsers(context.Background(), request(map[string]any{"protocol": "invalid"}))
+			_, err := service.ListDeviceUsers(context.Background(), &controllerv1.ListDeviceUsersRequest{Protocol: "invalid"})
 			return err
 		},
 		func() error {
-			_, err := service.RestoreAmneziaWGBackup(context.Background(), request(map[string]any{"data": "not-base64"}))
+			_, err := service.RestoreAmneziaWGBackup(context.Background(), &controllerv1.RestoreAmneziaWGBackupRequest{})
 			return err
 		},
 		func() error {
-			_, err := service.GetAmneziaWGClientConfig(context.Background(), emptyRequest())
+			_, err := service.GetAmneziaWGClientConfig(context.Background(), &controllerv1.GetAmneziaWGClientConfigRequest{})
 			return err
 		},
+		func() error { _, err := service.AddDeviceUser(context.Background(), nil); return err },
+		func() error { _, err := service.RemoveDeviceUser(context.Background(), nil); return err },
+		func() error { _, err := service.ListDeviceUsers(context.Background(), nil); return err },
+		func() error { _, err := service.CreateAmneziaWGPeer(context.Background(), nil); return err },
 	} {
 		if status.Code(call()) != codes.InvalidArgument {
-			t.Errorf("malformed request error = %v", call())
+			t.Errorf("invalid request error = %v", call())
 		}
-	}
-	if _, err := service.AddDeviceUser(context.Background(), request(map[string]any{"protocol": 1, "email": "x", "id": "id"})); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("wrong protocol type = %v", err)
-	}
-	if _, err := service.GetXrayTelemetry(context.Background(), request(map[string]any{"unexpected": true})); status.Code(err) != codes.InvalidArgument {
-		t.Fatalf("unexpected telemetry field = %v", err)
 	}
 	failedHandler := &fakeXrayHandler{err: errors.New("adapter failure")}
 	failedStats := fakeXrayStats{err: errors.New("stats failure")}
@@ -404,61 +382,56 @@ func TestServiceRejectsUnavailableAndMalformedRuntimeAdapters(t *testing.T) {
 	failed := NewServiceWithAdapters(&fakeRuntime{}, failedHandler, failedStats, failedAWG)
 	for _, call := range []func() error{
 		func() error {
-			_, err := failed.AddDeviceUser(context.Background(), request(map[string]any{"protocol": "vless", "email": "x", "id": "id"}))
+			_, err := failed.AddDeviceUser(context.Background(), &controllerv1.AddDeviceUserRequest{Protocol: "vless", Email: "x", Id: "id"})
 			return err
 		},
 		func() error {
-			_, err := failed.RemoveDeviceUser(context.Background(), request(map[string]any{"protocol": "vless", "email": "x"}))
+			_, err := failed.RemoveDeviceUser(context.Background(), &controllerv1.RemoveDeviceUserRequest{Protocol: "vless", Email: "x"})
 			return err
 		},
 		func() error {
-			_, err := failed.ListDeviceUsers(context.Background(), request(map[string]any{"protocol": "vless"}))
-			return err
-		},
-		func() error { _, err := failed.GetXrayTelemetry(context.Background(), emptyRequest()); return err },
-		func() error { _, err := failed.GetAmneziaWGStatus(context.Background(), emptyRequest()); return err },
-		func() error { _, err := failed.ListAmneziaWGPeers(context.Background(), emptyRequest()); return err },
-		func() error {
-			_, err := failed.CreateAmneziaWGPeer(context.Background(), request(map[string]any{"name": "phone"}))
+			_, err := failed.ListDeviceUsers(context.Background(), &controllerv1.ListDeviceUsersRequest{Protocol: "vless"})
 			return err
 		},
 		func() error {
-			_, err := failed.RemoveAmneziaWGPeer(context.Background(), request(map[string]any{"name": "phone"}))
+			_, err := failed.GetXrayTelemetry(context.Background(), &controllerv1.EmptyRequest{})
 			return err
 		},
-		func() error { _, err := failed.GetAmneziaWGPeerStats(context.Background(), emptyRequest()); return err },
 		func() error {
-			_, err := failed.GetAmneziaWGClientConfig(context.Background(), request(map[string]any{"name": "phone"}))
+			_, err := failed.GetAmneziaWGStatus(context.Background(), &controllerv1.EmptyRequest{})
 			return err
 		},
-		func() error { _, err := failed.ExportAmneziaWGBackup(context.Background(), emptyRequest()); return err },
 		func() error {
-			_, err := failed.RestoreAmneziaWGBackup(context.Background(), request(map[string]any{"data": "YXJjaGl2ZQ=="}))
+			_, err := failed.ListAmneziaWGPeers(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		},
+		func() error {
+			_, err := failed.CreateAmneziaWGPeer(context.Background(), &controllerv1.CreateAmneziaWGPeerRequest{Name: "phone"})
+			return err
+		},
+		func() error {
+			_, err := failed.RemoveAmneziaWGPeer(context.Background(), &controllerv1.RemoveAmneziaWGPeerRequest{Name: "phone"})
+			return err
+		},
+		func() error {
+			_, err := failed.GetAmneziaWGPeerStats(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		},
+		func() error {
+			_, err := failed.GetAmneziaWGClientConfig(context.Background(), &controllerv1.GetAmneziaWGClientConfigRequest{Name: "phone"})
+			return err
+		},
+		func() error {
+			_, err := failed.ExportAmneziaWGBackup(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		},
+		func() error {
+			_, err := failed.RestoreAmneziaWGBackup(context.Background(), &controllerv1.RestoreAmneziaWGBackupRequest{Data: []byte("x")})
 			return err
 		},
 	} {
 		if err := call(); err == nil {
 			t.Error("adapter failure was ignored")
-		}
-	}
-	for _, call := range []func() error{
-		func() error {
-			_, err := service.GetAmneziaWGStatus(context.Background(), request(map[string]any{"extra": true}))
-			return err
-		},
-		func() error { _, err := service.CreateAmneziaWGPeer(context.Background(), emptyRequest()); return err },
-		func() error { _, err := service.RemoveAmneziaWGPeer(context.Background(), emptyRequest()); return err },
-		func() error {
-			_, err := service.GetAmneziaWGPeerStats(context.Background(), request(map[string]any{"extra": true}))
-			return err
-		},
-		func() error {
-			_, err := service.ExportAmneziaWGBackup(context.Background(), request(map[string]any{"extra": true}))
-			return err
-		},
-	} {
-		if status.Code(call()) != codes.InvalidArgument {
-			t.Errorf("invalid AWG request error = %v", call())
 		}
 	}
 }

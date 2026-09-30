@@ -17,6 +17,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"xray-easy/internal/interaction"
 	supervisorapi "xray-easy/internal/supervisor"
 )
 
@@ -74,10 +75,10 @@ func TestSupervisorGRPCOperationsKeepExistingRuntimeBehavior(t *testing.T) {
 	if err := client.Apply(ctx, "", "apply-operation"); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("ApplyConfig missing path status = %v", err)
 	}
-	if err := client.Apply(ctx, filepath.Join(configDir, "missing.json"), "bad-operation"); status.Code(err) != codes.FailedPrecondition {
+	if err := client.Apply(interaction.WithStateRevision(ctx, 1), filepath.Join(configDir, "missing.json"), "bad-operation"); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("ApplyConfig invalid path status = %v", err)
 	}
-	if err := client.Apply(ctx, valid, "apply-operation"); err != nil {
+	if err := client.Apply(interaction.WithStateRevision(ctx, 2), valid, "apply-operation"); err != nil {
 		t.Fatalf("ApplyConfig: %v", err)
 	}
 	waitForSupervisorState(t, instance, "running")
@@ -85,7 +86,7 @@ func TestSupervisorGRPCOperationsKeepExistingRuntimeBehavior(t *testing.T) {
 	if err != nil || statusValue.ConfigPath != canonicalTestPath(t, valid) || statusValue.PID <= 0 {
 		t.Fatalf("running status = %+v, %v", statusValue, err)
 	}
-	if err := client.Apply(ctx, valid, ""); status.Code(err) != codes.InvalidArgument {
+	if err := client.Apply(interaction.WithStateRevision(ctx, 3), valid, ""); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("ApplyConfig without operation id status = %v", err)
 	}
 	instance.mu.Lock()
@@ -104,14 +105,14 @@ func TestSupervisorGRPCOperationsKeepExistingRuntimeBehavior(t *testing.T) {
 func TestSupervisorGRPCReplaceInboundAndProbeMethods(t *testing.T) {
 	instance, candidate, previous, logPath := newReplaceTestSupervisor(t)
 	client := newSupervisorTestClient(t, instance)
-	if err := client.ReplaceInbound(context.Background(), candidate, previous, "vless-reality", "replace-operation"); err != nil {
+	if err := client.ReplaceInbound(interaction.WithStateRevision(context.Background(), 1), candidate, previous, "vless-reality", "replace-operation"); err != nil {
 		t.Fatalf("ReplaceInbound: %v", err)
 	}
 	calls, err := os.ReadFile(logPath)
 	if err != nil || string(calls) != "rmi\nadi\n" {
 		t.Fatalf("inbound RPC API calls = %q, %v", calls, err)
 	}
-	if err := client.ReplaceInbound(context.Background(), candidate, previous, "", "op"); status.Code(err) != codes.InvalidArgument {
+	if err := client.ReplaceInbound(interaction.WithStateRevision(context.Background(), 2), candidate, previous, "", "op"); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("ReplaceInbound missing tag = %v", err)
 	}
 	for _, fields := range [][4]string{
@@ -119,7 +120,7 @@ func TestSupervisorGRPCReplaceInboundAndProbeMethods(t *testing.T) {
 		{candidate, "", "vless-reality", "op"},
 		{candidate, previous, "vless-reality", ""},
 	} {
-		if err := client.ReplaceInbound(context.Background(), fields[0], fields[1], fields[2], fields[3]); status.Code(err) != codes.InvalidArgument {
+		if err := client.ReplaceInbound(interaction.WithStateRevision(context.Background(), 3), fields[0], fields[1], fields[2], fields[3]); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("ReplaceInbound missing field %q/%q/%q/%q = %v", fields[0], fields[1], fields[2], fields[3], err)
 		}
 	}
@@ -226,6 +227,19 @@ func TestSupervisorRPCValidationHelpers(t *testing.T) {
 	}
 	if _, err := rpcResponse(map[string]any{"invalid": make(chan int)}); err == nil {
 		t.Fatal("unsupported response value encoded successfully")
+	}
+	for _, request := range []*structpb.Struct{
+		{},
+		{Fields: map[string]*structpb.Value{"state_revision": structpb.NewStringValue("0")}},
+		{Fields: map[string]*structpb.Value{"state_revision": structpb.NewStringValue("-1")}},
+		{Fields: map[string]*structpb.Value{"state_revision": structpb.NewStringValue("not-a-number")}},
+	} {
+		if _, err := rpcRevision(request); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("rpcRevision(%v) error = %v, want InvalidArgument", request, err)
+		}
+	}
+	if revision, err := rpcRevision(&structpb.Struct{Fields: map[string]*structpb.Value{"state_revision": structpb.NewStringValue("17")}}); err != nil || revision != 17 {
+		t.Fatalf("rpcRevision(valid) = %d, %v", revision, err)
 	}
 	if err := rpcFields(nil, "path"); err != nil {
 		t.Fatalf("nil request fields = %v", err)

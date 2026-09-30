@@ -6,13 +6,13 @@ import (
 	"strings"
 	"time"
 
+	controllerv1 "xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/interaction"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // AuthInterceptor requires the private Controller bearer token.
@@ -55,15 +55,22 @@ func protocolForRPC(method string, request any) string {
 	if strings.HasSuffix(method, "/Health") || strings.HasSuffix(method, "/GetCapabilities") {
 		return "runtime"
 	}
-	if value, ok := request.(*structpb.Struct); ok {
-		if protocol := value.GetFields()["protocol"]; protocol != nil {
-			if text, ok := protocol.GetKind().(*structpb.Value_StringValue); ok {
-				switch text.StringValue {
-				case "vless", "vmess", "hysteria2", "amneziawg":
-					return text.StringValue
-				}
-			}
-		}
+	switch value := request.(type) {
+	case *controllerv1.AddDeviceUserRequest:
+		return safeProtocolName(value.GetProtocol())
+	case *controllerv1.RemoveDeviceUserRequest:
+		return safeProtocolName(value.GetProtocol())
+	case *controllerv1.ListDeviceUsersRequest:
+		return safeProtocolName(value.GetProtocol())
 	}
 	return "xray"
+}
+
+func safeProtocolName(protocol string) string {
+	switch protocol {
+	case "vless", "vmess", "hysteria2", "amneziawg":
+		return protocol
+	default:
+		return "xray"
+	}
 }

@@ -1,5 +1,10 @@
 # Xray supervisor gRPC migration plan
 
+> Scope note: this document tracks the private Xray-supervisor gRPC contract,
+> which currently uses validated `google.protobuf.Struct` messages. The
+> separate backend ↔ Controller contract is now generated, typed Protobuf;
+> Controller typing does not automatically change the supervisor contract.
+
 ## Goal
 
 Replace the private HTTP/JSON control channel between `xray-easy` and

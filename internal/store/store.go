@@ -339,6 +339,10 @@ func (s *Store) RestoreFrom(path string) error {
 		_ = tx.Rollback()
 		return fmt.Errorf("restore VMess migration marker: %w", err)
 	}
+	if _, err := tx.Exec(`UPDATE main.apply_revision_sequence SET revision = MAX(revision, (SELECT COALESCE(MAX(revision), 0) FROM main.apply_operations)) WHERE id = 1`); err != nil {
+		_ = tx.Rollback()
+		return fmt.Errorf("preserve apply revision high-water mark: %w", err)
+	}
 	if err := tx.Commit(); err != nil {
 		return err
 	}
@@ -462,6 +466,14 @@ CREATE TABLE IF NOT EXISTS apply_operations (
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS apply_revision_sequence (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  revision INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO apply_revision_sequence(id, revision)
+  SELECT 1, COALESCE(MAX(revision), 0) FROM apply_operations;
+UPDATE apply_revision_sequence
+  SET revision = MAX(revision, (SELECT COALESCE(MAX(revision), 0) FROM apply_operations)) WHERE id = 1;
 CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   actor_id TEXT NOT NULL,
@@ -1516,6 +1528,34 @@ func (s *Store) DeleteAWGTrafficSnapshot(ctx context.Context, name string) error
 func (s *Store) CreateApplyOperation(ctx context.Context, operation ApplyOperation) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO apply_operations(id, revision, state, error, created_at, updated_at) VALUES(?,?,?,?,?,?)`, operation.ID, operation.Revision, operation.State, operation.Error, operation.CreatedAt.Format(time.RFC3339Nano), operation.UpdatedAt.Format(time.RFC3339Nano))
 	return err
+}
+
+// CreateApplyOperationWithNextRevision allocates a durable monotonically
+// increasing revision and records the operation atomically. The sequence row
+// is deliberately preserved by RestoreFrom so restoring an older backup does
+// not lower the revision high-water mark held by xray-supervisor.
+func (s *Store) CreateApplyOperationWithNextRevision(ctx context.Context, operation ApplyOperation) (int64, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `UPDATE apply_revision_sequence
+SET revision = MAX(revision, (SELECT COALESCE(MAX(revision), 0) FROM apply_operations)) + 1 WHERE id=1`); err != nil {
+		return 0, err
+	}
+	var revision int64
+	if err := tx.QueryRowContext(ctx, `SELECT revision FROM apply_revision_sequence WHERE id=1`).Scan(&revision); err != nil {
+		return 0, fmt.Errorf("read apply revision sequence: %w", err)
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO apply_operations(id, revision, state, error, created_at, updated_at) VALUES(?,?,?,?,?,?)`,
+		operation.ID, revision, operation.State, operation.Error, operation.CreatedAt.Format(time.RFC3339Nano), operation.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return revision, nil
 }
 
 func (s *Store) UpdateApplyOperation(ctx context.Context, id, state, operationError string) error {

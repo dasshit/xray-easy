@@ -25,6 +25,9 @@ func newSupervisorGRPCServer(instance *supervisor) *grpc.Server {
 func runSupervisor(cfg *config, signals <-chan os.Signal) error {
 	instance := newSupervisor(cfg)
 	defer instance.closeRuntimeClients()
+	if instance.revisions.err != nil {
+		return fmt.Errorf("load Xray revision fence: %w", instance.revisions.err)
+	}
 	if err := instance.startInitial(); err != nil {
 		return err
 	}
