@@ -15,7 +15,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"testing"
 	"time"
 
@@ -36,7 +35,6 @@ func TestEmbeddedRealityRuntimeExposesLiveFeaturesAndUserManager(t *testing.T) {
 	vlessPort := freeTCPPort(t)
 	vmessPort := freeTCPPort(t)
 	hysteriaPort := freeUDPPort(t)
-	apiPort := freeTCPPort(t)
 	certificateFile, keyFile := writeSelfSignedCertificate(t)
 	privateKey := make([]byte, 32)
 	if _, err := rand.Read(privateKey); err != nil {
@@ -45,7 +43,6 @@ func TestEmbeddedRealityRuntimeExposesLiveFeaturesAndUserManager(t *testing.T) {
 
 	configJSON, err := json.Marshal(map[string]any{
 		"log":   map[string]any{"loglevel": "warning"},
-		"api":   map[string]any{"tag": "api", "listen": net.JoinHostPort("127.0.0.1", itoa(apiPort)), "services": []string{"HandlerService", "StatsService", "LoggerService"}},
 		"stats": map[string]any{},
 		"policy": map[string]any{"levels": map[string]any{"0": map[string]any{
 			"statsUserUplink": true, "statsUserDownlink": true, "statsUserOnline": true,
@@ -229,8 +226,4 @@ func writeSelfSignedCertificate(t *testing.T) (string, string) {
 		t.Fatalf("write test TLS key: %v", err)
 	}
 	return certificateFile, keyFile
-}
-
-func itoa(value int) string {
-	return strconv.Itoa(value)
 }

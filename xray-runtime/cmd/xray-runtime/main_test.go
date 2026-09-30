@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -27,6 +28,24 @@ func TestRunRejectsUnexpectedArguments(t *testing.T) {
 	if err := run([]string{"--not-an-option"}); err == nil {
 		t.Fatal("run accepted an unknown flag")
 	}
+	if err := run([]string{"validate-candidate", "one", "two"}); err == nil {
+		t.Fatal("validate-candidate accepted too many arguments")
+	}
+}
+
+func TestMainReportsErrorAndExits(t *testing.T) {
+	previousArgs := os.Args
+	os.Args = []string{"xray-runtime", "--not-an-option"}
+	defer func() { os.Args = previousArgs }()
+	previousExit := exitProcess
+	defer func() { exitProcess = previousExit }()
+	exitProcess = func(code int) { panic(code) }
+	defer func() {
+		if code := recover(); code != 1 {
+			t.Fatalf("main exit code = %v, want 1", code)
+		}
+	}()
+	main()
 }
 
 func TestValidateCandidateCommand(t *testing.T) {
@@ -47,6 +66,36 @@ func TestValidateCandidateCommand(t *testing.T) {
 	}
 	if err := run([]string{"validate-candidate", invalidPath}); err == nil {
 		t.Fatal("invalid candidate was accepted")
+	}
+	oldStdin := os.Stdin
+	stdinFile, err := os.CreateTemp(t.TempDir(), "candidate-stdin-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stdinFile.WriteString(valid); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stdinFile.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = stdinFile
+	if err := validateCandidate(""); err != nil {
+		t.Fatalf("validate stdin candidate: %v", err)
+	}
+	if err := stdinFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin = oldStdin
+
+	emptyFile, err := os.CreateTemp(t.TempDir(), "empty-candidate-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := emptyFile.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateCandidate(emptyFile.Name()); err == nil {
+		t.Fatal("empty candidate was accepted")
 	}
 }
 
@@ -127,6 +176,12 @@ func TestRuntimeLoggingInterceptorDoesNotLogPayload(t *testing.T) {
 	if strings.Contains(output.String(), "private-payload") || strings.Contains(output.String(), "expected failure") {
 		t.Fatalf("RPC log contains payload/error detail: %s", output.String())
 	}
+	response, err = runtimeLoggingInterceptor(context.Background(), &emptypb.Empty{}, &grpc.UnaryServerInfo{FullMethod: "/service/Method"}, func(context.Context, any) (any, error) {
+		return "ok", nil
+	})
+	if err != nil || response != "ok" {
+		t.Fatalf("successful interceptor result = %v, %v", response, err)
+	}
 }
 
 func TestHealthcheckAuthenticatesUsingSeparateIdentity(t *testing.T) {
@@ -160,6 +215,11 @@ func TestHealthcheckAuthenticatesUsingSeparateIdentity(t *testing.T) {
 	if err := healthcheck("bufconn", tokenPath); err != nil {
 		t.Fatalf("authenticated healthcheck: %v", err)
 	}
+	t.Setenv("XRAY_RUNTIME_ADDR", "ignored-by-test-dialer")
+	t.Setenv("XRAY_RUNTIME_TOKEN_FILE", tokenPath)
+	if err := run([]string{"healthcheck"}); err != nil {
+		t.Fatalf("healthcheck CLI command: %v", err)
+	}
 	if err := healthcheck("bufconn", filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("healthcheck accepted a missing token")
 	}
@@ -178,5 +238,207 @@ func TestServeReportsTokenAndConfigReadErrors(t *testing.T) {
 	}
 	if err := serve("127.0.0.1:0", t.TempDir(), tokenPath, ""); err == nil || !strings.Contains(err.Error(), "active Xray configuration") {
 		t.Fatalf("config read error = %v", err)
+	}
+	invalidConfig := filepath.Join(t.TempDir(), "invalid.json")
+	if err := os.WriteFile(invalidConfig, []byte(`{"inbounds":[`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := serve("127.0.0.1:0", invalidConfig, tokenPath, ""); err == nil || !strings.Contains(err.Error(), "load active Xray configuration") {
+		t.Fatalf("invalid active config error = %v", err)
+	}
+}
+
+func TestServeReportsListenErrorAndStopsOnContextCancellation(t *testing.T) {
+	directory := t.TempDir()
+	tokenPath := filepath.Join(directory, "token")
+	if err := os.WriteFile(tokenPath, []byte(strings.Repeat("a", 32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	occupied, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := serve(occupied.Addr().String(), filepath.Join(directory, "missing-config"), tokenPath, ""); err == nil || !strings.Contains(err.Error(), "listen for Xray runtime") {
+		t.Fatalf("listen error = %v", err)
+	}
+	if err := occupied.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	probe, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	address := probe.Addr().String()
+	if err := probe.Close(); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() {
+		result <- serveContext(ctx, address, filepath.Join(directory, "missing-config"), tokenPath, filepath.Join(directory, "revision.json"))
+	}()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		connection, dialErr := net.DialTimeout("tcp", address, 50*time.Millisecond)
+		if dialErr == nil {
+			_ = connection.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("runtime listener did not start: %v", dialErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	select {
+	case err := <-result:
+		if err != nil {
+			t.Fatalf("serve after graceful shutdown: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("runtime server did not stop after context cancellation")
+	}
+}
+
+func TestEnvOrUsesTrimmedEnvironmentOrFallback(t *testing.T) {
+	t.Setenv("XRAY_RUNTIME_TEST_ENV", "  configured  ")
+	if got := envOr("XRAY_RUNTIME_TEST_ENV", "fallback"); got != "configured" {
+		t.Fatalf("configured env = %q", got)
+	}
+	t.Setenv("XRAY_RUNTIME_TEST_ENV", "  ")
+	if got := envOr("XRAY_RUNTIME_TEST_ENV", "fallback"); got != "fallback" {
+		t.Fatalf("fallback env = %q", got)
+	}
+}
+
+func TestWaitForServeReportsFailureAndRuntimeFatal(t *testing.T) {
+	tests := []struct {
+		name     string
+		serveErr error
+		fatal    bool
+		wantErr  string
+	}{
+		{name: "unexpected server error", serveErr: errors.New("listener failed"), wantErr: "serve Xray runtime gRPC"},
+		{name: "expected stopped server", serveErr: grpc.ErrServerStopped},
+		{name: "fatal runtime", fatal: true, wantErr: "must restart"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			server := grpc.NewServer()
+			serveErrors := make(chan error, 1)
+			fatalErrors := make(chan error, 1)
+			if test.fatal {
+				fatalErrors <- errors.New("private xray error")
+			} else {
+				serveErrors <- test.serveErr
+			}
+			err := waitForServe(context.Background(), server, serveErrors, fatalErrors)
+			if test.wantErr == "" {
+				if err != nil {
+					t.Fatalf("wait result = %v", err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), test.wantErr) || strings.Contains(err.Error(), "private xray error") {
+				t.Fatalf("wait error = %v", err)
+			}
+		})
+	}
+}
+
+type blockingHealthServer struct {
+	xrayruntimev1.UnimplementedRuntimeServer
+	entered chan struct{}
+}
+
+func (s blockingHealthServer) Health(ctx context.Context, _ *xrayruntimev1.HealthRequest) (*xrayruntimev1.HealthResponse, error) {
+	close(s.entered)
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+func TestWaitForServeStopsAfterGracefulShutdownTimeout(t *testing.T) {
+	previousTimeout := gracefulStopTimeout
+	gracefulStopTimeout = 10 * time.Millisecond
+	defer func() { gracefulStopTimeout = previousTimeout }()
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	service := blockingHealthServer{entered: make(chan struct{})}
+	xrayruntimev1.RegisterRuntimeServer(server, service)
+	serveErrors := make(chan error, 1)
+	go func() { serveErrors <- server.Serve(listener) }()
+	connection, err := grpc.NewClient("passthrough:///bufconn",
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	callFinished := make(chan struct{})
+	go func() {
+		defer close(callFinished)
+		_, _ = xrayruntimev1.NewRuntimeClient(connection).Health(context.Background(), &xrayruntimev1.HealthRequest{})
+	}()
+	select {
+	case <-service.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("blocking health request did not reach server")
+	}
+	shutdown, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := waitForServe(shutdown, server, serveErrors, make(chan error)); err != nil {
+		t.Fatalf("wait after forced graceful shutdown: %v", err)
+	}
+	select {
+	case <-callFinished:
+	case <-time.After(2 * time.Second):
+		t.Fatal("forced server stop did not cancel the active request")
+	}
+	_ = listener.Close()
+}
+
+type fixedHealthServer struct {
+	xrayruntimev1.UnimplementedRuntimeServer
+	ready bool
+}
+
+func (s fixedHealthServer) Health(context.Context, *xrayruntimev1.HealthRequest) (*xrayruntimev1.HealthResponse, error) {
+	return &xrayruntimev1.HealthResponse{Ready: s.ready}, nil
+}
+
+func TestHealthcheckReportsConnectionAndReadinessFailures(t *testing.T) {
+	token := strings.Repeat("t", 32)
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte(token), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousDial := newHealthConnection
+	newHealthConnection = func(string) (*grpc.ClientConn, error) { return nil, errors.New("dial blocked") }
+	if err := healthcheck("unavailable", tokenPath); err == nil || !strings.Contains(err.Error(), "connect to Xray runtime") {
+		t.Fatalf("health connection error = %v", err)
+	}
+
+	listener := bufconn.Listen(1 << 20)
+	authenticator, err := runtimeauth.NewAuthenticator([]byte(token), allowedRuntimeCall)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.UnaryInterceptor(authenticator.UnaryServerInterceptor()))
+	xrayruntimev1.RegisterRuntimeServer(server, fixedHealthServer{ready: false})
+	go func() { _ = server.Serve(listener) }()
+	newHealthConnection = func(string) (*grpc.ClientConn, error) {
+		return grpc.NewClient("passthrough:///bufconn",
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }),
+		)
+	}
+	defer func() {
+		server.Stop()
+		_ = listener.Close()
+		newHealthConnection = previousDial
+	}()
+	if err := healthcheck("bufconn", tokenPath); err == nil || !strings.Contains(err.Error(), "not ready") {
+		t.Fatalf("unready healthcheck error = %v", err)
 	}
 }

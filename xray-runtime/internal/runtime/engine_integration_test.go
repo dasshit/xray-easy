@@ -160,7 +160,16 @@ func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		online.AddIP(fmt.Sprintf("192.0.2.%d", 40+i))
+		addresses := 1
+		if user.protocol == xrayruntimev1.Protocol_PROTOCOL_VMESS {
+			addresses = maxTelemetrySourceIPs + 3
+		}
+		for address := 0; address < addresses; address++ {
+			online.AddIP(fmt.Sprintf("192.0.2.%d", 40+i*40+address))
+		}
+		if user.protocol == xrayruntimev1.Protocol_PROTOCOL_VLESS {
+			online.AddIP("not-an-ip-address")
+		}
 	}
 	telemetry, err := engine.GetTelemetry(ctx, tags)
 	if err != nil || len(telemetry) != len(users) {
@@ -168,9 +177,16 @@ func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) 
 	}
 	for i, user := range users {
 		item := telemetry[i]
-		if item.Email != user.email || item.UploadBytes != int64(100+i) || item.DownloadBytes != int64(200+i) || !item.Online || len(item.SourceIPs) != 1 || item.SourceIPs[0].Address != fmt.Sprintf("192.0.2.%d", 40+i) {
+		expectedIPs := 1
+		if user.protocol == xrayruntimev1.Protocol_PROTOCOL_VMESS {
+			expectedIPs = maxTelemetrySourceIPs
+		}
+		if item.Email != user.email || item.UploadBytes != int64(100+i) || item.DownloadBytes != int64(200+i) || !item.Online || len(item.SourceIPs) != expectedIPs || item.SourceIPs[0].Address != fmt.Sprintf("192.0.2.%d", 40+i*40) {
 			t.Errorf("telemetry for %s = %+v", user.protocol, item)
 		}
+	}
+	if _, err := engine.GetTelemetry(ctx, map[xrayruntimev1.Protocol]string{xrayruntimev1.Protocol_PROTOCOL_VLESS: "missing-inbound"}); err == nil {
+		t.Fatal("telemetry read accepted an unknown inbound")
 	}
 }
 

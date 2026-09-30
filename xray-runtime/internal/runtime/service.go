@@ -197,7 +197,7 @@ func (s *Service) addLog(level, component, message string) {
 	if s.logLimit < 1 {
 		s.logLimit = 200
 	}
-	entry := logRecord{at: time.Now().UTC(), level: level, component: component, message: diagnostics.Redact(message)}
+	entry := logRecord{at: time.Now().UTC(), level: level, component: component, message: redactXrayLog(diagnostics.Redact(message))}
 	if len(s.logs) >= s.logLimit {
 		copy(s.logs, s.logs[1:])
 		s.logs = s.logs[:s.logLimit-1]
@@ -274,7 +274,7 @@ func (s *Service) GetRecentLogs(_ context.Context, _ *xrayruntimev1.EmptyRequest
 	for _, entry := range s.logs {
 		response.Entries = append(response.Entries, &xrayruntimev1.LogEntry{
 			Timestamp: timestamppb.New(entry.at), Level: entry.level, Component: entry.component,
-			Message: diagnostics.Redact(entry.message),
+			Message: redactXrayLog(diagnostics.Redact(entry.message)),
 		})
 	}
 	return response, nil

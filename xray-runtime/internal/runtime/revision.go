@@ -35,21 +35,61 @@ type revisionMutation struct {
 	State       string `json:"state"`
 }
 
+type revisionTempFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type revisionDirectoryHandle interface {
+	Sync() error
+	Close() error
+}
+
+type revisionFileSystem interface {
+	ReadFile(string) ([]byte, error)
+	MkdirAll(string, os.FileMode) error
+	CreateTemp(string, string) (revisionTempFile, error)
+	Remove(string) error
+	Rename(string, string) error
+	OpenDirectory(string) (revisionDirectoryHandle, error)
+}
+
+type osRevisionFileSystem struct{}
+
+func (osRevisionFileSystem) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+func (osRevisionFileSystem) MkdirAll(path string, mode os.FileMode) error {
+	return os.MkdirAll(path, mode)
+}
+func (osRevisionFileSystem) CreateTemp(directory, pattern string) (revisionTempFile, error) {
+	return os.CreateTemp(directory, pattern)
+}
+func (osRevisionFileSystem) Remove(path string) error { return os.Remove(path) }
+func (osRevisionFileSystem) Rename(oldPath, newPath string) error {
+	return os.Rename(oldPath, newPath)
+}
+func (osRevisionFileSystem) OpenDirectory(path string) (revisionDirectoryHandle, error) {
+	return os.Open(path)
+}
+
 // RevisionFence persists operation identity and hashes only. It never stores
 // configuration snapshots, credentials, or user emails.
 type RevisionFence struct {
-	path   string
-	latest revisionRecord
+	path       string
+	latest     revisionRecord
+	fileSystem revisionFileSystem
 }
 
 // NewRevisionFence loads the persisted fence and makes prior operations
 // replayable after restart because Xray has been reconstructed from active.json.
 func NewRevisionFence(path string) (*RevisionFence, error) {
-	fence := &RevisionFence{path: strings.TrimSpace(path), latest: revisionRecord{Version: revisionStateVersion}}
+	fence := &RevisionFence{path: strings.TrimSpace(path), latest: revisionRecord{Version: revisionStateVersion}, fileSystem: osRevisionFileSystem{}}
 	if fence.path == "" {
 		return fence, nil
 	}
-	data, err := os.ReadFile(fence.path)
+	data, err := fence.fileSystem.ReadFile(fence.path)
 	if errors.Is(err, os.ErrNotExist) {
 		return fence, nil
 	}
@@ -163,18 +203,18 @@ func (f *RevisionFence) persist(record revisionRecord) error {
 		return nil
 	}
 	directory := filepath.Dir(f.path)
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	if err := f.fileSystem.MkdirAll(directory, 0o700); err != nil {
 		return fmt.Errorf("%w: create Xray revision state directory: %v", ErrRevisionIO, err)
 	}
 	data, err := json.Marshal(record)
 	if err != nil {
 		return fmt.Errorf("%w: encode Xray revision state: %v", ErrRevisionIO, err)
 	}
-	temporary, err := os.CreateTemp(directory, ".runtime-revision-*")
+	temporary, err := f.fileSystem.CreateTemp(directory, ".runtime-revision-*")
 	if err != nil {
 		return fmt.Errorf("%w: create Xray revision state temporary file: %v", ErrRevisionIO, err)
 	}
-	defer os.Remove(temporary.Name())
+	defer f.fileSystem.Remove(temporary.Name())
 	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("%w: secure Xray revision state: %v", ErrRevisionIO, err)
@@ -190,10 +230,10 @@ func (f *RevisionFence) persist(record revisionRecord) error {
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("%w: close Xray revision state: %v", ErrRevisionIO, err)
 	}
-	if err := os.Rename(temporary.Name(), f.path); err != nil {
+	if err := f.fileSystem.Rename(temporary.Name(), f.path); err != nil {
 		return fmt.Errorf("%w: replace Xray revision state: %v", ErrRevisionIO, err)
 	}
-	directoryHandle, err := os.Open(directory)
+	directoryHandle, err := f.fileSystem.OpenDirectory(directory)
 	if err != nil {
 		return fmt.Errorf("%w: open Xray revision state directory: %v", ErrRevisionIO, err)
 	}

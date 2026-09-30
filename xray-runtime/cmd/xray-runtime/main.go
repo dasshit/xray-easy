@@ -24,6 +24,8 @@ import (
 )
 
 var runtimeVersion = "dev"
+var exitProcess = os.Exit
+var gracefulStopTimeout = 10 * time.Second
 
 const (
 	defaultListen    = "0.0.0.0:10086"
@@ -43,7 +45,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, diagnostics.Redact(err.Error()))
-		os.Exit(1)
+		exitProcess(1)
 	}
 }
 
@@ -76,6 +78,12 @@ func run(args []string) error {
 }
 
 func serve(listenAddress, configPath, tokenPath, revisionPath string) error {
+	shutdown, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+	return serveContext(shutdown, listenAddress, configPath, tokenPath, revisionPath)
+}
+
+func serveContext(shutdown context.Context, listenAddress, configPath, tokenPath, revisionPath string) error {
 	token, err := readToken(tokenPath)
 	if err != nil {
 		return fmt.Errorf("load runtime authentication token: %w", err)
@@ -104,16 +112,17 @@ func serve(listenAddress, configPath, tokenPath, revisionPath string) error {
 	xrayruntimev1.RegisterRuntimeServer(server, service)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
+	return waitForServe(shutdown, server, serveErr, service.Fatal())
+}
 
-	shutdown, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer stop()
+func waitForServe(shutdown context.Context, server *grpc.Server, serveErr <-chan error, fatal <-chan error) error {
 	select {
 	case <-shutdown.Done():
 		stopped := make(chan struct{})
 		go func() { server.GracefulStop(); close(stopped) }()
 		select {
 		case <-stopped:
-		case <-time.After(10 * time.Second):
+		case <-time.After(gracefulStopTimeout):
 			server.Stop()
 		}
 		return nil
@@ -123,7 +132,7 @@ func serve(listenAddress, configPath, tokenPath, revisionPath string) error {
 			return fmt.Errorf("serve Xray runtime gRPC: %w", err)
 		}
 		return nil
-	case <-service.Fatal():
+	case <-fatal:
 		server.Stop()
 		return errors.New("Xray runtime failed and must restart from the active configuration")
 	}

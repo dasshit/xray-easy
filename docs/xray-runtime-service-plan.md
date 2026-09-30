@@ -430,8 +430,38 @@ rollback, stale revision, replay/conflict, отмену deadline, restart servic
   остаётся применимым. Исключать строки из метрик только по существующим
   правилам для generated code.
 
-**Готово, когда:** тестовый набор проходит без VDS, old/new parity подтверждён,
-контейнер собирается для amd64 и arm64, а все текущие coverage gates проходят.
+**Готово, когда:** тестовый набор и все текущие coverage gates проходят без VDS;
+Docker multiarch build и Compose validation выполняются перед opt-in проверкой
+на этапе 7. Полный old/new parity подтверждается на тестовом Compose stack до
+перехода к этапу 8.
+
+**Результат этапа 6 от 2026-09-30:**
+
+- Добавлен отдельный CI job для embedded runtime: обычные тесты, race detector
+  и per-file coverage gate. Скрипт `scripts/xray-runtime-coverage.sh`
+  контролирует каждый handwritten Go-файл в `cmd/xray-runtime` и
+  `internal/runtime`; порог по умолчанию — 90%, generated protobuf и тестовые
+  файлы в метрику не входят.
+- Покрытие по файлам после изменений: CLI `main.go` — 94.3%, revision journal
+  — 95.7%, engine — 90.4%, telemetry — 95.7%, service — 91.4%.
+- Добавлены тесты для graceful shutdown и принудительной остановки gRPC server,
+  ошибок запуска/listener, child-process candidate validation, ошибок
+  persistence на границах записи revision journal, runtime lifecycle и
+  telemetry, deadlines, отсутствующих inbound/stats и cancellation.
+- Spike-конфигурация больше не запускает встроенный Xray API inbound: он не
+  нужен runtime, который обращается к core interfaces, и включал upstream
+  Commander с race при параллельных Serve/Close. После его удаления полный
+  runtime race detector проходит.
+- Заодно исправлены два дефекта: Xray `NoopManager` больше не считается
+  доступной Stats feature, а диагностические логи embedded runtime редактируют
+  IP-адреса вместе с секретами.
+- Проверки прошли: `go test -race -count=1 ./...`, `go vet ./...` в модуле
+  `xray-runtime`, а также per-file coverage gate с порогом 90%. Проверены
+  `git diff --check` и синтаксис GitHub Actions workflow.
+- На этом этапе не менялись production Compose и Controller adapter. Docker
+  multiarch build, Compose validation и parity всей цепочки выполняются в
+  следующем opt-in этапе; ручная проверка клиентского подключения остаётся за
+  владельцем VDS.
 
 ### Этап 7. Подключить новый adapter к Controller в тестовом Compose профиле
 
@@ -499,8 +529,10 @@ rollback, stale revision, replay/conflict, отмену deadline, restart servic
    коммит.
 3. Не объединять переезд runtime, новый gRPC контракт и удаление supervisor в
    один коммит.
-4. Не выполнять push и не удалять production rollback path до отдельной
-   проверки работоспособности и запроса пользователя.
+4. Для этапов 6–7 сначала завершить локальные gates и opt-in Compose путь,
+   затем создать отдельные коммиты и отправить их в `main` перед ручной VDS
+   проверкой. Не переключать production Compose и не удалять supervisor rollback
+   path до результата этой проверки.
 
 ## Критерии завершения всей миграции
 

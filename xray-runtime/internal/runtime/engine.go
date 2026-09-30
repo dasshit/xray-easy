@@ -55,7 +55,10 @@ var (
 	ipv4EndpointPattern  = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::[0-9]{1,5})?\b`)
 	bracketedIPv6Pattern = regexp.MustCompile(`\[[0-9a-fA-F:]+\](?::[0-9]{1,5})?`)
 	canonicalUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
+	runtimeExecutable    = os.Executable
 )
+
+const isolatedValidationTimeout = 20 * time.Second
 
 const maxTelemetrySourceIPs = 32
 
@@ -110,11 +113,11 @@ func ValidateConfigIsolatedContext(parent context.Context, configuration []byte)
 	if err := ValidateConfig(configuration); err != nil {
 		return err
 	}
-	executable, err := os.Executable()
+	executable, err := runtimeExecutable()
 	if err != nil {
 		return errors.New("locate runtime executable")
 	}
-	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
+	ctx, cancel := context.WithTimeout(parent, isolatedValidationTimeout)
 	defer cancel()
 	command := exec.CommandContext(ctx, executable, "validate-candidate")
 	command.Stdin = bytes.NewReader(configuration)
@@ -364,7 +367,15 @@ func (e *Engine) StatsAvailable() bool {
 		return false
 	}
 	manager, ok := e.instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
-	return ok && manager != nil
+	if !ok || manager == nil {
+		return false
+	}
+	switch manager.(type) {
+	case corestats.NoopManager, *corestats.NoopManager:
+		return false
+	default:
+		return true
+	}
 }
 
 // GetTelemetry collects configured user roster, cumulative counters, and
@@ -375,6 +386,9 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 	}
 	statsManager, ok := e.instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
 	if !ok || statsManager == nil {
+		return nil, errors.New("Xray stats manager is unavailable")
+	}
+	if !e.StatsAvailable() {
 		return nil, errors.New("Xray stats manager is unavailable")
 	}
 	if ctx == nil {

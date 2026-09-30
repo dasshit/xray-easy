@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -49,6 +50,7 @@ type fakeEngine struct {
 	replaceErr   error
 	addErr       error
 	removeErr    error
+	listErr      error
 	telemetryErr error
 	stats        bool
 	telemetry    []RuntimeUserTelemetry
@@ -99,6 +101,9 @@ func (e *fakeEngine) RemoveUser(_ context.Context, _ string, email string) (bool
 	return false, nil
 }
 func (e *fakeEngine) ListUsers(_ context.Context, _ string) ([]string, error) {
+	if e.listErr != nil {
+		return nil, e.listErr
+	}
 	users := make([]string, 0, len(e.users))
 	for email := range e.users {
 		users = append(users, email)
@@ -177,6 +182,75 @@ func TestNewServiceReturnsLoadAndStartFailures(t *testing.T) {
 	}
 }
 
+func TestNewServiceRejectsOversizeSnapshotAndInvalidRevisionJournal(t *testing.T) {
+	if _, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "v", make([]byte, maxConfigurationBytes+1), 0); err == nil {
+		t.Fatal("oversize active config was accepted")
+	}
+	directory := t.TempDir()
+	if _, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "v", nil, 0, directory); err == nil {
+		t.Fatal("revision journal path pointing at a directory was accepted")
+	}
+}
+
+func TestNewServiceClosesEngineWhenSnapshotMetadataIsInvalid(t *testing.T) {
+	for _, configuration := range [][]byte{
+		[]byte(`not json`),
+		[]byte(`{"inbounds":[{"protocol":"vless"}]}`),
+	} {
+		engine := &fakeEngine{}
+		if _, err := NewService(&fakeLoader{engine: engine}, "v", configuration, 1); err == nil {
+			t.Fatalf("invalid snapshot metadata was accepted: %s", configuration)
+		}
+		if engine.starts != 1 || engine.closes != 1 {
+			t.Fatalf("invalid snapshot lifecycle: starts=%d closes=%d", engine.starts, engine.closes)
+		}
+	}
+}
+
+func TestCoreLoaderLoadAndValidation(t *testing.T) {
+	for _, loader := range []coreLoader{{}, {writeLog: func(string, string, string) {}}} {
+		engine, err := loader.Load([]byte(`{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[{"protocol":"freedom"}]}`))
+		if err != nil {
+			t.Fatalf("core loader load: %v", err)
+		}
+		if err := engine.Close(); err != nil {
+			t.Fatalf("close core loader candidate: %v", err)
+		}
+	}
+	if err := (coreLoader{}).Validate(context.Background(), []byte(`{"inbounds":[`)); err == nil {
+		t.Fatal("core loader accepted invalid configuration")
+	}
+}
+
+func TestRecentLogsAreBoundedAndRedacted(t *testing.T) {
+	service, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "v", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.logLimit = 2
+	service.addLog("debug", "test", "discarded")
+	service.addLog("warn", "test", "kept warning")
+	service.addLog("error", "test", `failed for 192.0.2.8 password="private-value"`)
+	response, err := service.GetRecentLogs(context.Background(), new(xrayruntimev1.EmptyRequest))
+	if err != nil || len(response.GetEntries()) != 2 {
+		t.Fatalf("recent logs=%+v error=%v", response, err)
+	}
+	if response.GetEntries()[0].GetMessage() != "kept warning" || strings.Contains(response.GetEntries()[1].GetMessage(), "192.0.2.8") || strings.Contains(response.GetEntries()[1].GetMessage(), "private-value") {
+		t.Fatalf("recent logs are not redacted/bounded: %+v", response.GetEntries())
+	}
+	if runtimeLogLevel("error") != slog.LevelError || runtimeLogLevel("warn") != slog.LevelWarn || runtimeLogLevel("debug") != slog.LevelInfo {
+		t.Fatal("runtime log levels do not map error/warn/default correctly")
+	}
+	service.protocols = []string{"unknown"}
+	capabilities, err := service.GetCapabilities(context.Background(), new(xrayruntimev1.EmptyRequest))
+	if err != nil || len(capabilities.GetProtocols()) != 0 {
+		t.Fatalf("unknown protocol capability=%+v error=%v", capabilities, err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestValidateConfigurationChecksSnapshotWithoutConstructingCoreAndRedactsFailures(t *testing.T) {
 	loader := &fakeLoader{engine: &fakeEngine{}}
 	service, err := NewService(loader, "v", nil, 0)
@@ -204,6 +278,8 @@ func TestValidateConfigurationChecksSnapshotWithoutConstructingCoreAndRedactsFai
 		{},
 		{ConfigurationJson: []byte(`{}`), OperationId: "", Revision: 1},
 		{ConfigurationJson: []byte(`{}`), OperationId: "operation", Revision: 0},
+		{ConfigurationJson: make([]byte, maxConfigurationBytes+1), OperationId: "too-large", Revision: 1},
+		{ConfigurationJson: []byte(`{}`), OperationId: strings.Repeat("x", maxOperationIDBytes+1), Revision: 1},
 	} {
 		if _, err := service.ValidateConfiguration(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
 			t.Errorf("invalid request error = %v, want InvalidArgument", err)
@@ -213,6 +289,20 @@ func TestValidateConfigurationChecksSnapshotWithoutConstructingCoreAndRedactsFai
 	loader.validateErr = errors.New(`invalid privateKey="secret-value"`)
 	if _, err := service.ValidateConfiguration(context.Background(), request); status.Code(err) != codes.InvalidArgument || strings.Contains(err.Error(), "secret-value") {
 		t.Fatalf("invalid snapshot error leaks details: %v", err)
+	}
+	loader.validateErr = context.DeadlineExceeded
+	if _, err := service.ValidateConfiguration(context.Background(), request); status.Code(err) != codes.DeadlineExceeded {
+		t.Fatalf("validation timeout status=%v", err)
+	}
+	loader.validateErr = context.Canceled
+	if _, err := service.ValidateConfiguration(context.Background(), request); status.Code(err) != codes.Canceled {
+		t.Fatalf("validation cancellation status=%v", err)
+	}
+	loader.validateErr = nil
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := service.ValidateConfiguration(canceled, request); status.Code(err) != codes.Canceled {
+		t.Fatalf("request cancellation status=%v", err)
 	}
 }
 
@@ -323,6 +413,7 @@ func TestTelemetryCapabilityRequiresStatsAndUserPolicy(t *testing.T) {
 		{"no stats app", `{"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}}}`, true, false, false},
 		{"no manager", `{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}}}`, false, false, false},
 		{"partial traffic flags", `{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserOnline":true}}}}`, true, false, true},
+		{"malformed level policy", `{"stats":{},"policy":{"levels":{"0":"invalid"}}}`, true, false, false},
 		{"all features", `{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}}}`, true, true, true},
 	}
 	for _, test := range cases {
@@ -402,6 +493,127 @@ func TestApplyConfigurationReplacesEngineAndReplaysIdempotently(t *testing.T) {
 	}
 	if response, err := service.ApplyConfiguration(context.Background(), request); err != nil || response.GetAlreadyApplied() || engine.closes != 3 || engine.starts != 4 {
 		t.Fatalf("original replay after rollback=%+v engine=%+v error=%v", response, engine, err)
+	}
+}
+
+func TestApplyConfigurationCommitsAnAlreadyActiveSnapshot(t *testing.T) {
+	configuration := []byte(`{"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)
+	engine := &fakeEngine{}
+	service, err := NewService(&fakeLoader{engine: engine}, "v", configuration, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	response, err := service.ApplyConfiguration(context.Background(), &xrayruntimev1.ConfigurationRequest{
+		ConfigurationJson: configuration, OperationId: "same-config", Revision: 1,
+	})
+	if err != nil || !response.GetAlreadyApplied() || engine.closes != 0 || engine.starts != 1 {
+		t.Fatalf("same-config apply=%+v engine=%+v error=%v", response, engine, err)
+	}
+	statusResponse, err := service.GetStatus(context.Background(), new(xrayruntimev1.EmptyRequest))
+	if err != nil || statusResponse.GetActiveRevision() != 1 {
+		t.Fatalf("same-config revision=%+v error=%v", statusResponse, err)
+	}
+}
+
+func TestApplyConfigurationRejectsMalformedMetadataAndStaleRevision(t *testing.T) {
+	configuration := []byte(`{"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)
+	journalPath := filepath.Join(t.TempDir(), "revision.json")
+	fence, err := NewRevisionFence(journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fence.Begin(4, "seed-operation", "apply", "seed-fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+	if err := fence.Commit(4, "seed-operation", "apply", "seed-fingerprint"); err != nil {
+		t.Fatal(err)
+	}
+	service, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "v", configuration, 4, journalPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	for _, snapshot := range [][]byte{[]byte(`not json`), []byte(`{"inbounds":[{"protocol":"vless"}]}`)} {
+		_, err := service.ApplyConfiguration(context.Background(), &xrayruntimev1.ConfigurationRequest{
+			ConfigurationJson: snapshot, OperationId: "invalid-snapshot", Revision: 5,
+		})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("invalid snapshot %s status=%v", snapshot, err)
+		}
+	}
+	if _, err := service.ApplyConfiguration(context.Background(), &xrayruntimev1.ConfigurationRequest{
+		ConfigurationJson: configuration, OperationId: "stale-apply", Revision: 3,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("stale apply status=%v", err)
+	}
+}
+
+func TestUserRPCsValidateInputsAndMapManagerErrors(t *testing.T) {
+	configuration := []byte(`{"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)
+	engine := &fakeEngine{addErr: errors.New("private add error"), removeErr: errors.New("private remove error"), listErr: errors.New("private list error")}
+	service, err := NewService(&fakeLoader{engine: engine}, "v", configuration, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer service.Close()
+	validAdd := &xrayruntimev1.AddUserRequest{
+		Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, Email: "device@xray-easy", Credential: "credential",
+		OperationId: "add-device", Revision: 1,
+	}
+	for _, invalid := range []*xrayruntimev1.AddUserRequest{
+		nil,
+		{Protocol: xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, Email: "device", Credential: "secret", OperationId: "bad", Revision: 1},
+		{Protocol: validAdd.GetProtocol(), Email: " ", Credential: "secret", OperationId: "bad", Revision: 1},
+		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: " ", OperationId: "bad", Revision: 1},
+		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: "secret", Flow: strings.Repeat("f", maxUserFlowBytes+1), OperationId: "bad", Revision: 1},
+		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: "secret", OperationId: " ", Revision: 1},
+		{Protocol: validAdd.GetProtocol(), Email: "device", Credential: "secret", OperationId: "bad", Revision: 0},
+	} {
+		if _, err := service.AddUser(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("invalid add request status=%v", err)
+		}
+	}
+	if _, err := service.AddUser(context.Background(), validAdd); status.Code(err) != codes.FailedPrecondition || strings.Contains(err.Error(), "private add error") {
+		t.Fatalf("add manager error leaked details: %v", err)
+	}
+	for _, invalid := range []*xrayruntimev1.RemoveUserRequest{
+		nil,
+		{Protocol: xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, Email: "device", OperationId: "bad", Revision: 2},
+		{Protocol: validAdd.GetProtocol(), Email: " ", OperationId: "bad", Revision: 2},
+		{Protocol: validAdd.GetProtocol(), Email: "device", OperationId: " ", Revision: 2},
+		{Protocol: validAdd.GetProtocol(), Email: "device", OperationId: "bad", Revision: 0},
+	} {
+		if _, err := service.RemoveUser(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("invalid remove request status=%v", err)
+		}
+	}
+	if _, err := service.RemoveUser(context.Background(), &xrayruntimev1.RemoveUserRequest{
+		Protocol: validAdd.GetProtocol(), Email: "device@xray-easy", OperationId: "remove-device", Revision: 2,
+	}); status.Code(err) != codes.FailedPrecondition || strings.Contains(err.Error(), "private remove error") {
+		t.Fatalf("remove manager error leaked details: %v", err)
+	}
+	if _, err := service.ListUsers(context.Background(), nil); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("nil list request status=%v", err)
+	}
+	if _, err := service.ListUsers(context.Background(), &xrayruntimev1.ListUsersRequest{Protocol: validAdd.GetProtocol()}); status.Code(err) != codes.FailedPrecondition || strings.Contains(err.Error(), "private list error") {
+		t.Fatalf("list manager error leaked details: %v", err)
+	}
+	emptyService, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "v", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer emptyService.Close()
+	if _, err := emptyService.AddUser(context.Background(), validAdd); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("add to unconfigured protocol status=%v", err)
+	}
+	if _, err := emptyService.RemoveUser(context.Background(), &xrayruntimev1.RemoveUserRequest{
+		Protocol: validAdd.GetProtocol(), Email: validAdd.GetEmail(), OperationId: "remove-empty", Revision: 1,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("remove from unconfigured protocol status=%v", err)
+	}
+	if _, err := emptyService.ListUsers(context.Background(), &xrayruntimev1.ListUsersRequest{Protocol: validAdd.GetProtocol()}); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("list from unconfigured protocol status=%v", err)
 	}
 }
 
@@ -571,6 +783,41 @@ func TestConfiguredInboundTagsRejectAmbiguousEntries(t *testing.T) {
 	if _, err := ConfiguredInboundTags([]byte("bad json")); err == nil {
 		t.Fatal("invalid JSON was accepted")
 	}
+}
+
+func TestRuntimeRevisionStatusAndProtocolEngineHelpers(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		err  error
+		code codes.Code
+	}{
+		{"persistence unavailable", ErrRevisionIO, codes.Unavailable},
+		{"stale revision", ErrStaleRevision, codes.FailedPrecondition},
+		{"operation conflict", ErrRevisionConflict, codes.FailedPrecondition},
+		{"unexpected fence error", errors.New("internal"), codes.FailedPrecondition},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if got := status.Code(revisionStatus(test.err)); got != test.code {
+				t.Fatalf("revision status=%v, want %v", got, test.code)
+			}
+		})
+	}
+	service, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "v", []byte(`{"inbounds":[{"tag":"vless","protocol":"vless"}]}`), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tag, engine, err := service.protocolEngine(xrayruntimev1.Protocol_PROTOCOL_VLESS)
+	if err != nil || tag != "vless" || engine == nil {
+		t.Fatalf("configured protocol engine = %q, %v, %v", tag, engine, err)
+	}
+	if _, _, err := service.protocolEngine(xrayruntimev1.Protocol_PROTOCOL_VMESS); status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("unconfigured protocol engine status=%v", err)
+	}
+	service.fence = nil
+	if err := service.commit(1, "op", "apply", "fingerprint"); err == nil {
+		t.Fatal("service committed without revision fence")
+	}
+	_ = service.Close()
 }
 
 func TestValidationAndMutationRespectContextCancellation(t *testing.T) {
