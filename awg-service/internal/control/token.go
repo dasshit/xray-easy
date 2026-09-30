@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func LoadOrCreateToken(path string) (string, error) {
 		return "", fmt.Errorf("create AWG data directory: %w", err)
 	}
 	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
 		return "", fmt.Errorf("generate AWG control token: %w", err)
 	}
 	token := base64.StdEncoding.EncodeToString(raw) + "\n"
