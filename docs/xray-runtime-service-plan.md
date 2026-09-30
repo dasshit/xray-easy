@@ -242,6 +242,33 @@ Controller и runtime adapters — в
 закреплённый runtime, проходит healthcheck, корректно закрывается и не меняет
 старый production path.
 
+**Результат этапа 3 от 2026-09-30:**
+
+- Добавлен самостоятельный `xray-runtime` в nested Go module, поэтому
+  требование Go 1.26 от Xray-core не поднимает версию корневого backend.
+- Сервис при запуске загружает `active.json` через upstream config builder,
+  создаёт один `core.Instance` и запускает его. Без файла конфигурации сервис
+  готов к первичной настройке и сообщает состояние `NO_CONFIGURATION`.
+- Добавлены private gRPC listener, healthcheck CLI и отдельная HMAC
+  аутентификация для `healthcheck` и `control-plane` с nonce replay protection.
+  RPC-логи содержат безопасные поля корреляции и результата, но не payload.
+- Добавлены version/status/capability ответы и preflight через upstream
+  config builder без создания `core.Instance`. Ошибки наружу возвращаются
+  обобщённо, без тела Xray ошибки и секретных фрагментов. Это пока синтаксическая
+  проверка: полноценный `core.New` вынесен в этап 4, поскольку создание instance
+  меняет process-global logger и system dialer и могло бы нарушить работу
+  действующего runtime.
+- Warning/error сообщения Xray направляются в bounded diagnostics buffer;
+  access-сообщения отбрасываются, UUID/секреты и IP endpoints маскируются.
+- Создан отдельный `Dockerfile.xray-runtime`. Buildx сборка для
+  `linux/amd64` и `linux/arm64` проходит. Рабочие `compose.yaml`,
+  `Dockerfile.xray` и supervisor path не переключались.
+- Unit-тесты сервисного lifecycle, статуса, capability, auth и ошибок, корневой
+  `go test ./...`, runtime `go test ./...` (включая реальный Xray integration
+  spike с локальными TCP/UDP listeners) и `go vet ./...` прошли. Runtime
+  mutation/telemetry RPC пока остаются явно `Unimplemented` и переносятся на
+  этапы 4–5; coverage gates runtime будут закрыты на этапе 6.
+
 ### Этап 4. Перенести runtime lifecycle, ревизии и мутации
 
 - Перенести durable revision fence и привязку повтора к operation ID,
@@ -249,6 +276,10 @@ Controller и runtime adapters — в
   конфиг в revision journal.
 - Реализовать конфигурационный preflight без изменения активного runtime;
   применять уже проверенный candidate под сериализованной блокировкой.
+  `core.New` нельзя вызывать в основном процессе для candidate, пока работает
+  активный instance: Xray-core меняет process-global logger и system dialer при
+  создании instance. Полную candidate-проверку следует изолировать в отдельном
+  короткоживущем validator-процессе либо найти эквивалентный безопасный путь.
 - Определить транзакционную последовательность `candidate → runtime → active`
   и точку commit. Не считать повторное использование закрытого `core.Instance`
   допустимым. Если запуск candidate не удался и восстановление предыдущего

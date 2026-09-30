@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+
+ARG GO_BUILD_IMAGE=golang:1.27-alpine
+ARG RUNTIME_IMAGE=alpine:3.22
+
+FROM --platform=$BUILDPLATFORM ${GO_BUILD_IMAGE} AS build
+ARG TARGETOS
+ARG TARGETARCH
+
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY internal/diagnostics ./internal/diagnostics
+COPY internal/interaction ./internal/interaction
+COPY internal/runtimeauth ./internal/runtimeauth
+COPY internal/xrayruntime/api/v1 ./internal/xrayruntime/api/v1
+COPY xray-runtime ./xray-runtime
+
+WORKDIR /src/xray-runtime
+RUN go mod download
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
+    -trimpath -ldflags='-s -w' -o /out/xray-runtime ./cmd/xray-runtime
+
+FROM ${RUNTIME_IMAGE} AS runtime
+RUN addgroup -S -g 10001 xray \
+    && adduser -S -D -H -u 10001 -G xray xray \
+    && mkdir -p /etc/xray \
+    && chown -R xray:xray /etc/xray
+
+COPY --from=build --chown=10001:10001 /out/xray-runtime /usr/local/bin/xray-runtime
+
+USER 10001:10001
+EXPOSE 8443/tcp 8444/tcp 8443/udp 10086/tcp
+STOPSIGNAL SIGTERM
+HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
+    CMD ["/usr/local/bin/xray-runtime", "healthcheck"]
+ENTRYPOINT ["/usr/local/bin/xray-runtime"]
