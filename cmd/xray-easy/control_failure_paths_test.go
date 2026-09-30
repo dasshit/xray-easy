@@ -197,3 +197,23 @@ func TestStartReconcilerRetriesAndReportsBackgroundFailure(t *testing.T) {
 	}
 	t.Fatal("periodic reconciler did not record its retry failure")
 }
+
+func TestSettingsApplyReportsApplyOperationPersistenceFailure(t *testing.T) {
+	app := newTestApp(t, true)
+	logLevel := "debug"
+	prepared := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{LogLevel: &logLevel}, true)
+	if prepared.Code != http.StatusOK {
+		t.Fatalf("prepare settings change = %d %s", prepared.Code, prepared.Body.String())
+	}
+	change := decodeResponse[struct {
+		ChangeID string `json:"change_id"`
+	}](t, prepared)
+	execSQLiteTestMutation(t, app, "reject apply operation update", `CREATE TRIGGER reject_apply_operation_update BEFORE UPDATE ON apply_operations BEGIN SELECT RAISE(ABORT, 'injected operation update failure'); END`)
+	response := requestJSON(t, app, http.MethodPost, "/api/settings/apply", settingsApplyRequest{ChangeID: change.ChangeID}, true)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "injected operation update failure") {
+		t.Fatalf("apply operation failure = %d %s", response.Code, response.Body.String())
+	}
+	if !pendingExists(app.server, change.ChangeID) {
+		t.Fatal("apply operation failure consumed the pending settings confirmation")
+	}
+}

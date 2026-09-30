@@ -599,12 +599,26 @@ func readState(path string) (persistedState, error) {
 }
 
 func writeState(path string, state persistedState) error {
+	return writeStateWith(path, state, func(dir, pattern string) (stateTempFile, error) {
+		return os.CreateTemp(dir, pattern)
+	})
+}
+
+type stateTempFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+func writeStateWith(path string, state persistedState, createTemp func(string, string) (stateTempFile, error)) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode AWG state: %w", err)
 	}
 	data = append(data, '\n')
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".state-*.tmp")
+	tmp, err := createTemp(filepath.Dir(path), ".state-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create AWG state temporary file: %w", err)
 	}

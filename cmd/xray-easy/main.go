@@ -258,10 +258,17 @@ func main() {
 		}
 		return
 	}
-	ctx := context.Background()
-	s, cleanup, err := initializeControlPlane(ctx)
-	if err != nil {
+	if err := runControlPlane(context.Background(), initializeControlPlane, func(serverHTTP *http.Server) error {
+		return serverHTTP.ListenAndServe()
+	}); err != nil {
 		fatal(err)
+	}
+}
+
+func runControlPlane(ctx context.Context, initialize func(context.Context) (*server, func(), error), listen func(*http.Server) error) error {
+	s, cleanup, err := initialize(ctx)
+	if err != nil {
+		return err
 	}
 	defer cleanup()
 	s.stats.Start(ctx)
@@ -269,9 +276,10 @@ func main() {
 	mux := newMux(s)
 	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: requestLimit(mux), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second}
 	fmt.Fprintf(os.Stderr, "xray-easy control plane listening on %s\n", serverHTTP.Addr)
-	if err := serverHTTP.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fatal(err)
+	if err := listen(serverHTTP); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
 	}
+	return nil
 }
 
 func initializeControlPlane(ctx context.Context) (*server, func(), error) {
@@ -3404,7 +3412,22 @@ func randomID() (string, error) {
 }
 
 func writeAtomic(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".candidate-*")
+	return writeAtomicWith(path, data,
+		func(directory, pattern string) (atomicCandidateFile, error) { return os.CreateTemp(directory, pattern) },
+		os.Rename,
+	)
+}
+
+type atomicCandidateFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+func writeAtomicWith(path string, data []byte, createTemp func(string, string) (atomicCandidateFile, error), rename func(string, string) error) error {
+	tmp, err := createTemp(filepath.Dir(path), ".candidate-*")
 	if err != nil {
 		return err
 	}
@@ -3425,5 +3448,5 @@ func writeAtomic(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return rename(tmpName, path)
 }

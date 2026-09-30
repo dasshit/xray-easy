@@ -33,11 +33,15 @@ type CertificateInfo struct {
 // Import validates and writes a certificate and matching private key into a
 // new immutable version directory under root.
 func Import(root string, certPEM, keyPEM []byte, serverName string) (string, CertificateInfo, error) {
+	return importWithVerifier(root, certPEM, keyPEM, serverName, verifyTrusted)
+}
+
+func importWithVerifier(root string, certPEM, keyPEM []byte, serverName string, verify func([]byte, *x509.Certificate, string) error) (string, CertificateInfo, error) {
 	parsed, info, err := validatePair(certPEM, keyPEM, serverName)
 	if err != nil {
 		return "", CertificateInfo{}, err
 	}
-	if err := verifyTrusted(certPEM, parsed, serverName); err != nil {
+	if err := verify(certPEM, parsed, serverName); err != nil {
 		return "", CertificateInfo{}, err
 	}
 	id, err := newID()
@@ -187,6 +191,13 @@ func verifyTrusted(chainPEM []byte, cert *x509.Certificate, serverName string) e
 	if err != nil || roots == nil {
 		return errors.New("system certificate roots are unavailable")
 	}
+	return verifyTrustedWithRoots(chainPEM, cert, serverName, roots)
+}
+
+func verifyTrustedWithRoots(chainPEM []byte, cert *x509.Certificate, serverName string, roots *x509.CertPool) error {
+	if roots == nil {
+		return errors.New("system certificate roots are unavailable")
+	}
 	intermediates := x509.NewCertPool()
 	remaining := chainPEM
 	for {
@@ -203,7 +214,7 @@ func verifyTrusted(chainPEM []byte, cert *x509.Certificate, serverName string) e
 			intermediates.AddCert(candidate)
 		}
 	}
-	_, err = cert.Verify(x509.VerifyOptions{
+	_, err := cert.Verify(x509.VerifyOptions{
 		DNSName: serverName, Roots: roots, Intermediates: intermediates,
 		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	})
@@ -260,8 +271,12 @@ func writePrivate(path string, data []byte, mode os.FileMode) error {
 }
 
 func newID() (string, error) {
+	return newIDFrom(rand.Reader)
+}
+
+func newIDFrom(source io.Reader) (string, error) {
 	value := make([]byte, 16)
-	if _, err := rand.Read(value); err != nil {
+	if _, err := io.ReadFull(source, value); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(value), nil

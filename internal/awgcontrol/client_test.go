@@ -168,6 +168,7 @@ func TestClientRejectsMalformedUpstreamResponses(t *testing.T) {
 		{"peer item wrong type", "ListPeers", map[string]any{"peers": []any{"wrong"}}, func(c *Client) error { _, err := c.ListPeers(context.Background()); return err }},
 		{"peer incomplete", "ListPeers", map[string]any{"peers": []any{map[string]any{"name": "phone"}}}, func(c *Client) error { _, err := c.ListPeers(context.Background()); return err }},
 		{"peer stats invalid counter", "GetPeerStats", map[string]any{"peers": []any{map[string]any{"name": "phone", "uploadBytes": "-1", "downloadBytes": "0"}}}, func(c *Client) error { _, err := c.PeerStats(context.Background()); return err }},
+		{"peer stats missing counter", "GetPeerStats", map[string]any{"peers": []any{map[string]any{"name": "phone", "uploadBytes": "1"}}}, func(c *Client) error { _, err := c.PeerStats(context.Background()); return err }},
 		{"profile missing", "GetClientConfig", map[string]any{}, func(c *Client) error { _, err := c.ClientConfig(context.Background(), "phone"); return err }},
 		{"backup invalid base64", "ExportBackup", map[string]any{"data": "%%%"}, func(c *Client) error { _, err := c.ExportBackup(context.Background()); return err }},
 	}
@@ -181,6 +182,13 @@ func TestClientRejectsMalformedUpstreamResponses(t *testing.T) {
 	}
 }
 
+func TestClientRejectsValuesThatCannotBeEncodedAsAWGRequests(t *testing.T) {
+	client, _ := newFakeClient(nil)
+	if _, err := client.call(context.Background(), "CreatePeer", map[string]any{"name": make(chan int)}); err == nil || !strings.Contains(err.Error(), "encode AWG request") {
+		t.Fatalf("invalid request value error = %v", err)
+	}
+}
+
 func TestClientPropagatesRPCAndConnectionCloseErrors(t *testing.T) {
 	client, connection := newFakeClient(nil)
 	connection.err = errors.New("connection refused")
@@ -190,6 +198,40 @@ func TestClientPropagatesRPCAndConnectionCloseErrors(t *testing.T) {
 	connection.closeErr = errors.New("close failed")
 	if err := client.Close(); err == nil || err.Error() != "close failed" {
 		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestClientRejectsMalformedStatusHandshakeAndCreatedPeerResponses(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		method    string
+		response  map[string]any
+		operation func(*Client) error
+	}{
+		{
+			name: "status missing endpoint fields", method: "GetStatus",
+			response:  map[string]any{"running": true},
+			operation: func(client *Client) error { _, err := client.Status(context.Background()); return err },
+		},
+		{
+			name: "peer stats invalid handshake", method: "GetPeerStats",
+			response: map[string]any{"peers": []any{map[string]any{
+				"name": "phone", "lastHandshake": "yesterday", "uploadBytes": "1", "downloadBytes": "2",
+			}}},
+			operation: func(client *Client) error { _, err := client.PeerStats(context.Background()); return err },
+		},
+		{
+			name: "created peer invalid timestamp", method: "CreatePeer",
+			response:  map[string]any{"name": "phone", "publicKey": "key", "ipv4": "10.0.0.2", "ipv6": "fd00::2", "createdAt": "invalid"},
+			operation: func(client *Client) error { _, err := client.CreatePeer(context.Background(), "phone"); return err },
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client, _ := newFakeClient(map[string]map[string]any{serviceName + test.method: test.response})
+			if err := test.operation(client); err == nil {
+				t.Fatal("malformed response was accepted")
+			}
+		})
 	}
 }
 

@@ -3,6 +3,7 @@ package backup
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -190,6 +191,76 @@ func TestBackupIncludesAndRestoresHysteriaTLSVersions(t *testing.T) {
 	got, err := db.GetHysteriaSettings(context.Background())
 	if err != nil || !got.Enabled || got.CertificateID != id {
 		t.Fatalf("restored Hysteria settings = %+v, %v", got, err)
+	}
+}
+
+func TestRestoreWithoutTLSFilesDisablesHysteriaAndClearsCertificateReference(t *testing.T) {
+	manager, db := newTestManager(t)
+	settings := domain.HysteriaSettings{
+		Enabled: true, TLSMode: domain.HysteriaTLSCustom, CertificateID: "0123456789abcdef0123456789abcdef",
+		UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff,
+	}
+	if err := db.InitializeHysteriaSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	info, err := manager.Create("without-tls")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The current host may have a certificate that was added after the backup.
+	// Restore must not keep the restored inbound enabled while its certificate
+	// files are absent from the snapshot.
+	currentTLS := filepath.Join(manager.DataDir, "hysteria-tls", settings.CertificateID)
+	if err := os.MkdirAll(currentTLS, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(currentTLS, "fullchain.pem"), []byte("new certificate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RestoreState(info); err != nil {
+		t.Fatalf("restore backup without TLS files: %v", err)
+	}
+	got, err := db.GetHysteriaSettings(context.Background())
+	if err != nil || got.Enabled || got.CertificateID != "" {
+		t.Fatalf("restored Hysteria settings = %+v, %v; want disabled and no certificate reference", got, err)
+	}
+	if _, err := os.Stat(filepath.Join(currentTLS, "fullchain.pem")); err != nil {
+		t.Fatalf("backup without TLS files unexpectedly removed current files: %v", err)
+	}
+}
+
+func TestRestoreRollsBackSQLiteWhenHysteriaDisableFails(t *testing.T) {
+	manager, db := newTestManager(t)
+	settings := domain.HysteriaSettings{
+		Enabled: true, TLSMode: domain.HysteriaTLSCustom,
+		CertificateID:  "0123456789abcdef0123456789abcdef",
+		UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff,
+	}
+	if err := db.InitializeHysteriaSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	mutationDB, err := sql.Open("sqlite", "file:"+filepath.Join(filepath.Dir(manager.DataDir), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := mutationDB.Exec(`CREATE TRIGGER reject_hysteria_disable BEFORE UPDATE ON hysteria_settings BEGIN SELECT RAISE(ABORT, 'disable blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := mutationDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+	info, err := manager.Create("disable-failure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = manager.RestoreState(info)
+	if err == nil || !strings.Contains(err.Error(), "disable Hysteria 2 after restore") || !strings.Contains(err.Error(), "disable blocked") {
+		t.Fatalf("restore error = %v, want Hysteria disable failure", err)
+	}
+	current, getErr := db.GetHysteriaSettings(context.Background())
+	if getErr != nil || !current.Enabled || current.CertificateID != settings.CertificateID {
+		t.Fatalf("failed restore did not roll Hysteria settings back: %+v, %v", current, getErr)
 	}
 }
 

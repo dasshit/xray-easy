@@ -2,36 +2,45 @@ package main
 
 import (
 	"errors"
+	"io"
 	"os"
 
 	"golang.org/x/sys/unix"
 )
 
 func readPasswordLineNoEcho(fd int) (password []byte, resultErr error) {
-	original, err := getTerminalMode(fd)
+	return readPasswordLineNoEchoWith(fd, getTerminalMode, setTerminalMode, readTerminalLine)
+}
+
+func readPasswordLineNoEchoWith(fd int, getMode func(int) (*unix.Termios, error), setMode func(int, *unix.Termios) error, readLine func() ([]byte, error)) (password []byte, resultErr error) {
+	original, err := getMode(fd)
 	if err != nil {
 		return nil, errors.New("input is not a terminal")
 	}
 	hidden := *original
 	hidden.Lflag &^= unix.ECHO
-	if err := setTerminalMode(fd, &hidden); err != nil {
+	if err := setMode(fd, &hidden); err != nil {
 		return nil, err
 	}
 	defer func() {
-		if err := setTerminalMode(fd, original); err != nil && resultErr == nil {
+		if err := setMode(fd, original); err != nil && resultErr == nil {
 			clear(password)
 			password = nil
 			resultErr = err
 		}
 	}()
-	return readTerminalLine()
+	return readLine()
 }
 
 func readTerminalLine() ([]byte, error) {
+	return readTerminalLineFrom(os.Stdin)
+}
+
+func readTerminalLineFrom(input io.Reader) ([]byte, error) {
 	password := make([]byte, 0, 64)
 	var next [1]byte
 	for {
-		n, err := os.Stdin.Read(next[:])
+		n, err := input.Read(next[:])
 		if err != nil {
 			clear(password)
 			return nil, err

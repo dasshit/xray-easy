@@ -172,6 +172,55 @@ func TestCreateAWGBackupRejectsMissingProfilesAndUnsafeProfileEntries(t *testing
 	}
 }
 
+func TestCreateAWGBackupRejectsInvalidStateAndProfileDirectories(t *testing.T) {
+	if _, err := createAWGBackup("", nil); err == nil {
+		t.Fatal("backup accepted an uninitialized service")
+	}
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	statePath := filepath.Join(opts.DataDir, "state.json")
+	stateData, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createAWGBackup(opts.DataDir, manager); err == nil {
+		t.Fatal("backup accepted a missing state file")
+	}
+	if err := os.WriteFile(statePath, []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createAWGBackup(opts.DataDir, manager); err == nil || !strings.Contains(err.Error(), "read persistent state") {
+		t.Fatalf("backup accepted malformed state: %v", err)
+	}
+	if err := os.WriteFile(statePath, stateData, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	profileDir := filepath.Join(opts.DataDir, "profiles")
+	if err := os.WriteFile(profileDir, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createAWGBackup(opts.DataDir, manager); err == nil {
+		t.Fatal("backup accepted a regular file for the profiles directory")
+	}
+	if err := os.Remove(profileDir); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	if err := os.Symlink(target, profileDir); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := createAWGBackup(opts.DataDir, manager); err == nil || !strings.Contains(err.Error(), "must be a directory") {
+		t.Fatalf("backup accepted a symlinked profile directory: %v", err)
+	}
+}
+
 func TestRestoreAWGBackupRejectsMissingOrMismatchedPeerProfiles(t *testing.T) {
 	opts := testOptions(t)
 	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
@@ -220,6 +269,86 @@ func TestRestoreAWGBackupRejectsMissingOrMismatchedPeerProfiles(t *testing.T) {
 	}
 	if len(manager.Peers()) != 1 {
 		t.Fatalf("invalid restore changed active peers: %+v", manager.Peers())
+	}
+}
+
+func TestSavedClientProfileHelpersRejectUnsafeOrMalformedEntries(t *testing.T) {
+	if err := writeClientProfile("", "phone", "profile"); err == nil || !strings.Contains(err.Error(), "data directory") {
+		t.Fatalf("write profile without directory = %v", err)
+	}
+	if err := writeClientProfile(t.TempDir(), "bad_name", "profile"); err == nil {
+		t.Fatal("write accepted an invalid peer name")
+	}
+
+	root := t.TempDir()
+	profile := "[Interface]\nPrivateKey = client-key\n[Peer]\nPublicKey = server-key\n"
+	if err := writeClientProfile(root, "phone", profile); err != nil {
+		t.Fatal(err)
+	}
+	got, err := readClientProfile(root, "phone")
+	if err != nil || got != profile {
+		t.Fatalf("readClientProfile() = %q, %v", got, err)
+	}
+	info, err := os.Stat(filepath.Join(root, "profiles", "phone.conf"))
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("saved profile mode = %v, %v", info, err)
+	}
+	if err := removeClientProfile(root, "phone"); err != nil {
+		t.Fatal(err)
+	}
+	if err := removeClientProfile(root, "phone"); err != nil {
+		t.Fatalf("removing an already absent profile should be idempotent: %v", err)
+	}
+
+	for _, test := range []struct {
+		name    string
+		content string
+		mode    os.FileMode
+		want    string
+	}{
+		{name: "malformed", content: "not a WireGuard profile", mode: 0o600, want: "malformed"},
+		{name: "oversized", content: strings.Repeat("x", (64<<10)+1), mode: 0o600, want: "exceeds 64 KiB"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			dir := t.TempDir()
+			profilePath := filepath.Join(dir, "profiles", "phone.conf")
+			if err := os.MkdirAll(filepath.Dir(profilePath), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(profilePath, []byte(test.content), test.mode); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readClientProfile(dir, "phone"); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("unsafe profile accepted: %v", err)
+			}
+		})
+	}
+
+	linkRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(linkRoot, "profiles"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(linkRoot, "missing-target"), filepath.Join(linkRoot, "profiles", "phone.conf")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readClientProfile(linkRoot, "phone"); err == nil {
+		t.Fatal("read accepted a symlink as a profile")
+	}
+}
+
+func TestPrivateKeyFromProfileRequiresExactlyOneInterfaceKey(t *testing.T) {
+	for _, profile := range []string{
+		"[Peer]\nPrivateKey = peer-key\n",
+		"[Interface]\nPrivateKey=bad-format\n",
+		"[Interface]\nPrivateKey = one\nPrivateKey = two\n",
+		"[Interface]\nPrivateKey = \n",
+	} {
+		if _, err := privateKeyFromProfile(profile); err == nil {
+			t.Fatalf("invalid private key profile was accepted: %q", profile)
+		}
+	}
+	if key, err := privateKeyFromProfile("[Interface]\nPrivateKey = actual-key\n[Peer]\nPrivateKey = ignored\n"); err != nil || key != "actual-key" {
+		t.Fatalf("private key extraction = %q, %v", key, err)
 	}
 }
 

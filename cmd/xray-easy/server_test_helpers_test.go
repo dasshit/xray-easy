@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -240,6 +241,40 @@ func writeTestHysteriaCertificate(t *testing.T, directory string) {
 		"fullchain.pem": pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}),
 		"privkey.pem":   pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
 	} {
+		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func writeTestMkcertMaterial(t *testing.T, directory string, ipv4 string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Minute)
+	certificate := x509.Certificate{
+		SerialNumber: big.NewInt(2), Subject: pkix.Name{CommonName: ipv4},
+		NotBefore: now, NotAfter: now.Add(24 * time.Hour),
+		IPAddresses: []net.IP{net.ParseIP(ipv4)},
+		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, &certificate, &certificate, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	for name, content := range map[string][]byte{"leaf.pem": certPEM, "key.pem": keyPEM, "ca.pem": certPEM} {
 		if err := os.WriteFile(filepath.Join(directory, name), content, 0o600); err != nil {
 			t.Fatal(err)
 		}

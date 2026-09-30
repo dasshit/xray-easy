@@ -447,6 +447,50 @@ func TestBuildProfileRejectsUnavailableClientAndIncompleteSettings(t *testing.T)
 	}
 }
 
+func TestBuildProfileRejectsInvalidProtocolSpecificTransportSettings(t *testing.T) {
+	base := validTestSettings()
+	vmess := Client{ID: "vmess-device", Name: "VMess phone", Protocol: domain.ProtocolVMess, UUID: "vmess-uuid", VMessEnabled: true}
+	hysteria := Client{ID: "hysteria-device", Name: "Hysteria phone", Protocol: domain.ProtocolHysteria2, HysteriaAuth: "auth", HysteriaEnabled: true}
+
+	for _, test := range []struct {
+		name     string
+		client   Client
+		settings Settings
+	}{
+		{"VMess port", vmess, func() Settings { s := base; s.VMessPublicPort = 0; return s }()},
+		{"VMess public host", vmess, func() Settings {
+			s := base
+			s.VMessPublicPort = 9443
+			s.PublicHost = "https://vpn.example.com"
+			return s
+		}()},
+		{"VMess server name", vmess, func() Settings {
+			s := base
+			s.VMessPublicPort = 9443
+			s.HysteriaTLSMode = HysteriaTLSCustom
+			s.HysteriaTLSServerName = "bad name"
+			return s
+		}()},
+		{"VMess invalid pin", vmess, func() Settings {
+			s := base
+			s.VMessPublicPort = 9443
+			s.HysteriaTLSMode = HysteriaTLSSelfSigned
+			s.HysteriaTLSFingerprint = "not-a-fingerprint"
+			return s
+		}()},
+		{"Hysteria disabled", hysteria, base},
+		{"Hysteria port", hysteria, func() Settings { s := base; s.Hysteria2Enabled = true; s.PublicPort = 0; return s }()},
+		{"Hysteria host", hysteria, func() Settings { s := base; s.Hysteria2Enabled = true; s.HysteriaHost = "bad host"; return s }()},
+		{"Hysteria TLS name", hysteria, func() Settings { s := base; s.Hysteria2Enabled = true; s.HysteriaTLSServerName = "bad name"; return s }()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := BuildProfile(test.settings, test.client); err == nil {
+				t.Fatal("invalid protocol-specific profile settings were accepted")
+			}
+		})
+	}
+}
+
 func TestRenderServerConfigPreservesDisabledAndReservedShortIDsWithoutActiveClients(t *testing.T) {
 	settings := validTestSettings()
 	settings.ReservedShortIDs = []string{"1111111111111111"}
@@ -591,5 +635,56 @@ func TestRenderServerConfigRejectsInvalidSettings(t *testing.T) {
 				t.Fatal("invalid settings accepted")
 			}
 		})
+	}
+}
+
+func TestRenderServerConfigValidatesHysteriaTLSVariantsAndLogLevel(t *testing.T) {
+	base := validTestSettings()
+	cases := []struct {
+		name   string
+		change func(*Settings)
+	}{
+		{"unsupported log level", func(s *Settings) { s.LogLevel = "verbose" }},
+		{"invalid custom SNI", func(s *Settings) {
+			s.Hysteria2Enabled = true
+			s.HysteriaTLSMode = HysteriaTLSCustom
+			s.HysteriaTLSServerName = "bad name"
+		}},
+		{"invalid TLS mode", func(s *Settings) { s.Hysteria2Enabled = true; s.HysteriaTLSMode = "unknown" }},
+		{"self-signed non IPv4", func(s *Settings) {
+			s.Hysteria2Enabled = true
+			s.HysteriaTLSMode = HysteriaTLSSelfSigned
+			s.HysteriaTLSCertIP = "2001:4860:4860::8888"
+		}},
+		{"self-signed endpoint mismatch", func(s *Settings) {
+			s.Hysteria2Enabled = true
+			s.HysteriaTLSMode = HysteriaTLSSelfSigned
+			s.HysteriaTLSCertIP = "8.8.8.8"
+		}},
+		{"self-signed SNI mismatch", func(s *Settings) {
+			s.Hysteria2Enabled = true
+			s.HysteriaTLSMode = HysteriaTLSSelfSigned
+			s.HysteriaTLSCertIP = "8.8.8.8"
+			s.PublicHost = "8.8.8.8"
+			s.HysteriaTLSServerName = "dns.google"
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			settings := base
+			test.change(&settings)
+			if _, err := RenderServerConfig(settings, nil); err == nil {
+				t.Fatal("invalid Xray TLS settings were accepted")
+			}
+		})
+	}
+	valid := base
+	valid.Hysteria2Enabled = true
+	valid.HysteriaTLSMode = HysteriaTLSSelfSigned
+	valid.HysteriaTLSCertIP = "8.8.8.8"
+	valid.PublicHost = "8.8.8.8"
+	valid.HysteriaTLSServerName = "8.8.8.8"
+	if _, err := RenderServerConfig(valid, nil); err != nil {
+		t.Fatalf("valid self-signed Hysteria TLS settings rejected: %v", err)
 	}
 }

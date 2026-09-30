@@ -28,6 +28,9 @@ func TestValidateAWGConfiguration(t *testing.T) {
 	if err := validateAWGConfiguration(base); err != nil {
 		t.Fatalf("valid AmneziaWG settings: %v", err)
 	}
+	if err := validateAWGConfiguration(configuration{public: 443}); err != nil {
+		t.Fatalf("disabled AmneziaWG with default port should be valid: %v", err)
+	}
 
 	for _, test := range []struct {
 		name string

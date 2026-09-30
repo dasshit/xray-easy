@@ -53,6 +53,57 @@ type recordingVMessHandler struct {
 	removeErr error
 }
 
+type reconcilingProtocolHandler struct {
+	*fakeXrayHandler
+	hysteriaUsers []string
+	vmessUsers    []string
+	listTag       string
+	listErr       error
+}
+
+func (h *reconcilingProtocolHandler) AddHysteriaUser(_ context.Context, email, _ string) error {
+	h.hysteriaUsers = append(h.hysteriaUsers, email)
+	return nil
+}
+
+func (h *reconcilingProtocolHandler) RemoveHysteriaUser(_ context.Context, email string) error {
+	h.hysteriaUsers = removeEmail(h.hysteriaUsers, email)
+	return nil
+}
+
+func (h *reconcilingProtocolHandler) AddVMessUser(_ context.Context, email, _ string) error {
+	h.vmessUsers = append(h.vmessUsers, email)
+	return nil
+}
+
+func (h *reconcilingProtocolHandler) RemoveVMessUser(_ context.Context, email string) error {
+	h.vmessUsers = removeEmail(h.vmessUsers, email)
+	return nil
+}
+
+func (h *reconcilingProtocolHandler) UsersInInbound(_ context.Context, tag string) ([]string, error) {
+	if h.listErr != nil && h.listTag == tag {
+		return nil, h.listErr
+	}
+	switch tag {
+	case xray.HysteriaInboundTag:
+		return append([]string(nil), h.hysteriaUsers...), nil
+	case xray.VMessInboundTag:
+		return append([]string(nil), h.vmessUsers...), nil
+	default:
+		return nil, fmt.Errorf("unexpected inbound tag %q", tag)
+	}
+}
+
+func removeEmail(emails []string, target string) []string {
+	for index, email := range emails {
+		if email == target {
+			return append(emails[:index], emails[index+1:]...)
+		}
+	}
+	return emails
+}
+
 func (h *recordingVMessHandler) AddVMessUser(_ context.Context, email, _ string) error {
 	h.added = append(h.added, email)
 	if h.addErr != nil {
@@ -454,6 +505,282 @@ func TestReconcilePersistsRuntimeUsersAndRepairsHysteriaRoster(t *testing.T) {
 	handler.listErr = errors.New("Hysteria inbound unavailable")
 	if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Hysteria inbound unavailable") {
 		t.Fatalf("Hysteria list failure = %v", err)
+	}
+}
+
+func TestReconcileRunningRepairsHysteriaAndVMessRostersAndReportsAPIErrors(t *testing.T) {
+	t.Setenv("XRAY_HYSTERIA2_ENABLED", "true")
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "custom")
+	t.Setenv("XRAY_HYSTERIA2_TLS_SERVER_NAME", "cert.example.test")
+	app := newTestApp(t, true)
+	handler := &reconcilingProtocolHandler{fakeXrayHandler: app.handler}
+	app.server.handler = handler
+	vless := createRuntimeTestClient(t, app, "vless-device")
+	hysteria := createRuntimeHysteriaClient(t, app, "hysteria-device")
+	vmess := createRuntimeVMessClient(t, app, "vmess-device")
+	disabled := seedTestClient(t, app, "disabled-device")
+	if err := app.server.store.SetClientState(t.Context(), disabled.ID, false, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate state drift from a stale Xray process: active peers are missing,
+	// while disabled and unrecognized users remain in each inbound.
+	handler.users = []string{disabled.Email, "stray-vless@xray-easy"}
+	handler.hysteriaUsers = []string{"stray-hysteria@xray-easy"}
+	handler.vmessUsers = []string{"stray-vmess@xray-easy"}
+	if err := app.server.reconcileRunning(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !containsEmail(handler.users, vless.Email) || containsEmail(handler.users, disabled.Email) || containsEmail(handler.users, "stray-vless@xray-easy") {
+		t.Fatalf("reconciled VLESS users = %v", handler.users)
+	}
+	if len(handler.hysteriaUsers) != 1 || handler.hysteriaUsers[0] != hysteria.Email {
+		t.Fatalf("reconciled Hysteria users = %v", handler.hysteriaUsers)
+	}
+	if len(handler.vmessUsers) != 1 || handler.vmessUsers[0] != vmess.Email {
+		t.Fatalf("reconciled VMess users = %v", handler.vmessUsers)
+	}
+
+	for _, tag := range []string{xray.HysteriaInboundTag, xray.VMessInboundTag} {
+		handler.listTag, handler.listErr = tag, errors.New("inbound stats unavailable")
+		err := app.server.reconcileRunning(t.Context())
+		if err == nil || !strings.Contains(err.Error(), "inbound stats unavailable") {
+			t.Errorf("reconcile with %s UsersInInbound error = %v", tag, err)
+		}
+	}
+}
+
+func TestProtocolSpecificClientStateTransitionsUseLiveHandlerAPIs(t *testing.T) {
+	t.Setenv("XRAY_HYSTERIA2_ENABLED", "true")
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "custom")
+	t.Setenv("XRAY_HYSTERIA2_TLS_SERVER_NAME", "cert.example.test")
+	app := newTestApp(t, true)
+	handler := &reconcilingProtocolHandler{fakeXrayHandler: app.handler}
+	app.server.handler = handler
+	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
+	app.server.supervisor = replacer
+	hysteria := createRuntimeHysteriaClient(t, app, "hysteria-state")
+	vmess := createRuntimeVMessClient(t, app, "vmess-state")
+
+	for _, transition := range []struct {
+		id     string
+		action string
+	}{
+		{id: hysteria.ID, action: "disable"},
+		{id: hysteria.ID, action: "enable"},
+		{id: hysteria.ID, action: "revoke"},
+		{id: vmess.ID, action: "disable"},
+		{id: vmess.ID, action: "enable"},
+		{id: vmess.ID, action: "revoke"},
+	} {
+		response := requestJSON(t, app, http.MethodPost, "/api/clients/"+transition.id+"/"+transition.action, nil, true)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s %s transition = %d %s", transition.id, transition.action, response.Code, response.Body.String())
+		}
+	}
+	if len(handler.hysteriaUsers) != 0 {
+		t.Fatalf("revoked Hysteria access remained live: %v", handler.hysteriaUsers)
+	}
+	if len(replacer.calls) == 0 || replacer.calls[len(replacer.calls)-1][2] != xray.VMessInboundTag {
+		t.Fatalf("VMess revocation did not replace its inbound: %v", replacer.calls)
+	}
+
+	// A failed live add must restore the previous protocol access state.
+	vmessRecreated := createRuntimeVMessClient(t, app, "vmess-rollback")
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients/"+vmessRecreated.ID+"/disable", nil, true).Code; got != http.StatusOK {
+		t.Fatalf("disable VMess before rollback check = %d", got)
+	}
+	app.handler.addErr = errors.New("live VLESS add rejected")
+	// This VLESS transition shares the same HandlerService but leaves the
+	// VMess-only credential lifecycle unchanged.
+	vless := createRuntimeTestClient(t, app, "vless-rollback")
+	if got := requestJSON(t, app, http.MethodPost, "/api/clients/"+vless.ID+"/disable", nil, true).Code; got != http.StatusOK {
+		t.Fatalf("disable VLESS before failure check = %d", got)
+	}
+	failed := requestJSON(t, app, http.MethodPost, "/api/clients/"+vless.ID+"/enable", nil, true)
+	if failed.Code != http.StatusBadGateway {
+		t.Fatalf("failed live protocol add = %d %s", failed.Code, failed.Body.String())
+	}
+	stored, err := app.server.store.GetClient(t.Context(), vless.ID)
+	if err != nil || stored.VLESSEnabled || stored.VLESSRevoked {
+		t.Fatalf("failed live add did not preserve the disabled access state: %+v, %v", stored, err)
+	}
+}
+
+func TestOptionalProtocolStateFailuresKeepPersistedAccessUnchanged(t *testing.T) {
+	t.Setenv("XRAY_HYSTERIA2_ENABLED", "true")
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "custom")
+	t.Setenv("XRAY_HYSTERIA2_TLS_SERVER_NAME", "cert.example.test")
+	t.Run("Hysteria add and remove failures", func(t *testing.T) {
+		app := newTestApp(t, true)
+		handler := &recordingHysteriaHandler{fakeXrayHandler: app.handler}
+		app.server.handler = handler
+		client := createRuntimeHysteriaClient(t, app, "hysteria-failure")
+		handler.removeErr = errors.New("remove Hysteria peer rejected")
+		response := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/disable", nil, true)
+		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "remove Hysteria peer rejected") {
+			t.Fatalf("Hysteria remove failure = %d %s", response.Code, response.Body.String())
+		}
+		stored, err := app.server.store.GetClient(t.Context(), client.ID)
+		if err != nil || !stored.HysteriaEnabled {
+			t.Fatalf("failed Hysteria remove changed persisted state: %+v, %v", stored, err)
+		}
+		handler.removeErr = nil
+		if response := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/disable", nil, true); response.Code != http.StatusOK {
+			t.Fatalf("disable Hysteria before add failure = %d %s", response.Code, response.Body.String())
+		}
+		handler.addErr = errors.New("add Hysteria peer rejected")
+		response = requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/enable", nil, true)
+		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "add Hysteria peer rejected") {
+			t.Fatalf("Hysteria add failure = %d %s", response.Code, response.Body.String())
+		}
+		stored, err = app.server.store.GetClient(t.Context(), client.ID)
+		if err != nil || stored.HysteriaEnabled {
+			t.Fatalf("failed Hysteria add changed persisted state: %+v, %v", stored, err)
+		}
+	})
+	t.Run("VMess add and remove failures", func(t *testing.T) {
+		app := newTestApp(t, true)
+		handler := &recordingVMessHandler{fakeXrayHandler: app.handler}
+		app.server.handler = handler
+		client := createRuntimeVMessClient(t, app, "vmess-failure")
+		handler.removeErr = errors.New("remove VMess peer rejected")
+		response := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/disable", nil, true)
+		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "remove VMess peer rejected") {
+			t.Fatalf("VMess remove failure = %d %s", response.Code, response.Body.String())
+		}
+		stored, err := app.server.store.GetClient(t.Context(), client.ID)
+		if err != nil || !stored.VMessEnabled {
+			t.Fatalf("failed VMess remove changed persisted state: %+v, %v", stored, err)
+		}
+		handler.removeErr = nil
+		if response := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/disable", nil, true); response.Code != http.StatusOK {
+			t.Fatalf("disable VMess before add failure = %d %s", response.Code, response.Body.String())
+		}
+		handler.addErr = errors.New("add VMess peer rejected")
+		response = requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/enable", nil, true)
+		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "add VMess peer rejected") {
+			t.Fatalf("VMess add failure = %d %s", response.Code, response.Body.String())
+		}
+		stored, err = app.server.store.GetClient(t.Context(), client.ID)
+		if err != nil || stored.VMessEnabled {
+			t.Fatalf("failed VMess add changed persisted state: %+v, %v", stored, err)
+		}
+	})
+}
+
+func containsEmail(emails []string, target string) bool {
+	for _, email := range emails {
+		if email == target {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRuntimeReconcilerHandlesVMessApiAvailabilityAndRosterFailures(t *testing.T) {
+	app := newTestApp(t, true)
+	client := createRuntimeVMessClient(t, app, "vmess-phone")
+	if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "VMess HandlerService is unavailable") {
+		t.Fatalf("reconcile without VMess API = %v", err)
+	}
+
+	handler := &recordingVMessHandler{fakeXrayHandler: app.handler}
+	app.server.handler = handler
+	handler.listErr = errors.New("VMess inbound unavailable")
+	if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "VMess inbound unavailable") {
+		t.Fatalf("VMess list failure = %v", err)
+	}
+	handler.listErr = nil
+	handler.users = []string{"stray@xray-easy"}
+	handler.removeErr = errors.New("VMess user removal failed")
+	if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "VMess user removal failed") {
+		t.Fatalf("VMess removal failure = %v", err)
+	}
+	handler.removeErr = nil
+	handler.users = nil
+	handler.addErr = errors.New("VMess user addition failed")
+	if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "VMess user addition failed") {
+		t.Fatalf("VMess addition failure = %v", err)
+	}
+	handler.addErr = nil
+	if err := app.server.reconcileRunning(t.Context()); err != nil {
+		t.Fatalf("VMess roster did not recover after transient errors: %v", err)
+	}
+	if len(handler.added) == 0 || handler.added[len(handler.added)-1] != client.Email {
+		t.Fatalf("VMess client was not restored to live inbound: %+v", handler.added)
+	}
+}
+
+func TestRuntimeReconcilerReportsStoreAndShortIDFailures(t *testing.T) {
+	t.Run("client query", func(t *testing.T) {
+		app := newTestApp(t, true)
+		if err := app.server.store.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := app.server.reconcileRunning(t.Context()); err == nil {
+			t.Fatal("reconcile succeeded with a closed store")
+		}
+	})
+	t.Run("short ID reserve query", func(t *testing.T) {
+		app := newTestApp(t, true)
+		createRuntimeTestClient(t, app, "reserve-phone")
+		execSQLiteTestMutation(t, app, "drop short IDs", `DROP TABLE reality_short_ids`)
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "reconcile REALITY short IDs") {
+			t.Fatalf("reconcile without short ID table = %v", err)
+		}
+	})
+}
+
+func TestProtocolClientCreationRollsBackFailedVMessAndCandidateValidation(t *testing.T) {
+	t.Run("live VMess registration rejected", func(t *testing.T) {
+		app := newTestApp(t, true)
+		handler := &recordingVMessHandler{fakeXrayHandler: app.handler}
+		app.server.handler = handler
+		createRuntimeVMessClient(t, app, "first-phone")
+		handler.addErr = errors.New("VMess user rejected")
+		response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolVMess), Name: "second-phone"}, true)
+		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "VMess user rejected") {
+			t.Fatalf("failed live VMess create = %d %s", response.Code, response.Body.String())
+		}
+		clients, err := app.server.store.ListClients(t.Context())
+		if err != nil || len(clients) != 1 {
+			t.Fatalf("failed VMess profile remained persisted: %v, %v", clients, err)
+		}
+	})
+	t.Run("candidate rejected", func(t *testing.T) {
+		app := newTestApp(t, true)
+		app.sup.validateErr = errors.New("candidate rejected")
+		response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "phone"}, true)
+		if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "candidate rejected") {
+			t.Fatalf("candidate validation create = %d %s", response.Code, response.Body.String())
+		}
+		clients, err := app.server.store.ListClients(t.Context())
+		if err != nil || len(clients) != 0 {
+			t.Fatalf("candidate-rejected profile remained persisted: %v, %v", clients, err)
+		}
+	})
+}
+
+func TestVLESSInboundReplacementFailureLeavesExistingClientsAndRuntimeIntact(t *testing.T) {
+	app := newTestApp(t, true)
+	replacer := &recordingInboundReplacer{fakeSupervisor: app.sup}
+	app.server.supervisor = replacer
+	for i := 1; i <= 5; i++ {
+		createRuntimeTestClient(t, app, fmt.Sprintf("phone-%d", i))
+	}
+	replacer.err = errors.New("inbound replacement rejected")
+	failed := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "phone-6"}, true)
+	if failed.Code != http.StatusBadGateway || !strings.Contains(failed.Body.String(), "inbound replacement rejected") {
+		t.Fatalf("reserve-exhaustion replacement failure = %d %s", failed.Code, failed.Body.String())
+	}
+	clients, err := app.server.store.ListClients(t.Context())
+	if err != nil || len(clients) != 5 {
+		t.Fatalf("failed inbound replacement changed profile set: %d, %v", len(clients), err)
+	}
+	active, err := os.ReadFile(filepath.Join(app.server.configDir, "active.json"))
+	if err != nil || !strings.Contains(string(active), clients[0].ShortID) {
+		t.Fatalf("failed inbound replacement changed active config: %v", err)
 	}
 }
 

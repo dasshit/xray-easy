@@ -14,6 +14,20 @@ import (
 // CreateBundle writes a private gzip tar archive containing the supplied
 // already-redacted report files and returns its absolute path.
 func CreateBundle(dataDir string, files map[string][]byte, now time.Time) (string, error) {
+	return createBundleWith(dataDir, files, now, func(dir, pattern string) (bundleFile, error) {
+		return os.CreateTemp(dir, pattern)
+	}, os.Remove, os.Rename)
+}
+
+type bundleFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+func createBundleWith(dataDir string, files map[string][]byte, now time.Time, createTemp func(string, string) (bundleFile, error), remove func(string) error, rename func(string, string) error) (string, error) {
 	if len(files) == 0 {
 		return "", errors.New("doctor bundle is empty")
 	}
@@ -33,12 +47,12 @@ func CreateBundle(dataDir string, files map[string][]byte, now time.Time) (strin
 		now = now.UTC()
 	}
 	name := "doctor-" + now.Format("20060102T150405.000000000Z") + ".tar.gz"
-	temporary, err := os.CreateTemp(directory, ".doctor-*.tmp")
+	temporary, err := createTemp(directory, ".doctor-*.tmp")
 	if err != nil {
 		return "", fmt.Errorf("create doctor bundle: %w", err)
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer remove(temporaryPath)
 	if err := temporary.Chmod(0o600); err != nil {
 		_ = temporary.Close()
 		return "", fmt.Errorf("secure doctor bundle: %w", err)
@@ -83,7 +97,7 @@ func CreateBundle(dataDir string, files map[string][]byte, now time.Time) (strin
 		return "", fmt.Errorf("close doctor bundle: %w", err)
 	}
 	path := filepath.Join(directory, name)
-	if err := os.Rename(temporaryPath, path); err != nil {
+	if err := rename(temporaryPath, path); err != nil {
 		return "", fmt.Errorf("publish doctor bundle: %w", err)
 	}
 	return path, nil

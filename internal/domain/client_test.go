@@ -144,3 +144,65 @@ func TestClientAccessStateIsIndependentByProtocol(t *testing.T) {
 		t.Fatal("unsupported protocol state was returned")
 	}
 }
+
+func TestProtocolAccessHelpersAndHysteriaCredentialFallback(t *testing.T) {
+	legacy := Client{Protocol: ProtocolLegacyDual, UUID: "legacy-uuid", HysteriaAuth: "  explicit-auth  "}
+	if !legacy.HasVLESS() || !legacy.HasHysteria2() || legacy.HasVMess() {
+		t.Fatalf("legacy protocol membership is incorrect: %+v", legacy)
+	}
+	if got := legacy.HysteriaCredential(); got != "  explicit-auth  " {
+		t.Fatalf("explicit Hysteria credential = %q", got)
+	}
+	legacy.HysteriaAuth = ""
+	if got := legacy.HysteriaCredential(); got != "legacy-uuid" {
+		t.Fatalf("legacy Hysteria credential fallback = %q", got)
+	}
+	if legacy.VLESSCanConnect() || legacy.Hysteria2CanConnect() || legacy.VMessCanConnect() {
+		t.Fatal("disabled access unexpectedly connects")
+	}
+
+	vless := Client{Protocol: ProtocolVLESS, VLESSEnabled: true}
+	if !vless.VLESSCanConnect() || vless.Hysteria2CanConnect() || vless.VMessCanConnect() {
+		t.Fatal("VLESS connectivity leaked across protocols")
+	}
+	hysteria := Client{Protocol: ProtocolHysteria2, HysteriaEnabled: true, HysteriaRevoked: true}
+	if hysteria.Hysteria2CanConnect() {
+		t.Fatal("revoked Hysteria access is connectable")
+	}
+	vmess := Client{Protocol: ProtocolVMess, Enabled: true}
+	if !vmess.HasVMess() || !vmess.VMessCanConnect() || vmess.HasVLESS() || vmess.HasHysteria2() {
+		t.Fatal("VMess connectivity or membership is incorrect")
+	}
+}
+
+func TestAccessStateRejectsMissingAndUnsupportedProtocols(t *testing.T) {
+	client := Client{Protocol: ProtocolVLESS, VLESSEnabled: true}
+	for _, protocol := range []ClientProtocol{ProtocolHysteria2, ProtocolVMess, ProtocolAmneziaWG, "unknown"} {
+		if _, err := client.AccessState(protocol); err == nil {
+			t.Errorf("AccessState(%q) unexpectedly succeeded", protocol)
+		}
+	}
+	if _, err := (Client{Protocol: ProtocolHysteria2}).AccessState(ProtocolHysteria2); err != nil {
+		t.Fatalf("Hysteria access state: %v", err)
+	}
+	if _, err := (Client{Protocol: ProtocolVMess}).AccessState(ProtocolVMess); err != nil {
+		t.Fatalf("VMess access state: %v", err)
+	}
+}
+
+func TestNewProtocolClientValidatesHysteriaCredentialsAndProtocolSpecificFields(t *testing.T) {
+	for _, auth := range []string{"", " \t", strings.Repeat("x", 257), "bad\nvalue"} {
+		if _, err := NewProtocolClient("id", "phone", ProtocolHysteria2, "", auth); err == nil {
+			t.Errorf("invalid Hysteria credential %q was accepted", auth)
+		}
+	}
+	client, err := NewProtocolClient("id", " phone ", ProtocolHysteria2, "ignored", "  password  ")
+	if err != nil || client.Name != "phone" || client.HysteriaAuth != "password" || client.ClientFingerprint != "" || !client.HysteriaEnabled {
+		t.Fatalf("Hysteria client = %+v, %v", client, err)
+	}
+	for _, protocol := range []ClientProtocol{ProtocolLegacyDual, ProtocolAmneziaWG, "unknown"} {
+		if _, err := NewProtocolClient("id", "phone", protocol, "", "password"); err == nil {
+			t.Errorf("unsupported new profile protocol %q was accepted", protocol)
+		}
+	}
+}

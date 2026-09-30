@@ -178,6 +178,9 @@ func TestDefaultVMessPortAvoidsInstallerPortSelections(t *testing.T) {
 	if got := defaultVMessPort(443, 9443); got != 9444 {
 		t.Fatalf("VMess port collides with Web UI port: %d", got)
 	}
+	if got := defaultVMessPort(9443, 9444); got != 9445 {
+		t.Fatalf("VMess port skipped both configured values = %d, want 9445", got)
+	}
 }
 
 func TestInvalidExistingKeyIsNeverReplaced(t *testing.T) {

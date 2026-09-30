@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/structpb"
 	"xray-easy/awg-service/internal/control"
 )
 
@@ -35,6 +36,15 @@ const (
 )
 
 var peerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
+
+type controlRPC interface {
+	Invoke(context.Context, string, map[string]any) (*structpb.Struct, error)
+	Close() error
+}
+
+var dialControlRPC = func() (controlRPC, error) { return dialControl() }
+var openControlManager = control.Open
+var listenControl = net.Listen
 
 func main() {
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -81,25 +91,33 @@ func serve() error {
 	if err != nil {
 		return err
 	}
-	manager, err := control.Open(opts, control.KernelFactory{Options: opts})
+	manager, err := openControlManager(opts, control.KernelFactory{Options: opts})
 	if err != nil {
 		return err
 	}
 	defer manager.Close()
-	listener, err := net.Listen("tcp", envOr("AWG_GRPC_LISTEN", defaultControlAddr))
+	listener, err := listenControl("tcp", envOr("AWG_GRPC_LISTEN", defaultControlAddr))
 	if err != nil {
 		return fmt.Errorf("listen on private AWG control address: %w", err)
 	}
+	shutdown := make(chan os.Signal, 1)
+	signalNotify(shutdown)
+	return serveControlService(manager, opts, token, listener, shutdown)
+}
+
+func serveControlService(manager *control.Manager, opts control.Options, token string, listener net.Listener, shutdown <-chan os.Signal) error {
 	server := grpc.NewServer(
 		grpc.UnaryInterceptor(control.AuthInterceptor(token)),
 		grpc.MaxRecvMsgSize(24<<20),
 		grpc.MaxSendMsgSize(24<<20),
 	)
 	control.Register(server, control.NewService(manager, opts))
+	return serveControlServer(server, listener, shutdown)
+}
+
+func serveControlServer(server *grpc.Server, listener net.Listener, shutdown <-chan os.Signal) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
-	shutdown := make(chan os.Signal, 1)
-	signalNotify(shutdown)
 	select {
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
@@ -192,7 +210,7 @@ func addPeer(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	client, err := dialControl()
+	client, err := dialControlRPC()
 	if err != nil {
 		return err
 	}
@@ -233,7 +251,7 @@ func removePeer(args []string, stdout io.Writer) error {
 	if *name == "" {
 		return errors.New("peer-remove requires --name")
 	}
-	client, err := dialControl()
+	client, err := dialControlRPC()
 	if err != nil {
 		return err
 	}
@@ -281,7 +299,7 @@ func refreshProfile(args []string, stdout, stderr io.Writer) error {
 	if err != nil {
 		return err
 	}
-	client, err := dialControl()
+	client, err := dialControlRPC()
 	if err != nil {
 		return err
 	}
@@ -330,12 +348,35 @@ func privateKeyFromProfile(config string) (string, error) {
 }
 
 func writePrivateProfileAtomic(path, contents string) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".profile-*.tmp")
+	return writePrivateProfileAtomicWith(path, contents, profileFileOperations{
+		createTemp: func(dir, pattern string) (profileFile, error) { return os.CreateTemp(dir, pattern) },
+		rename:     os.Rename,
+		remove:     os.Remove,
+	})
+}
+
+type profileFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+type profileFileOperations struct {
+	openExclusive func(string) (profileFile, error)
+	createTemp    func(string, string) (profileFile, error)
+	rename        func(string, string) error
+	remove        func(string) error
+}
+
+func writePrivateProfileAtomicWith(path, contents string, files profileFileOperations) error {
+	tmp, err := files.createTemp(filepath.Dir(path), ".profile-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create refreshed profile temporary file: %w", err)
 	}
 	tmpPath := tmp.Name()
-	defer os.Remove(tmpPath)
+	defer files.remove(tmpPath)
 	if err := tmp.Chmod(0600); err != nil {
 		tmp.Close()
 		return fmt.Errorf("secure refreshed profile: %w", err)
@@ -351,7 +392,7 @@ func writePrivateProfileAtomic(path, contents string) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close refreshed profile: %w", err)
 	}
-	if err := os.Rename(tmpPath, path); err != nil {
+	if err := files.rename(tmpPath, path); err != nil {
 		return fmt.Errorf("activate refreshed profile: %w", err)
 	}
 	dir, err := os.Open(filepath.Dir(path))
@@ -363,7 +404,7 @@ func writePrivateProfileAtomic(path, contents string) error {
 }
 
 func printRPC(method string, fields map[string]any, stdout io.Writer) error {
-	client, err := dialControl()
+	client, err := dialControlRPC()
 	if err != nil {
 		return err
 	}
@@ -378,7 +419,7 @@ func printRPC(method string, fields map[string]any, stdout io.Writer) error {
 }
 
 func checkHealth() error {
-	client, err := dialControl()
+	client, err := dialControlRPC()
 	if err != nil {
 		return err
 	}
@@ -395,32 +436,41 @@ func dialControl() (*control.Client, error) {
 	return control.DialClient(ctx, envOr("AWG_CONTROL_ADDR", defaultControlAddr), envOr("AWG_CONTROL_TOKEN_FILE", defaultTokenPath))
 }
 
-func rollbackPeer(client *control.Client, name string) {
+func rollbackPeer(client controlRPC, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _ = client.Invoke(ctx, "RemovePeer", map[string]any{"name": name})
 }
 
 func writePrivateProfile(path, contents string) error {
+	return writePrivateProfileWith(path, contents, profileFileOperations{
+		openExclusive: func(path string) (profileFile, error) {
+			return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		},
+		remove: os.Remove,
+	})
+}
+
+func writePrivateProfileWith(path, contents string, files profileFileOperations) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("create profile directory: %w", err)
 	}
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	file, err := files.openExclusive(path)
 	if err != nil {
 		return fmt.Errorf("create profile securely: %w", err)
 	}
 	if _, err := io.WriteString(file, contents); err != nil {
 		file.Close()
-		os.Remove(path)
+		_ = files.remove(path)
 		return fmt.Errorf("write profile: %w", err)
 	}
 	if err := file.Sync(); err != nil {
 		file.Close()
-		os.Remove(path)
+		_ = files.remove(path)
 		return fmt.Errorf("sync profile: %w", err)
 	}
 	if err := file.Close(); err != nil {
-		os.Remove(path)
+		_ = files.remove(path)
 		return fmt.Errorf("close profile: %w", err)
 	}
 	return nil

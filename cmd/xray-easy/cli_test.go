@@ -29,6 +29,29 @@ func configureCLIEnv(t *testing.T, app testApp, masterKey []byte) {
 	t.Setenv("XRAY_PUBLIC_PORT", "443")
 }
 
+type cliAWGBackup struct {
+	state      []byte
+	restored   [][]byte
+	exportErr  error
+	restoreErr error
+}
+
+func (b *cliAWGBackup) ExportBackup(context.Context) ([]byte, error) {
+	if b.exportErr != nil {
+		return nil, b.exportErr
+	}
+	return append([]byte(nil), b.state...), nil
+}
+
+func (b *cliAWGBackup) RestoreBackup(_ context.Context, state []byte) error {
+	b.restored = append(b.restored, append([]byte(nil), state...))
+	if b.restoreErr != nil {
+		return b.restoreErr
+	}
+	b.state = append([]byte(nil), state...)
+	return nil
+}
+
 func TestMasterKeyAndPublicPortEnvironmentValidation(t *testing.T) {
 	t.Setenv("XRAY_EASY_MASTER_KEY", "")
 	if _, err := loadMasterKey(); err == nil || !strings.Contains(err.Error(), "is required") {
@@ -62,6 +85,34 @@ func TestMasterKeyAndPublicPortEnvironmentValidation(t *testing.T) {
 	t.Setenv("SAMPLE_ENV", " configured ")
 	if got := envOr("SAMPLE_ENV", "fallback"); got != "configured" || envOr("MISSING_ENV", "fallback") != "fallback" {
 		t.Fatalf("envOr values = %q / %q", got, envOr("MISSING_ENV", "fallback"))
+	}
+}
+
+func TestDialConfiguredAWGBackupHonorsOptionalServiceConfiguration(t *testing.T) {
+	t.Setenv("AWG_PUBLIC_HOST", "")
+	client, err := dialConfiguredAWGBackup()
+	if err != nil || client != nil {
+		t.Fatalf("dialConfiguredAWGBackup without AWG = %v, %v", client, err)
+	}
+
+	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
+	t.Setenv("AWG_CONTROL_ADDR", "passthrough:///awg-test")
+	t.Setenv("AWG_CONTROL_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
+	if _, err := dialConfiguredAWGBackup(); err == nil || !strings.Contains(err.Error(), "initialize AmneziaWG backup client") {
+		t.Fatalf("dialConfiguredAWGBackup without token = %v", err)
+	}
+
+	tokenPath := filepath.Join(t.TempDir(), "control.token")
+	if err := os.WriteFile(tokenPath, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("AWG_CONTROL_TOKEN_FILE", tokenPath)
+	client, err = dialConfiguredAWGBackup()
+	if err != nil || client == nil {
+		t.Fatalf("dialConfiguredAWGBackup with configured AWG = %v, %v", client, err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -348,6 +399,42 @@ func TestRestoreCLIAppliesBackupAndRollsBackOnApplyFailure(t *testing.T) {
 	settings, err = app.server.store.GetSettings(context.Background())
 	if err != nil || settings.PublicHost != "vpn.example.test" {
 		t.Fatalf("successful restore settings = %+v, %v", settings, err)
+	}
+}
+
+func TestRestoreCLIIncludesAWGStateAndRollsItBackOnApplyFailure(t *testing.T) {
+	app := newTestApp(t, true)
+	configureCLIEnv(t, app, app.server.masterKey)
+	awg := &cliAWGBackup{state: []byte("awg-before")}
+	manager := backup.NewManager(app.server.store, app.server.dataDir, app.server.configDir, app.server.masterKey)
+	manager.AWG = awg
+	target, err := manager.Create("with-awg")
+	if err != nil {
+		t.Fatal(err)
+	}
+	awg.state = []byte("awg-current")
+	settings, err := app.server.store.GetSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.PublicHost = "changed.example.test"
+	if err := app.server.store.UpdateSettings(context.Background(), settings); err != nil {
+		t.Fatal(err)
+	}
+	var applyCalls int
+	apply := func(context.Context, *store.Store, []byte, string, int) error {
+		applyCalls++
+		if applyCalls == 1 {
+			return errors.New("injected restored-config failure")
+		}
+		return nil
+	}
+	err = runRestoreCLIWithApplierAndAWG(context.Background(), app.server.dataDir, app.server.configDir, []string{target.Name, "RESTORE"}, apply, awg)
+	if err == nil || !strings.Contains(err.Error(), "state rolled back") || applyCalls != 2 {
+		t.Fatalf("restore rollback result = %v, apply calls=%d", err, applyCalls)
+	}
+	if string(awg.state) != "awg-current" || len(awg.restored) < 2 || string(awg.restored[0]) != "awg-before" || string(awg.restored[len(awg.restored)-1]) != "awg-current" {
+		t.Fatalf("AmneziaWG backup/rollback states = %q / %q", awg.state, awg.restored)
 	}
 }
 

@@ -236,7 +236,21 @@ func writeClientProfile(dataDir, name, config string) error {
 	if err := os.MkdirAll(directory, 0700); err != nil {
 		return err
 	}
-	file, err := os.CreateTemp(directory, ".profile-*")
+	return writeClientProfileWithPath(path, directory, config, func(dir, pattern string) (savedProfileFile, error) {
+		return os.CreateTemp(dir, pattern)
+	})
+}
+
+type savedProfileFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	WriteString(string) (int, error)
+	Sync() error
+	Close() error
+}
+
+func writeClientProfileWithPath(path, directory, config string, createTemp func(string, string) (savedProfileFile, error)) error {
+	file, err := createTemp(directory, ".profile-*")
 	if err != nil {
 		return err
 	}

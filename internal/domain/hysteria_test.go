@@ -1,6 +1,9 @@
 package domain
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestHysteriaSettingsValidate(t *testing.T) {
 	valid := HysteriaSettings{
@@ -70,5 +73,49 @@ func TestHysteriaSettingsEffectiveTLSServerName(t *testing.T) {
 				t.Fatalf("EffectiveTLSServerName() = %q, want %q", got, test.want)
 			}
 		})
+	}
+}
+
+func TestHysteriaSettingsValidateRejectsUnsafeAndOutOfRangeValues(t *testing.T) {
+	valid := HysteriaSettings{
+		TLSMode: HysteriaTLSCustom, UDPIdleTimeout: 60,
+		MasqueradeType: HysteriaMasqueradeOff,
+	}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid defaults rejected: %v", err)
+	}
+	cases := []struct {
+		name   string
+		change func(*HysteriaSettings)
+	}{
+		{"TLS mode", func(s *HysteriaSettings) { s.TLSMode = "invalid" }},
+		{"self-signed IPv6", func(s *HysteriaSettings) { s.TLSMode, s.TLSCertIP = HysteriaTLSSelfSigned, "2001:4860:4860::8888" }},
+		{"self-signed private IPv4", func(s *HysteriaSettings) { s.TLSMode, s.TLSCertIP = HysteriaTLSSelfSigned, "10.0.0.1" }},
+		{"self-signed mismatched SNI", func(s *HysteriaSettings) {
+			s.TLSMode, s.TLSCertIP, s.TLSServerName = HysteriaTLSSelfSigned, "8.8.8.8", "dns.google"
+		}},
+		{"invalid SNI", func(s *HysteriaSettings) { s.TLSServerName = "not a host" }},
+		{"invalid host", func(s *HysteriaSettings) { s.Host = "https://example.test" }},
+		{"timeout too short", func(s *HysteriaSettings) { s.UDPIdleTimeout = 9 }},
+		{"timeout too long", func(s *HysteriaSettings) { s.UDPIdleTimeout = 601 }},
+		{"invalid masquerade", func(s *HysteriaSettings) { s.MasqueradeType = "proxy" }},
+		{"empty static masquerade", func(s *HysteriaSettings) { s.MasqueradeType, s.MasqueradeString = HysteriaMasqueradeText, "  " }},
+		{"oversized masquerade", func(s *HysteriaSettings) { s.MasqueradeString = strings.Repeat("x", 4097) }},
+		{"invalid certificate id", func(s *HysteriaSettings) { s.CertificateID = "../bad" }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			value := valid
+			test.change(&value)
+			if err := value.Validate(); err == nil {
+				t.Fatal("invalid Hysteria settings were accepted")
+			}
+		})
+	}
+	valid.TLSMode = HysteriaTLSSelfSigned
+	valid.TLSCertIP = "8.8.8.8"
+	valid.TLSServerName = "8.8.8.8"
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid self-signed settings rejected: %v", err)
 	}
 }

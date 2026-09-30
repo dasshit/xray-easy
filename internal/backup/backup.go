@@ -677,12 +677,26 @@ func hmacSHA256(key, data []byte) string {
 }
 
 func writeFile(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-")
+	return writeFileWith(path, data, mode, func(dir, pattern string) (backupTempFile, error) {
+		return os.CreateTemp(dir, pattern)
+	}, os.Remove, os.Rename)
+}
+
+type backupTempFile interface {
+	Name() string
+	Chmod(os.FileMode) error
+	Write([]byte) (int, error)
+	Sync() error
+	Close() error
+}
+
+func writeFileWith(path string, data []byte, mode os.FileMode, createTemp func(string, string) (backupTempFile, error), remove func(string) error, rename func(string, string) error) error {
+	tmp, err := createTemp(filepath.Dir(path), ".tmp-")
 	if err != nil {
 		return err
 	}
 	tmpName := tmp.Name()
-	defer os.Remove(tmpName)
+	defer remove(tmpName)
 	if err := tmp.Chmod(mode); err != nil {
 		_ = tmp.Close()
 		return err
@@ -698,7 +712,7 @@ func writeFile(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	return rename(tmpName, path)
 }
 
 func syncDir(path string) error {

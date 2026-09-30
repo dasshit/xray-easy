@@ -150,6 +150,69 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 	}
 }
 
+func TestPollDeduplicatesActiveSourceIPObservations(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	createStatsClient(t, db, "phone", "phone@example.test")
+	api := &fakeStatsAPI{}
+	manager := NewManager(db, api)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	api.set([]xrayapi.UserStats{{
+		Email: "phone@example.test", LastSeen: now,
+		SourceIPs: []xrayapi.IPObservation{
+			{Address: "198.51.100.1", LastSeen: now},
+			{Address: "198.51.100.1", LastSeen: now.Add(-time.Second)},
+			{Address: "2001:db8::1", LastSeen: now},
+		},
+	}}, nil)
+	if err := manager.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	got := manager.Snapshot()["phone"].SourceIPs
+	if len(got) != 2 || got[0] != "198.51.100.1" || got[1] != "2001:db8::1" {
+		t.Fatalf("source IP observations were not deduplicated in order: %v", got)
+	}
+}
+
+func TestPollKeepsFreshCachedStatsWhenXrayTemporarilyFails(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	createStatsClient(t, db, "phone", "phone@example.test")
+	api := &fakeStatsAPI{}
+	manager := NewManager(db, api)
+	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	lastSeen := now.Add(-time.Minute)
+	api.set([]xrayapi.UserStats{{
+		Email: "phone@example.test", UploadBytes: 30, LastSeen: lastSeen,
+		SourceIPs: []xrayapi.IPObservation{{Address: "198.51.100.9", LastSeen: lastSeen}},
+	}}, nil)
+	if err := manager.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	now = now.Add(10 * time.Second)
+	api.set(nil, errors.New("temporary StatsService outage"))
+	if err := manager.Poll(context.Background()); err == nil {
+		t.Fatal("Xray stats outage was not returned")
+	}
+	got := manager.Snapshot()["phone"]
+	if !got.Online || got.UploadBytes != 30 || got.UploadBytesPerSecond != 0 || len(got.SourceIPs) != 1 || got.SourceIPs[0] != "198.51.100.9" {
+		t.Fatalf("fresh cached connection details were not preserved with rates cleared: %+v", got)
+	}
+	if !strings.Contains(manager.LastError(), "StatsService outage") {
+		t.Fatalf("Xray stats error was not reported: %q", manager.LastError())
+	}
+
+	now = lastSeen.Add(onlineWindow + time.Second)
+	if err := manager.Poll(context.Background()); err == nil {
+		t.Fatal("continued Xray stats outage was not returned")
+	}
+	stale := manager.Snapshot()["phone"]
+	if stale.Online || len(stale.SourceIPs) != 0 || stale.UploadBytes != 30 {
+		t.Fatalf("stale cached stats retained active connection details: %+v", stale)
+	}
+}
+
 func TestAWGStatsAreComposedPersistedAndRateLimitedToFreshPolls(t *testing.T) {
 	db, _ := openStatsTestStore(t)
 	xray := &fakeStatsAPI{}

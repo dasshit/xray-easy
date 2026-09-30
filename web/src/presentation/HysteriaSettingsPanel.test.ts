@@ -102,4 +102,70 @@ describe('HysteriaSettingsPanel', () => {
     await flushPromises()
     expect(wrapper.emitted('error')?.[0]?.[0]).toMatchObject({ message: 'invalid timeout' })
   })
+
+  it('reports status, certificate upload, generation and apply failures', async () => {
+    const api = makeApi()
+    api.hysteria.status = vi.fn().mockRejectedValue(new Error('status unavailable'))
+    const statusWrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
+    await flushPromises()
+    expect(statusWrapper.emitted('error')?.[0]?.[0]).toMatchObject({ message: 'status unavailable' })
+
+    api.hysteria.status = vi.fn().mockResolvedValue(baseStatus)
+    api.hysteria.uploadCertificate = vi.fn().mockRejectedValue(new Error('certificate rejected'))
+    const uploadWrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
+    await flushPromises()
+    const fileInputs = uploadWrapper.findAll('input[type="file"]')
+    for (const [input, name] of [[fileInputs[0], 'chain.pem'], [fileInputs[1], 'key.pem']] as const) {
+      if (!input) throw new Error('Expected both certificate file inputs')
+      Object.defineProperty(input.element, 'files', { configurable: true, value: { item: () => new File(['pem'], name) } })
+      await input.trigger('change')
+    }
+    await uploadWrapper.findAll('button').find(button => button.text() === 'Validate and stage certificate')?.trigger('click')
+    await flushPromises()
+    expect(uploadWrapper.emitted('error')?.[0]?.[0]).toMatchObject({ message: 'certificate rejected' })
+
+    api.hysteria.generateCertificate = vi.fn().mockRejectedValue(new Error('mkcert failed'))
+    const generateWrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
+    await flushPromises()
+    await generateWrapper.get('select').setValue('self-signed')
+    await generateWrapper.get('input[inputmode="decimal"]').setValue('89.169.13.234')
+    await generateWrapper.findAll('button').find(button => button.text() === 'Generate certificate')?.trigger('click')
+    await flushPromises()
+    expect(generateWrapper.emitted('error')?.[0]?.[0]).toMatchObject({ message: 'mkcert failed' })
+
+    api.hysteria.preview = vi.fn().mockResolvedValue({
+      changed: true as const, changeId: 'change-2', expiresIn: 60, expectedConfirmation: 'APPLY', requiresConfirmation: true,
+      diff: [], consequences: [], settings: baseStatus,
+    })
+    api.hysteria.apply = vi.fn().mockRejectedValue(new Error('apply failed'))
+    const applyWrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
+    await flushPromises()
+    await applyWrapper.findAll('button').find(button => button.text() === 'Review Hysteria 2 changes')?.trigger('click')
+    await flushPromises()
+    await applyWrapper.get('input[autocomplete="off"]').setValue('APPLY')
+    await applyWrapper.findAll('button').find(button => button.text() === 'Apply settings')?.trigger('click')
+    await flushPromises()
+    expect(applyWrapper.emitted('error')?.[0]?.[0]).toMatchObject({ message: 'apply failed' })
+    expect(applyWrapper.find('[role="dialog"]').exists()).toBe(true)
+  })
+
+  it('renders all persisted transport states and tolerates missing certificate metadata', async () => {
+    const expectedLabels: Record<HysteriaSettings['state'], string> = {
+      off: 'Off', on: 'Running', ready: 'Ready to enable', needs_certificate: 'Certificate required',
+      applying: 'Applying', renewal_due: 'Certificate renewal due', error: 'Needs attention',
+    }
+    const states: HysteriaSettings['state'][] = ['off', 'on', 'ready', 'needs_certificate', 'applying', 'renewal_due', 'error']
+    const statusWithoutCertificate: HysteriaSettings = { ...baseStatus }
+    delete statusWithoutCertificate.certificate
+    for (const state of states) {
+      const label = expectedLabels[state]
+      const api = makeApi({ ...statusWithoutCertificate, state, certificateError: 'certificate metadata unavailable' })
+      const wrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
+      await flushPromises()
+      expect(wrapper.text()).toContain(label)
+      expect(wrapper.text()).toContain('certificate metadata unavailable')
+      expect(wrapper.find('.hysteria-certificate-meta').exists()).toBe(false)
+      wrapper.unmount()
+    }
+  })
 })

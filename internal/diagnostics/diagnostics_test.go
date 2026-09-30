@@ -3,6 +3,8 @@ package diagnostics
 import (
 	"archive/tar"
 	"compress/gzip"
+	"crypto/rand"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -10,6 +12,46 @@ import (
 	"testing"
 	"time"
 )
+
+type failingBundleFile struct {
+	*os.File
+	chmodErr       error
+	writeErr       error
+	failWriteAfter int
+	writes         int
+	syncErr        error
+	closeErr       error
+}
+
+func (f *failingBundleFile) Chmod(mode os.FileMode) error {
+	if f.chmodErr != nil {
+		return f.chmodErr
+	}
+	return f.File.Chmod(mode)
+}
+
+func (f *failingBundleFile) Write(data []byte) (int, error) {
+	f.writes++
+	if f.writeErr != nil && (f.failWriteAfter == 0 || f.writes >= f.failWriteAfter) {
+		return 0, f.writeErr
+	}
+	return f.File.Write(data)
+}
+
+func (f *failingBundleFile) Sync() error {
+	if f.syncErr != nil {
+		return f.syncErr
+	}
+	return f.File.Sync()
+}
+
+func (f *failingBundleFile) Close() error {
+	actualErr := f.File.Close()
+	if f.closeErr != nil {
+		return f.closeErr
+	}
+	return actualErr
+}
 
 func TestRedactMasksSecretsAndBearerValues(t *testing.T) {
 	value := `level=error password="secret" private_key=abc token: bearer123 Authorization: Bearer api-token shortId=deadbeef uuid=123e4567-e89b-12d3-a456-426614174000 vless://uuid@example.com:443?pbk=public#phone json={"privateKey":"json-secret","password":"json-password","token":"json-token"}`
@@ -109,6 +151,96 @@ func TestCreateBundleRejectsEmptyOrUnwritableDestination(t *testing.T) {
 	}
 	if _, err := CreateBundle(root, map[string][]byte{"report.txt": []byte("safe")}, now); err == nil {
 		t.Fatal("bundle replaced an occupied directory")
+	}
+}
+
+func TestCreateBundleReportsAtomicFileFailuresAndRemovesTemporaryFiles(t *testing.T) {
+	for _, test := range []struct {
+		failure string
+		want    string
+	}{
+		{failure: "chmod", want: "secure doctor bundle"},
+		{failure: "write", want: "write doctor bundle header"},
+		{failure: "sync", want: "sync doctor bundle"},
+		{failure: "close", want: "close doctor bundle"},
+		{failure: "rename", want: "publish doctor bundle"},
+	} {
+		t.Run(test.failure, func(t *testing.T) {
+			root := t.TempDir()
+			injected := errors.New("injected " + test.failure + " failure")
+			file := &failingBundleFile{}
+			_, err := createBundleWith(root, map[string][]byte{"report.txt": []byte("report")}, time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC),
+				func(dir, pattern string) (bundleFile, error) {
+					created, err := os.CreateTemp(dir, pattern)
+					if err != nil {
+						return nil, err
+					}
+					file.File = created
+					switch test.failure {
+					case "chmod":
+						file.chmodErr = injected
+					case "write":
+						file.writeErr = injected
+					case "sync":
+						file.syncErr = injected
+					case "close":
+						file.closeErr = injected
+					}
+					return file, nil
+				}, os.Remove,
+				func(source, destination string) error {
+					if test.failure == "rename" {
+						return injected
+					}
+					return os.Rename(source, destination)
+				})
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("createBundleWith() error = %v, want message containing %q", err, test.want)
+			}
+			entries, err := os.ReadDir(filepath.Join(root, "diagnostics"))
+			if err != nil || len(entries) != 0 {
+				t.Fatalf("failed bundle left files behind: entries=%v err=%v", entries, err)
+			}
+		})
+	}
+}
+
+func TestCreateBundleReportsTemporaryFileCreationFailure(t *testing.T) {
+	wantErr := errors.New("temporary storage unavailable")
+	_, err := createBundleWith(t.TempDir(), map[string][]byte{"report.txt": []byte("report")}, time.Now(),
+		func(string, string) (bundleFile, error) { return nil, wantErr },
+		os.Remove, os.Rename)
+	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("temporary bundle creation error = %v", err)
+	}
+}
+
+func TestCreateBundleReportsArchivePayloadWriteFailure(t *testing.T) {
+	root := t.TempDir()
+	wantErr := errors.New("payload write failed")
+	file := &failingBundleFile{writeErr: wantErr, failWriteAfter: 2}
+	payload := make([]byte, 1<<20)
+	if _, err := rand.Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	_, err := createBundleWith(root, map[string][]byte{"report.txt": payload}, time.Now(),
+		func(dir, pattern string) (bundleFile, error) {
+			created, err := os.CreateTemp(dir, pattern)
+			if err != nil {
+				return nil, err
+			}
+			file.File = created
+			return file, nil
+		}, os.Remove, os.Rename)
+	if err == nil || !strings.Contains(err.Error(), "write doctor bundle file") || !strings.Contains(err.Error(), wantErr.Error()) {
+		t.Fatalf("archive payload write error = %v", err)
+	}
+}
+
+func TestRedactJSONPreservesSafeScalarValues(t *testing.T) {
+	got, err := RedactJSON([]byte(`{"enabled":true,"count":42,"optional":null}`))
+	if err != nil || string(got) == "" || !strings.Contains(string(got), `"enabled": true`) || !strings.Contains(string(got), `"count": 42`) || !strings.Contains(string(got), `"optional": null`) {
+		t.Fatalf("safe JSON scalar values = %s, %v", got, err)
 	}
 }
 

@@ -1,10 +1,30 @@
 package secret
 
 import (
+	"crypto/rand"
 	"encoding/base64"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
+
+type limitedReader struct{ remaining int }
+
+func (r *limitedReader) Read(value []byte) (int, error) {
+	if r.remaining == 0 {
+		return 0, errors.New("injected random source failure")
+	}
+	count := len(value)
+	if count > r.remaining {
+		count = r.remaining
+	}
+	for index := 0; index < count; index++ {
+		value[index] = 1
+	}
+	r.remaining -= count
+	return count, nil
+}
 
 func TestSealAndOpenRoundTripWithPurposeSeparation(t *testing.T) {
 	masterKey := []byte(strings.Repeat("k", 32))
@@ -77,5 +97,25 @@ func TestOpenRejectsMalformedAndTamperedEnvelopes(t *testing.T) {
 	}
 	if _, err := Open([]byte("short"), sealed, "totp"); err == nil {
 		t.Fatal("Open accepted a short master key")
+	}
+}
+
+func TestSealReportsRandomSourceFailuresForSaltAndNonce(t *testing.T) {
+	original := rand.Reader
+	t.Cleanup(func() { rand.Reader = original })
+	for _, test := range []struct {
+		name      string
+		available int
+		want      string
+	}{
+		{name: "salt", available: 0, want: "generate envelope salt"},
+		{name: "nonce", available: 32, want: "generate envelope nonce"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			rand.Reader = io.Reader(&limitedReader{remaining: test.available})
+			if value, err := Seal([]byte(strings.Repeat("k", 32)), "secret", "totp"); err == nil || value != "" || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("Seal() = %q, %v; want %q failure", value, err, test.want)
+			}
+		})
 	}
 }

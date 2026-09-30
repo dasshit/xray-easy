@@ -101,6 +101,11 @@ jobs:
         run: go test -count=1 -race ./...
         working-directory: awg-service
 
+      - name: Enforce AWG coverage threshold
+        run: bash scripts/awg-coverage.sh awg-service/coverage.out
+        env:
+          AWG_COVERAGE_MIN: "90"
+
       - name: Build Linux amd64 and arm64 services
         run: |
           GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build ./...

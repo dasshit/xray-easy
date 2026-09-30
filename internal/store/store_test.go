@@ -74,6 +74,101 @@ func TestVMessProfileStoresAndTransitionsIndependentAccessState(t *testing.T) {
 	}
 }
 
+func TestProtocolStorageDefaultsAndCredentialNullability(t *testing.T) {
+	if got := nullableCredential(""); got != nil {
+		t.Fatalf("empty credential storage = %#v, want NULL", got)
+	}
+	if got := nullableCredential("credential"); got != "credential" {
+		t.Fatalf("non-empty credential storage = %#v", got)
+	}
+	cases := []struct {
+		name     string
+		client   domain.Client
+		uuid     string
+		protocol string
+		auth     string
+		states   [6]int
+	}{
+		{name: "implicit legacy", client: domain.Client{Enabled: true}, uuid: "legacy-uuid", protocol: string(domain.ProtocolLegacyDual), auth: "legacy-uuid", states: [6]int{1, 0, 1, 0, 0, 0}},
+		{name: "explicit legacy", client: domain.Client{Protocol: domain.ProtocolLegacyDual, Revoked: true}, uuid: "legacy-uuid", protocol: string(domain.ProtocolLegacyDual), auth: "legacy-uuid", states: [6]int{0, 1, 0, 1, 0, 0}},
+		{name: "VLESS enabled fallback", client: domain.Client{Protocol: domain.ProtocolVLESS, Enabled: true}, protocol: string(domain.ProtocolVLESS), states: [6]int{1, 0, 0, 0, 0, 0}},
+		{name: "VLESS explicit disabled", client: domain.Client{Protocol: domain.ProtocolVLESS, VLESSEnabled: false, VLESSRevoked: true}, protocol: string(domain.ProtocolVLESS), states: [6]int{0, 1, 0, 0, 0, 0}},
+		{name: "Hysteria enabled fallback", client: domain.Client{Protocol: domain.ProtocolHysteria2, Enabled: true, HysteriaAuth: "password"}, protocol: string(domain.ProtocolHysteria2), auth: "password", states: [6]int{0, 0, 1, 0, 0, 0}},
+		{name: "VMess enabled", client: domain.Client{Protocol: domain.ProtocolVMess, Enabled: true}, protocol: string(domain.ProtocolVMess), states: [6]int{0, 0, 0, 0, 1, 0}},
+		{name: "unsupported protocol", client: domain.Client{Protocol: domain.ProtocolAmneziaWG, Enabled: true}, protocol: string(domain.ProtocolAmneziaWG), states: [6]int{}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked := clientProtocolStorage(test.client, test.uuid)
+			if protocol != test.protocol || auth != test.auth || [6]int{vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked} != test.states {
+				t.Fatalf("stored protocol credentials = %q/%q [%d %d %d %d %d %d]", protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked)
+			}
+		})
+	}
+}
+
+func TestUpdateSettingsAndClientProtocolStatesCommitsOnlySupportedAccess(t *testing.T) {
+	db, ctx := openTestStore(t, "settings-protocol-states.db")
+	initTestAdmin(t, db, ctx)
+	legacy := createTestClient(t, db, ctx, "legacy")
+	hysteria, err := domain.NewProtocolClient("hysteria", "hysteria", domain.ProtocolHysteria2, "", "auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hysteria.Email = "hysteria@xray-easy"
+	if err := db.CreateHysteriaClient(ctx, hysteria); err != nil {
+		t.Fatal(err)
+	}
+	vmess, err := domain.NewProtocolClient("vmess", "vmess", domain.ProtocolVMess, "uuid-vmess", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vmess.UUID = "uuid-vmess"
+	vmess.Email = "vmess@xray-easy"
+	if err := db.CreateVMessClient(ctx, vmess); err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.PublicHost = "new.example.test"
+	if err := db.UpdateSettingsAndClientProtocolStates(ctx, settings, map[string]map[domain.ClientProtocol]domain.ClientState{
+		legacy.ID:   {domain.ProtocolVLESS: {Enabled: false}, domain.ProtocolHysteria2: {Enabled: true}},
+		hysteria.ID: {domain.ProtocolHysteria2: {Enabled: false, Revoked: true}},
+		vmess.ID:    {domain.ProtocolVMess: {Enabled: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	gotLegacy, err := db.GetClient(ctx, legacy.ID)
+	if err != nil || gotLegacy.VLESSCanConnect() || !gotLegacy.Hysteria2CanConnect() || gotLegacy.Revoked {
+		t.Fatalf("legacy per-protocol state = %+v, %v", gotLegacy, err)
+	}
+	gotHysteria, err := db.GetClient(ctx, hysteria.ID)
+	if err != nil || gotHysteria.Enabled || !gotHysteria.Revoked || !gotHysteria.HysteriaRevoked {
+		t.Fatalf("Hysteria revoked state = %+v, %v", gotHysteria, err)
+	}
+	gotVMess, err := db.GetClient(ctx, vmess.ID)
+	if err != nil || !gotVMess.VMessCanConnect() {
+		t.Fatalf("VMess state = %+v, %v", gotVMess, err)
+	}
+	for name, states := range map[string]map[string]map[domain.ClientProtocol]domain.ClientState{
+		"revoked enabled": {legacy.ID: {domain.ProtocolVLESS: {Enabled: true, Revoked: true}}},
+		"missing access":  {hysteria.ID: {domain.ProtocolVLESS: {Enabled: false}}},
+		"unknown access":  {vmess.ID: {domain.ClientProtocol("unknown"): {Enabled: false}}},
+		"missing client":  {"missing": {domain.ProtocolVLESS: {Enabled: false}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := db.UpdateSettingsAndClientProtocolStates(ctx, settings, states); err == nil {
+				t.Fatal("invalid protocol state update succeeded")
+			}
+		})
+	}
+	if err := db.UpdateSettingsAndClientProtocolStates(ctx, settings, nil); err != nil {
+		t.Fatalf("settings update without profile transitions failed: %v", err)
+	}
+}
+
 func TestMigrationSetupAndSettingsLifecycle(t *testing.T) {
 	db, ctx := openTestStore(t, "state.db")
 	if err := db.Ping(ctx); err != nil {
