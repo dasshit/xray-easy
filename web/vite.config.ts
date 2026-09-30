@@ -3,7 +3,24 @@ import vue from '@vitejs/plugin-vue'
 
 export default defineConfig({
   plugins: [vue()],
-  build: { outDir: 'dist', emptyOutDir: true },
+  build: {
+    outDir: 'dist',
+    emptyOutDir: true,
+    rollupOptions: {
+      onwarn(warning, warn) {
+        const source = warning.id?.replaceAll('\\', '/')
+        const isZodCommentAnnotation = warning.code === 'INVALID_ANNOTATION'
+          && source?.includes('/node_modules/zod/v4/core/') === true
+          && (warning.message.includes('Wrapped in a `@__PURE__` IIFE')
+            || warning.message.includes('Anchors a pattern source.'))
+
+        // Zod's explanatory comments mention @__PURE__; Rollup mistakes the prose for an annotation.
+        if (isZodCommentAnnotation) return
+
+        warn(warning)
+      },
+    },
+  },
   test: {
     environment: 'jsdom',
     include: ['src/**/*.{test,spec}.{ts,tsx}', 'test/**/*.{test,spec}.{ts,tsx}'],
