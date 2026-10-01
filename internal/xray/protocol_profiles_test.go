@@ -2,6 +2,8 @@ package xray
 
 import (
 	"encoding/json"
+	"net/url"
+	"strings"
 	"testing"
 
 	"xray-easy/internal/domain"
@@ -123,6 +125,64 @@ func TestRenderServerConfigSeparatesProtocolUsersAndShortIDs(t *testing.T) {
 		if id == "old-short" {
 			t.Fatalf("revoked VLESS short ID remained in inbound: %v", shortIDs)
 		}
+	}
+}
+
+func TestRenderAndBuildShadowsocksProfile(t *testing.T) {
+	settings := validTestSettings()
+	settings.ShadowsocksEnabled = true
+	settings.ShadowsocksPublicPort = 8388
+	settings.ShadowsocksMethod = domain.ShadowsocksMethodChaCha20Poly1305
+	settings.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
+	client := Client{ID: "ss", Name: "MacBook Pro", Protocol: domain.ProtocolShadowsocks, Email: "ss@xray-easy", ShadowsocksPassword: "secret-password", ShadowsocksEnabled: true}
+	config, err := RenderServerConfig(settings, []Client{client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Inbounds []struct {
+			Tag      string `json:"tag"`
+			Port     int    `json:"port"`
+			Protocol string `json:"protocol"`
+			Settings struct {
+				Network string                                     `json:"network"`
+				Clients []struct{ Method, Password, Email string } `json:"clients"`
+			} `json:"settings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(config, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	var inbound *struct {
+		Tag      string `json:"tag"`
+		Port     int    `json:"port"`
+		Protocol string `json:"protocol"`
+		Settings struct {
+			Network string                                     `json:"network"`
+			Clients []struct{ Method, Password, Email string } `json:"clients"`
+		} `json:"settings"`
+	}
+	for i := range decoded.Inbounds {
+		if decoded.Inbounds[i].Tag == ShadowsocksInboundTag {
+			inbound = &decoded.Inbounds[i]
+		}
+	}
+	if inbound == nil || inbound.Port != ShadowsocksInternalPort || inbound.Protocol != "shadowsocks" || inbound.Settings.Network != domain.ShadowsocksNetworkTCPUDP || len(inbound.Settings.Clients) != 1 || inbound.Settings.Clients[0].Password != client.ShadowsocksPassword {
+		t.Fatalf("unexpected Shadowsocks inbound: %+v", decoded.Inbounds)
+	}
+	profile, err := BuildProfile(settings, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(profile.ShadowsocksURI)
+	if err != nil || parsed.Scheme != "ss" || parsed.Host != "vpn.example.com:8388" || parsed.Fragment != client.Name {
+		t.Fatalf("unexpected Shadowsocks URI: %s (%v)", profile.ShadowsocksURI, err)
+	}
+	if !strings.Contains(profile.ShadowsocksURI, "Y2hhY2hhMjAtcG9seTEzMDU6c2VjcmV0LX") {
+		t.Fatalf("URI does not contain encoded method/password: %s", profile.ShadowsocksURI)
+	}
+	if len(profile.ShadowsocksJSON) == 0 || !strings.Contains(string(profile.ShadowsocksJSON), client.ShadowsocksPassword) {
+		t.Fatal("Shadowsocks JSON profile missing password")
 	}
 }
 

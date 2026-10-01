@@ -30,17 +30,19 @@ const (
 	// Xray requires at least one REALITY short ID even when there are no
 	// enabled clients. This reserved value has no matching UUID and therefore
 	// cannot authenticate a device.
-	emptyShortID          = "0000000000000000"
-	ReservedShortIDCount  = 5
-	VerifiedCoreVersion   = "26.7.28"
-	HysteriaInboundTag    = "hysteria2"
-	VMessInboundTag       = "vmess-tls"
-	VMessInternalPort     = 8444
-	HysteriaTLSCertPath   = "/etc/xray/hysteria-tls/fullchain.pem"
-	HysteriaTLSKeyPath    = "/etc/xray/hysteria-tls/privkey.pem"
-	HysteriaTLSSelfSigned = "self-signed"
-	HysteriaTLSCustom     = "custom"
-	HysteriaTLSLegacy     = "legacy"
+	emptyShortID            = "0000000000000000"
+	ReservedShortIDCount    = 5
+	VerifiedCoreVersion     = "26.7.28"
+	HysteriaInboundTag      = "hysteria2"
+	VMessInboundTag         = "vmess-tls"
+	ShadowsocksInboundTag   = "shadowsocks"
+	VMessInternalPort       = 8444
+	ShadowsocksInternalPort = 8388
+	HysteriaTLSCertPath     = "/etc/xray/hysteria-tls/fullchain.pem"
+	HysteriaTLSKeyPath      = "/etc/xray/hysteria-tls/privkey.pem"
+	HysteriaTLSSelfSigned   = "self-signed"
+	HysteriaTLSCustom       = "custom"
+	HysteriaTLSLegacy       = "legacy"
 )
 
 type Settings struct {
@@ -67,36 +69,45 @@ type Settings struct {
 	HysteriaMasqueradeType   string
 	HysteriaMasqueradeString string
 	VMessPublicPort          int
+	ShadowsocksEnabled       bool
+	ShadowsocksPublicPort    int
+	ShadowsocksMethod        string
+	ShadowsocksNetwork       string
 }
 
 type Client struct {
-	ID                string
-	Name              string
-	Protocol          domain.ClientProtocol
-	UUID              string
-	Email             string
-	ShortID           string
-	HysteriaAuth      string
-	ClientFingerprint string
-	Enabled           bool
-	Revoked           bool
-	VLESSEnabled      bool
-	VLESSRevoked      bool
-	HysteriaEnabled   bool
-	HysteriaRevoked   bool
-	VMessEnabled      bool
-	VMessRevoked      bool
+	ID                  string
+	Name                string
+	Protocol            domain.ClientProtocol
+	UUID                string
+	Email               string
+	ShortID             string
+	HysteriaAuth        string
+	ClientFingerprint   string
+	Enabled             bool
+	Revoked             bool
+	VLESSEnabled        bool
+	VLESSRevoked        bool
+	HysteriaEnabled     bool
+	HysteriaRevoked     bool
+	VMessEnabled        bool
+	VMessRevoked        bool
+	ShadowsocksPassword string
+	ShadowsocksEnabled  bool
+	ShadowsocksRevoked  bool
 }
 
 type Profile struct {
-	Protocol    domain.ClientProtocol
-	URI         string
-	HysteriaURI string
-	VMessURI    string
-	JSON        []byte
-	Name        string
-	UUID        string
-	ShortID     string
+	Protocol        domain.ClientProtocol
+	URI             string
+	HysteriaURI     string
+	VMessURI        string
+	ShadowsocksURI  string
+	ShadowsocksJSON []byte
+	JSON            []byte
+	Name            string
+	UUID            string
+	ShortID         string
 }
 
 type serverConfig struct {
@@ -231,6 +242,25 @@ type vmessStreamSettings struct {
 	TLSSettings hysteriaTLSSettings `json:"tlsSettings"`
 }
 
+type shadowsocksInbound struct {
+	Listen   string                     `json:"listen"`
+	Port     int                        `json:"port"`
+	Protocol string                     `json:"protocol"`
+	Tag      string                     `json:"tag"`
+	Settings shadowsocksInboundSettings `json:"settings"`
+}
+
+type shadowsocksInboundSettings struct {
+	Network string                    `json:"network"`
+	Clients []shadowsocksServerClient `json:"clients"`
+}
+
+type shadowsocksServerClient struct {
+	Method   string `json:"method"`
+	Password string `json:"password"`
+	Email    string `json:"email"`
+}
+
 func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	if settings.LogLevel == "" {
 		settings.LogLevel = "warning"
@@ -241,6 +271,7 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	activeVLESS := make([]Client, 0, len(clients))
 	activeHysteria := make([]Client, 0, len(clients))
 	activeVMess := make([]Client, 0, len(clients))
+	activeShadowsocks := make([]Client, 0, len(clients))
 	hasVMessProfile := false
 	for _, client := range clients {
 		if client.VLESSCanConnect() {
@@ -255,10 +286,14 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 				activeVMess = append(activeVMess, client)
 			}
 		}
+		if client.HasShadowsocks() && !client.ShadowsocksIsRevoked() && client.ShadowsocksCanConnect() {
+			activeShadowsocks = append(activeShadowsocks, client)
+		}
 	}
 	sort.Slice(activeVLESS, func(i, j int) bool { return activeVLESS[i].ID < activeVLESS[j].ID })
 	sort.Slice(activeHysteria, func(i, j int) bool { return activeHysteria[i].ID < activeHysteria[j].ID })
 	sort.Slice(activeVMess, func(i, j int) bool { return activeVMess[i].ID < activeVMess[j].ID })
+	sort.Slice(activeShadowsocks, func(i, j int) bool { return activeShadowsocks[i].ID < activeShadowsocks[j].ID })
 	serverClients := make([]serverClient, 0, len(activeVLESS))
 	shortIDs := make([]string, 0, len(clients)+len(settings.ReservedShortIDs))
 	shortIDSet := make(map[string]struct{}, cap(shortIDs))
@@ -358,6 +393,28 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 			},
 		})
 	}
+	if settings.ShadowsocksEnabled {
+		if settings.ShadowsocksPublicPort < 1 || settings.ShadowsocksPublicPort > 65535 {
+			return nil, errors.New("Shadowsocks public port is not configured")
+		}
+		if !domain.SupportsShadowsocksMethod(settings.ShadowsocksMethod) {
+			return nil, errors.New("unsupported Shadowsocks method")
+		}
+		if !domain.SupportsShadowsocksNetwork(settings.ShadowsocksNetwork) {
+			return nil, errors.New("unsupported Shadowsocks network")
+		}
+		ssUsers := make([]shadowsocksServerClient, 0, len(activeShadowsocks))
+		for _, client := range activeShadowsocks {
+			if client.ShadowsocksPassword == "" || client.Email == "" {
+				return nil, fmt.Errorf("client %s is missing Shadowsocks credentials", client.ID)
+			}
+			ssUsers = append(ssUsers, shadowsocksServerClient{Method: settings.ShadowsocksMethod, Password: client.ShadowsocksPassword, Email: client.Email})
+		}
+		inbounds = append(inbounds, shadowsocksInbound{
+			Listen: "0.0.0.0", Port: ShadowsocksInternalPort, Protocol: "shadowsocks", Tag: ShadowsocksInboundTag,
+			Settings: shadowsocksInboundSettings{Network: settings.ShadowsocksNetwork, Clients: ssUsers},
+		})
+	}
 	config := serverConfig{
 		Log:       logConfig{LogLevel: settings.LogLevel},
 		API:       apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "LoggerService"}},
@@ -431,10 +488,43 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 			return Profile{}, err
 		}
 	}
-	if profile.URI == "" && profile.HysteriaURI == "" && profile.VMessURI == "" {
+	if client.HasShadowsocks() && !client.ShadowsocksIsRevoked() {
+		if err := validateShadowsocksProfileSettings(settings); err != nil {
+			return Profile{}, err
+		}
+		if client.ShadowsocksPassword == "" {
+			return Profile{}, errors.New("Shadowsocks profile is unavailable")
+		}
+		profile.ShadowsocksURI = BuildShadowsocksURI(settings, client)
+		var err error
+		profile.ShadowsocksJSON, err = buildShadowsocksClientJSON(settings, client)
+		if err != nil {
+			return Profile{}, err
+		}
+	}
+	if profile.URI == "" && profile.HysteriaURI == "" && profile.VMessURI == "" && profile.ShadowsocksURI == "" {
 		return Profile{}, errors.New("client profile is unavailable")
 	}
 	return profile, nil
+}
+
+func validateShadowsocksProfileSettings(settings Settings) error {
+	if !settings.ShadowsocksEnabled {
+		return errors.New("Shadowsocks is not enabled")
+	}
+	if settings.ShadowsocksPublicPort < 1 || settings.ShadowsocksPublicPort > 65535 {
+		return errors.New("Shadowsocks public port is not configured")
+	}
+	if _, err := domain.NormalizePublicHost(settings.PublicHost); err != nil {
+		return fmt.Errorf("Shadowsocks public host: %w", err)
+	}
+	if !domain.SupportsShadowsocksMethod(settings.ShadowsocksMethod) {
+		return errors.New("unsupported Shadowsocks method")
+	}
+	if !domain.SupportsShadowsocksNetwork(settings.ShadowsocksNetwork) {
+		return errors.New("unsupported Shadowsocks network")
+	}
+	return nil
 }
 
 func validateVMessProfileSettings(settings Settings) error {
@@ -517,6 +607,8 @@ func (c Client) HasHysteria2() bool {
 
 func (c Client) HasVMess() bool { return c.protocol() == domain.ProtocolVMess }
 
+func (c Client) HasShadowsocks() bool { return c.protocol() == domain.ProtocolShadowsocks }
+
 func (c Client) VLESSCanConnect() bool {
 	if c.Protocol == "" {
 		return c.Enabled && !c.Revoked
@@ -536,6 +628,13 @@ func (c Client) VMessCanConnect() bool {
 		return c.Enabled && !c.Revoked
 	}
 	return c.HasVMess() && c.VMESSEnabled() && !c.VMessIsRevoked()
+}
+
+func (c Client) ShadowsocksCanConnect() bool {
+	if c.Protocol == "" {
+		return false
+	}
+	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked
 }
 
 func (c Client) VMESSEnabled() bool {
@@ -564,6 +663,13 @@ func (c Client) VMessIsRevoked() bool {
 		return c.Revoked
 	}
 	return c.VMessRevoked
+}
+
+func (c Client) ShadowsocksIsRevoked() bool {
+	if c.Protocol == "" {
+		return false
+	}
+	return c.ShadowsocksRevoked
 }
 
 func (c Client) HysteriaCredential() string {
@@ -610,6 +716,35 @@ func BuildVMessURI(settings Settings, client Client) (string, error) {
 	}
 	data, _ := json.Marshal(value)
 	return "vmess://" + base64.StdEncoding.EncodeToString(data), nil
+}
+
+// BuildShadowsocksURI creates a SIP-002 Shadowsocks share link.
+func BuildShadowsocksURI(settings Settings, client Client) string {
+	credentials := base64.RawURLEncoding.EncodeToString([]byte(settings.ShadowsocksMethod + ":" + client.ShadowsocksPassword))
+	u := &url.URL{Scheme: "ss", Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.ShadowsocksPublicPort)), Fragment: client.Name}
+	return "ss://" + credentials + "@" + u.Host + "#" + url.PathEscape(client.Name)
+}
+
+func buildShadowsocksClientJSON(settings Settings, client Client) ([]byte, error) {
+	value := map[string]any{
+		"log":      map[string]any{"loglevel": "warning"},
+		"inbounds": []any{map[string]any{"listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": map[string]any{"udp": true}}},
+		"outbounds": []any{map[string]any{
+			"protocol": "shadowsocks",
+			"settings": map[string]any{"servers": []any{map[string]any{
+				"address": settings.PublicHost, "port": settings.ShadowsocksPublicPort,
+				"method": settings.ShadowsocksMethod, "password": client.ShadowsocksPassword,
+			}}},
+		}},
+	}
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 func buildVMessClientJSON(settings Settings, client Client) ([]byte, error) {

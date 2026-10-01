@@ -41,6 +41,15 @@ func ApplyHysteriaSettings(settings *Settings, value domain.HysteriaSettings) {
 	settings.HysteriaTLSKeyPath = filepath.Join(certificateDir, "privkey.pem")
 }
 
+// ApplyShadowsocksSettings translates node-level Shadowsocks configuration
+// into renderer fields without coupling persistence to Xray JSON types.
+func ApplyShadowsocksSettings(settings *Settings, value domain.ShadowsocksSettings) {
+	settings.ShadowsocksEnabled = value.Enabled
+	settings.ShadowsocksPublicPort = value.PublicPort
+	settings.ShadowsocksMethod = value.Method
+	settings.ShadowsocksNetwork = value.Network
+}
+
 func validCertificateID(value string) bool {
 	if len(value) != 32 || strings.ToLower(value) != value {
 		return false
@@ -57,6 +66,7 @@ func ClientFromDomain(value domain.Client) Client {
 		VLESSEnabled: value.VLESSEnabled, VLESSRevoked: value.VLESSRevoked,
 		HysteriaEnabled: value.HysteriaEnabled, HysteriaRevoked: value.HysteriaRevoked,
 		VMessEnabled: value.VMessEnabled, VMessRevoked: value.VMessRevoked,
+		ShadowsocksEnabled: value.ShadowsocksEnabled, ShadowsocksRevoked: value.ShadowsocksRevoked,
 	}
 }
 
