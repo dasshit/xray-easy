@@ -310,16 +310,21 @@ func TestConsumeTelemetryStreamReportsOpenAndReceiveFailures(t *testing.T) {
 			stream := &fakeTelemetryStreamOpener{ctxs: make(chan context.Context, 1), openErr: test.open, recvErr: test.recv}
 			manager := NewManager(db, &fakeStatsAPI{})
 			manager.stream = stream
-			_, unsubscribe := manager.Subscribe()
+			notifications, unsubscribe := manager.Subscribe()
 			defer unsubscribe()
 			select {
 			case <-stream.ctxs:
 			case <-time.After(time.Second):
 				t.Fatal("stream manager did not attempt to open its upstream")
 			}
-			deadline := time.Now().Add(time.Second)
-			for manager.LastError() == "" && time.Now().Before(deadline) {
-				time.Sleep(time.Millisecond)
+			timeout := time.NewTimer(time.Second)
+			defer timeout.Stop()
+			for manager.LastError() == "" {
+				select {
+				case <-notifications:
+				case <-timeout.C:
+					t.Fatal("stream failure did not notify subscribers")
+				}
 			}
 			if manager.LastError() != "live telemetry stream is unavailable" {
 				t.Fatalf("stream failure state = %q", manager.LastError())

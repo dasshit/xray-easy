@@ -182,6 +182,8 @@ func TestStartReconcilerRetriesAndReportsBackgroundFailure(t *testing.T) {
 		t.Fatal("test client was not created")
 	}
 	app.handler.usersErr = errors.New("stats API temporarily unavailable")
+	events, unsubscribe := app.server.subscribeEvents()
+	defer unsubscribe()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	done := app.server.startReconcilerWithInterval(ctx, 5*time.Millisecond)
@@ -189,17 +191,21 @@ func TestStartReconcilerRetriesAndReportsBackgroundFailure(t *testing.T) {
 		cancel()
 		<-done
 	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
+	timeout := time.NewTimer(2 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case <-events:
+		case <-timeout.C:
+			t.Fatal("periodic reconciler did not record its retry failure")
+		}
 		for _, entry := range app.server.diagnosticBuffer.Snapshot(10) {
 			if strings.Contains(entry.Message, "Xray reconciliation skipped") {
 				cancel()
 				return
 			}
 		}
-		time.Sleep(5 * time.Millisecond)
 	}
-	t.Fatal("periodic reconciler did not record its retry failure")
 }
 
 func TestSettingsApplyReportsApplyOperationPersistenceFailure(t *testing.T) {

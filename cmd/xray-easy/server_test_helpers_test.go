@@ -91,19 +91,18 @@ func (f *fakeXrayRuntime) Logs(context.Context) ([]string, error) {
 }
 
 type fakeXrayHandler struct {
-	mu         sync.Mutex
-	users      []string
-	usersCalls int
-	usersErr   error
-	addErr     error
-	remove     map[string]bool
-	addCall    [][3]string
+	mu        sync.Mutex
+	users     []string
+	usersErr  error
+	addErr    error
+	remove    map[string]bool
+	addCall   [][3]string
+	userAdded chan string
 }
 
 func (f *fakeXrayHandler) Users(context.Context) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.usersCalls++
 	if f.usersErr != nil {
 		return nil, f.usersErr
 	}
@@ -118,6 +117,12 @@ func (f *fakeXrayHandler) AddUser(_ context.Context, email, uuid, flow string) e
 		return f.addErr
 	}
 	f.users = append(f.users, email)
+	if f.userAdded != nil {
+		select {
+		case f.userAdded <- email:
+		default:
+		}
+	}
 	return nil
 }
 
@@ -143,6 +148,23 @@ type testApp struct {
 	token   string
 	sup     *fakeXrayRuntime
 	handler *fakeXrayHandler
+}
+
+var (
+	testAdminPasswordHashOnce sync.Once
+	testAdminPasswordHash     string
+	testAdminPasswordHashErr  error
+)
+
+func sharedTestAdminPasswordHash(t *testing.T) string {
+	t.Helper()
+	testAdminPasswordHashOnce.Do(func() {
+		testAdminPasswordHash, testAdminPasswordHashErr = auth.HashPassword("correct horse battery")
+	})
+	if testAdminPasswordHashErr != nil {
+		t.Fatalf("hash test admin password: %v", testAdminPasswordHashErr)
+	}
+	return testAdminPasswordHash
 }
 
 func newTestApp(t *testing.T, initialized bool) testApp {
@@ -174,11 +196,7 @@ func newTestApp(t *testing.T, initialized bool) testApp {
 	}
 	app.server = s
 	if initialized {
-		passwordHash, err := auth.HashPassword("correct horse battery")
-		if err != nil {
-			t.Fatal(err)
-		}
-		admin, err := db.Initialize(context.Background(), "admin", passwordHash, "vpn.example.test", 443)
+		admin, err := db.Initialize(context.Background(), "admin", sharedTestAdminPasswordHash(t), "vpn.example.test", 443)
 		if err != nil {
 			t.Fatal(err)
 		}

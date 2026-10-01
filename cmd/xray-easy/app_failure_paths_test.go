@@ -413,26 +413,32 @@ func TestStartReconcilerPerformsInitialSyncAndHonorsCancellation(t *testing.T) {
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "initial-sync")
 	app.handler.users = []string{"stale@xray-easy"}
+	app.handler.userAdded = make(chan string, 1)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := app.server.startReconciler(ctx)
 	defer func() {
 		cancel()
 		<-done
 	}()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		app.handler.mu.Lock()
-		calls := app.handler.usersCalls
-		users := append([]string(nil), app.handler.users...)
-		app.handler.mu.Unlock()
-		if calls > 0 && len(users) == 1 && users[0] == client.Email {
-			cancel()
+	timeout := time.NewTimer(2 * time.Second)
+	defer timeout.Stop()
+	for {
+		select {
+		case email := <-app.handler.userAdded:
+			if email != client.Email {
+				t.Fatalf("reconciler added unexpected user %q", email)
+			}
+			app.handler.mu.Lock()
+			users := append([]string(nil), app.handler.users...)
+			app.handler.mu.Unlock()
+			if len(users) != 1 || users[0] != client.Email {
+				t.Fatalf("reconciled users = %v, want only %q", users, client.Email)
+			}
 			return
+		case <-timeout.C:
+			t.Fatal("reconciler did not perform its initial sync")
 		}
-		time.Sleep(10 * time.Millisecond)
 	}
-	cancel()
-	t.Fatal("reconciler did not perform its initial sync")
 }
 
 func TestApplyRestoredStateWrapperReturnsStorageErrorsBeforeNetwork(t *testing.T) {
