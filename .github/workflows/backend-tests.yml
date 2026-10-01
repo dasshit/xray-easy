@@ -150,15 +150,15 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - image: xray-easy
+          - image: xray-easy-control-plane
             dockerfile: Dockerfile.control
           - image: xray-easy-controller
             dockerfile: Dockerfile.controller
-          - image: xray-easy-runtime
+          - image: xray-easy-xray-core-service
             dockerfile: Dockerfile.xray-runtime
-          - image: xray-easy-awg
+          - image: xray-easy-amneziawg-service
             dockerfile: Dockerfile.awg
-          - image: xray-easy-hysteria-tls
+          - image: xray-easy-hysteria-tls-init
             dockerfile: Dockerfile.hysteria-tls
     steps:
       - name: Check out repository

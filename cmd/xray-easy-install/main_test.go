@@ -57,7 +57,7 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 	if err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --wait") || !strings.Contains(runner.calls[4], "exec -T xray-easy xray-easy doctor") {
+	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --remove-orphans --wait") || !strings.Contains(runner.calls[4], "exec -T control-plane xray-easy doctor") {
 		t.Fatalf("unexpected Docker calls: %v", runner.calls)
 	}
 	if !strings.Contains(output.String(), "Doctor completed. Review any warnings above") {
@@ -119,7 +119,7 @@ func TestChangingAmneziaWGEndpointDoesNotForceRecreateXray(t *testing.T) {
 	if strings.Contains(calls, "--force-recreate") {
 		t.Fatalf("AmneziaWG endpoint change forced unrelated container recreation: %s", calls)
 	}
-	if !strings.Contains(calls, "compose -f compose.yaml up -d --build --wait --wait-timeout 180") {
+	if !strings.Contains(calls, "compose -f compose.yaml up -d --build --remove-orphans --wait --wait-timeout 180") {
 		t.Fatalf("Compose did not apply the changed service configuration: %s", calls)
 	}
 	if !strings.Contains(output.String(), "open each existing device profile") {
@@ -225,8 +225,8 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 		t.Fatalf("expected retryable Compose error, got %v", err)
 	}
 	for _, recoveryCommand := range []string{
-		"docker compose -f compose.yaml exec -T xray-easy xray-easy doctor bundle",
-		"docker compose -f compose.yaml run --rm --no-deps xray-easy doctor bundle",
+		"docker compose -f compose.yaml exec -T control-plane xray-easy doctor bundle",
+		"docker compose -f compose.yaml run --rm --no-deps control-plane doctor bundle",
 	} {
 		if !strings.Contains(err.Error(), recoveryCommand) {
 			t.Errorf("Compose failure omitted recovery command %q: %v", recoveryCommand, err)
@@ -248,13 +248,13 @@ func TestComposeFailureKeepsGeneratedConfigurationForRetry(t *testing.T) {
 
 func TestDoctorFailurePreservesStartedStackAndShowsRetryCommand(t *testing.T) {
 	root := t.TempDir()
-	runner := &fakeRunner{failOn: "exec -T xray-easy xray-easy doctor"}
+	runner := &fakeRunner{failOn: "exec -T control-plane xray-easy doctor"}
 	var output bytes.Buffer
 	err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n"), &output, runner)
-	if err == nil || !strings.Contains(err.Error(), "docker compose -f compose.yaml exec -T xray-easy xray-easy doctor") {
+	if err == nil || !strings.Contains(err.Error(), "docker compose -f compose.yaml exec -T control-plane xray-easy doctor") {
 		t.Fatalf("expected doctor failure with retry command, got %v", err)
 	}
-	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --wait") || !strings.Contains(runner.calls[4], "doctor") {
+	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --remove-orphans --wait") || !strings.Contains(runner.calls[4], "doctor") {
 		t.Fatalf("doctor was not the final install step: %v", runner.calls)
 	}
 	if strings.Contains(strings.Join(runner.calls, "\n"), " down") {

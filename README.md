@@ -105,9 +105,9 @@ and **XRAY_VMESS_PORT** for VMess TCP. AmneziaWG uses **AWG_PUBLIC_PORT**.
 
 ## Protocol guide: Xray
 
-The `xray` container runs the project runtime service with Xray-core embedded
-as a Go library. The project pins Xray **26.7.28** as the currently verified
-version for its API integration and VLESS + REALITY profile workflow.
+The `xray-core-service` container embeds Xray-core as a Go library. The project
+pins Xray **26.7.28** as the currently verified version for its API integration
+and VLESS + REALITY profile workflow.
 The UI and doctor report when the configured or running version differs from
 the verified compatibility record at
 [versions/xray-compatibility.json](versions/xray-compatibility.json). Treat
@@ -187,7 +187,7 @@ can be lost because service counters are process-local.
 Run the doctor from the VPS repository directory:
 
 ~~~sh
-docker compose exec -T xray-easy xray-easy doctor
+docker compose exec -T control-plane xray-easy doctor
 ~~~
 
 It checks configuration, runtime/API availability, version compatibility and
@@ -237,7 +237,7 @@ three hours or follow new Xray messages:
 ~~~sh
 docker compose ps
 docker compose logs --since=3h
-docker compose logs --since=3h -f xray
+docker compose logs --since=3h -f xray-core-service
 ~~~
 
 The journal can also be queried directly. For example, this shows Xray entries
@@ -245,8 +245,8 @@ from the last three hours (the container name is resolved from the active
 Compose project):
 
 ~~~sh
-xray_container=$(docker compose ps --all --format '{{.Name}}' xray)
-sudo journalctl --since '3 hours ago' "CONTAINER_NAME=$xray_container" -o short-iso-precise
+xray_core_container=$(docker compose ps --all --format '{{.Name}}' xray-core-service)
+sudo journalctl --since '3 hours ago' "CONTAINER_NAME=$xray_core_container" -o short-iso-precise
 ~~~
 
 Journald rotates archived files automatically according to the host's size
@@ -294,10 +294,10 @@ plaintext, so protect the VPS and any exported copies. Create a manual backup
 before updating the checkout.
 
 ~~~sh
-docker compose exec xray-easy xray-easy backup create
-docker compose exec xray-easy xray-easy backup list
-docker compose exec xray-easy xray-easy restore BACKUP_NAME RESTORE
-docker compose cp xray-easy:/data/backups ./backups
+docker compose exec control-plane xray-easy backup create
+docker compose exec control-plane xray-easy backup list
+docker compose exec control-plane xray-easy restore BACKUP_NAME RESTORE
+docker compose cp control-plane:/data/backups ./backups
 ~~~
 
 Replace **BACKUP_NAME** with a name from the list. Restore requires the backup
@@ -310,10 +310,10 @@ be restored when AmneziaWG is enabled in Compose.
 These commands run in the control-plane container:
 
 ~~~sh
-docker compose exec xray-easy xray-easy admin reset-password
-docker compose exec xray-easy xray-easy admin reset-totp
-docker compose exec xray-easy xray-easy admin recovery-codes
-docker compose exec xray-easy xray-easy admin logout-all
+docker compose exec control-plane xray-easy admin reset-password
+docker compose exec control-plane xray-easy admin reset-totp
+docker compose exec control-plane xray-easy admin recovery-codes
+docker compose exec control-plane xray-easy admin logout-all
 ~~~
 
 Password reset prompts twice without echoing input and revokes all sessions.
@@ -325,8 +325,8 @@ reissue also invalidate sessions or previous codes as appropriate.
 If doctor reports a failure, create a support bundle:
 
 ~~~sh
-docker compose exec -T xray-easy xray-easy doctor bundle
-docker compose cp xray-easy:/data/diagnostics ./doctor-reports
+docker compose exec -T control-plane xray-easy doctor bundle
+docker compose cp control-plane:/data/diagnostics ./doctor-reports
 ~~~
 
 The bundle contains the doctor report, Xray runtime status, recent Xray
@@ -410,7 +410,16 @@ The workflow reads `DOCKERHUB_USERNAME` and
 Compose namespace is `dasshit`; set `XRAY_EASY_IMAGE_NAMESPACE` when running
 `install.sh` if the Docker Hub namespace differs. Docker Hub images include
 the Xray runtime, Controller, web backend, optional AmneziaWG service and
-Hysteria TLS initializer.
+Hysteria TLS initializer. Docker Hub image names use `namespace/repository`,
+so each component is published in its own repository:
+
+| Compose service | Docker Hub repository |
+| --- | --- |
+| `control-plane` | `dasshit/xray-easy-control-plane` |
+| `controller` | `dasshit/xray-easy-controller` |
+| `xray-core-service` | `dasshit/xray-easy-xray-core-service` |
+| `amneziawg-service` | `dasshit/xray-easy-amneziawg-service` |
+| `hysteria-tls-init` | `dasshit/xray-easy-hysteria-tls-init` |
 
 Regenerate checked-in typed protobuf bindings from the repository root with
 **scripts/generate-protobuf.sh**. See

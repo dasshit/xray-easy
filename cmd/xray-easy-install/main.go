@@ -22,11 +22,11 @@ const (
 	startupRecoveryCommands = `Useful commands from the repository directory:
   docker compose -f compose.yaml ps --all
   docker compose -f compose.yaml logs --tail=100 --timestamps
-  docker compose -f compose.yaml exec -T xray-easy xray-easy doctor
-  docker compose -f compose.yaml exec -T xray-easy xray-easy doctor bundle
+  docker compose -f compose.yaml exec -T control-plane xray-easy doctor
+  docker compose -f compose.yaml exec -T control-plane xray-easy doctor bundle
 
 If xray-easy is stopped, create a report with a one-off container:
-  docker compose -f compose.yaml run --rm --no-deps xray-easy doctor bundle`
+  docker compose -f compose.yaml run --rm --no-deps control-plane doctor bundle`
 )
 
 type configuration struct {
@@ -262,7 +262,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		ui.message("Updated Hysteria 2 settings in .env; existing keys were preserved")
 	}
 	if existing && previous.awgEnabled && !cfg.awgEnabled {
-		if err := runner.run(ctx, root, false, "compose", "--profile", "awg", "-f", "compose.yaml", "stop", "awg"); err != nil {
+		if err := runner.run(ctx, root, false, "compose", "--profile", "awg", "-f", "compose.yaml", "stop", "amneziawg-service"); err != nil {
 			return installResult{}, fmt.Errorf("stop AmneziaWG before disabling it: %w", err)
 		}
 	}
@@ -277,7 +277,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	if err := runner.run(ctx, root, false, "compose", "-f", "compose.yaml", "config", "--quiet"); err != nil {
 		return installResult{}, fmt.Errorf("Compose configuration is invalid: %w", err)
 	}
-	upArgs := []string{"compose", "-f", "compose.yaml", "up", "-d", "--build", "--wait", "--wait-timeout", "180"}
+	upArgs := []string{"compose", "-f", "compose.yaml", "up", "-d", "--build", "--remove-orphans", "--wait", "--wait-timeout", "180"}
 	if err := runner.run(ctx, root, true, upArgs...); err != nil {
 		ui.step(4, "Collecting startup diagnostics")
 		ui.message("Compose did not become healthy. Collecting service state and recent logs; containers and configuration are preserved.")
@@ -286,7 +286,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	}
 	if existing && (certificateChanged || cfg.hysteriaEnabled && cfg.hysteriaMode == "self-signed") {
 		ui.step(4, "Reloading Xray TLS certificate")
-		reloadArgs := []string{"compose", "-f", "compose.yaml", "up", "-d", "--wait", "--wait-timeout", "180", "--no-deps", "--force-recreate", "xray"}
+		reloadArgs := []string{"compose", "-f", "compose.yaml", "up", "-d", "--wait", "--wait-timeout", "180", "--no-deps", "--force-recreate", "xray-core-service"}
 		if err := runner.run(ctx, root, true, reloadArgs...); err != nil {
 			ui.step(4, "Collecting startup diagnostics")
 			ui.message("Xray did not become healthy after the TLS certificate reload. Collecting service state and recent logs; containers and configuration are preserved.")
@@ -295,10 +295,10 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		}
 	}
 	ui.step(4, "Verifying the installation")
-	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "exec", "-T", "xray-easy", "xray-easy", "doctor"); err != nil {
+	if err := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "exec", "-T", "control-plane", "xray-easy", "doctor"); err != nil {
 		ui.step(4, "Doctor checks failed")
 		ui.message("Doctor found failures. The services and configuration are preserved for troubleshooting.")
-		return installResult{}, fmt.Errorf("post-install doctor failed: %w; rerun after fixing with: docker compose -f compose.yaml exec -T xray-easy xray-easy doctor", err)
+		return installResult{}, fmt.Errorf("post-install doctor failed: %w; rerun after fixing with: docker compose -f compose.yaml exec -T control-plane xray-easy doctor", err)
 	}
 	ui.step(4, "Doctor checks completed")
 	ui.message("Doctor completed. Review any warnings above; Xray-easy is running.")

@@ -58,11 +58,11 @@ profile in the AWG volume. `profile` rewrites that saved profile using current
 shared transport settings without placing the private key in shell arguments.
 
 ```sh
-docker compose --profile awg-prototype exec -T awg awg-service status
-docker compose --profile awg-prototype exec -T awg awg-service peer-list
-docker compose --profile awg-prototype exec -T awg awg-service peer-add --name iphone
-docker compose --profile awg-prototype exec -T awg awg-service profile --name iphone
-docker compose --profile awg-prototype exec -T awg awg-service peer-remove --name iphone
+docker compose --profile awg-prototype exec -T amneziawg-service awg-service status
+docker compose --profile awg-prototype exec -T amneziawg-service awg-service peer-list
+docker compose --profile awg-prototype exec -T amneziawg-service awg-service peer-add --name iphone
+docker compose --profile awg-prototype exec -T amneziawg-service awg-service profile --name iphone
+docker compose --profile awg-prototype exec -T amneziawg-service awg-service peer-remove --name iphone
 ```
 
 In a regular deployment with AmneziaWG enabled by `./install.sh`, the

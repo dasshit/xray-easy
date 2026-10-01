@@ -365,7 +365,7 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		switch {
 		case controllerErr != nil:
 			controllerTokenReady = false
-			appendCheck(doctorFail, "Controller secret", "secret file is missing or inaccessible", "Check init-controller-token and the controller_token volume.")
+			appendCheck(doctorFail, "Controller secret", "secret file is missing or inaccessible", "Check controller-auth-init and the controller_token volume.")
 		case !controllerInfo.Mode().IsRegular():
 			controllerTokenReady = false
 			appendCheck(doctorFail, "Controller secret", "secret path is not a regular file", "Recreate the Controller token volume through Compose.")
@@ -376,7 +376,7 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 			contents, readErr := os.ReadFile(controllerTokenPath)
 			if readErr != nil || len(strings.TrimSpace(string(contents))) == 0 {
 				controllerTokenReady = false
-				appendCheck(doctorFail, "Controller secret", "secret file is unreadable or empty", "Check init-controller-token and the controller_token volume.")
+				appendCheck(doctorFail, "Controller secret", "secret file is unreadable or empty", "Check controller-auth-init and the controller_token volume.")
 			} else {
 				appendCheck(doctorPass, "Controller secret", "readable and mode is 0400", "")
 			}

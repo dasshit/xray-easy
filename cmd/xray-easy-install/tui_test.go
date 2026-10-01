@@ -229,7 +229,7 @@ func TestTerminalSessionRestoresSettingsAndMainRuns(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(binDir, "stty"), []byte(stty), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	docker := "#!/bin/sh\nif [ \"$1\" = compose ] && [ \"$2\" = version ]; then echo v2.33.1; exit 0; fi\nif [ \"$1\" = info ]; then echo 28.0.0; exit 0; fi\nif [ \"$1\" = compose ] && [ \"$4\" = up ]; then echo 'Container xray-easy Started'; fi\n"
+	docker := "#!/bin/sh\nif [ \"$1\" = compose ] && [ \"$2\" = version ]; then echo v2.33.1; exit 0; fi\nif [ \"$1\" = info ]; then echo 28.0.0; exit 0; fi\nif [ \"$1\" = compose ] && [ \"$4\" = up ]; then echo 'Container control-plane Started'; fi\n"
 	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(docker), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -262,7 +262,7 @@ func TestTerminalSessionRestoresSettingsAndMainRuns(t *testing.T) {
 	if !strings.Contains(content, "ssh -N -L 8080:127.0.0.1:8080") {
 		t.Fatal("next steps were not printed after restoring terminal")
 	}
-	if !strings.Contains(content, "Container xray-easy Started") {
+	if !strings.Contains(content, "Container control-plane Started") {
 		t.Fatal("Docker output was not shown inside the installer")
 	}
 	log := readFile(t, sttyLog)

@@ -512,7 +512,7 @@ Docker multiarch build и Compose validation выполняются перед o
 ```sh
 ./scripts/xray-runtime-test-stack.sh up -d --build --wait --wait-timeout 180
 ./scripts/xray-runtime-test-stack.sh ps
-./scripts/xray-runtime-test-stack.sh exec xray-easy /usr/local/bin/xray-easy doctor
+./scripts/xray-runtime-test-stack.sh exec control-plane /usr/local/bin/xray-easy doctor
 ```
 
 Web UI будет доступен через SSH tunnel на `http://127.0.0.1:18080`; по

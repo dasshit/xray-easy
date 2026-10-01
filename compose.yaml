@@ -7,7 +7,7 @@ x-logging: &journald-logging
     tag: "{{.Name}}"
 
 services:
-  init-volumes:
+  data-init:
     image: alpine:3.22
     restart: "no"
     logging: *journald-logging
@@ -27,7 +27,7 @@ services:
       - hysteria_tls_data:/tls
       - ./prototype/config-stage1:/bootstrap:ro
 
-  init-xray-runtime-token:
+  runtime-auth-init:
     image: alpine:3.22
     restart: "no"
     logging: *journald-logging
@@ -46,7 +46,7 @@ services:
     volumes:
       - xray_runtime_token_data:/target
 
-  init-xray-runtime-state:
+  runtime-state-init:
     image: alpine:3.22
     restart: "no"
     logging: *journald-logging
@@ -61,7 +61,7 @@ services:
     volumes:
       - xray_runtime_state:/state
 
-  init-controller-token:
+  controller-auth-init:
     image: alpine:3.22
     restart: "no"
     logging: *journald-logging
@@ -80,7 +80,7 @@ services:
     volumes:
       - controller_token:/target
 
-  init-awg-control-token:
+  awg-auth-init:
     image: alpine:3.22
     restart: "no"
     logging: *journald-logging
@@ -99,8 +99,8 @@ services:
     volumes:
       - awg_control_token:/target
 
-  init-hysteria-tls:
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy-hysteria-tls:${XRAY_EASY_IMAGE_TAG:-latest}
+  hysteria-tls-init:
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy-hysteria-tls-init:${XRAY_EASY_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.hysteria-tls
@@ -118,11 +118,11 @@ services:
       - ./secrets/hysteria:/source:ro
       - hysteria_tls_data:/target
     depends_on:
-      init-volumes:
+      data-init:
         condition: service_completed_successfully
 
-  xray:
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy-runtime:${XRAY_EASY_IMAGE_TAG:-latest}
+  xray-core-service:
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy-xray-core-service:${XRAY_EASY_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.xray-runtime
@@ -159,13 +159,13 @@ services:
       egress:
         gw_priority: 1
     depends_on:
-      init-volumes:
+      data-init:
         condition: service_completed_successfully
-      init-xray-runtime-token:
+      runtime-auth-init:
         condition: service_completed_successfully
-      init-xray-runtime-state:
+      runtime-state-init:
         condition: service_completed_successfully
-      init-hysteria-tls:
+      hysteria-tls-init:
         condition: service_completed_successfully
     healthcheck:
       test:
@@ -205,13 +205,13 @@ services:
       backend:
         ipv4_address: ${XRAY_EASY_CONTROLLER_BACKEND_IP:-172.31.242.2}
     depends_on:
-      xray:
+      xray-core-service:
         condition: service_healthy
-      init-xray-runtime-token:
+      runtime-auth-init:
         condition: service_completed_successfully
-      init-controller-token:
+      controller-auth-init:
         condition: service_completed_successfully
-      init-awg-control-token:
+      awg-auth-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "/usr/local/bin/xray-controller", "healthcheck"]
@@ -219,8 +219,8 @@ services:
       timeout: 5s
       retries: 5
 
-  xray-easy:
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy:${XRAY_EASY_IMAGE_TAG:-latest}
+  control-plane:
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy-control-plane:${XRAY_EASY_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.control
@@ -257,11 +257,11 @@ services:
         ipv4_address: ${XRAY_EASY_BACKEND_IP:-172.31.242.3}
       ui: {}
     depends_on:
-      xray:
+      xray-core-service:
         condition: service_healthy
       controller:
         condition: service_healthy
-      init-awg-control-token:
+      awg-auth-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/api/healthz"]
@@ -269,7 +269,7 @@ services:
       timeout: 5s
       retries: 5
 
-  init-awg-data:
+  awg-data-init:
     profiles: ["awg", "awg-prototype"]
     image: alpine:3.22
     restart: "no"
@@ -285,9 +285,9 @@ services:
     volumes:
       - awg_data:/data
 
-  awg:
+  amneziawg-service:
     profiles: ["awg", "awg-prototype"]
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy-awg:${XRAY_EASY_IMAGE_TAG:-latest}
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy-amneziawg-service:${XRAY_EASY_IMAGE_TAG:-latest}
     build:
       context: .
       dockerfile: Dockerfile.awg
@@ -358,9 +358,9 @@ services:
       egress:
         gw_priority: 1
     depends_on:
-      init-awg-data:
+      awg-data-init:
         condition: service_completed_successfully
-      init-awg-control-token:
+      awg-auth-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "awg-service", "health"]

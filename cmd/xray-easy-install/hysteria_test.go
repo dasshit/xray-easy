@@ -42,10 +42,10 @@ func TestInstallerSelectsMkcertIPv4AndPreservesItOnRetry(t *testing.T) {
 		t.Fatal("retry changed .env")
 	}
 	calls := strings.Join(runner.calls, "\n")
-	if !strings.Contains(calls, "--no-deps --force-recreate xray") {
+	if !strings.Contains(calls, "--no-deps --force-recreate xray-core-service") {
 		t.Fatal("retry must rerun mkcert expiry check and recreate Xray")
 	}
-	if strings.Contains(calls, "--force-recreate xray-easy") || strings.Contains(calls, "--force-recreate awg") {
+	if strings.Contains(calls, "--force-recreate control-plane") || strings.Contains(calls, "--force-recreate amneziawg-service") {
 		t.Fatalf("TLS certificate reload unexpectedly force-recreated another service: %s", calls)
 	}
 }
