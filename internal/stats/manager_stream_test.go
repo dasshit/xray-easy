@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	controllerv1 "xray-easy/internal/controller/api/v1"
+	"xray-easy/internal/domain"
 )
 
 type fakeTelemetryStreamOpener struct {
@@ -135,6 +136,49 @@ func TestApplyStreamUpdatePersistsTotalsRatesAndRejectsReplay(t *testing.T) {
 	}
 	if stored["phone"].TotalUpload != 155 || stored["phone"].TotalDownload != 267 {
 		t.Fatalf("SQLite totals = %+v", stored["phone"])
+	}
+}
+
+func TestApplyStreamUpdateMapsShadowsocksUserAndComputesRates(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	client, err := domain.NewShadowsocksClient("ss-device", "tablet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Email = "ss-device@xray-easy"
+	client.ShadowsocksPasswordEnc = "encrypted"
+	if err := db.CreateShadowsocksClient(context.Background(), client); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(db, &fakeStatsAPI{})
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	makeUpdate := func(sequence uint64, upload, download int64, online bool) *controllerv1.TelemetryUpdate {
+		activity := now
+		if !online {
+			activity = now.Add(-onlineWindow - time.Second)
+		}
+		at := timestamppb.New(now)
+		return &controllerv1.TelemetryUpdate{
+			SampledAt: at,
+			Sources:   []*controllerv1.TelemetrySourceStatus{{Protocol: "xray", Available: true, Generation: "xray-runtime", Sequence: sequence}},
+			Clients:   []*controllerv1.TelemetryClient{{DeviceKey: client.Email, Protocol: "shadowsocks", Online: online, LastActivity: timestamppb.New(activity), UploadBytes: upload, DownloadBytes: download, SourceIps: []string{"198.51.100.55"}}},
+		}
+	}
+	if err := manager.ApplyStreamUpdate(context.Background(), makeUpdate(1, 10, 20, true)); err != nil {
+		t.Fatal(err)
+	}
+	first := manager.Snapshot()[client.ID]
+	if !first.Online || first.UploadBytes != 10 || first.DownloadBytes != 20 || len(first.SourceIPs) != 1 {
+		t.Fatalf("initial Shadowsocks stream stats = %+v", first)
+	}
+	now = now.Add(time.Second)
+	if err := manager.ApplyStreamUpdate(context.Background(), makeUpdate(2, 25, 50, true)); err != nil {
+		t.Fatal(err)
+	}
+	second := manager.Snapshot()[client.ID]
+	if second.UploadBytes != 25 || second.DownloadBytes != 50 || second.UploadBytesPerSecond != 15 || second.DownloadBytesPerSecond != 30 {
+		t.Fatalf("updated Shadowsocks stream stats = %+v", second)
 	}
 }
 

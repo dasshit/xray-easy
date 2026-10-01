@@ -225,7 +225,7 @@ func (m *Manager) ApplyStreamUpdate(ctx context.Context, update *controllerv1.Te
 			awgRows = append(awgRows, domain.AmneziaWGPeerStats{Name: strings.TrimPrefix(client.GetDeviceKey(), "awg:"), SourceIP: address, LastSeen: lastSeen, UploadBytes: client.GetUploadBytes(), DownloadBytes: client.GetDownloadBytes()})
 			continue
 		}
-		if !fresh["xray"] || (protocol != "vless" && protocol != "vmess" && protocol != "hysteria2") {
+		if !fresh["xray"] || (protocol != "vless" && protocol != "vmess" && protocol != "hysteria2" && protocol != "shadowsocks") {
 			continue
 		}
 		lastSeen := protobufTimestamp(client.GetLastActivity())
