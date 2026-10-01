@@ -25,6 +25,7 @@ export default defineConfig({
     environment: 'jsdom',
     pool: 'vmThreads',
     fsModuleCache: true,
+    maxWorkers: 4,
     include: ['src/**/*.{test,spec}.{ts,tsx}', 'test/**/*.{test,spec}.{ts,tsx}'],
     coverage: {
       provider: 'v8',
