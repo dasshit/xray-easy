@@ -114,11 +114,16 @@ Compose separates the public control plane from the VPN runtimes. The runtime
 gRPC endpoints and the Controller are reachable only on private Docker
 networks; the only published application port is the Web UI on the VPS
 loopback interface. `amneziawg-service` is started only when the `awg` Compose
-profile is enabled.
+profile is enabled. The administrator's browser reaches the panel through an
+SSH tunnel, while VPN client devices use the public Xray or AmneziaWG ports.
 
 ```mermaid
 graph LR
-    admin[Administrator] -->|SSH tunnel| ui[control-plane]
+    subgraph clients [Client devices]
+        admin[Admin browser]
+        xrayClients[Xray clients]
+        awgClients[AmneziaWG clients]
+    end
 
     subgraph bootstrap [Initialization jobs]
         dataInit[data-init]
@@ -130,12 +135,19 @@ graph LR
         awgData[awg-data-init]
     end
 
+    subgraph platform [Control services]
+        ui[control-plane]
+        controller[controller]
+    end
+
     subgraph vpn [VPN services]
         xray[xray-core-service]
-        controller[controller]
         awg[amneziawg-service]
     end
 
+    internet((Public network))
+
+    admin -->|SSH tunnel| ui
     ui <-->|Authenticated gRPC| controller
     controller <-->|Authenticated gRPC| xray
     controller <-->|Authenticated gRPC| awg
@@ -150,8 +162,19 @@ graph LR
     awgData --> awg
     awgAuth --> awg
 
-    xray -.->|Xray protocols| internet((Public network))
-    awg -.->|AmneziaWG UDP| internet
+    xrayClients -->|VLESS / VMess / Hysteria 2 / Shadowsocks| internet
+    awgClients -->|AmneziaWG UDP| internet
+    internet -->|TCP and UDP public ports| xray
+    internet -->|UDP public port| awg
+
+    classDef client fill:#e8f0ff,stroke:#4c6ef5,color:#172033,stroke-width:1px;
+    classDef service fill:#e7f8ef,stroke:#2b8a3e,color:#183c23,stroke-width:1px;
+    classDef bootstrap fill:#f5f5f5,stroke:#777,color:#222,stroke-dasharray:4 3;
+    classDef network fill:#fff3bf,stroke:#e67700,color:#4d2d00,stroke-width:1px;
+    class admin,xrayClients,awgClients client;
+    class ui,controller,xray,awg service;
+    class dataInit,runtimeAuth,runtimeState,controllerAuth,awgAuth,tlsInit,awgData bootstrap;
+    class internet network;
 ```
 
 | Service | Responsibility |
