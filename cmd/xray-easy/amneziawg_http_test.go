@@ -81,6 +81,7 @@ func (f *fakeAmneziaWGGateway) ClientConfig(_ context.Context, name string) (str
 }
 
 func TestAmneziaWGRoutesRequireAuthenticationAndReportDisabledState(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	if got := requestJSON(t, app, http.MethodGet, "/api/transports/amneziawg", nil, false).Code; got != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated AWG status = %d", got)
@@ -92,6 +93,7 @@ func TestAmneziaWGRoutesRequireAuthenticationAndReportDisabledState(t *testing.T
 }
 
 func TestAmneziaWGUsesUnifiedProfileAPIAndKeepsSecretsInAWGService(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	gateway := &fakeAmneziaWGGateway{
 		status: domain.AmneziaWGStatus{Running: true, PublicHost: "vpn.example.test", PublicPort: 1234, ListenPort: 1234},
@@ -128,6 +130,7 @@ func TestAmneziaWGUsesUnifiedProfileAPIAndKeepsSecretsInAWGService(t *testing.T)
 }
 
 func TestUnifiedAWGCreationValidatesProtocolSpecificInputAndAvailability(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	invalid := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "bad_name", Protocol: string(domain.ProtocolAmneziaWG)}, true)
 	if invalid.Code != http.StatusBadRequest {
@@ -146,6 +149,7 @@ func TestUnifiedAWGCreationValidatesProtocolSpecificInputAndAvailability(t *test
 }
 
 func TestAmneziaWGUnavailableErrorsAreRedacted(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	app.server.awg = &fakeAmneziaWGGateway{
 		peers: make(map[string]domain.AmneziaWGPeer), profiles: make(map[string]string),
@@ -166,6 +170,7 @@ func TestAmneziaWGUnavailableErrorsAreRedacted(t *testing.T) {
 }
 
 func TestAmneziaWGRoutesHandleInvalidMethodsAndUpstreamFailures(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	gateway := &fakeAmneziaWGGateway{peers: make(map[string]domain.AmneziaWGPeer), profiles: make(map[string]string)}
 	app.server.awg = gateway
@@ -193,6 +198,7 @@ func TestAmneziaWGRoutesHandleInvalidMethodsAndUpstreamFailures(t *testing.T) {
 }
 
 func TestAmneziaWGRevocationRequiresSuccessfulAutomaticBackup(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	gateway := &fakeAmneziaWGGateway{
 		peers: map[string]domain.AmneziaWGPeer{"phone": {Name: "phone"}}, profiles: make(map[string]string),
@@ -206,6 +212,7 @@ func TestAmneziaWGRevocationRequiresSuccessfulAutomaticBackup(t *testing.T) {
 }
 
 func TestWriteAWGErrorMapsKnownGRPCCodes(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		code codes.Code
 		want int
@@ -233,6 +240,7 @@ func TestWriteAWGErrorMapsKnownGRPCCodes(t *testing.T) {
 }
 
 func TestUnifiedAWGProfileRouteValidatesFormatsAndPeerPresence(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	peer := domain.AmneziaWGPeer{Name: "phone"}
 	gateway := &fakeAmneziaWGGateway{
@@ -266,6 +274,7 @@ func TestUnifiedAWGProfileRouteValidatesFormatsAndPeerPresence(t *testing.T) {
 }
 
 func TestAWGClientCreateAndPeerRoutesCoverLifecycleFailures(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	gateway := &fakeAmneziaWGGateway{peers: make(map[string]domain.AmneziaWGPeer), profiles: make(map[string]string)}
 	app.server.awg = gateway
@@ -310,6 +319,7 @@ func TestAWGClientCreateAndPeerRoutesCoverLifecycleFailures(t *testing.T) {
 }
 
 func TestAmneziaWGStatusAndClientHandlersCoverBoundaryFailures(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	statusRecorder := httptest.NewRecorder()
 	app.server.amneziaWGStatus(statusRecorder, httptest.NewRequest(http.MethodGet, "/wrong", nil))

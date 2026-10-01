@@ -11,6 +11,7 @@ import (
 )
 
 func TestCreateProtocolClientReportsPreparationAndPersistenceFailures(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		protocol domain.ClientProtocol

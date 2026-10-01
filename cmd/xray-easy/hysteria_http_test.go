@@ -20,6 +20,7 @@ import (
 )
 
 func TestHysteriaCertificateUploadRejectsInvalidRequests(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	if response := requestJSON(t, app, http.MethodGet, "/api/transports/hysteria2/certificate", nil, true); response.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("wrong method status = %d", response.Code)
@@ -50,6 +51,7 @@ func TestHysteriaCertificateUploadRejectsInvalidRequests(t *testing.T) {
 }
 
 func TestHysteriaCertificateUploadRejectsOversizeAndMissingInitialSetup(t *testing.T) {
+	t.Parallel()
 	t.Run("request exceeds upload limit", func(t *testing.T) {
 		app := newTestApp(t, true)
 		body := bytes.Repeat([]byte("x"), hysteriaCertificateMaxBytes+1)
@@ -78,6 +80,7 @@ func TestHysteriaCertificateUploadRejectsOversizeAndMissingInitialSetup(t *testi
 }
 
 func TestReadMultipartFileValidatesExactlyOneBoundedFile(t *testing.T) {
+	t.Parallel()
 	form := &multipart.Form{File: map[string][]*multipart.FileHeader{}}
 	if _, err := readMultipartFile(form, "certificate"); err == nil {
 		t.Fatal("missing multipart file was accepted")
@@ -122,6 +125,7 @@ func certificateUploadBody(t *testing.T, certificate, privateKey, serverName str
 }
 
 func TestHysteriaSettingsStatusAndPreviewRequireAuthenticationAndCertificate(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	if err := os.RemoveAll(filepath.Join(app.server.dataDir, "hysteria-tls")); err != nil {
 		t.Fatal(err)
@@ -146,6 +150,7 @@ func TestHysteriaSettingsStatusAndPreviewRequireAuthenticationAndCertificate(t *
 }
 
 func TestHysteriaSettingsStatusReportsTransportAndRuntimeMismatch(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name       string
 		settings   domain.HysteriaSettings
@@ -177,6 +182,7 @@ func TestHysteriaSettingsStatusReportsTransportAndRuntimeMismatch(t *testing.T) 
 }
 
 func TestHysteriaSettingsPreviewAndApplyPersistsDisabledNodeSettings(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	initial := domain.HysteriaSettings{TLSMode: domain.HysteriaTLSCustom, UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff}
 	if err := app.server.store.InitializeHysteriaSettings(context.Background(), initial); err != nil {
@@ -218,6 +224,7 @@ func TestHysteriaSettingsPreviewAndApplyPersistsDisabledNodeSettings(t *testing.
 }
 
 func TestHysteriaSettingsPreviewAndApplyEnablesInboundWithRuntimeReplacement(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	certificateID := "0123456789abcdef0123456789abcdef"
 	writeTestHysteriaCertificate(t, filepath.Join(app.server.dataDir, "hysteria-tls", certificateID))
@@ -259,6 +266,7 @@ func TestHysteriaSettingsPreviewAndApplyEnablesInboundWithRuntimeReplacement(t *
 }
 
 func TestHysteriaApplyRequiresInboundReplacementWhenTopologyChanges(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	changeID := prepareEnabledHysteriaChange(t, app)
 	// The basic runtime interface can validate a full config, but cannot
@@ -275,6 +283,7 @@ func TestHysteriaApplyRequiresInboundReplacementWhenTopologyChanges(t *testing.T
 }
 
 func TestHysteriaApplyRollsBackWhenCandidateConfigCannotBePromoted(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	activePath := filepath.Join(app.server.configDir, "active.json")
 	if err := os.WriteFile(activePath, []byte(`{"inbounds":[]}`), 0o600); err != nil {
@@ -308,6 +317,7 @@ func TestHysteriaApplyRollsBackWhenCandidateConfigCannotBePromoted(t *testing.T)
 }
 
 func TestHysteriaApplyFailurePathsRemainExplicitAndRetryable(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name     string
 		prepare  func(t *testing.T, app testApp, replacer *recordingInboundReplacer)
@@ -366,6 +376,7 @@ func TestHysteriaApplyFailurePathsRemainExplicitAndRetryable(t *testing.T) {
 }
 
 func TestHysteriaApplyRejectsExpiredForeignAndStaleConfirmations(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		mutate func(t *testing.T, app testApp, changeID string)
@@ -518,6 +529,7 @@ func TestTLSSettingsApplyUpdatesExistingVMessInboundWhenHysteriaIsOff(t *testing
 }
 
 func TestHysteriaCertificateGenerationRejectsInvalidAddressesAndMethods(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	wrongMethod := requestJSON(t, app, "GET", "/api/transports/hysteria2/certificate/mkcert", nil, true)
 	if wrongMethod.Code != 405 {
@@ -572,6 +584,7 @@ func TestHysteriaCertificateGenerateUsesMkcertAndPersistsVersion(t *testing.T) {
 }
 
 func TestHysteriaSettingsRouteHandlesMethodBusyAndStorageFailures(t *testing.T) {
+	t.Parallel()
 	t.Run("method not allowed", func(t *testing.T) {
 		app := newTestApp(t, true)
 		response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2", nil, true)
@@ -607,6 +620,7 @@ func TestHysteriaSettingsRouteHandlesMethodBusyAndStorageFailures(t *testing.T) 
 }
 
 func TestHysteriaPreviewRejectsInvalidRequestsAndReturnsUnchangedState(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name      string
 		method    string

@@ -10,6 +10,7 @@ import (
 )
 
 func TestVMessCreationUsesFallbackAndRollsBackFailedLiveAddition(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	first := createRuntimeVMessClient(t, app, "first")
 	if first.UUID == "" || len(app.sup.applyCalls) != 1 {

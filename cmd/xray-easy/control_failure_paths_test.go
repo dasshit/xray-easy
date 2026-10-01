@@ -12,6 +12,7 @@ import (
 )
 
 func TestControlPlaneReportsDiagnosticProfileAndBackupFailures(t *testing.T) {
+	t.Parallel()
 	t.Run("status redacts Xray runtime errors", func(t *testing.T) {
 		app := newTestApp(t, true)
 		if got := requestJSON(t, app, http.MethodGet, "/api/status", nil, false).Code; got != http.StatusUnauthorized {
@@ -176,6 +177,7 @@ func TestControlPlaneReportsDiagnosticProfileAndBackupFailures(t *testing.T) {
 }
 
 func TestStartReconcilerRetriesAndReportsBackgroundFailure(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "background")
 	if client.ID == "" {
@@ -209,6 +211,7 @@ func TestStartReconcilerRetriesAndReportsBackgroundFailure(t *testing.T) {
 }
 
 func TestSettingsApplyReportsApplyOperationPersistenceFailure(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	logLevel := "debug"
 	prepared := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{LogLevel: &logLevel}, true)

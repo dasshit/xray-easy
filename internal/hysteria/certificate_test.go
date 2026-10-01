@@ -93,6 +93,7 @@ func testCertificateSignedByCA(t *testing.T, dnsName string) ([]byte, []byte, *x
 }
 
 func TestValidatePairChecksHostnameExpiryAndKeyMatch(t *testing.T) {
+	t.Parallel()
 	certPEM, keyPEM := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
 	_, info, err := validatePair(certPEM, keyPEM, "vpn.example.com")
 	if err != nil {
@@ -118,6 +119,7 @@ func TestValidatePairChecksHostnameExpiryAndKeyMatch(t *testing.T) {
 }
 
 func TestCertificateVersionIsAtomicAndRejectsTraversal(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	cert, key := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
 	id := "0123456789abcdef0123456789abcdef"
@@ -143,6 +145,7 @@ func TestCertificateVersionIsAtomicAndRejectsTraversal(t *testing.T) {
 }
 
 func TestCertificateInfoEncodesMissingDNSNamesAsEmptyArray(t *testing.T) {
+	t.Parallel()
 	info := certificateInfo(&x509.Certificate{Raw: []byte("certificate without DNS SANs")})
 	if info.DNSNames == nil {
 		t.Fatal("DNS names should be an empty array, not nil")
@@ -161,6 +164,7 @@ func TestCertificateInfoEncodesMissingDNSNamesAsEmptyArray(t *testing.T) {
 }
 
 func TestValidatePairRejectsMalformedPEMAndPrivateKeys(t *testing.T) {
+	t.Parallel()
 	validCert, validKey := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
 	for name, pair := range map[string]struct{ cert, key []byte }{
 		"missing certificate PEM": {[]byte("not pem"), validKey},
@@ -178,6 +182,7 @@ func TestValidatePairRejectsMalformedPEMAndPrivateKeys(t *testing.T) {
 }
 
 func TestValidatePairAcceptsPKCS1AndECDSAPrivateKeys(t *testing.T) {
+	t.Parallel()
 	rsaCert, rsaKey := testCertificate(t, "rsa.example.test", time.Now().Add(time.Hour))
 	rsaBlock, _ := pem.Decode(rsaKey)
 	parsed, err := x509.ParsePKCS8PrivateKey(rsaBlock.Bytes)
@@ -206,6 +211,7 @@ func TestValidatePairAcceptsPKCS1AndECDSAPrivateKeys(t *testing.T) {
 }
 
 func TestInspectSupportsLegacyRootAndReportsMissingFiles(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	cert, key := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
 	if err := os.WriteFile(filepath.Join(root, "fullchain.pem"), cert, 0o600); err != nil {
@@ -233,6 +239,7 @@ func TestInspectSupportsLegacyRootAndReportsMissingFiles(t *testing.T) {
 }
 
 func TestImportRejectsUntrustedCertificateWithoutPersistingIt(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	cert, key := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
 	if _, _, err := Import(root, cert, key, "vpn.example.com"); err == nil || !strings.Contains(err.Error(), "not trusted") {
@@ -245,6 +252,7 @@ func TestImportRejectsUntrustedCertificateWithoutPersistingIt(t *testing.T) {
 }
 
 func TestImportPersistsValidatedCertificateAndTrustedVerificationUsesChain(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	chain, key, rootCertificate := testCertificateSignedByCA(t, "vpn.example.test")
 	id, info, err := importWithVerifier(root, chain, key, "vpn.example.test", func(chainPEM []byte, certificate *x509.Certificate, serverName string) error {
@@ -281,6 +289,7 @@ func TestImportPersistsValidatedCertificateAndTrustedVerificationUsesChain(t *te
 }
 
 func TestImportWithVerifierRejectsValidationTrustAndPersistenceFailures(t *testing.T) {
+	t.Parallel()
 	cert, key := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
 	accept := func([]byte, *x509.Certificate, string) error { return nil }
 	if _, _, err := importWithVerifier(t.TempDir(), []byte("bad"), key, "vpn.example.com", accept); err == nil {
@@ -314,6 +323,7 @@ func mustParseCertificate(t *testing.T, chain []byte) *x509.Certificate {
 }
 
 func TestWriteVersionRejectsInvalidRootAndExistingVersion(t *testing.T) {
+	t.Parallel()
 	cert, key := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
 	fileRoot := filepath.Join(t.TempDir(), "not-directory")
 	if err := os.WriteFile(fileRoot, []byte("x"), 0o600); err != nil {
@@ -340,6 +350,7 @@ func TestWriteVersionRejectsInvalidRootAndExistingVersion(t *testing.T) {
 }
 
 func TestWritePrivateRejectsExistingFilesAndNewIDReadsExactlySixteenBytes(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "secret")
 	if err := os.WriteFile(path, []byte("original"), 0o600); err != nil {
 		t.Fatal(err)
@@ -361,6 +372,7 @@ func TestWritePrivateRejectsExistingFilesAndNewIDReadsExactlySixteenBytes(t *tes
 }
 
 func TestVersionDirectoryRejectsNonHexVersion(t *testing.T) {
+	t.Parallel()
 	if _, err := versionDirectory(t.TempDir(), strings.Repeat("z", 32), false); err == nil {
 		t.Fatal("non-hex version ID was accepted")
 	}

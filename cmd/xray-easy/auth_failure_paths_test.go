@@ -48,6 +48,7 @@ func enableTestTOTP(t *testing.T, app testApp) (string, string) {
 }
 
 func TestAuthHandlersReportStorageFailures(t *testing.T) {
+	t.Parallel()
 	t.Run("recovery login cannot consume code", func(t *testing.T) {
 		app := newTestApp(t, true)
 		_, recoveryCode := enableTestTOTP(t, app)

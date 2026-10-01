@@ -13,6 +13,7 @@ import (
 )
 
 func TestVMessProfilePinsUntrustedCertificateInShareLinkAndJSON(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	ctx := context.Background()
 	if err := app.server.store.InitializeHysteriaSettings(ctx, domain.HysteriaSettings{

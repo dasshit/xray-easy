@@ -37,6 +37,7 @@ func (w *noFlushWriter) Write(data []byte) (int, error) { return len(data), nil 
 func (w *noFlushWriter) WriteHeader(status int)         { w.status = status }
 
 func TestSSEInitialSnapshotStatusEventsAndCancellation(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	request := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
@@ -76,6 +77,7 @@ func TestSSEInitialSnapshotStatusEventsAndCancellation(t *testing.T) {
 }
 
 func TestEventSubscriptionsCoalesceAndCanUnsubscribeTwice(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	channel, unsubscribe := app.server.subscribeEvents()
 	app.server.notifyEvents()
@@ -109,6 +111,7 @@ func TestEventSubscriptionsCoalesceAndCanUnsubscribeTwice(t *testing.T) {
 }
 
 func TestSSEStopsWhenSessionExpiresAndRedactsRuntimeError(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	ctx, cancel := context.WithCancel(context.Background())
 	response := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
@@ -150,6 +153,7 @@ func TestSSEStopsWhenSessionExpiresAndRedactsRuntimeError(t *testing.T) {
 }
 
 func TestBackupRoutesListCreateAndMaintenanceLock(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	if got := requestJSON(t, app, http.MethodGet, "/api/backups", nil, false).Code; got != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated backups status = %d", got)
@@ -186,6 +190,7 @@ func TestBackupRoutesListCreateAndMaintenanceLock(t *testing.T) {
 }
 
 func TestReconcileRunningSynchronizesHandlerUsers(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	active := seedTestClient(t, app, "active")
 	disabled := seedTestClient(t, app, "disabled")

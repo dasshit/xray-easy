@@ -19,6 +19,7 @@ func (f fixedStatsAPI) Poll(context.Context) ([]xrayapi.UserStats, error) {
 }
 
 func TestClientResponsesAndSSEIncludePersistedTrafficSnapshot(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "laptop")
 	lastSeen := time.Now().UTC().Add(-time.Minute)

@@ -28,6 +28,7 @@ func (w *failingStreamWriter) Write(data []byte) (int, error) {
 func (*failingStreamWriter) Flush() {}
 
 func TestHTTPBoundaryValidationAndProfileRenderingErrors(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	for _, tc := range []struct {
 		method string
@@ -67,6 +68,7 @@ func TestHTTPBoundaryValidationAndProfileRenderingErrors(t *testing.T) {
 }
 
 func TestSSEStopsOnStatsAndStatusWriteFailures(t *testing.T) {
+	t.Parallel()
 	for _, failAt := range []int{1, 2} {
 		t.Run(map[int]string{1: "stats", 2: "status"}[failAt], func(t *testing.T) {
 			app := newTestApp(t, true)

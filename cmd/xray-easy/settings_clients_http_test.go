@@ -48,6 +48,7 @@ func randomTestID(t *testing.T) string {
 }
 
 func TestSettingsReadValidationAndFingerprintApply(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	if got := requestJSON(t, app, http.MethodGet, "/api/settings", nil, false).Code; got != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated settings status = %d", got)
@@ -118,6 +119,7 @@ func TestSettingsReadValidationAndFingerprintApply(t *testing.T) {
 }
 
 func TestSettingsLogLevelApplyRestartsXrayWithoutRevokingProfiles(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "family-phone")
 	invalid := "trace"
@@ -157,6 +159,7 @@ func TestSettingsLogLevelApplyRestartsXrayWithoutRevokingProfiles(t *testing.T) 
 }
 
 func TestSettingsPreviewCanonicalizesIPv6BeforeComparing(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	settings, err := app.server.store.GetSettings(t.Context())
 	if err != nil {
@@ -174,6 +177,7 @@ func TestSettingsPreviewCanonicalizesIPv6BeforeComparing(t *testing.T) {
 }
 
 func TestSettingsRotationBacksUpAppliesAndRevokesProfiles(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "macbook")
 	newTarget, newSNI, newHost := "www.google.com:443", "www.google.com", "new-vpn.example.test"
@@ -214,6 +218,7 @@ func TestSettingsRotationBacksUpAppliesAndRevokesProfiles(t *testing.T) {
 }
 
 func TestSettingsRotationApplyFailureKeepsDatabaseAndClientState(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "phone")
 	newHost := "rotated.example.test"
@@ -250,6 +255,7 @@ func pendingExists(s *server, id string) bool {
 }
 
 func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	if got := requestJSON(t, app, http.MethodGet, "/api/clients", nil, false).Code; got != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated clients status = %d", got)
@@ -388,6 +394,7 @@ func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
 }
 
 func TestClientCreationRejectsIncompleteOrUndecryptableSettings(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	settings, err := app.server.store.GetSettings(t.Context())
 	if err != nil {

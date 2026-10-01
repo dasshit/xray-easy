@@ -17,6 +17,7 @@ import (
 )
 
 func TestCandidateApplicationHelpersCommitRollbackAndRejectInvalidConfigs(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "tablet")
 	settings, err := app.server.store.GetSettings(context.Background())
@@ -66,6 +67,7 @@ func TestCandidateApplicationHelpersCommitRollbackAndRejectInvalidConfigs(t *tes
 }
 
 func TestLiveClientApplyRollsBackPersistedStateWhenPromotionFails(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "watch")
 	settings, err := app.server.store.GetSettings(context.Background())
@@ -109,6 +111,7 @@ func TestLiveClientApplyRollsBackPersistedStateWhenPromotionFails(t *testing.T) 
 }
 
 func TestLiveClientApplyRestoresXrayWhenPersistenceFails(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "phone")
 	settings, err := app.server.store.GetSettings(context.Background())
@@ -132,6 +135,7 @@ func TestLiveClientApplyRestoresXrayWhenPersistenceFails(t *testing.T) {
 }
 
 func TestApplyClientsLockedReportsMaintenanceApplyAndPromotionFailures(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "tablet")
 	settings, err := app.server.store.GetSettings(context.Background())
@@ -172,6 +176,7 @@ func TestApplyClientsLockedReportsMaintenanceApplyAndPromotionFailures(t *testin
 }
 
 func TestSettingsApplyConflictExpiredAndLockGuardPaths(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "tablet")
 	newHost := "node-new.example.test"
@@ -276,6 +281,7 @@ func TestSettingsApplyConflictExpiredAndLockGuardPaths(t *testing.T) {
 }
 
 func TestSettingsApplyBackupAndCandidateValidationFailures(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	newHost := "rotated.example.test"
 	prepared := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{PublicHost: &newHost}, true)
@@ -321,6 +327,7 @@ func TestSettingsApplyBackupAndCandidateValidationFailures(t *testing.T) {
 }
 
 func TestSettingsApplyDatabaseAndPromotionFailureRollBack(t *testing.T) {
+	t.Parallel()
 	newHost := "rotated.example.test"
 	t.Run("database transaction", func(t *testing.T) {
 		app := newTestApp(t, true)
@@ -372,6 +379,7 @@ func TestSettingsApplyDatabaseAndPromotionFailureRollBack(t *testing.T) {
 }
 
 func TestIssueSessionAndHealthHandlersReportClosedStore(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	if err := app.server.store.Close(); err != nil {
 		t.Fatal(err)
@@ -394,6 +402,7 @@ func TestIssueSessionAndHealthHandlersReportClosedStore(t *testing.T) {
 }
 
 func TestApplyRestoredStateReportsValidationAndPromotionFailures(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	if err := applyRestoredStateWithRuntime(context.Background(), app.server.store, app.server.masterKey, app.server.configDir, 443, &fakeXrayRuntime{validateErr: errors.New("invalid Xray config")}); err == nil || !strings.Contains(err.Error(), "invalid Xray config") {
 		t.Fatalf("restored-state validation failure = %v", err)
@@ -410,6 +419,7 @@ func TestApplyRestoredStateReportsValidationAndPromotionFailures(t *testing.T) {
 }
 
 func TestStartReconcilerPerformsInitialSyncAndHonorsCancellation(t *testing.T) {
+	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "initial-sync")
 	app.handler.users = []string{"stale@xray-easy"}
