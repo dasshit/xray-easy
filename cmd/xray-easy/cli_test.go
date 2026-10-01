@@ -264,7 +264,10 @@ func TestAdminAndBackupCLIPropagateStorageAndLockFailures(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer lock.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+		// Opening the store runs migrations before the CLI tries the lock. Give
+		// that setup enough time under the race detector, then verify that the
+		// same deadline is eventually reported by the contended lock acquisition.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
 		if err := runBackupCLI(ctx, app.server.dataDir, app.server.configDir, []string{"create"}); err == nil || !strings.Contains(err.Error(), "maintenance lock") {
 			t.Fatalf("backup lock error = %v", err)
