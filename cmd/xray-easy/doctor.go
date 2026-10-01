@@ -149,6 +149,9 @@ func writeDoctorHeader(out io.Writer) {
 	fmt.Fprintln(out, "Host ports from active Compose environment:")
 	fmt.Fprintf(out, "  Xray public TCP: %s -> container TCP 8443\n", safeDoctorPort("XRAY_PUBLIC_PORT", "443"))
 	fmt.Fprintf(out, "  VMess TCP: %s -> container TCP 8444\n", safeDoctorPort("XRAY_VMESS_PORT", "9443"))
+	if strings.EqualFold(envOr("XRAY_SHADOWSOCKS_ENABLED", "false"), "true") {
+		fmt.Fprintf(out, "  Shadowsocks TCP+UDP: %s -> container TCP/UDP 8388\n", safeDoctorPort("XRAY_SHADOWSOCKS_PORT", "8388"))
+	}
 	fmt.Fprintf(out, "  Web UI loopback: %s -> container TCP 8080\n", safeDoctorPort("XRAY_EASY_UI_PORT", "8080"))
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
 		fmt.Fprintf(out, "  AmneziaWG public UDP: %s -> container UDP 51820\n", safeDoctorPort("AWG_PUBLIC_PORT", "1234"))
@@ -298,6 +301,13 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		appendCheck(doctorFail, "VMess TCP port", err.Error(), "Set XRAY_VMESS_PORT to a free host port distinct from XRAY_PUBLIC_PORT and XRAY_EASY_UI_PORT, then rerun Compose.")
 	} else {
 		appendCheck(doctorPass, "VMess TCP port", fmt.Sprintf("port %d is configured", port), "")
+	}
+	if configuredShadowsocksEnabled() {
+		if port, err := configuredShadowsocksPort(); err != nil {
+			appendCheck(doctorFail, "Shadowsocks port", err.Error(), "Set XRAY_SHADOWSOCKS_PORT to a free port distinct from XRAY_PUBLIC_PORT, XRAY_VMESS_PORT, and XRAY_EASY_UI_PORT, then rerun Compose.")
+		} else {
+			appendCheck(doctorPass, "Shadowsocks TCP/UDP port", fmt.Sprintf("port %d is configured", port), "")
+		}
 	}
 
 	if err := probeWritableDirectory(dataDir); err != nil {
@@ -501,7 +511,11 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 			appendCheck(doctorPass, "Embedded Xray telemetry", "in-process counters are readable through Controller", "")
 		}
 	}
-	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s (VLESS) and TCP %s (VMess, when used) for IPv4 and IPv6 in the VDS firewall/security group; verify a client connection.", envOr("XRAY_PUBLIC_PORT", "443"), envOr("XRAY_VMESS_PORT", "9443")))
+	inboundHint := fmt.Sprintf("Allow inbound TCP %s (VLESS) and TCP %s (VMess, when used) for IPv4 and IPv6 in the VDS firewall/security group; verify a client connection.", envOr("XRAY_PUBLIC_PORT", "443"), envOr("XRAY_VMESS_PORT", "9443"))
+	if configuredShadowsocksEnabled() {
+		inboundHint += fmt.Sprintf(" Allow TCP and UDP %s for Shadowsocks.", envOr("XRAY_SHADOWSOCKS_PORT", "8388"))
+	}
+	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", inboundHint)
 	if hysteria2Enabled() {
 		hint := fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6 and verify a Hysteria 2 client connection.", envOr("XRAY_PUBLIC_PORT", "443"))
 		if mode := envOr("XRAY_HYSTERIA2_TLS_MODE", xray.HysteriaTLSLegacy); mode == xray.HysteriaTLSSelfSigned || mode == xray.HysteriaTLSLegacy {

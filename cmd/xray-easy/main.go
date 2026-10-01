@@ -3074,15 +3074,7 @@ func vmessInboundExpected(clients []domain.Client) bool {
 }
 
 func shadowsocksInboundExpected(clients []domain.Client) bool {
-	if !configuredShadowsocksEnabled() {
-		return false
-	}
-	for _, client := range clients {
-		if client.HasShadowsocks() && !client.ShadowsocksRevoked {
-			return true
-		}
-	}
-	return false
+	return configuredShadowsocksEnabled()
 }
 
 func stringSliceMatchesSet(values []string, expected map[string]struct{}) bool {

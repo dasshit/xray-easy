@@ -13,6 +13,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"xray-easy/internal/domain"
 )
 
 const (
@@ -34,6 +36,10 @@ type configuration struct {
 	version            string
 	public             int
 	vmess              int
+	shadowsocks        int
+	shadowsocksEnabled bool
+	shadowsocksMethod  string
+	shadowsocksNetwork string
 	ui                 int
 	hysteriaEnabled    bool
 	hysteriaMode       string
@@ -98,6 +104,10 @@ func composeEnvironment() []string {
 		"XRAY_VERSION":                   true,
 		"XRAY_PUBLIC_PORT":               true,
 		"XRAY_VMESS_PORT":                true,
+		"XRAY_SHADOWSOCKS_PORT":          true,
+		"XRAY_SHADOWSOCKS_ENABLED":       true,
+		"XRAY_SHADOWSOCKS_METHOD":        true,
+		"XRAY_SHADOWSOCKS_NETWORK":       true,
 		"XRAY_EASY_UI_PORT":              true,
 		"XRAY_EASY_MASTER_KEY":           true,
 		"XRAY_HYSTERIA2_ENABLED":         true,
@@ -197,7 +207,14 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		}
 		ui.message("Existing .env and master key found; they will be reused.")
 	} else {
-		cfg = configuration{project: defaultProject, version: defaultVersion, hysteriaMode: "custom", awgPublicPort: defaultAWGPort}
+		cfg = configuration{
+			project:            defaultProject,
+			version:            defaultVersion,
+			hysteriaMode:       "custom",
+			awgPublicPort:      defaultAWGPort,
+			shadowsocksMethod:  "chacha20-poly1305",
+			shadowsocksNetwork: "tcp,udp",
+		}
 		cfg.public, cfg.ui, err = ui.ports(ctx, 443, 8080)
 		if err != nil {
 			if errors.Is(err, errCancelled) {
@@ -206,6 +223,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 			return installResult{}, err
 		}
 		cfg.vmess = defaultVMessPort(cfg.public, cfg.ui)
+		cfg.shadowsocks = defaultShadowsocksPort(cfg.public, cfg.vmess, cfg.ui)
 	}
 	previous := cfg
 	cfg, err = ui.hysteria(ctx, root, cfg)
@@ -216,6 +234,13 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 		return installResult{}, err
 	}
 	cfg, err = ui.amneziaWG(ctx, cfg)
+	if err != nil {
+		if errors.Is(err, errCancelled) {
+			return installResult{}, nil
+		}
+		return installResult{}, err
+	}
+	cfg, err = ui.shadowsocks(ctx, cfg)
 	if err != nil {
 		if errors.Is(err, errCancelled) {
 			return installResult{}, nil
@@ -243,6 +268,9 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	if err := validateAWGConfiguration(cfg); err != nil {
 		return installResult{}, err
 	}
+	if err := validateShadowsocksConfiguration(cfg); err != nil {
+		return installResult{}, err
+	}
 	certificateChanged := false
 	if cfg.hysteriaEnabled && cfg.hysteriaMode == "custom" {
 		certificateChanged, err = importHysteriaCertificate(root, cfg)
@@ -260,6 +288,14 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 			return installResult{}, err
 		}
 		ui.message("Updated Hysteria 2 settings in .env; existing keys were preserved")
+	}
+	if existing {
+		if err := updateShadowsocksConfiguration(root, cfg); err != nil {
+			return installResult{}, fmt.Errorf("save Shadowsocks settings: %w", err)
+		}
+		if shadowsocksConfigurationChanged(previous, cfg) {
+			ui.message("Updated Shadowsocks settings in .env; existing keys were preserved")
+		}
 	}
 	if existing && previous.awgEnabled && !cfg.awgEnabled {
 		if err := runner.run(ctx, root, false, "compose", "--profile", "awg", "-f", "compose.yaml", "stop", "amneziawg-service"); err != nil {
@@ -329,6 +365,9 @@ func collectStartupDiagnostics(ctx context.Context, root string, runner commandR
 
 func printNextSteps(output io.Writer, cfg configuration) {
 	fmt.Fprintf(output, "Xray-easy is running.\n\nOn your computer:\n  ssh -N -L %d:127.0.0.1:%d user@your-vds\n\nOpen http://127.0.0.1:%d to create the admin and first device.\nAllow inbound TCP %d (VLESS) and TCP %d (VMess, if used) through the VDS firewall.\n", cfg.ui, cfg.ui, cfg.ui, cfg.public, cfg.vmess)
+	if cfg.shadowsocksEnabled {
+		fmt.Fprintf(output, "Allow inbound TCP and UDP %d through the VDS firewall for Shadowsocks.\n", cfg.shadowsocks)
+	}
 	if cfg.hysteriaEnabled {
 		fmt.Fprintf(output, "Allow inbound UDP %d through the VDS firewall for Hysteria 2.\n", cfg.public)
 	}
@@ -404,6 +443,11 @@ func createConfiguration(root string, cfg configuration) error {
 	if cfg.vmess == 0 {
 		cfg.vmess = defaultVMessPort(cfg.public, cfg.ui)
 	}
+	if cfg.shadowsocks == 0 {
+		cfg.shadowsocks = defaultShadowsocksPort(cfg.public, cfg.vmess, cfg.ui)
+	}
+	cfg.shadowsocksMethod = valueOr(cfg.shadowsocksMethod, "chacha20-poly1305")
+	cfg.shadowsocksNetwork = valueOr(cfg.shadowsocksNetwork, "tcp,udp")
 	if cfg.vmess == cfg.public || cfg.vmess == cfg.ui {
 		return errors.New("XRAY_VMESS_PORT must differ from the Xray and Web UI ports")
 	}
@@ -416,7 +460,7 @@ func createConfiguration(root string, cfg configuration) error {
 	}
 	imageNamespace := valueOr(os.Getenv("XRAY_EASY_IMAGE_NAMESPACE"), "dasshit")
 	imageTag := valueOr(os.Getenv("XRAY_EASY_IMAGE_TAG"), "latest")
-	content := fmt.Sprintf("# Generated by ./install.sh. Keep this file and its master key private.\nXRAY_EASY_PROJECT_NAME=%s\nXRAY_EASY_IMAGE_NAMESPACE=%s\nXRAY_EASY_IMAGE_TAG=%s\nXRAY_VERSION=%s\nXRAY_PUBLIC_PORT=%d\nXRAY_VMESS_PORT=%d\nXRAY_EASY_UI_PORT=%d\nXRAY_EASY_MASTER_KEY=%s\n%s", cfg.project, imageNamespace, imageTag, cfg.version, cfg.public, cfg.vmess, cfg.ui, masterKey, hysteriaEnvironment(cfg))
+	content := fmt.Sprintf("# Generated by ./install.sh. Keep this file and its master key private.\nXRAY_EASY_PROJECT_NAME=%s\nXRAY_EASY_IMAGE_NAMESPACE=%s\nXRAY_EASY_IMAGE_TAG=%s\nXRAY_VERSION=%s\nXRAY_PUBLIC_PORT=%d\nXRAY_VMESS_PORT=%d\nXRAY_SHADOWSOCKS_PORT=%d\nXRAY_SHADOWSOCKS_ENABLED=%t\nXRAY_SHADOWSOCKS_METHOD=%s\nXRAY_SHADOWSOCKS_NETWORK=%s\nXRAY_EASY_UI_PORT=%d\nXRAY_EASY_MASTER_KEY=%s\n%s", cfg.project, imageNamespace, imageTag, cfg.version, cfg.public, cfg.vmess, cfg.shadowsocks, cfg.shadowsocksEnabled, cfg.shadowsocksMethod, cfg.shadowsocksNetwork, cfg.ui, masterKey, hysteriaEnvironment(cfg))
 	if err := writeNewPrivateFile(filepath.Join(root, ".env"), content); err != nil {
 		return fmt.Errorf("save .env: %w", err)
 	}
@@ -491,11 +535,23 @@ func loadConfiguration(root string) (configuration, error) {
 	if vmessPort == publicPort || vmessPort == uiPort {
 		return configuration{}, errors.New("XRAY_VMESS_PORT must differ from the Xray and Web UI ports")
 	}
+	ssValue := valueOr(values["XRAY_SHADOWSOCKS_PORT"], strconv.Itoa(defaultShadowsocksPort(publicPort, vmessPort, uiPort)))
+	ssPort, err := parsePort(ssValue)
+	if err != nil {
+		return configuration{}, fmt.Errorf("XRAY_SHADOWSOCKS_PORT: %w", err)
+	}
+	if ssPort == publicPort || ssPort == vmessPort || ssPort == uiPort {
+		return configuration{}, errors.New("XRAY_SHADOWSOCKS_PORT must differ from Xray, VMess, and Web UI ports")
+	}
 	cfg := configuration{
 		project:            valueOr(values["XRAY_EASY_PROJECT_NAME"], legacyProject),
 		version:            valueOr(values["XRAY_VERSION"], defaultVersion),
 		public:             publicPort,
 		vmess:              vmessPort,
+		shadowsocks:        ssPort,
+		shadowsocksEnabled: strings.EqualFold(values["XRAY_SHADOWSOCKS_ENABLED"], "true"),
+		shadowsocksMethod:  valueOr(values["XRAY_SHADOWSOCKS_METHOD"], "chacha20-poly1305"),
+		shadowsocksNetwork: valueOr(values["XRAY_SHADOWSOCKS_NETWORK"], "tcp,udp"),
 		ui:                 uiPort,
 		hysteriaEnabled:    strings.EqualFold(values["XRAY_HYSTERIA2_ENABLED"], "true"),
 		hysteriaMode:       valueOr(values["XRAY_HYSTERIA2_TLS_MODE"], "legacy"),
@@ -517,7 +573,41 @@ func loadConfiguration(root string) (configuration, error) {
 	if err := validateAWGConfiguration(cfg); err != nil {
 		return configuration{}, err
 	}
+	if err := validateShadowsocksConfiguration(cfg); err != nil {
+		return configuration{}, err
+	}
 	return cfg, nil
+}
+
+func defaultShadowsocksPort(publicPort, vmessPort, uiPort int) int {
+	for port := 8388; port <= 65535; port++ {
+		if port != publicPort && port != vmessPort && port != uiPort {
+			return port
+		}
+	}
+	return 0
+}
+
+func validateShadowsocksConfiguration(cfg configuration) error {
+	port := cfg.shadowsocks
+	if port == 0 {
+		port = defaultShadowsocksPort(cfg.public, cfg.vmess, cfg.ui)
+	}
+	if port < 1 || port > 65535 {
+		return errors.New("XRAY_SHADOWSOCKS_PORT must be between 1 and 65535")
+	}
+	if port == cfg.public || port == cfg.vmess || port == cfg.ui {
+		return errors.New("XRAY_SHADOWSOCKS_PORT must differ from Xray, VMess, and Web UI ports")
+	}
+	method := valueOr(cfg.shadowsocksMethod, "chacha20-poly1305")
+	if !domain.SupportsShadowsocksMethod(method) {
+		return errors.New("unsupported XRAY_SHADOWSOCKS_METHOD")
+	}
+	network := valueOr(cfg.shadowsocksNetwork, "tcp,udp")
+	if !domain.SupportsShadowsocksNetwork(network) {
+		return errors.New("unsupported XRAY_SHADOWSOCKS_NETWORK")
+	}
+	return nil
 }
 
 func composeProfileEnabled(value, profile string) bool {
