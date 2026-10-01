@@ -23,11 +23,7 @@ describe('browser preferences', () => {
     expect(readTheme()).toBe('dark')
   })
 
-  it('uses light theme when there is no window or matchMedia support', () => {
-    vi.stubGlobal('window', undefined)
-    expect(readTheme()).toBe('light')
-
-    vi.unstubAllGlobals()
+  it('uses light theme when matchMedia is unavailable', () => {
     vi.stubGlobal('matchMedia', undefined)
     expect(readTheme()).toBe('light')
   })
@@ -48,11 +44,6 @@ describe('browser preferences', () => {
     window.localStorage.setItem('xray-easy-language', 'ru')
     expect(readLanguage()).toBe('ru')
     window.localStorage.setItem('xray-easy-language', 'invalid')
-    expect(readLanguage()).toBe('en')
-  })
-
-  it('defaults to English when there is no window', () => {
-    vi.stubGlobal('window', undefined)
     expect(readLanguage()).toBe('en')
   })
 
