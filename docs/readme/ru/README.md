@@ -105,49 +105,60 @@ SSH tunnel, while VPN client devices use the public Xray or AmneziaWG ports.
 
 ```mermaid
 flowchart LR
+    classDef admin fill:#f3e8ff,stroke:#7c3aed,color:#3b0764,stroke-width:2px;
+    classDef client fill:#e8f0ff,stroke:#4c6ef5,color:#172033,stroke-width:1px;
+    classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e,stroke-width:2px;
+    classDef runtime fill:#e7f8ef,stroke:#2b8a3e,color:#183c23,stroke-width:2px;
+    classDef bootstrap fill:#f5f5f5,stroke:#777,color:#222,stroke-dasharray:4 3;
+    classDef network fill:#fff3bf,stroke:#e67700,color:#4d2d00,stroke-width:2px;
+
     subgraph clients [Client devices]
-        admin[Admin browser]
-        xrayClients[Xray clients]
-        awgClients[AmneziaWG clients]
+        direction TB
+        admin([Admin browser]):::admin
+        xrayClients([Xray clients]):::client
+        awgClients([AmneziaWG clients]):::client
     end
 
     subgraph control [Control plane]
-        ui[control-plane]
-        controller[controller]
+        direction TB
+        ui[[control-plane]]:::control
+        controller[[controller]]:::control
     end
 
     subgraph runtimes [VPN runtimes]
-        xray[xray-core-service]
-        awg[amneziawg-service]
+        direction TB
+        xray{{xray-core-service}}:::runtime
+        awg{{amneziawg-service}}:::runtime
     end
 
     subgraph bootstrap [Initialization jobs]
-        dataInit[data-init]
-        runtimeAuth[runtime-auth-init]
-        runtimeState[runtime-state-init]
-        controllerAuth[controller-auth-init]
-        awgAuth[awg-auth-init]
-        tlsInit[hysteria-tls-init]
-        awgData[awg-data-init]
+        direction TB
+        dataInit[/data-init/]:::bootstrap
+        runtimeAuth[/runtime-auth-init/]:::bootstrap
+        runtimeState[/runtime-state-init/]:::bootstrap
+        controllerAuth[/controller-auth-init/]:::bootstrap
+        awgAuth[/awg-auth-init/]:::bootstrap
+        tlsInit[/hysteria-tls-init/]:::bootstrap
+        awgData[/awg-data-init/]:::bootstrap
     end
 
-    public((Public VPN ports))
-    internet((Internet egress))
+    public((Public VPN ports)):::network
+    internet((Internet egress)):::network
 
     admin -->|SSH tunnel| ui
     ui <-->|Authenticated control gRPC| controller
     controller <-->|Xray runtime gRPC| xray
     controller <-->|AWG control gRPC| awg
 
-    dataInit --> xray
-    runtimeAuth --> xray
-    runtimeState --> xray
-    tlsInit --> xray
-    controllerAuth --> controller
-    runtimeAuth --> controller
-    awgAuth --> controller
-    awgData --> awg
-    awgAuth --> awg
+    dataInit -.-> xray
+    runtimeAuth -.-> xray
+    runtimeState -.-> xray
+    tlsInit -.-> xray
+    controllerAuth -.-> controller
+    runtimeAuth -.-> controller
+    awgAuth -.-> controller
+    awgData -.-> awg
+    awgAuth -.-> awg
 
     xrayClients -->|TCP / UDP client traffic| public
     awgClients -->|UDP client traffic| public
@@ -155,20 +166,12 @@ flowchart LR
     public -->|AmneziaWG public port| awg
     xray -->|Outbound proxy traffic| internet
     awg -->|Outbound VPN traffic| internet
-
-    classDef admin fill:#f3e8ff,stroke:#7c3aed,color:#3b0764,stroke-width:1px;
-    classDef client fill:#e8f0ff,stroke:#4c6ef5,color:#172033,stroke-width:1px;
-    classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e,stroke-width:1px;
-    classDef runtime fill:#e7f8ef,stroke:#2b8a3e,color:#183c23,stroke-width:1px;
-    classDef bootstrap fill:#f5f5f5,stroke:#777,color:#222,stroke-dasharray:4 3;
-    classDef network fill:#fff3bf,stroke:#e67700,color:#4d2d00,stroke-width:1px;
-    class admin admin;
-    class xrayClients,awgClients client;
-    class ui,controller control;
-    class xray,awg runtime;
-    class dataInit,runtimeAuth,runtimeState,controllerAuth,awgAuth,tlsInit,awgData bootstrap;
-    class public,internet network;
 ```
+
+Rounded nodes are client devices, double-bordered nodes are control services,
+hexagons are VPN runtimes, slanted nodes are one-shot initialization jobs, and
+yellow circles are public or external network boundaries. Dashed arrows show
+bootstrap dependencies; solid arrows show runtime traffic or control calls.
 
 | Service | Responsibility |
 | --- | --- |
