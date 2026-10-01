@@ -209,6 +209,64 @@ func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) 
 	}
 }
 
+func TestEmbeddedEngineManagesClassicShadowsocksUsersAndTelemetry(t *testing.T) {
+	port := freeEngineTCPPort(t)
+	configuration := []byte(fmt.Sprintf(`{"log":{"loglevel":"none"},"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","tag":"shadowsocks","settings":{"network":"tcp,udp","clients":[]}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`, port))
+	engine, err := LoadEngine(configuration)
+	if err != nil {
+		t.Fatalf("load Shadowsocks engine: %v", err)
+	}
+	defer func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("close Shadowsocks engine: %v", err)
+		}
+	}()
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start Shadowsocks engine: %v", err)
+	}
+
+	ctx := context.Background()
+	protocol := xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS
+	added, err := engine.AddUserWithMethod(ctx, protocol, "shadowsocks", "device-ss", "secret-password", "", "chacha20-poly1305")
+	if err != nil || added {
+		t.Fatalf("add Shadowsocks user already=%v error=%v", added, err)
+	}
+	users, err := engine.ListUsers(ctx, "shadowsocks")
+	if err != nil || len(users) != 1 || users[0] != "device-ss" {
+		t.Fatalf("Shadowsocks users=%v error=%v", users, err)
+	}
+	statsManager, ok := engine.instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	if !ok || statsManager == nil {
+		t.Fatal("Shadowsocks engine has no stats manager")
+	}
+	uplink, err := statsManager.GetOrRegisterCounter("user>>>device-ss>>>traffic>>>uplink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	uplink.Set(11)
+	downlink, err := statsManager.GetOrRegisterCounter("user>>>device-ss>>>traffic>>>downlink")
+	if err != nil {
+		t.Fatal(err)
+	}
+	downlink.Set(22)
+	online, err := statsManager.GetOrRegisterOnlineMap("user>>>device-ss>>>online")
+	if err != nil {
+		t.Fatal(err)
+	}
+	online.AddIP("198.51.100.88")
+	telemetry, err := engine.GetTelemetry(ctx, map[xrayruntimev1.Protocol]string{protocol: "shadowsocks"})
+	if err != nil || len(telemetry) != 1 {
+		t.Fatalf("Shadowsocks telemetry=%+v error=%v", telemetry, err)
+	}
+	if telemetry[0].Email != "device-ss" || telemetry[0].UploadBytes != 11 || telemetry[0].DownloadBytes != 22 || !telemetry[0].Online || len(telemetry[0].SourceIPs) != 1 || telemetry[0].SourceIPs[0].Address != "198.51.100.88" {
+		t.Fatalf("Shadowsocks telemetry=%+v", telemetry[0])
+	}
+	removed, err := engine.RemoveUser(ctx, "shadowsocks", "device-ss")
+	if err != nil || removed {
+		t.Fatalf("remove Shadowsocks user alreadyAbsent=%v error=%v", removed, err)
+	}
+}
+
 func TestAccountFactoryRejectsUnsupportedProtocolAndInvalidUUID(t *testing.T) {
 	if _, err := accountFor(xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, "credential", ""); err == nil {
 		t.Fatal("unspecified protocol was accepted")
