@@ -74,6 +74,37 @@ func TestVMessProfileStoresAndTransitionsIndependentAccessState(t *testing.T) {
 	}
 }
 
+func TestShadowsocksProfileStoresEncryptedCredentialAndTransitionsState(t *testing.T) {
+	db, ctx := openTestStore(t, "shadowsocks-client.db")
+	client, err := domain.NewShadowsocksClient("ss-device", "phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Email = "device-ss@xray-easy"
+	client.ShadowsocksPasswordEnc = "encrypted-envelope"
+	if err := db.CreateShadowsocksClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetClient(ctx, client.ID)
+	if err != nil || !got.HasShadowsocks() || !got.ShadowsocksCanConnect() || got.ShadowsocksPasswordEnc != "encrypted-envelope" || got.UUID != "" {
+		t.Fatalf("stored Shadowsocks profile = %+v, %v", got, err)
+	}
+	if err := db.SetClientProtocolState(ctx, client.ID, domain.ProtocolShadowsocks, domain.ClientState{Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.GetClient(ctx, client.ID)
+	if err != nil || got.ShadowsocksCanConnect() || got.ShadowsocksRevoked {
+		t.Fatalf("disabled Shadowsocks state = %+v, %v", got, err)
+	}
+	if err := db.SetClientProtocolState(ctx, client.ID, domain.ProtocolShadowsocks, domain.ClientState{Revoked: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.GetClient(ctx, client.ID)
+	if err != nil || !got.ShadowsocksRevoked || got.Enabled || !got.Revoked {
+		t.Fatalf("revoked Shadowsocks state = %+v, %v", got, err)
+	}
+}
+
 func TestProtocolStorageDefaultsAndCredentialNullability(t *testing.T) {
 	if got := nullableCredential(""); got != nil {
 		t.Fatalf("empty credential storage = %#v, want NULL", got)
@@ -99,7 +130,7 @@ func TestProtocolStorageDefaultsAndCredentialNullability(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked := clientProtocolStorage(test.client, test.uuid)
+			protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, _, _, _ := clientProtocolStorage(test.client, test.uuid)
 			if protocol != test.protocol || auth != test.auth || [6]int{vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked} != test.states {
 				t.Fatalf("stored protocol credentials = %q/%q [%d %d %d %d %d %d]", protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked)
 			}

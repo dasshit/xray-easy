@@ -24,11 +24,12 @@ type ClientAction string
 type ClientProtocol string
 
 const (
-	ProtocolLegacyDual ClientProtocol = "legacy_dual"
-	ProtocolVLESS      ClientProtocol = "vless"
-	ProtocolHysteria2  ClientProtocol = "hysteria2"
-	ProtocolVMess      ClientProtocol = "vmess"
-	ProtocolAmneziaWG  ClientProtocol = "amneziawg"
+	ProtocolLegacyDual  ClientProtocol = "legacy_dual"
+	ProtocolVLESS       ClientProtocol = "vless"
+	ProtocolHysteria2   ClientProtocol = "hysteria2"
+	ProtocolVMess       ClientProtocol = "vmess"
+	ProtocolShadowsocks ClientProtocol = "shadowsocks"
+	ProtocolAmneziaWG   ClientProtocol = "amneziawg"
 )
 
 const (
@@ -40,24 +41,27 @@ const (
 // Client is an Xray device profile and its credentials. It contains secrets
 // used by the control plane, so transport responses must map it explicitly.
 type Client struct {
-	ID                string
-	Name              string
-	Protocol          ClientProtocol
-	UUID              string
-	Email             string
-	ShortID           string
-	HysteriaAuth      string
-	ClientFingerprint string
-	Enabled           bool
-	Revoked           bool
-	VLESSEnabled      bool
-	VLESSRevoked      bool
-	HysteriaEnabled   bool
-	HysteriaRevoked   bool
-	VMessEnabled      bool
-	VMessRevoked      bool
-	CreatedAt         time.Time
-	UpdatedAt         time.Time
+	ID                     string
+	Name                   string
+	Protocol               ClientProtocol
+	UUID                   string
+	Email                  string
+	ShortID                string
+	HysteriaAuth           string
+	ClientFingerprint      string
+	Enabled                bool
+	Revoked                bool
+	VLESSEnabled           bool
+	VLESSRevoked           bool
+	HysteriaEnabled        bool
+	HysteriaRevoked        bool
+	VMessEnabled           bool
+	VMessRevoked           bool
+	ShadowsocksPasswordEnc string
+	ShadowsocksEnabled     bool
+	ShadowsocksRevoked     bool
+	CreatedAt              time.Time
+	UpdatedAt              time.Time
 }
 
 // HasVLESS reports whether this profile contains VLESS credentials.
@@ -73,6 +77,9 @@ func (c Client) HasHysteria2() bool {
 // HasVMess reports whether this profile has VMess credentials.
 func (c Client) HasVMess() bool { return c.Protocol == ProtocolVMess }
 
+// HasShadowsocks reports whether this profile contains Shadowsocks credentials.
+func (c Client) HasShadowsocks() bool { return c.Protocol == ProtocolShadowsocks }
+
 // VLESSCanConnect reports whether the VLESS access for this profile is active.
 func (c Client) VLESSCanConnect() bool {
 	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked
@@ -85,6 +92,11 @@ func (c Client) Hysteria2CanConnect() bool {
 
 // VMessCanConnect reports whether the VMess access for this profile is active.
 func (c Client) VMessCanConnect() bool { return c.HasVMess() && c.Enabled && !c.Revoked }
+
+// ShadowsocksCanConnect reports whether the Shadowsocks access is active.
+func (c Client) ShadowsocksCanConnect() bool {
+	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked
+}
 
 // HysteriaCredential returns the stored password or the legacy UUID fallback.
 func (c Client) HysteriaCredential() string {
@@ -117,9 +129,27 @@ func (c Client) AccessState(protocol ClientProtocol) (ClientState, error) {
 			return ClientState{}, errors.New("profile has no VMess access")
 		}
 		return ClientState{Enabled: c.Enabled, Revoked: c.Revoked}, nil
+	case ProtocolShadowsocks:
+		if !c.HasShadowsocks() {
+			return ClientState{}, errors.New("profile has no Shadowsocks access")
+		}
+		return ClientState{Enabled: c.ShadowsocksEnabled, Revoked: c.ShadowsocksRevoked}, nil
 	default:
 		return ClientState{}, errors.New("unsupported protocol access")
 	}
+}
+
+// NewShadowsocksClient creates a profile for the classic Shadowsocks inbound.
+// The encrypted password is generated and persisted by the application layer.
+func NewShadowsocksClient(id, name string) (Client, error) {
+	name = strings.TrimSpace(name)
+	if id == "" {
+		return Client{}, errors.New("client id is required")
+	}
+	if !deviceNamePattern.MatchString(name) {
+		return Client{}, errors.New("name must contain ASCII letters, digits or '-' and be 1-64 characters")
+	}
+	return Client{ID: id, Name: name, Protocol: ProtocolShadowsocks, Enabled: true, ShadowsocksEnabled: true}, nil
 }
 
 func NewClient(id, name, fingerprint string) (Client, error) {
@@ -164,8 +194,10 @@ func NewProtocolClient(id, name string, protocol ClientProtocol, fingerprint, hy
 		return Client{ID: id, Name: name, Protocol: protocol, HysteriaAuth: hysteriaAuth, Enabled: true, HysteriaEnabled: true}, nil
 	case ProtocolVMess:
 		return Client{ID: id, Name: name, Protocol: protocol, Enabled: true, VMessEnabled: true}, nil
+	case ProtocolShadowsocks:
+		return Client{ID: id, Name: name, Protocol: protocol, Enabled: true, ShadowsocksEnabled: true}, nil
 	default:
-		return Client{}, errors.New("new profiles must use VLESS, VMess, or Hysteria 2")
+		return Client{}, errors.New("new profiles must use VLESS, VMess, Hysteria 2, or Shadowsocks")
 	}
 }
 

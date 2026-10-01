@@ -112,6 +112,10 @@ func TestNewProtocolClientCreatesOneInboundAccess(t *testing.T) {
 	if err != nil || vmess.Protocol != ProtocolVMess || !vmess.HasVMess() || !vmess.VMessCanConnect() || vmess.HasVLESS() || vmess.HasHysteria2() {
 		t.Fatalf("VMess-only profile = %+v, %v", vmess, err)
 	}
+	shadowsocks, err := NewShadowsocksClient("ss-id", "phone")
+	if err != nil || shadowsocks.Protocol != ProtocolShadowsocks || !shadowsocks.HasShadowsocks() || !shadowsocks.ShadowsocksCanConnect() || shadowsocks.HasVLESS() {
+		t.Fatalf("Shadowsocks profile = %+v, %v", shadowsocks, err)
+	}
 	if _, err := NewProtocolClient("dual-id", "phone", ProtocolLegacyDual, "", "secret"); err == nil {
 		t.Fatal("new dual-protocol profile was accepted")
 	}
