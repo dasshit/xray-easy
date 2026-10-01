@@ -1,3 +1,5 @@
+// @vitest-environment node
+
 import { describe, expect, it, vi } from 'vitest'
 import { connectXrayEvents, type EventSourceFactory } from './events'
 
