@@ -11,3 +11,8 @@ prototype/secrets/*
 node_modules
 dist
 *.log
+**/coverage/
+.github/
+docs/
+README.md
+compose.yaml

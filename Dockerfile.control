@@ -1,19 +1,28 @@
+# syntax=docker/dockerfile:1
+
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 ARG TARGETOS
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
-COPY awg-contract ./awg-contract
-COPY third_party ./third_party
-RUN for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
+COPY awg-contract/go.mod ./awg-contract/go.mod
+COPY third_party/go-qrcode/go.mod ./third_party/go-qrcode/go.mod
+RUN --mount=type=cache,target=/go/pkg/mod \
+    for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
+COPY awg-contract ./awg-contract
+COPY third_party ./third_party
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
 
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS mkcert-build
 ARG TARGETOS
 ARG TARGETARCH
-RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go install filippo.io/mkcert@v1.4.4 \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go install filippo.io/mkcert@v1.4.4 \
     && mkdir -p /out \
     && if [ -x "/go/bin/${TARGETOS}_${TARGETARCH}/mkcert" ]; then \
         cp "/go/bin/${TARGETOS}_${TARGETARCH}/mkcert" /out/mkcert; \

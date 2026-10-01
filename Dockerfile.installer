@@ -1,12 +1,20 @@
+# syntax=docker/dockerfile:1
+
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY awg-contract/go.mod ./awg-contract/go.mod
+COPY third_party/go-qrcode/go.mod ./third_party/go-qrcode/go.mod
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 COPY awg-contract ./awg-contract
 COPY third_party ./third_party
 COPY internal ./internal
 COPY cmd/xray-easy-install ./cmd/xray-easy-install
-RUN mkdir -p \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    mkdir -p \
       /out/linux/${TARGETARCH} \
       /out/darwin/${TARGETARCH} \
     && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \

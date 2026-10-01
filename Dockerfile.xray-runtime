@@ -10,19 +10,27 @@ ARG XRAY_VERSION=26.7.28
 
 WORKDIR /src
 COPY go.mod go.sum ./
-COPY internal/diagnostics ./internal/diagnostics
-COPY internal/interaction ./internal/interaction
-COPY internal/runtimeauth ./internal/runtimeauth
-COPY internal/xrayruntime/api/v1 ./internal/xrayruntime/api/v1
-COPY xray-runtime ./xray-runtime
+COPY xray-runtime/go.mod xray-runtime/go.sum ./xray-runtime/
+COPY awg-contract/go.mod ./awg-contract/go.mod
+COPY third_party/go-qrcode/go.mod ./third_party/go-qrcode/go.mod
 
 WORKDIR /src/xray-runtime
 RUN if [ "$XRAY_VERSION" != "26.7.28" ]; then \
       echo "embedded Xray runtime currently pins Xray 26.7.28; got XRAY_VERSION=$XRAY_VERSION" >&2; \
       exit 1; \
     fi
-RUN go mod download
-RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -mod=readonly \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+WORKDIR /src
+COPY internal/diagnostics ./internal/diagnostics
+COPY internal/interaction ./internal/interaction
+COPY internal/runtimeauth ./internal/runtimeauth
+COPY internal/xrayruntime/api/v1 ./internal/xrayruntime/api/v1
+COPY xray-runtime ./xray-runtime
+WORKDIR /src/xray-runtime
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -mod=readonly \
     -trimpath -ldflags='-s -w' -o /out/xray-runtime ./cmd/xray-runtime
 
 FROM ${RUNTIME_IMAGE} AS runtime
