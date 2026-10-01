@@ -36,11 +36,7 @@ jobs:
         run: npm run typecheck
         working-directory: web
 
-      - name: Run web unit tests
-        run: npm test
-        working-directory: web
-
-      - name: Enforce web coverage thresholds
+      - name: Run web unit tests and enforce coverage thresholds
         run: npm run test:coverage
         working-directory: web
 
