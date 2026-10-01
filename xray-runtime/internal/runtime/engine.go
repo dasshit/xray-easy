@@ -421,8 +421,8 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	usersByEmail := make(map[string]struct{})
-	for _, tag := range inboundTags {
+	usersByEmail := make(map[string]xrayruntimev1.Protocol)
+	for protocol, tag := range inboundTags {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -432,7 +432,7 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 		}
 		for _, user := range manager.GetUsers(ctx) {
 			if user != nil && strings.TrimSpace(user.Email) != "" {
-				usersByEmail[user.Email] = struct{}{}
+				usersByEmail[user.Email] = protocol
 			}
 		}
 	}
@@ -446,7 +446,7 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		user := RuntimeUserTelemetry{Email: email, SourceIPs: make([]RuntimeIPObservation, 0)}
+		user := RuntimeUserTelemetry{Email: email, Protocol: usersByEmail[email], SourceIPs: make([]RuntimeIPObservation, 0)}
 		if counter := statsManager.GetCounter("user>>>" + email + ">>>traffic>>>uplink"); counter != nil {
 			user.UploadBytes = clampNonNegative(counter.Value())
 		}

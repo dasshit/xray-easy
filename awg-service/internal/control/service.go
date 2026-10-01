@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	awgapi "xray-easy/awg-contract/api/v1"
 
@@ -21,16 +22,18 @@ import (
 // Service maps the prototype's gRPC methods onto the AWG lifecycle manager.
 type Service struct {
 	awgapi.UnimplementedControlServer
-	manager *Manager
-	options Options
-	mu      sync.Mutex
+	manager           *Manager
+	options           Options
+	mu                sync.Mutex
+	startedAt         time.Time
+	telemetrySequence uint64
 }
 
 var servicePeerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 
 // NewService creates the RPC adapter for a configured lifecycle manager.
 func NewService(manager *Manager, options Options) *Service {
-	service := &Service{manager: manager, options: options}
+	service := &Service{manager: manager, options: options, startedAt: time.Now().UTC()}
 	service.removeOrphanedOperationKeys()
 	return service
 }
@@ -106,6 +109,84 @@ func (s *Service) GetPeerStats(context.Context, *emptypb.Empty) (*awgapi.GetPeer
 		})
 	}
 	return &awgapi.GetPeerStatsResponse{Peers: items}, nil
+}
+
+// WatchPeerStats streams coalesced peer counters. Online state is based on
+// observed counter growth, with a recent handshake used only as an initial
+// activity hint until the first sample delta is available.
+func (s *Service) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream awgapi.Control_WatchPeerStatsServer) error {
+	if request == nil {
+		return status.Error(codes.InvalidArgument, "watch request is required")
+	}
+	interval := time.Duration(request.GetSampleIntervalMs()) * time.Millisecond
+	if interval < 500*time.Millisecond {
+		interval = time.Second
+	}
+	if interval > 5*time.Second {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	previous := make(map[string][2]int64)
+	lastActivity := make(map[string]time.Time)
+	generation := s.startedAt.Format(time.RFC3339Nano)
+	send := func() error {
+		peers, err := s.manager.PeerTelemetry()
+		if err != nil {
+			return mapError(err)
+		}
+		now := time.Now().UTC()
+		seenPeers := make(map[string]struct{}, len(peers))
+		update := &awgapi.PeerStatsUpdate{SampledAt: timestamppb.New(now), SourceGeneration: generation, FullSnapshot: true}
+		for _, peer := range peers {
+			current := [2]int64{peer.UploadBytes, peer.DownloadBytes}
+			prior, sampled := previous[peer.Name]
+			if sampled && (current[0] > prior[0] || current[1] > prior[1]) {
+				lastActivity[peer.Name] = now
+			} else if !sampled && !peer.LastHandshake.IsZero() {
+				lastActivity[peer.Name] = peer.LastHandshake.UTC()
+			}
+			previous[peer.Name] = current
+			seenPeers[peer.Name] = struct{}{}
+			activity := lastActivity[peer.Name]
+			item := &awgapi.PeerStats{Name: peer.Name, SourceIp: peer.SourceIP, UploadBytes: peer.UploadBytes, DownloadBytes: peer.DownloadBytes}
+			if !peer.LastHandshake.IsZero() {
+				item.LastHandshake = timestamppb.New(peer.LastHandshake.UTC())
+			}
+			if !activity.IsZero() {
+				item.LastActivity = timestamppb.New(activity)
+				item.Online = now.Sub(activity) <= 15*time.Second
+			}
+			if !item.Online {
+				item.SourceIp = ""
+			}
+			update.Peers = append(update.Peers, item)
+		}
+		for name := range previous {
+			if _, exists := seenPeers[name]; !exists {
+				delete(previous, name)
+				delete(lastActivity, name)
+			}
+		}
+		s.mu.Lock()
+		s.telemetrySequence++
+		update.Sequence = s.telemetrySequence
+		s.mu.Unlock()
+		return stream.Send(update)
+	}
+	if err := send(); err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-ticker.C:
+			if err := send(); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // CreatePeer creates a keypair, registers its public key, and persists the

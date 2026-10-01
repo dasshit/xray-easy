@@ -2,9 +2,11 @@ package interaction
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
@@ -21,7 +23,9 @@ func LogRPC(logger *slog.Logger, service, method, requestID, protocol string, st
 		}
 	}
 	code, level, result := "OK", slog.LevelInfo, "success"
-	if err != nil {
+	if errors.Is(err, context.Canceled) {
+		code, result = codes.Canceled.String(), "canceled"
+	} else if err != nil {
 		code, level, result = status.Code(err).String(), slog.LevelError, "failure"
 	}
 	attrs := []slog.Attr{

@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -376,7 +377,7 @@ func (c *EmbeddedXrayClient) Poll(ctx context.Context) ([]xrayapi.UserStats, err
 		if err != nil {
 			return nil, err
 		}
-		value := xrayapi.UserStats{Email: user.GetEmail(), UploadBytes: user.GetUploadBytes(), DownloadBytes: user.GetDownloadBytes(), LastSeen: lastSeen}
+		value := xrayapi.UserStats{Email: user.GetEmail(), Protocol: xrayProtocolName(user.GetProtocol()), UploadBytes: user.GetUploadBytes(), DownloadBytes: user.GetDownloadBytes(), LastSeen: lastSeen}
 		for ipIndex, observation := range user.GetSourceIps() {
 			if observation == nil {
 				return nil, fmt.Errorf("decode embedded Xray telemetry: source IP %d for user %d is invalid", ipIndex, index)
@@ -394,6 +395,63 @@ func (c *EmbeddedXrayClient) Poll(ctx context.Context) ([]xrayapi.UserStats, err
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// WatchTelemetry opens the authenticated long-lived telemetry stream from the
+// embedded Xray runtime. The caller owns cancellation and Recv lifecycle.
+func (c *EmbeddedXrayClient) WatchTelemetry(ctx context.Context, interval time.Duration) (xrayruntimev1.Runtime_WatchTelemetryClient, error) {
+	if c == nil || c.conn == nil || c.rpc == nil {
+		return nil, errors.New("embedded Xray gRPC connection is not initialized")
+	}
+	if interval < 500*time.Millisecond {
+		interval = time.Second
+	}
+	if interval > 5*time.Second {
+		interval = 5 * time.Second
+	}
+	request := &xrayruntimev1.WatchTelemetryRequest{SampleIntervalMs: uint32(interval.Milliseconds())}
+	outgoing, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create embedded Xray stream request ID: %w", err)
+	}
+	token, err := c.readToken()
+	if err != nil {
+		return nil, err
+	}
+	method := xrayruntimev1.Runtime_WatchTelemetry_FullMethodName
+	outgoing, err = runtimeauth.SignContext(outgoing, token, embeddedControlIdentity, method, request)
+	if err != nil {
+		return nil, err
+	}
+	started := time.Now()
+	stream, err := c.rpc.WatchTelemetry(outgoing, request)
+	interaction.LogRPC(c.logger, "xray-controller-xray-runtime-client", method, requestID, "xray", started, err, interaction.TraceFromContext(outgoing))
+	if err != nil {
+		return nil, fmt.Errorf("open embedded Xray telemetry stream: %w", err)
+	}
+	slog.Default().Info("grpc stream started", "service", "xray-controller-xray-runtime-client", "method", method, "request_id", requestID, "protocol", "xray")
+	return &loggedRuntimeTelemetryStream{Runtime_WatchTelemetryClient: stream, logger: c.logger, requestID: requestID, started: started}, nil
+}
+
+type loggedRuntimeTelemetryStream struct {
+	xrayruntimev1.Runtime_WatchTelemetryClient
+	logger    *slog.Logger
+	requestID string
+	started   time.Time
+	logged    bool
+}
+
+func (s *loggedRuntimeTelemetryStream) Recv() (*xrayruntimev1.TelemetryResponse, error) {
+	response, err := s.Runtime_WatchTelemetryClient.Recv()
+	if err != nil && !s.logged {
+		s.logged = true
+		logErr := err
+		if errors.Is(logErr, io.EOF) {
+			logErr = nil
+		}
+		interaction.LogRPC(s.logger, "xray-controller-xray-runtime-client", xrayruntimev1.Runtime_WatchTelemetry_FullMethodName, s.requestID, "xray", s.started, logErr, interaction.Trace{})
+	}
+	return response, err
 }
 
 func (c *EmbeddedXrayClient) call(ctx context.Context, identity, method string, request proto.Message, invoke func(context.Context, proto.Message) (proto.Message, error)) (proto.Message, error) {

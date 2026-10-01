@@ -2,6 +2,7 @@ package runtimeauth
 
 import (
 	"context"
+	"io"
 	"strings"
 	"testing"
 
@@ -9,8 +10,80 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+type authTestServerStream struct {
+	ctx     context.Context
+	request proto.Message
+}
+
+func (s *authTestServerStream) SetHeader(metadata.MD) error  { return nil }
+func (s *authTestServerStream) SendHeader(metadata.MD) error { return nil }
+func (s *authTestServerStream) SetTrailer(metadata.MD)       {}
+func (s *authTestServerStream) Context() context.Context     { return s.ctx }
+func (s *authTestServerStream) SendMsg(any) error            { return nil }
+func (s *authTestServerStream) RecvMsg(message any) error {
+	target, ok := message.(proto.Message)
+	if !ok {
+		return io.ErrUnexpectedEOF
+	}
+	proto.Merge(target, s.request)
+	return nil
+}
+
+func TestStreamInterceptorAuthenticatesInitialProtobufRequest(t *testing.T) {
+	token := []byte(strings.Repeat("stream-token", 4))
+	method := "/runtime/WatchTelemetry"
+	authenticator, err := NewAuthenticator(token, func(gotMethod, identity string) bool {
+		return gotMethod == method && identity == "control-plane"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &emptypb.Empty{}
+	ctx, err := SignContext(context.Background(), token, "control-plane", method, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outgoing, _ := metadata.FromOutgoingContext(ctx)
+	incoming := metadata.NewIncomingContext(context.Background(), outgoing)
+	stream := &authTestServerStream{ctx: incoming, request: request}
+	called := false
+	err = authenticator.StreamServerInterceptor()(nil, stream, &grpc.StreamServerInfo{FullMethod: method, IsServerStream: true}, func(_ any, wrapped grpc.ServerStream) error {
+		called = true
+		var received emptypb.Empty
+		if err := wrapped.RecvMsg(&received); err != nil {
+			return err
+		}
+		if got := IdentityFromContext(wrapped.Context()); got != "control-plane" {
+			t.Fatalf("stream identity = %q", got)
+		}
+		return nil
+	})
+	if err != nil || !called {
+		t.Fatalf("authenticated stream handler called=%t error=%v", called, err)
+	}
+
+	unauthorizedCtx, err := SignContext(context.Background(), token, "healthcheck", method, request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorizedMetadata, _ := metadata.FromOutgoingContext(unauthorizedCtx)
+	stream = &authTestServerStream{ctx: metadata.NewIncomingContext(context.Background(), unauthorizedMetadata), request: request}
+	called = false
+	err = authenticator.StreamServerInterceptor()(nil, stream, &grpc.StreamServerInfo{FullMethod: method, IsServerStream: true}, func(_ any, wrapped grpc.ServerStream) error {
+		if err := wrapped.RecvMsg(new(emptypb.Empty)); err != nil {
+			return err
+		}
+		called = true
+		return nil
+	})
+	if status.Code(err) != codes.Unauthenticated || called {
+		t.Fatalf("unauthorized stream called=%t error=%v", called, err)
+	}
+}
 
 func TestSignContextAndInterceptorAuthenticateRequest(t *testing.T) {
 	token := []byte(strings.Repeat("t", 32))

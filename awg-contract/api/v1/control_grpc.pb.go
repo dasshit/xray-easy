@@ -23,6 +23,7 @@ const (
 	Control_GetStatus_FullMethodName          = "/xrayeasy.awg.v1.Control/GetStatus"
 	Control_ListPeers_FullMethodName          = "/xrayeasy.awg.v1.Control/ListPeers"
 	Control_GetPeerStats_FullMethodName       = "/xrayeasy.awg.v1.Control/GetPeerStats"
+	Control_WatchPeerStats_FullMethodName     = "/xrayeasy.awg.v1.Control/WatchPeerStats"
 	Control_CreatePeer_FullMethodName         = "/xrayeasy.awg.v1.Control/CreatePeer"
 	Control_AddPeer_FullMethodName            = "/xrayeasy.awg.v1.Control/AddPeer"
 	Control_RemovePeer_FullMethodName         = "/xrayeasy.awg.v1.Control/RemovePeer"
@@ -42,6 +43,7 @@ type ControlClient interface {
 	GetStatus(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*StatusResponse, error)
 	ListPeers(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ListPeersResponse, error)
 	GetPeerStats(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPeerStatsResponse, error)
+	WatchPeerStats(ctx context.Context, in *WatchPeerStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PeerStatsUpdate], error)
 	CreatePeer(ctx context.Context, in *CreatePeerRequest, opts ...grpc.CallOption) (*Peer, error)
 	AddPeer(ctx context.Context, in *AddPeerRequest, opts ...grpc.CallOption) (*Peer, error)
 	RemovePeer(ctx context.Context, in *RemovePeerRequest, opts ...grpc.CallOption) (*RemovePeerResponse, error)
@@ -88,6 +90,25 @@ func (c *controlClient) GetPeerStats(ctx context.Context, in *emptypb.Empty, opt
 	}
 	return out, nil
 }
+
+func (c *controlClient) WatchPeerStats(ctx context.Context, in *WatchPeerStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PeerStatsUpdate], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Control_ServiceDesc.Streams[0], Control_WatchPeerStats_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchPeerStatsRequest, PeerStatsUpdate]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Control_WatchPeerStatsClient = grpc.ServerStreamingClient[PeerStatsUpdate]
 
 func (c *controlClient) CreatePeer(ctx context.Context, in *CreatePeerRequest, opts ...grpc.CallOption) (*Peer, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
@@ -169,6 +190,7 @@ type ControlServer interface {
 	GetStatus(context.Context, *emptypb.Empty) (*StatusResponse, error)
 	ListPeers(context.Context, *emptypb.Empty) (*ListPeersResponse, error)
 	GetPeerStats(context.Context, *emptypb.Empty) (*GetPeerStatsResponse, error)
+	WatchPeerStats(*WatchPeerStatsRequest, grpc.ServerStreamingServer[PeerStatsUpdate]) error
 	CreatePeer(context.Context, *CreatePeerRequest) (*Peer, error)
 	AddPeer(context.Context, *AddPeerRequest) (*Peer, error)
 	RemovePeer(context.Context, *RemovePeerRequest) (*RemovePeerResponse, error)
@@ -194,6 +216,9 @@ func (UnimplementedControlServer) ListPeers(context.Context, *emptypb.Empty) (*L
 }
 func (UnimplementedControlServer) GetPeerStats(context.Context, *emptypb.Empty) (*GetPeerStatsResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetPeerStats not implemented")
+}
+func (UnimplementedControlServer) WatchPeerStats(*WatchPeerStatsRequest, grpc.ServerStreamingServer[PeerStatsUpdate]) error {
+	return status.Errorf(codes.Unimplemented, "method WatchPeerStats not implemented")
 }
 func (UnimplementedControlServer) CreatePeer(context.Context, *CreatePeerRequest) (*Peer, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePeer not implemented")
@@ -290,6 +315,17 @@ func _Control_GetPeerStats_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	return interceptor(ctx, in, info, handler)
 }
+
+func _Control_WatchPeerStats_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchPeerStatsRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ControlServer).WatchPeerStats(m, &grpc.GenericServerStream[WatchPeerStatsRequest, PeerStatsUpdate]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Control_WatchPeerStatsServer = grpc.ServerStreamingServer[PeerStatsUpdate]
 
 func _Control_CreatePeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(CreatePeerRequest)
@@ -465,6 +501,12 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_RenderClientConfig_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchPeerStats",
+			Handler:       _Control_WatchPeerStats_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "api/v1/control.proto",
 }

@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -147,6 +148,50 @@ func (c *Client) PeerStats(ctx context.Context) ([]domain.AmneziaWGPeerStats, er
 		})
 	}
 	return peers, nil
+}
+
+// WatchPeerStats opens the authenticated AWG peer telemetry stream.
+func (c *Client) WatchPeerStats(ctx context.Context, interval time.Duration) (awgapi.Control_WatchPeerStatsClient, error) {
+	if interval < 500*time.Millisecond {
+		interval = time.Second
+	}
+	if interval > 5*time.Second {
+		interval = 5 * time.Second
+	}
+	ctx, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create AWG stream request ID: %w", err)
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
+	method := serviceName + "WatchPeerStats"
+	started := time.Now()
+	stream, err := c.client.WatchPeerStats(ctx, &awgapi.WatchPeerStatsRequest{SampleIntervalMs: uint32(interval.Milliseconds())})
+	if err != nil {
+		interaction.LogRPC(slog.Default(), "awg-client", method, requestID, "amneziawg", started, err, interaction.TraceFromContext(ctx))
+		return nil, fmt.Errorf("open AWG telemetry stream: %w", err)
+	}
+	slog.Default().Info("grpc stream started", "service", "awg-client", "method", method, "request_id", requestID, "protocol", "amneziawg")
+	return &loggedPeerStatsStream{Control_WatchPeerStatsClient: stream, requestID: requestID, started: started}, nil
+}
+
+type loggedPeerStatsStream struct {
+	awgapi.Control_WatchPeerStatsClient
+	requestID string
+	started   time.Time
+	logged    bool
+}
+
+func (s *loggedPeerStatsStream) Recv() (*awgapi.PeerStatsUpdate, error) {
+	response, err := s.Control_WatchPeerStatsClient.Recv()
+	if err != nil && !s.logged {
+		s.logged = true
+		logErr := err
+		if errors.Is(logErr, io.EOF) {
+			logErr = nil
+		}
+		interaction.LogRPC(slog.Default(), "awg-client", serviceName+"WatchPeerStats", s.requestID, "amneziawg", s.started, logErr, interaction.Trace{})
+	}
+	return response, err
 }
 
 // CreatePeer generates the device keypair and registers a persistent peer.

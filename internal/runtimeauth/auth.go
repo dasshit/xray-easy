@@ -58,6 +58,46 @@ func (a *Authenticator) UnaryServerInterceptor() grpc.UnaryServerInterceptor {
 	}
 }
 
+// StreamServerInterceptor authenticates the protobuf request received by a
+// server-streaming RPC before the generated handler reaches the service method.
+func (a *Authenticator) StreamServerInterceptor() grpc.StreamServerInterceptor {
+	return func(server any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		wrapped := &authenticatedServerStream{ServerStream: stream, auth: a, method: info.FullMethod}
+		return handler(server, wrapped)
+	}
+}
+
+type authenticatedServerStream struct {
+	grpc.ServerStream
+	auth       *Authenticator
+	method     string
+	ctx        context.Context
+	authorized bool
+}
+
+func (s *authenticatedServerStream) Context() context.Context {
+	if s.ctx != nil {
+		return s.ctx
+	}
+	return s.ServerStream.Context()
+}
+
+func (s *authenticatedServerStream) RecvMsg(message any) error {
+	if err := s.ServerStream.RecvMsg(message); err != nil {
+		return err
+	}
+	if s.authorized {
+		return nil
+	}
+	identity, err := s.auth.authenticate(s.ServerStream.Context(), message, s.method)
+	if err != nil {
+		return status.Error(codes.Unauthenticated, "service authentication failed")
+	}
+	s.ctx = context.WithValue(s.ServerStream.Context(), identityContextKey{}, identity)
+	s.authorized = true
+	return nil
+}
+
 // SignContext attaches an HMAC signature for a deterministic protobuf request.
 func SignContext(ctx context.Context, token []byte, identity, method string, request proto.Message) (context.Context, error) {
 	if len(token) < 32 {

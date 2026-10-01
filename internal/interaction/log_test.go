@@ -2,12 +2,15 @@ package interaction
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
 )
 
 func TestLogRPCRecordsSafeStructuredFields(t *testing.T) {
@@ -40,4 +43,17 @@ func TestLogRPCRecordsSafeStructuredFields(t *testing.T) {
 
 func TestLogRPCHandlesNilLoggerAndSuccess(t *testing.T) {
 	LogRPC(nil, "service", "method", "request", "none", time.Now(), nil)
+}
+
+func TestLogRPCCancellationUsesCanceledOutcome(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	LogRPC(logger, "controller", "/controller.v1.Controller/WatchTelemetry", "trace-1", "xray", time.Now(), context.Canceled)
+	var fields map[string]any
+	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["result"] != "canceled" || fields["grpc_code"] != codes.Canceled.String() || fields["level"] != "INFO" {
+		t.Fatalf("cancellation log fields = %#v", fields)
+	}
 }

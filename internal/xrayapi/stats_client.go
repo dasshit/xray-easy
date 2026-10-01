@@ -20,6 +20,7 @@ import (
 // the rest of the application independent from upstream package paths.
 type UserStats struct {
 	Email         string
+	Protocol      string
 	UploadBytes   int64
 	DownloadBytes int64
 	LastSeen      time.Time

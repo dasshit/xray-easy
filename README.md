@@ -172,10 +172,16 @@ REALITY or Hysteria 2; it is not presented as a DPI-resistance improvement.
 
 ### Xray status and troubleshooting
 
-Profiles show online/last-seen state, cumulative upload/download, sampled
-current rates and the last observed source IP when the protocol reports it.
-Online status is a five-minute freshness estimate; rates are sampled over the
-control plane's ten-second polling interval.
+Profiles show online/last-seen state, cumulative upload/download, current
+upload/download rates and the last observed source IP when the protocol reports
+it. While the authenticated Web UI is open, Xray and AmneziaWG publish telemetry
+through a shared gRPC stream about once per second, which the existing SSE
+connection forwards to the page. A client is online while its user-data
+counters have advanced within the last 15 seconds; an idle open tunnel does not
+keep it online. When no Web UI SSE clients are connected, the backend keeps its
+10-second poll to continue saving traffic totals in SQLite. If a VPN service
+restarts between polls while the UI is closed, traffic since the previous poll
+can be lost because service counters are process-local.
 
 Run the doctor from the VPS repository directory:
 

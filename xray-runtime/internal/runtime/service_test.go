@@ -45,19 +45,21 @@ func (l *fakeLoader) Validate(_ context.Context, data []byte) error {
 }
 
 type fakeEngine struct {
-	startErr     error
-	closeErr     error
-	replaceErr   error
-	addErr       error
-	removeErr    error
-	listErr      error
-	telemetryErr error
-	stats        bool
-	telemetry    []RuntimeUserTelemetry
-	starts       int
-	closes       int
-	replacements int
-	users        map[string]string
+	startErr          error
+	closeErr          error
+	replaceErr        error
+	addErr            error
+	removeErr         error
+	listErr           error
+	telemetryErr      error
+	stats             bool
+	telemetry         []RuntimeUserTelemetry
+	telemetrySequence [][]RuntimeUserTelemetry
+	telemetryCalls    int
+	starts            int
+	closes            int
+	replacements      int
+	users             map[string]string
 }
 
 func (e *fakeEngine) Start() error         { e.starts++; return e.startErr }
@@ -67,6 +69,11 @@ func (e *fakeEngine) StatsAvailable() bool { return e.stats }
 func (e *fakeEngine) GetTelemetry(_ context.Context, _ map[xrayruntimev1.Protocol]string) ([]RuntimeUserTelemetry, error) {
 	if e.telemetryErr != nil {
 		return nil, e.telemetryErr
+	}
+	if len(e.telemetrySequence) > 0 {
+		index := min(e.telemetryCalls, len(e.telemetrySequence)-1)
+		e.telemetryCalls++
+		return append([]RuntimeUserTelemetry(nil), e.telemetrySequence[index]...), nil
 	}
 	return append([]RuntimeUserTelemetry(nil), e.telemetry...), nil
 }

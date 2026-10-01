@@ -13,6 +13,7 @@ service Control {
   rpc GetStatus(google.protobuf.Empty) returns (StatusResponse);
   rpc ListPeers(google.protobuf.Empty) returns (ListPeersResponse);
   rpc GetPeerStats(google.protobuf.Empty) returns (GetPeerStatsResponse);
+  rpc WatchPeerStats(WatchPeerStatsRequest) returns (stream PeerStatsUpdate);
   rpc CreatePeer(CreatePeerRequest) returns (Peer);
   rpc AddPeer(AddPeerRequest) returns (Peer);
   rpc RemovePeer(RemovePeerRequest) returns (RemovePeerResponse);
@@ -53,10 +54,25 @@ message PeerStats {
   google.protobuf.Timestamp last_handshake = 3;
   int64 upload_bytes = 4;
   int64 download_bytes = 5;
+  bool online = 6;
+  google.protobuf.Timestamp last_activity = 7;
 }
 
 message GetPeerStatsResponse {
   repeated PeerStats peers = 1;
+}
+
+message WatchPeerStatsRequest {
+  // Requested sampling cadence; the service clamps this to a safe range.
+  uint32 sample_interval_ms = 1;
+}
+
+message PeerStatsUpdate {
+  google.protobuf.Timestamp sampled_at = 1;
+  string source_generation = 2;
+  uint64 sequence = 3;
+  bool full_snapshot = 4;
+  repeated PeerStats peers = 5;
 }
 
 message CreatePeerRequest {

@@ -32,6 +32,7 @@ const (
 	Controller_RemoveDeviceUser_FullMethodName         = "/xrayeasy.controller.v1.Controller/RemoveDeviceUser"
 	Controller_ListDeviceUsers_FullMethodName          = "/xrayeasy.controller.v1.Controller/ListDeviceUsers"
 	Controller_GetXrayTelemetry_FullMethodName         = "/xrayeasy.controller.v1.Controller/GetXrayTelemetry"
+	Controller_WatchTelemetry_FullMethodName           = "/xrayeasy.controller.v1.Controller/WatchTelemetry"
 	Controller_GetAmneziaWGStatus_FullMethodName       = "/xrayeasy.controller.v1.Controller/GetAmneziaWGStatus"
 	Controller_ListAmneziaWGPeers_FullMethodName       = "/xrayeasy.controller.v1.Controller/ListAmneziaWGPeers"
 	Controller_CreateAmneziaWGPeer_FullMethodName      = "/xrayeasy.controller.v1.Controller/CreateAmneziaWGPeer"
@@ -61,6 +62,7 @@ type ControllerClient interface {
 	RemoveDeviceUser(ctx context.Context, in *RemoveDeviceUserRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	ListDeviceUsers(ctx context.Context, in *ListDeviceUsersRequest, opts ...grpc.CallOption) (*ListDeviceUsersResponse, error)
 	GetXrayTelemetry(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*XrayTelemetryResponse, error)
+	WatchTelemetry(ctx context.Context, in *WatchTelemetryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TelemetryUpdate], error)
 	GetAmneziaWGStatus(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*AmneziaWGStatusResponse, error)
 	ListAmneziaWGPeers(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ListAmneziaWGPeersResponse, error)
 	CreateAmneziaWGPeer(ctx context.Context, in *CreateAmneziaWGPeerRequest, opts ...grpc.CallOption) (*AmneziaWGPeer, error)
@@ -209,6 +211,25 @@ func (c *controllerClient) GetXrayTelemetry(ctx context.Context, in *EmptyReques
 	return out, nil
 }
 
+func (c *controllerClient) WatchTelemetry(ctx context.Context, in *WatchTelemetryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TelemetryUpdate], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Controller_ServiceDesc.Streams[0], Controller_WatchTelemetry_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchTelemetryRequest, TelemetryUpdate]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Controller_WatchTelemetryClient = grpc.ServerStreamingClient[TelemetryUpdate]
+
 func (c *controllerClient) GetAmneziaWGStatus(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*AmneziaWGStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AmneziaWGStatusResponse)
@@ -308,6 +329,7 @@ type ControllerServer interface {
 	RemoveDeviceUser(context.Context, *RemoveDeviceUserRequest) (*OperationResponse, error)
 	ListDeviceUsers(context.Context, *ListDeviceUsersRequest) (*ListDeviceUsersResponse, error)
 	GetXrayTelemetry(context.Context, *EmptyRequest) (*XrayTelemetryResponse, error)
+	WatchTelemetry(*WatchTelemetryRequest, grpc.ServerStreamingServer[TelemetryUpdate]) error
 	GetAmneziaWGStatus(context.Context, *EmptyRequest) (*AmneziaWGStatusResponse, error)
 	ListAmneziaWGPeers(context.Context, *EmptyRequest) (*ListAmneziaWGPeersResponse, error)
 	CreateAmneziaWGPeer(context.Context, *CreateAmneziaWGPeerRequest) (*AmneziaWGPeer, error)
@@ -364,6 +386,9 @@ func (UnimplementedControllerServer) ListDeviceUsers(context.Context, *ListDevic
 }
 func (UnimplementedControllerServer) GetXrayTelemetry(context.Context, *EmptyRequest) (*XrayTelemetryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetXrayTelemetry not implemented")
+}
+func (UnimplementedControllerServer) WatchTelemetry(*WatchTelemetryRequest, grpc.ServerStreamingServer[TelemetryUpdate]) error {
+	return status.Errorf(codes.Unimplemented, "method WatchTelemetry not implemented")
 }
 func (UnimplementedControllerServer) GetAmneziaWGStatus(context.Context, *EmptyRequest) (*AmneziaWGStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetAmneziaWGStatus not implemented")
@@ -644,6 +669,17 @@ func _Controller_GetXrayTelemetry_Handler(srv interface{}, ctx context.Context, 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Controller_WatchTelemetry_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchTelemetryRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ControllerServer).WatchTelemetry(m, &grpc.GenericServerStream[WatchTelemetryRequest, TelemetryUpdate]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Controller_WatchTelemetryServer = grpc.ServerStreamingServer[TelemetryUpdate]
+
 func _Controller_GetAmneziaWGStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyRequest)
 	if err := dec(in); err != nil {
@@ -880,6 +916,12 @@ var Controller_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Controller_RestoreAmneziaWGBackup_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchTelemetry",
+			Handler:       _Controller_WatchTelemetry_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "controller.proto",
 }

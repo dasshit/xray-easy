@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -226,5 +228,61 @@ func TestClientRPCErrorIncludesMethodOnly(t *testing.T) {
 	}
 	if strings.Contains(invoker.method, "sensitive") {
 		t.Fatalf("method unexpectedly includes error data: %q", invoker.method)
+	}
+}
+
+type telemetryControllerServer struct {
+	controllerv1.UnimplementedControllerServer
+	requests chan *controllerv1.WatchTelemetryRequest
+}
+
+func (s *telemetryControllerServer) WatchTelemetry(request *controllerv1.WatchTelemetryRequest, stream controllerv1.Controller_WatchTelemetryServer) error {
+	s.requests <- request
+	values, _ := metadata.FromIncomingContext(stream.Context())
+	if got := values.Get("authorization"); len(got) != 1 || got[0] != "Bearer stream-token" {
+		return status.Error(codes.Unauthenticated, "missing controller token")
+	}
+	if err := stream.Send(&controllerv1.TelemetryUpdate{Sequence: 7, FullSnapshot: true, SampledAt: timestamppb.Now(), Sources: []*controllerv1.TelemetrySourceStatus{{Protocol: "xray", Available: true, Generation: "runtime"}}, Clients: []*controllerv1.TelemetryClient{{DeviceKey: "ios@example.test", Protocol: "vless", Online: true, UploadBytes: 40}}}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func TestClientOpensAuthenticatedTelemetryStreamAndClampsInterval(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	stub := &telemetryControllerServer{requests: make(chan *controllerv1.WatchTelemetryRequest, 2)}
+	controllerv1.RegisterControllerServer(server, stub)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	connection, err := grpc.NewClient("passthrough:///controller-stream-test", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	client := NewClientWithConn(connection, "stream-token")
+
+	for _, interval := range []time.Duration{100 * time.Millisecond, 10 * time.Second} {
+		stream, err := client.WatchTelemetry(context.Background(), interval)
+		if err != nil {
+			t.Fatalf("WatchTelemetry(%s): %v", interval, err)
+		}
+		request := <-stub.requests
+		wantInterval := uint32(interval.Milliseconds())
+		if interval < 500*time.Millisecond {
+			wantInterval = 1000
+		} else if interval > 5*time.Second {
+			wantInterval = 5000
+		}
+		if request.GetSampleIntervalMs() != wantInterval {
+			t.Fatalf("stream interval = %dms, want %dms", request.GetSampleIntervalMs(), wantInterval)
+		}
+		update, err := stream.Recv()
+		if err != nil || update.GetSequence() != 7 || len(update.GetClients()) != 1 || update.GetClients()[0].GetDeviceKey() != "ios@example.test" {
+			t.Fatalf("telemetry stream update = %+v, %v", update, err)
+		}
+		if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+			t.Fatalf("stream completion error = %v, want EOF", err)
+		}
 	}
 }

@@ -108,12 +108,32 @@ func serveContext(shutdown context.Context, listenAddress, configPath, tokenPath
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(24<<20), grpc.MaxSendMsgSize(24<<20),
 		grpc.ChainUnaryInterceptor(runtimeLoggingInterceptor, authenticator.UnaryServerInterceptor()),
+		grpc.ChainStreamInterceptor(runtimeStreamLoggingInterceptor, authenticator.StreamServerInterceptor()),
 	)
 	xrayruntimev1.RegisterRuntimeServer(server, service)
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
 	return waitForServe(shutdown, server, serveErr, service.Fatal())
 }
+
+func runtimeStreamLoggingInterceptor(server any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+	ctx, requestID, err := interaction.EnsureIncoming(stream.Context())
+	if err != nil {
+		slog.Warn("could not create runtime stream request ID", "service", "xray-runtime")
+		ctx = stream.Context()
+	}
+	started := time.Now()
+	err = handler(server, &runtimeContextServerStream{ServerStream: stream, ctx: ctx})
+	interaction.LogRPC(slog.Default(), "xray-runtime", info.FullMethod, requestID, "xray", started, err, interaction.TraceFromContext(ctx))
+	return err
+}
+
+type runtimeContextServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *runtimeContextServerStream) Context() context.Context { return s.ctx }
 
 func waitForServe(shutdown context.Context, server *grpc.Server, serveErr <-chan error, fatal <-chan error) error {
 	select {

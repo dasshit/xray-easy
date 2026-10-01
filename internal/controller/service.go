@@ -347,7 +347,7 @@ func (s *Service) GetXrayTelemetry(ctx context.Context, _ *controllerv1.EmptyReq
 	}
 	response := &controllerv1.XrayTelemetryResponse{Users: make([]*controllerv1.XrayUserTelemetry, 0, len(users))}
 	for _, user := range users {
-		item := &controllerv1.XrayUserTelemetry{Email: user.Email, UploadBytes: user.UploadBytes, DownloadBytes: user.DownloadBytes, LastSeen: protobufTime(user.LastSeen)}
+		item := &controllerv1.XrayUserTelemetry{Email: user.Email, Protocol: user.Protocol, UploadBytes: user.UploadBytes, DownloadBytes: user.DownloadBytes, LastSeen: protobufTime(user.LastSeen)}
 		for _, address := range user.SourceIPs {
 			item.SourceIps = append(item.SourceIps, &controllerv1.IPObservation{Address: address.Address, LastSeen: protobufTime(address.LastSeen)})
 		}

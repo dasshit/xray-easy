@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -246,6 +247,61 @@ func (c *Client) Poll(ctx context.Context) ([]xrayapi.UserStats, error) {
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+// WatchTelemetry opens the authenticated Controller stream used while at least
+// one SSE client is subscribed to live profile statistics.
+func (c *Client) WatchTelemetry(ctx context.Context, interval time.Duration) (controllerv1.Controller_WatchTelemetryClient, error) {
+	connection, ok := c.connection.(grpc.ClientConnInterface)
+	if !ok {
+		return nil, errors.New("Controller connection does not support server streams")
+	}
+	if interval < 500*time.Millisecond {
+		interval = time.Second
+	}
+	if interval > 5*time.Second {
+		interval = 5 * time.Second
+	}
+	outgoing, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Controller stream request ID: %w", err)
+	}
+	outgoing = metadataAppendAuth(outgoing, c.token)
+	method := controllerv1.Controller_WatchTelemetry_FullMethodName
+	started := time.Now()
+	stream, err := controllerv1.NewControllerClient(connection).WatchTelemetry(outgoing, &controllerv1.WatchTelemetryRequest{SampleIntervalMs: uint32(interval.Milliseconds())})
+	if err != nil {
+		interaction.LogRPC(c.logger, "xray-easy", method, requestID, "runtime", started, err, interaction.TraceFromContext(outgoing))
+		return nil, fmt.Errorf("open Controller telemetry stream: %w", err)
+	}
+	logger := c.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info("grpc stream started", "service", "xray-easy", "method", method, "request_id", requestID, "protocol", "runtime")
+	return &loggedControllerTelemetryStream{Controller_WatchTelemetryClient: stream, logger: logger, requestID: requestID, started: started, trace: interaction.TraceFromContext(outgoing)}, nil
+}
+
+type loggedControllerTelemetryStream struct {
+	controllerv1.Controller_WatchTelemetryClient
+	logger    *slog.Logger
+	requestID string
+	started   time.Time
+	trace     interaction.Trace
+	logged    bool
+}
+
+func (s *loggedControllerTelemetryStream) Recv() (*controllerv1.TelemetryUpdate, error) {
+	response, err := s.Controller_WatchTelemetryClient.Recv()
+	if err != nil && !s.logged {
+		s.logged = true
+		logErr := err
+		if errors.Is(logErr, io.EOF) {
+			logErr = nil
+		}
+		interaction.LogRPC(s.logger, "xray-easy", controllerv1.Controller_WatchTelemetry_FullMethodName, s.requestID, "runtime", s.started, logErr, s.trace)
+	}
+	return response, err
 }
 
 func (c *Client) call(ctx context.Context, method string, request proto.Message) (proto.Message, error) {

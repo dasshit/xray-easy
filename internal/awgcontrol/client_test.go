@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,9 +15,12 @@ import (
 	awgapi "xray-easy/awg-contract/api/v1"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeInvoker struct {
@@ -230,6 +235,62 @@ func TestClientPropagatesRPCAndConnectionCloseErrors(t *testing.T) {
 	connection.closeErr = errors.New("close failed")
 	if err := client.Close(); err == nil || err.Error() != "close failed" {
 		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+type telemetryAWGServer struct {
+	awgapi.UnimplementedControlServer
+	requests chan *awgapi.WatchPeerStatsRequest
+}
+
+func (s *telemetryAWGServer) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream awgapi.Control_WatchPeerStatsServer) error {
+	s.requests <- request
+	values, _ := metadata.FromIncomingContext(stream.Context())
+	if got := values.Get("authorization"); len(got) != 1 || got[0] != "Bearer stream-token" {
+		return errors.New("AWG telemetry stream is missing bearer authorization")
+	}
+	if err := stream.Send(&awgapi.PeerStatsUpdate{SourceGeneration: "awg-test", Sequence: 4, FullSnapshot: true, SampledAt: timestamppb.Now(), Peers: []*awgapi.PeerStats{{Name: "ios", Online: true, UploadBytes: 9, DownloadBytes: 12}}}); err != nil {
+		return err
+	}
+	return nil
+}
+
+func TestClientOpensAuthenticatedTelemetryStreamAndClampsInterval(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	stub := &telemetryAWGServer{requests: make(chan *awgapi.WatchPeerStatsRequest, 2)}
+	awgapi.RegisterControlServer(server, stub)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	connection, err := grpc.NewClient("passthrough:///awg-stream-test", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	client := &Client{connection: connection, client: awgapi.NewControlClient(connection), token: "stream-token"}
+
+	for _, interval := range []time.Duration{100 * time.Millisecond, 10 * time.Second} {
+		stream, err := client.WatchPeerStats(context.Background(), interval)
+		if err != nil {
+			t.Fatalf("WatchPeerStats(%s): %v", interval, err)
+		}
+		request := <-stub.requests
+		wantInterval := uint32(interval.Milliseconds())
+		if interval < 500*time.Millisecond {
+			wantInterval = 1000
+		} else if interval > 5*time.Second {
+			wantInterval = 5000
+		}
+		if request.GetSampleIntervalMs() != wantInterval {
+			t.Fatalf("stream interval = %dms, want %dms", request.GetSampleIntervalMs(), wantInterval)
+		}
+		update, err := stream.Recv()
+		if err != nil || update.GetSourceGeneration() != "awg-test" || update.GetSequence() != 4 || len(update.GetPeers()) != 1 || update.GetPeers()[0].GetName() != "ios" {
+			t.Fatalf("telemetry stream update = %+v, %v", update, err)
+		}
+		if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+			t.Fatalf("stream completion error = %v, want EOF", err)
+		}
 	}
 }
 

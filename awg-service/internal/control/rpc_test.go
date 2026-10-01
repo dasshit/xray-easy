@@ -73,6 +73,52 @@ func TestLoggingInterceptorCorrelatesWithoutLoggingPayloads(t *testing.T) {
 	}
 }
 
+func TestStreamInterceptorsAuthenticateAndLogLifecycle(t *testing.T) {
+	token := "stream-test-token"
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+token))
+	stream := &capturePeerStatsStream{ctx: ctx, updates: make(chan *awgapi.PeerStatsUpdate, 1)}
+	called := false
+	info := &grpc.StreamServerInfo{FullMethod: "/xrayeasy.awg.v1.Control/WatchPeerStats"}
+	err := AuthStreamInterceptor(token)(nil, stream, info, func(_ any, _ grpc.ServerStream) error {
+		called = true
+		return nil
+	})
+	if err != nil || !called {
+		t.Fatalf("authenticated stream interceptor = %v, called %v", err, called)
+	}
+	called = false
+	unauthenticated := &capturePeerStatsStream{ctx: context.Background(), updates: make(chan *awgapi.PeerStatsUpdate, 1)}
+	err = AuthStreamInterceptor(token)(nil, unauthenticated, info, func(_ any, _ grpc.ServerStream) error {
+		called = true
+		return nil
+	})
+	if status.Code(err) != codes.Unauthenticated || called {
+		t.Fatalf("unauthenticated stream interceptor = %v, called %v", err, called)
+	}
+
+	previous := slog.Default()
+	var output bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	defer slog.SetDefault(previous)
+	err = LoggingStreamInterceptor()(nil, stream, info, func(_ any, wrapped grpc.ServerStream) error {
+		if OperationID(wrapped.Context()) == "" {
+			t.Error("stream logging interceptor did not attach an operation ID")
+		}
+		return context.Canceled
+	})
+	if err != context.Canceled || !strings.Contains(output.String(), `"result":"canceled"`) || !strings.Contains(output.String(), info.FullMethod) {
+		t.Fatalf("stream lifecycle log = %s, error %v", output.String(), err)
+	}
+	if strings.Contains(output.String(), token) {
+		t.Fatalf("stream log contains bearer token: %s", output.String())
+	}
+	output.Reset()
+	err = LoggingStreamInterceptor()(nil, stream, info, func(_ any, _ grpc.ServerStream) error { return nil })
+	if err != nil || !strings.Contains(output.String(), `"result":"success"`) {
+		t.Fatalf("successful stream lifecycle log = %s, error %v", output.String(), err)
+	}
+}
+
 func TestGRPCLifecycleRequiresTokenAndChangesPeerWithoutRestart(t *testing.T) {
 	opts := testOptions(t)
 	engine := &fakeDevice{}
@@ -190,8 +236,13 @@ func TestGeneratedAWGServiceRegistersTypedMethods(t *testing.T) {
 	server := grpc.NewServer()
 	Register(server, NewService(nil, Options{}))
 	info := server.GetServiceInfo()["xrayeasy.awg.v1.Control"]
-	if len(info.Methods) != 10 {
-		t.Fatalf("registered methods = %d, want 10", len(info.Methods))
+	if len(info.Methods) != 11 {
+		t.Fatalf("registered methods = %d, want 11", len(info.Methods))
+	}
+	for _, method := range info.Methods {
+		if method.Name == "WatchPeerStats" && !method.IsServerStream {
+			t.Fatal("WatchPeerStats was registered as a unary RPC")
+		}
 	}
 }
 

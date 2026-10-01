@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -30,6 +31,7 @@ const (
 	maxUserEmailBytes     = 320
 	maxCredentialBytes    = 512
 	maxUserFlowBytes      = 64
+	telemetryOnlineWindow = 15 * time.Second
 )
 
 // Loader keeps active-instance construction and side-effect-free validation
@@ -73,26 +75,27 @@ func (coreLoader) Validate(ctx context.Context, data []byte) error {
 type Service struct {
 	xrayruntimev1.UnimplementedRuntimeServer
 
-	loader         Loader
-	serviceVersion string
-	startedAt      time.Time
-	opMu           sync.Mutex
-	mu             sync.RWMutex
-	engine         EngineHandle
-	activeConfig   []byte
-	state          xrayruntimev1.RuntimeState
-	activeRevision int64
-	lastError      string
-	protocols      []string
-	inboundTags    map[xrayruntimev1.Protocol]string
-	telemetry      telemetryCapabilities
-	lastSeen       map[string]time.Time
-	probeTarget    func(context.Context, string, string) error
-	probeIPv6      func(context.Context) error
-	fence          *RevisionFence
-	fatal          chan error
-	logs           []logRecord
-	logLimit       int
+	loader            Loader
+	serviceVersion    string
+	startedAt         time.Time
+	opMu              sync.Mutex
+	mu                sync.RWMutex
+	engine            EngineHandle
+	activeConfig      []byte
+	state             xrayruntimev1.RuntimeState
+	activeRevision    int64
+	lastError         string
+	protocols         []string
+	inboundTags       map[xrayruntimev1.Protocol]string
+	telemetry         telemetryCapabilities
+	lastSeen          map[string]time.Time
+	telemetrySequence uint64
+	probeTarget       func(context.Context, string, string) error
+	probeIPv6         func(context.Context) error
+	fence             *RevisionFence
+	fatal             chan error
+	logs              []logRecord
+	logLimit          int
 }
 
 type logRecord struct {
@@ -595,7 +598,7 @@ func (s *Service) GetTelemetry(ctx context.Context, _ *xrayruntimev1.EmptyReques
 	seenEmails := make(map[string]struct{}, len(users))
 	for _, user := range users {
 		seenEmails[user.Email] = struct{}{}
-		item := &xrayruntimev1.UserTelemetry{Email: user.Email}
+		item := &xrayruntimev1.UserTelemetry{Email: user.Email, Protocol: user.Protocol}
 		if capabilities.trafficCounters {
 			item.UploadBytes = clampNonNegative(user.UploadBytes)
 			item.DownloadBytes = clampNonNegative(user.DownloadBytes)
@@ -627,6 +630,86 @@ func (s *Service) GetTelemetry(ctx context.Context, _ *xrayruntimev1.EmptyReques
 		}
 	}
 	return response, nil
+}
+
+// WatchTelemetry publishes coalesced absolute-counter snapshots while a
+// Controller subscriber is connected. It never logs telemetry payloads.
+func (s *Service) WatchTelemetry(request *xrayruntimev1.WatchTelemetryRequest, stream xrayruntimev1.Runtime_WatchTelemetryServer) error {
+	if request == nil {
+		return status.Error(codes.InvalidArgument, "watch request is required")
+	}
+	interval := time.Duration(request.GetSampleIntervalMs()) * time.Millisecond
+	if interval < 500*time.Millisecond {
+		interval = time.Second
+	}
+	if interval > 5*time.Second {
+		interval = 5 * time.Second
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	previous := make(map[string][2]int64)
+	lastActivity := make(map[string]time.Time)
+	generation := strconv.FormatInt(s.startedAt.UnixNano(), 10)
+	send := func() error {
+		ctx, cancel := context.WithTimeout(stream.Context(), interval)
+		defer cancel()
+		response, err := s.GetTelemetry(ctx, new(xrayruntimev1.EmptyRequest))
+		if err != nil {
+			return err
+		}
+		now := time.Now().UTC()
+		seenEmails := make(map[string]struct{}, len(response.GetUsers()))
+		for _, user := range response.GetUsers() {
+			if user == nil || user.GetEmail() == "" {
+				continue
+			}
+			current := [2]int64{user.GetUploadBytes(), user.GetDownloadBytes()}
+			prior, sampled := previous[user.GetEmail()]
+			if sampled && (current[0] > prior[0] || current[1] > prior[1]) {
+				lastActivity[user.GetEmail()] = now
+			} else if !sampled && user.GetLastSeen() != nil && user.GetLastSeen().CheckValid() == nil {
+				lastActivity[user.GetEmail()] = user.GetLastSeen().AsTime().UTC()
+			}
+			previous[user.GetEmail()] = current
+			seenEmails[user.GetEmail()] = struct{}{}
+			activity := lastActivity[user.GetEmail()]
+			user.LastActivity = nil
+			if !activity.IsZero() {
+				user.LastActivity = timestamppb.New(activity)
+			}
+			user.Online = !activity.IsZero() && now.Sub(activity) <= telemetryOnlineWindow
+			if !user.Online {
+				user.SourceIps = nil
+			}
+		}
+		for email := range previous {
+			if _, exists := seenEmails[email]; !exists {
+				delete(previous, email)
+				delete(lastActivity, email)
+			}
+		}
+		s.mu.Lock()
+		s.telemetrySequence++
+		sequence := s.telemetrySequence
+		s.mu.Unlock()
+		response.SourceGeneration = generation
+		response.Sequence = sequence
+		response.FullSnapshot = true
+		return stream.Send(response)
+	}
+	if err := send(); err != nil {
+		return err
+	}
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case <-ticker.C:
+			if err := send(); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 func (s *Service) ProbeRealityTarget(ctx context.Context, request *xrayruntimev1.ProbeRealityTargetRequest) (*xrayruntimev1.ProbeResponse, error) {

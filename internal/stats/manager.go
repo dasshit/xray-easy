@@ -2,18 +2,28 @@ package stats
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
+	"strings"
 	"sync"
 	"time"
 
+	controllerv1 "xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/store"
 	"xray-easy/internal/xrayapi"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const defaultPollInterval = 10 * time.Second
-const onlineWindow = 5 * time.Minute
+const onlineWindow = 15 * time.Second
 const telemetryCallTimeout = 5 * time.Second
+
+type telemetryStreamOpener interface {
+	WatchTelemetry(context.Context, time.Duration) (controllerv1.Controller_WatchTelemetryClient, error)
+}
 
 // ClientStats is the UI-facing snapshot. Totals survive Xray restarts because
 // Manager accumulates deltas in SQLite rather than exposing process-local
@@ -43,16 +53,27 @@ type Manager struct {
 	api   StatsAPI
 	awg   AWGStatsAPI
 
-	mu        sync.RWMutex
-	latest    map[string]ClientStats
-	subs      map[chan struct{}]struct{}
-	interval  time.Duration
-	lastError string
-	now       func() time.Time
+	mu           sync.RWMutex
+	applyMu      sync.Mutex
+	latest       map[string]ClientStats
+	subs         map[chan struct{}]struct{}
+	interval     time.Duration
+	lastError    string
+	now          func() time.Time
+	stream       telemetryStreamOpener
+	streamCancel context.CancelFunc
+	rootContext  context.Context
+	checkpoints  map[string]streamCheckpoint
+}
+
+type streamCheckpoint struct {
+	generation string
+	sequence   uint64
 }
 
 func NewManager(db *store.Store, api StatsAPI, awg ...AWGStatsAPI) *Manager {
-	manager := &Manager{store: db, api: api, latest: make(map[string]ClientStats), subs: make(map[chan struct{}]struct{}), interval: defaultPollInterval, now: time.Now}
+	manager := &Manager{store: db, api: api, latest: make(map[string]ClientStats), subs: make(map[chan struct{}]struct{}), interval: defaultPollInterval, now: time.Now, checkpoints: make(map[string]streamCheckpoint)}
+	manager.stream, _ = api.(telemetryStreamOpener)
 	if len(awg) > 0 {
 		manager.awg = awg[0]
 	}
@@ -60,6 +81,9 @@ func NewManager(db *store.Store, api StatsAPI, awg ...AWGStatsAPI) *Manager {
 }
 
 func (m *Manager) Start(ctx context.Context) <-chan struct{} {
+	m.mu.Lock()
+	m.rootContext = ctx
+	m.mu.Unlock()
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -79,6 +103,8 @@ func (m *Manager) Start(ctx context.Context) <-chan struct{} {
 }
 
 func (m *Manager) Poll(ctx context.Context) error {
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
 	clients, err := m.store.ListClients(ctx)
 	if err != nil {
 		m.setError(err)
@@ -141,6 +167,128 @@ func (m *Manager) Poll(ctx context.Context) error {
 	return nil
 }
 
+// ApplyStreamUpdate folds the latest Controller snapshot into durable traffic
+// totals and publishes it to SSE subscribers. Absolute counters make replayed
+// or coalesced snapshots safe to process.
+func (m *Manager) ApplyStreamUpdate(ctx context.Context, update *controllerv1.TelemetryUpdate) error {
+	if update == nil {
+		return fmt.Errorf("Controller telemetry update is nil")
+	}
+	m.applyMu.Lock()
+	defer m.applyMu.Unlock()
+
+	clients, err := m.store.ListClients(ctx)
+	if err != nil {
+		return fmt.Errorf("list clients for streamed stats: %w", err)
+	}
+	previous, err := m.store.ListTrafficSnapshots(ctx)
+	if err != nil {
+		return fmt.Errorf("list traffic snapshots: %w", err)
+	}
+	previousLatest := m.Snapshot()
+	now := m.now().UTC()
+	if update.GetSampledAt() != nil && update.GetSampledAt().CheckValid() == nil {
+		now = update.GetSampledAt().AsTime().UTC()
+	}
+	fresh := make(map[string]bool, len(update.GetSources()))
+	for _, source := range update.GetSources() {
+		if source == nil || !source.GetAvailable() || source.GetGeneration() == "" || source.GetSequence() == 0 {
+			continue
+		}
+		prior := m.checkpoints[source.GetProtocol()]
+		fresh[source.GetProtocol()] = prior.generation != source.GetGeneration() || source.GetSequence() > prior.sequence
+		if fresh[source.GetProtocol()] {
+			m.checkpoints[source.GetProtocol()] = streamCheckpoint{generation: source.GetGeneration(), sequence: source.GetSequence()}
+		}
+	}
+	xrayRows := make([]xrayapi.UserStats, 0)
+	awgRows := make([]domain.AmneziaWGPeerStats, 0)
+	for _, client := range update.GetClients() {
+		if client == nil || client.GetDeviceKey() == "" || client.GetUploadBytes() < 0 || client.GetDownloadBytes() < 0 {
+			continue
+		}
+		protocol := client.GetProtocol()
+		if protocol == "amneziawg" {
+			if !fresh[protocol] || !strings.HasPrefix(client.GetDeviceKey(), "awg:") {
+				continue
+			}
+			lastSeen := protobufTimestamp(client.GetLastActivity())
+			address := ""
+			if client.GetOnline() && len(client.GetSourceIps()) > 0 {
+				address = client.GetSourceIps()[0]
+			}
+			awgRows = append(awgRows, domain.AmneziaWGPeerStats{Name: strings.TrimPrefix(client.GetDeviceKey(), "awg:"), SourceIP: address, LastSeen: lastSeen, UploadBytes: client.GetUploadBytes(), DownloadBytes: client.GetDownloadBytes()})
+			continue
+		}
+		if !fresh["xray"] || (protocol != "vless" && protocol != "vmess" && protocol != "hysteria2") {
+			continue
+		}
+		lastSeen := protobufTimestamp(client.GetLastActivity())
+		row := xrayapi.UserStats{Email: client.GetDeviceKey(), Protocol: protocol, UploadBytes: client.GetUploadBytes(), DownloadBytes: client.GetDownloadBytes(), LastSeen: lastSeen}
+		if client.GetOnline() {
+			for _, address := range client.GetSourceIps() {
+				if address != "" {
+					row.SourceIPs = append(row.SourceIPs, xrayapi.IPObservation{Address: address, LastSeen: now})
+				}
+			}
+		}
+		xrayRows = append(xrayRows, row)
+	}
+	next := make(map[string]ClientStats, len(clients))
+	if fresh["xray"] {
+		if err := m.updateXray(ctx, clients, previous, xrayRows, previousLatest, next, now); err != nil {
+			m.setError(err)
+			return err
+		}
+	} else {
+		for _, client := range clients {
+			if current, ok := previousLatest[client.ID]; ok {
+				current.UploadBytesPerSecond, current.DownloadBytesPerSecond = 0, 0
+				current.Online = current.LastSeen != nil && isOnline(*current.LastSeen, now)
+				if !current.Online {
+					current.SourceIPs = nil
+				}
+				next[client.ID] = current
+			}
+		}
+	}
+	if !fresh["amneziawg"] {
+		preserveAWGStats(next, previousLatest, now)
+	}
+	if fresh["amneziawg"] {
+		if err := m.updateAWGObserved(ctx, previousLatest, next, now, awgRows); err != nil {
+			m.setError(err)
+			return err
+		}
+	}
+	m.mu.Lock()
+	m.latest = next
+	m.lastError = ""
+	for _, source := range update.GetSources() {
+		if source != nil && !source.GetAvailable() {
+			if m.lastError != "" {
+				m.lastError += "; "
+			}
+			m.lastError += source.GetProtocol() + " telemetry is unavailable"
+		}
+	}
+	for subscriber := range m.subs {
+		select {
+		case subscriber <- struct{}{}:
+		default:
+		}
+	}
+	m.mu.Unlock()
+	return nil
+}
+
+func protobufTimestamp(value *timestamppb.Timestamp) time.Time {
+	if value == nil || value.CheckValid() != nil {
+		return time.Time{}
+	}
+	return value.AsTime().UTC()
+}
+
 func (m *Manager) updateXray(ctx context.Context, clients []domain.Client, previous map[string]store.TrafficSnapshot, observed []xrayapi.UserStats, previousLatest, next map[string]ClientStats, now time.Time) error {
 	byEmail := make(map[string]xrayapi.UserStats, len(observed))
 	for _, user := range observed {
@@ -152,17 +300,22 @@ func (m *Manager) updateXray(ctx context.Context, clients []domain.Client, previ
 		snapshot.ClientID = client.ID
 		var uploadDelta, downloadDelta int64
 		var sourceIPs []string
+		trafficObserved := false
 		if user, ok := byEmail[client.Email]; ok {
 			uploadDelta = counterDelta(user.UploadBytes, snapshot.RawUpload)
 			downloadDelta = counterDelta(user.DownloadBytes, snapshot.RawDownload)
 			snapshot.TotalUpload += uploadDelta
 			snapshot.TotalDownload += downloadDelta
 			snapshot.RawUpload, snapshot.RawDownload = user.UploadBytes, user.DownloadBytes
+			trafficObserved = uploadDelta > 0 || downloadDelta > 0
 			if user.LastSeen.After(snapshot.LastSeenAt) {
 				snapshot.LastSeenAt = user.LastSeen
 			}
+			if trafficObserved && now.After(snapshot.LastSeenAt) {
+				snapshot.LastSeenAt = now
+			}
 			for _, ip := range user.SourceIPs {
-				if isOnline(ip.LastSeen, now) && ip.Address != "" {
+				if (isOnline(ip.LastSeen, now) || trafficObserved) && ip.Address != "" {
 					sourceIPs = appendUnique(sourceIPs, ip.Address)
 				}
 			}
@@ -215,6 +368,14 @@ func (m *Manager) updateAWG(ctx context.Context, previousLatest, next map[string
 		}
 		return err
 	}
+	return m.updateAWGObserved(ctx, previousLatest, next, now, observed)
+}
+
+func (m *Manager) updateAWGObserved(ctx context.Context, previousLatest, next map[string]ClientStats, now time.Time, observed []domain.AmneziaWGPeerStats) error {
+	previous, err := m.store.ListAWGTrafficSnapshots(ctx)
+	if err != nil {
+		return fmt.Errorf("list AmneziaWG traffic snapshots: %w", err)
+	}
 	for _, peer := range observed {
 		if peer.Name == "" {
 			continue
@@ -258,6 +419,22 @@ func (m *Manager) updateAWG(ctx context.Context, previousLatest, next map[string
 		next["awg:"+peer.Name] = stats
 	}
 	return nil
+}
+
+func preserveAWGStats(next, previous map[string]ClientStats, now time.Time) {
+	for key, current := range previous {
+		if !strings.HasPrefix(key, "awg:") {
+			continue
+		}
+		current.UploadBytesPerSecond, current.DownloadBytesPerSecond = 0, 0
+		if current.LastSeen != nil {
+			current.Online = isOnline(*current.LastSeen, now)
+		}
+		if !current.Online {
+			current.SourceIPs = nil
+		}
+		next[key] = current
+	}
 }
 
 func appendUnique(values []string, value string) []string {
@@ -309,7 +486,17 @@ func (m *Manager) LastError() string {
 func (m *Manager) Subscribe() (<-chan struct{}, func()) {
 	channel := make(chan struct{}, 1)
 	m.mu.Lock()
+	wasEmpty := len(m.subs) == 0
 	m.subs[channel] = struct{}{}
+	if wasEmpty && m.stream != nil && m.streamCancel == nil {
+		parent := m.rootContext
+		if parent == nil {
+			parent = context.Background()
+		}
+		streamContext, cancel := context.WithCancel(parent)
+		m.streamCancel = cancel
+		go m.consumeTelemetryStream(streamContext)
+	}
 	m.mu.Unlock()
 	return channel, func() {
 		m.mu.Lock()
@@ -317,8 +504,76 @@ func (m *Manager) Subscribe() (<-chan struct{}, func()) {
 			delete(m.subs, channel)
 			close(channel)
 		}
+		if len(m.subs) == 0 && m.streamCancel != nil {
+			m.streamCancel()
+			m.streamCancel = nil
+		}
 		m.mu.Unlock()
 	}
+}
+
+func (m *Manager) consumeTelemetryStream(ctx context.Context) {
+	backoff := time.Second
+	for ctx.Err() == nil {
+		stream, err := m.stream.WatchTelemetry(ctx, time.Second)
+		if err == nil {
+			for ctx.Err() == nil {
+				var update *controllerv1.TelemetryUpdate
+				update, err = stream.Recv()
+				if err != nil {
+					if !errors.Is(err, io.EOF) && ctx.Err() == nil {
+						m.markStreamError(err)
+					}
+					break
+				}
+				if applyErr := m.ApplyStreamUpdate(ctx, update); applyErr != nil {
+					m.markStreamError(applyErr)
+				} else {
+					backoff = time.Second
+				}
+			}
+		}
+		if ctx.Err() != nil {
+			return
+		}
+		if err != nil && !errors.Is(err, io.EOF) {
+			m.markStreamError(err)
+		}
+		timer := time.NewTimer(backoff)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+		backoff = min(backoff*2, 30*time.Second)
+	}
+}
+
+func (m *Manager) markStreamError(err error) {
+	if err == nil {
+		return
+	}
+	now := m.now().UTC()
+	m.mu.Lock()
+	m.lastError = "live telemetry stream is unavailable"
+	for id, current := range m.latest {
+		current.UploadBytesPerSecond, current.DownloadBytesPerSecond = 0, 0
+		if current.LastSeen != nil {
+			current.Online = isOnline(*current.LastSeen, now)
+		}
+		if !current.Online {
+			current.SourceIPs = nil
+		}
+		m.latest[id] = current
+	}
+	for subscriber := range m.subs {
+		select {
+		case subscriber <- struct{}{}:
+		default:
+		}
+	}
+	m.mu.Unlock()
 }
 
 func (m *Manager) setError(err error) {

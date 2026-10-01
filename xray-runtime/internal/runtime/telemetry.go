@@ -3,6 +3,8 @@ package runtime
 import (
 	"encoding/json"
 	"time"
+
+	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 )
 
 // RuntimeIPObservation describes a currently tracked client address. The Xray
@@ -17,6 +19,7 @@ type RuntimeIPObservation struct {
 // live counters and online observations Xray currently exposes for it.
 type RuntimeUserTelemetry struct {
 	Email         string
+	Protocol      xrayruntimev1.Protocol
 	UploadBytes   int64
 	DownloadBytes int64
 	Online        bool

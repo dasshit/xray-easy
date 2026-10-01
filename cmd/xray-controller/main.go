@@ -103,6 +103,7 @@ func serve() error {
 		grpc.MaxRecvMsgSize(24<<20),
 		grpc.MaxSendMsgSize(24<<20),
 		grpc.ChainUnaryInterceptor(controller.LoggingInterceptor("xray-controller"), controller.AuthInterceptor(token)),
+		grpc.ChainStreamInterceptor(controller.LoggingStreamInterceptor("xray-controller"), controller.AuthStreamInterceptor(token)),
 	)
 	var awg controller.AmneziaWGRuntime
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {

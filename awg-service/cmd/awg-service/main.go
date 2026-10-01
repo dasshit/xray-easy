@@ -109,6 +109,7 @@ func serve() error {
 func serveControlService(manager *control.Manager, opts control.Options, token string, listener net.Listener, shutdown <-chan os.Signal) error {
 	server := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(control.LoggingInterceptor(), control.AuthInterceptor(token)),
+		grpc.ChainStreamInterceptor(control.LoggingStreamInterceptor(), control.AuthStreamInterceptor(token)),
 		grpc.MaxRecvMsgSize(24<<20),
 		grpc.MaxSendMsgSize(24<<20),
 	)

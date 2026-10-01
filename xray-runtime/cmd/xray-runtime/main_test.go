@@ -14,8 +14,10 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"xray-easy/internal/interaction"
 	"xray-easy/internal/runtimeauth"
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 	runtime "xray-easy/xray-runtime/internal/runtime"
@@ -181,6 +183,43 @@ func TestRuntimeLoggingInterceptorDoesNotLogPayload(t *testing.T) {
 	})
 	if err != nil || response != "ok" {
 		t.Fatalf("successful interceptor result = %v, %v", response, err)
+	}
+}
+
+type runtimeLoggingTestStream struct{ ctx context.Context }
+
+func (s *runtimeLoggingTestStream) SetHeader(metadata.MD) error  { return nil }
+func (s *runtimeLoggingTestStream) SendHeader(metadata.MD) error { return nil }
+func (s *runtimeLoggingTestStream) SetTrailer(metadata.MD)       {}
+func (s *runtimeLoggingTestStream) Context() context.Context     { return s.ctx }
+func (s *runtimeLoggingTestStream) SendMsg(any) error            { return nil }
+func (s *runtimeLoggingTestStream) RecvMsg(any) error            { return nil }
+
+func TestRuntimeStreamLoggingInterceptorAddsTraceAndLogsCancellation(t *testing.T) {
+	var output bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	defer slog.SetDefault(previousLogger)
+	requestID := "abcdef0123456789abcdef0123456789"
+	operationID := "0123456789abcdef0123456789abcdef"
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", requestID, "x-controller-operation-id", operationID))
+	stream := &runtimeLoggingTestStream{ctx: ctx}
+	err := runtimeStreamLoggingInterceptor(nil, stream, &grpc.StreamServerInfo{FullMethod: xrayruntimev1.Runtime_WatchTelemetry_FullMethodName}, func(_ any, wrapped grpc.ServerStream) error {
+		if got := interaction.RequestID(wrapped.Context()); got != requestID {
+			t.Errorf("stream request ID = %q, want %q", got, requestID)
+		}
+		if got := interaction.OperationID(wrapped.Context()); got != operationID {
+			t.Errorf("stream operation ID = %q, want %q", got, operationID)
+		}
+		return context.Canceled
+	})
+	if err != context.Canceled {
+		t.Fatalf("runtime stream interceptor error = %v", err)
+	}
+	for _, expected := range []string{requestID, operationID, "grpc interaction", "canceled"} {
+		if !strings.Contains(output.String(), expected) {
+			t.Errorf("stream log %q does not contain %q", output.String(), expected)
+		}
 	}
 }
 

@@ -21,6 +21,7 @@ service Controller {
   rpc RemoveDeviceUser(RemoveDeviceUserRequest) returns (OperationResponse);
   rpc ListDeviceUsers(ListDeviceUsersRequest) returns (ListDeviceUsersResponse);
   rpc GetXrayTelemetry(EmptyRequest) returns (XrayTelemetryResponse);
+  rpc WatchTelemetry(WatchTelemetryRequest) returns (stream TelemetryUpdate);
   rpc GetAmneziaWGStatus(EmptyRequest) returns (AmneziaWGStatusResponse);
   rpc ListAmneziaWGPeers(EmptyRequest) returns (ListAmneziaWGPeersResponse);
   rpc CreateAmneziaWGPeer(CreateAmneziaWGPeerRequest) returns (AmneziaWGPeer);
@@ -126,9 +127,45 @@ message XrayUserTelemetry {
   int64 download_bytes = 3;
   google.protobuf.Timestamp last_seen = 4;
   repeated IPObservation source_ips = 5;
+  string protocol = 6;
+  google.protobuf.Timestamp last_activity = 7;
 }
 
 message XrayTelemetryResponse { repeated XrayUserTelemetry users = 1; }
+
+message WatchTelemetryRequest {
+  // Requested upstream sampling cadence; Controller clamps it to a safe range.
+  uint32 sample_interval_ms = 1;
+}
+
+message TelemetryClient {
+  // Stable protocol key: Xray user email or "awg:<peer-name>".
+  string device_key = 1;
+  string protocol = 2;
+  bool online = 3;
+  google.protobuf.Timestamp last_activity = 4;
+  int64 upload_bytes = 5;
+  int64 download_bytes = 6;
+  repeated string source_ips = 7;
+}
+
+message TelemetrySourceStatus {
+  string protocol = 1;
+  bool available = 2;
+  string generation = 3;
+  uint64 sequence = 4;
+  google.protobuf.Timestamp sampled_at = 5;
+  // Safe, bounded diagnostic text; source errors must be redacted.
+  string error = 6;
+}
+
+message TelemetryUpdate {
+  google.protobuf.Timestamp sampled_at = 1;
+  uint64 sequence = 2;
+  bool full_snapshot = 3;
+  repeated TelemetryClient clients = 4;
+  repeated TelemetrySourceStatus sources = 5;
+}
 
 message AmneziaWGStatusResponse {
   bool running = 1;

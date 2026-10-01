@@ -30,6 +30,7 @@ const (
 	Runtime_RemoveUser_FullMethodName            = "/xrayeasy.xray.v1.Runtime/RemoveUser"
 	Runtime_ListUsers_FullMethodName             = "/xrayeasy.xray.v1.Runtime/ListUsers"
 	Runtime_GetTelemetry_FullMethodName          = "/xrayeasy.xray.v1.Runtime/GetTelemetry"
+	Runtime_WatchTelemetry_FullMethodName        = "/xrayeasy.xray.v1.Runtime/WatchTelemetry"
 	Runtime_ProbeRealityTarget_FullMethodName    = "/xrayeasy.xray.v1.Runtime/ProbeRealityTarget"
 	Runtime_ProbeIPv6Egress_FullMethodName       = "/xrayeasy.xray.v1.Runtime/ProbeIPv6Egress"
 )
@@ -52,6 +53,7 @@ type RuntimeClient interface {
 	RemoveUser(ctx context.Context, in *RemoveUserRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error)
 	GetTelemetry(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*TelemetryResponse, error)
+	WatchTelemetry(ctx context.Context, in *WatchTelemetryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TelemetryResponse], error)
 	ProbeRealityTarget(ctx context.Context, in *ProbeRealityTargetRequest, opts ...grpc.CallOption) (*ProbeResponse, error)
 	ProbeIPv6Egress(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ProbeResponse, error)
 }
@@ -174,6 +176,25 @@ func (c *runtimeClient) GetTelemetry(ctx context.Context, in *EmptyRequest, opts
 	return out, nil
 }
 
+func (c *runtimeClient) WatchTelemetry(ctx context.Context, in *WatchTelemetryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TelemetryResponse], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Runtime_ServiceDesc.Streams[0], Runtime_WatchTelemetry_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchTelemetryRequest, TelemetryResponse]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Runtime_WatchTelemetryClient = grpc.ServerStreamingClient[TelemetryResponse]
+
 func (c *runtimeClient) ProbeRealityTarget(ctx context.Context, in *ProbeRealityTargetRequest, opts ...grpc.CallOption) (*ProbeResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ProbeResponse)
@@ -212,6 +233,7 @@ type RuntimeServer interface {
 	RemoveUser(context.Context, *RemoveUserRequest) (*OperationResponse, error)
 	ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error)
 	GetTelemetry(context.Context, *EmptyRequest) (*TelemetryResponse, error)
+	WatchTelemetry(*WatchTelemetryRequest, grpc.ServerStreamingServer[TelemetryResponse]) error
 	ProbeRealityTarget(context.Context, *ProbeRealityTargetRequest) (*ProbeResponse, error)
 	ProbeIPv6Egress(context.Context, *EmptyRequest) (*ProbeResponse, error)
 	mustEmbedUnimplementedRuntimeServer()
@@ -256,6 +278,9 @@ func (UnimplementedRuntimeServer) ListUsers(context.Context, *ListUsersRequest) 
 }
 func (UnimplementedRuntimeServer) GetTelemetry(context.Context, *EmptyRequest) (*TelemetryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTelemetry not implemented")
+}
+func (UnimplementedRuntimeServer) WatchTelemetry(*WatchTelemetryRequest, grpc.ServerStreamingServer[TelemetryResponse]) error {
+	return status.Errorf(codes.Unimplemented, "method WatchTelemetry not implemented")
 }
 func (UnimplementedRuntimeServer) ProbeRealityTarget(context.Context, *ProbeRealityTargetRequest) (*ProbeResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ProbeRealityTarget not implemented")
@@ -482,6 +507,17 @@ func _Runtime_GetTelemetry_Handler(srv interface{}, ctx context.Context, dec fun
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Runtime_WatchTelemetry_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchTelemetryRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(RuntimeServer).WatchTelemetry(m, &grpc.GenericServerStream[WatchTelemetryRequest, TelemetryResponse]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Runtime_WatchTelemetryServer = grpc.ServerStreamingServer[TelemetryResponse]
+
 func _Runtime_ProbeRealityTarget_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ProbeRealityTargetRequest)
 	if err := dec(in); err != nil {
@@ -578,6 +614,12 @@ var Runtime_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Runtime_ProbeIPv6Egress_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchTelemetry",
+			Handler:       _Runtime_WatchTelemetry_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "runtime.proto",
 }

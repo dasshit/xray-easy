@@ -20,6 +20,7 @@ service Runtime {
   rpc RemoveUser(RemoveUserRequest) returns (OperationResponse);
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
   rpc GetTelemetry(EmptyRequest) returns (TelemetryResponse);
+  rpc WatchTelemetry(WatchTelemetryRequest) returns (stream TelemetryResponse);
   rpc ProbeRealityTarget(ProbeRealityTargetRequest) returns (ProbeResponse);
   rpc ProbeIPv6Egress(EmptyRequest) returns (ProbeResponse);
 }
@@ -144,11 +145,23 @@ message UserTelemetry {
   bool online = 4;
   google.protobuf.Timestamp last_seen = 5;
   repeated IPObservation source_ips = 6;
+  // Time of the last observed user-data counter increase.
+  google.protobuf.Timestamp last_activity = 7;
+  Protocol protocol = 8;
 }
 
 message TelemetryResponse {
   google.protobuf.Timestamp sampled_at = 1;
   repeated UserTelemetry users = 2;
+  // Changes when the runtime process restarts or its counter baseline resets.
+  string source_generation = 3;
+  uint64 sequence = 4;
+  bool full_snapshot = 5;
+}
+
+message WatchTelemetryRequest {
+  // Requested sampling cadence; the runtime clamps this to a safe range.
+  uint32 sample_interval_ms = 1;
 }
 
 message ProbeRealityTargetRequest {

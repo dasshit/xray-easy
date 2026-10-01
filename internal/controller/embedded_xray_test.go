@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"net"
 	"os"
 	"path/filepath"
@@ -493,5 +494,67 @@ func TestDialEmbeddedXrayValidatesConfiguration(t *testing.T) {
 	client.TokenFile = ""
 	if _, err := client.readToken(); err == nil {
 		t.Fatal("empty runtime token path was accepted")
+	}
+}
+
+type telemetryRuntimeServer struct {
+	xrayruntimev1.UnimplementedRuntimeServer
+	requests chan *xrayruntimev1.WatchTelemetryRequest
+}
+
+func (s *telemetryRuntimeServer) WatchTelemetry(request *xrayruntimev1.WatchTelemetryRequest, stream xrayruntimev1.Runtime_WatchTelemetryServer) error {
+	s.requests <- request
+	if runtimeauth.IdentityFromContext(stream.Context()) != embeddedControlIdentity {
+		return status.Error(codes.Unauthenticated, "runtime stream identity is invalid")
+	}
+	return stream.Send(&xrayruntimev1.TelemetryResponse{SampledAt: timestamppb.Now(), SourceGeneration: "embedded-runtime", Sequence: 3, FullSnapshot: true, Users: []*xrayruntimev1.UserTelemetry{{Email: "ios@example.test", Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, UploadBytes: 15}}})
+}
+
+func TestEmbeddedXrayClientOpensAuthenticatedTelemetryStream(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	authenticator, err := runtimeauth.NewAuthenticator([]byte(embeddedTestToken), func(method, identity string) bool {
+		return method == xrayruntimev1.Runtime_WatchTelemetry_FullMethodName && identity == embeddedControlIdentity
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer(grpc.ChainStreamInterceptor(authenticator.StreamServerInterceptor()))
+	stub := &telemetryRuntimeServer{requests: make(chan *xrayruntimev1.WatchTelemetryRequest, 2)}
+	xrayruntimev1.RegisterRuntimeServer(server, stub)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	connection, err := grpc.NewClient("passthrough:///embedded-stream-test", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	tokenPath := filepath.Join(t.TempDir(), "runtime-token")
+	if err := os.WriteFile(tokenPath, []byte(embeddedTestToken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client := NewEmbeddedXrayClientWithConn(connection, tokenPath, t.TempDir())
+
+	for _, interval := range []time.Duration{100 * time.Millisecond, 10 * time.Second} {
+		stream, err := client.WatchTelemetry(context.Background(), interval)
+		if err != nil {
+			t.Fatalf("WatchTelemetry(%s): %v", interval, err)
+		}
+		request := <-stub.requests
+		wantInterval := uint32(interval.Milliseconds())
+		if interval < 500*time.Millisecond {
+			wantInterval = 1000
+		} else if interval > 5*time.Second {
+			wantInterval = 5000
+		}
+		if request.GetSampleIntervalMs() != wantInterval {
+			t.Fatalf("stream interval = %dms, want %dms", request.GetSampleIntervalMs(), wantInterval)
+		}
+		update, err := stream.Recv()
+		if err != nil || update.GetSequence() != 3 || len(update.GetUsers()) != 1 || update.GetUsers()[0].GetEmail() != "ios@example.test" {
+			t.Fatalf("runtime telemetry update = %+v, %v", update, err)
+		}
+		if _, err := stream.Recv(); err != io.EOF {
+			t.Fatalf("runtime stream completion error = %v, want EOF", err)
+		}
 	}
 }

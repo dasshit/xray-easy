@@ -89,7 +89,7 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 		t.Fatal(err)
 	}
 	first := manager.Snapshot()
-	if got := first["phone"]; !got.Online || got.UploadBytes != 100 || got.DownloadBytes != 200 || got.LastSeen == nil || !got.LastSeen.Equal(lastSeen) {
+	if got := first["phone"]; !got.Online || got.UploadBytes != 100 || got.DownloadBytes != 200 || got.LastSeen == nil || !got.LastSeen.Equal(now) {
 		t.Fatalf("first phone stats = %+v", got)
 	}
 	if len(first["phone"].SourceIPs) != 1 || first["phone"].SourceIPs[0] != "198.51.100.12" || first["phone"].UploadBytesPerSecond != 0 {
@@ -109,7 +109,7 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := manager.Snapshot()["phone"]
-	if second.UploadBytes != 120 || second.DownloadBytes != 250 || second.LastSeen == nil || !second.LastSeen.Equal(lastSeen) {
+	if second.UploadBytes != 120 || second.DownloadBytes != 250 || second.LastSeen == nil || !second.LastSeen.Equal(now) {
 		t.Fatalf("monotonic snapshot = %+v", second)
 	}
 	if second.UploadBytesPerSecond != 2 || second.DownloadBytesPerSecond != 5 || len(second.SourceIPs) != 1 {
@@ -125,7 +125,7 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 		t.Fatal(err)
 	}
 	third := manager.Snapshot()["phone"]
-	if third.UploadBytes != 125 || third.DownloadBytes != 257 || third.LastSeen == nil || !third.LastSeen.Equal(newLastSeen) {
+	if third.UploadBytes != 125 || third.DownloadBytes != 257 || third.LastSeen == nil || !third.LastSeen.Equal(now) {
 		t.Fatalf("post-restart stats = %+v", third)
 	}
 	if got := manager.LastError(); got != "" {
@@ -138,7 +138,7 @@ func TestPollAccumulatesCountersAcrossRestartsAndKeepsLastSeen(t *testing.T) {
 		t.Fatal(err)
 	}
 	stale := manager.Snapshot()["phone"]
-	if stale.Online || stale.UploadBytes != 125 || stale.DownloadBytes != 257 || stale.LastSeen == nil || !stale.LastSeen.Equal(newLastSeen) {
+	if stale.Online || stale.UploadBytes != 125 || stale.DownloadBytes != 257 || stale.LastSeen == nil {
 		t.Fatalf("stats after user disappears from Xray poll = %+v", stale)
 	}
 	snapshots, err := db.ListTrafficSnapshots(context.Background())
@@ -203,7 +203,7 @@ func TestPollKeepsFreshCachedStatsWhenXrayTemporarilyFails(t *testing.T) {
 		t.Fatalf("Xray stats error was not reported: %q", manager.LastError())
 	}
 
-	now = lastSeen.Add(onlineWindow + time.Second)
+	now = now.Add(onlineWindow + time.Second)
 	if err := manager.Poll(context.Background()); err == nil {
 		t.Fatal("continued Xray stats outage was not returned")
 	}

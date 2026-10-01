@@ -68,6 +68,23 @@ func AuthInterceptor(token string) grpc.UnaryServerInterceptor {
 	}
 }
 
+// AuthStreamInterceptor checks the same private bearer token on server streams.
+func AuthStreamInterceptor(token string) grpc.StreamServerInterceptor {
+	return func(server any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		values, ok := metadata.FromIncomingContext(stream.Context())
+		provided := ""
+		if ok {
+			if entries := values.Get("authorization"); len(entries) == 1 && strings.HasPrefix(entries[0], "Bearer ") {
+				provided = strings.TrimPrefix(entries[0], "Bearer ")
+			}
+		}
+		if len(provided) != len(token) || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
+			return status.Error(codes.Unauthenticated, "invalid control token")
+		}
+		return handler(server, stream)
+	}
+}
+
 // LoggingInterceptor records request correlation and outcome without logging
 // protobuf payloads, peer credentials, or raw error messages.
 func LoggingInterceptor() grpc.UnaryServerInterceptor {
@@ -96,6 +113,34 @@ func LoggingInterceptor() grpc.UnaryServerInterceptor {
 		return response, err
 	}
 }
+
+// LoggingStreamInterceptor records stream lifecycle and result without logging
+// peer telemetry or protobuf payloads.
+func LoggingStreamInterceptor() grpc.StreamServerInterceptor {
+	return func(server any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		ctx, requestID, operationID, attempt, traceErr := ensureIncomingTrace(stream.Context())
+		if traceErr != nil {
+			return status.Error(codes.Internal, "could not create stream request identifier")
+		}
+		started := time.Now()
+		err := handler(server, &controlContextServerStream{ServerStream: stream, ctx: ctx})
+		code, result, level := codes.OK.String(), "success", slog.LevelInfo
+		if err != nil && !errors.Is(err, context.Canceled) {
+			code, result, level = status.Code(err).String(), "failure", slog.LevelError
+		} else if errors.Is(err, context.Canceled) {
+			code, result = codes.Canceled.String(), "canceled"
+		}
+		slog.Default().LogAttrs(context.Background(), level, "grpc stream", slog.String("service", "awg-service"), slog.String("method", info.FullMethod), slog.String("request_id", requestID), slog.String("controller_operation_id", operationID), slog.Int("retry_attempt", attempt), slog.String("protocol", "amneziawg"), slog.String("result", result), slog.String("grpc_code", code), slog.Int64("duration_ms", time.Since(started).Milliseconds()))
+		return err
+	}
+}
+
+type controlContextServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s *controlContextServerStream) Context() context.Context { return s.ctx }
 
 func ensureIncomingTrace(ctx context.Context) (context.Context, string, string, int, error) {
 	values, _ := metadata.FromIncomingContext(ctx)
