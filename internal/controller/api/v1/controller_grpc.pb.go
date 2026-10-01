@@ -31,6 +31,7 @@ const (
 	Controller_AddDeviceUser_FullMethodName            = "/xrayeasy.controller.v1.Controller/AddDeviceUser"
 	Controller_RemoveDeviceUser_FullMethodName         = "/xrayeasy.controller.v1.Controller/RemoveDeviceUser"
 	Controller_ListDeviceUsers_FullMethodName          = "/xrayeasy.controller.v1.Controller/ListDeviceUsers"
+	Controller_SetXrayLogLevel_FullMethodName          = "/xrayeasy.controller.v1.Controller/SetXrayLogLevel"
 	Controller_GetXrayTelemetry_FullMethodName         = "/xrayeasy.controller.v1.Controller/GetXrayTelemetry"
 	Controller_WatchTelemetry_FullMethodName           = "/xrayeasy.controller.v1.Controller/WatchTelemetry"
 	Controller_GetAmneziaWGStatus_FullMethodName       = "/xrayeasy.controller.v1.Controller/GetAmneziaWGStatus"
@@ -61,6 +62,7 @@ type ControllerClient interface {
 	AddDeviceUser(ctx context.Context, in *AddDeviceUserRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	RemoveDeviceUser(ctx context.Context, in *RemoveDeviceUserRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	ListDeviceUsers(ctx context.Context, in *ListDeviceUsersRequest, opts ...grpc.CallOption) (*ListDeviceUsersResponse, error)
+	SetXrayLogLevel(ctx context.Context, in *SetXrayLogLevelRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	GetXrayTelemetry(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*XrayTelemetryResponse, error)
 	WatchTelemetry(ctx context.Context, in *WatchTelemetryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TelemetryUpdate], error)
 	GetAmneziaWGStatus(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*AmneziaWGStatusResponse, error)
@@ -201,6 +203,16 @@ func (c *controllerClient) ListDeviceUsers(ctx context.Context, in *ListDeviceUs
 	return out, nil
 }
 
+func (c *controllerClient) SetXrayLogLevel(ctx context.Context, in *SetXrayLogLevelRequest, opts ...grpc.CallOption) (*OperationResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(OperationResponse)
+	err := c.cc.Invoke(ctx, Controller_SetXrayLogLevel_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controllerClient) GetXrayTelemetry(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*XrayTelemetryResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(XrayTelemetryResponse)
@@ -328,6 +340,7 @@ type ControllerServer interface {
 	AddDeviceUser(context.Context, *AddDeviceUserRequest) (*OperationResponse, error)
 	RemoveDeviceUser(context.Context, *RemoveDeviceUserRequest) (*OperationResponse, error)
 	ListDeviceUsers(context.Context, *ListDeviceUsersRequest) (*ListDeviceUsersResponse, error)
+	SetXrayLogLevel(context.Context, *SetXrayLogLevelRequest) (*OperationResponse, error)
 	GetXrayTelemetry(context.Context, *EmptyRequest) (*XrayTelemetryResponse, error)
 	WatchTelemetry(*WatchTelemetryRequest, grpc.ServerStreamingServer[TelemetryUpdate]) error
 	GetAmneziaWGStatus(context.Context, *EmptyRequest) (*AmneziaWGStatusResponse, error)
@@ -383,6 +396,9 @@ func (UnimplementedControllerServer) RemoveDeviceUser(context.Context, *RemoveDe
 }
 func (UnimplementedControllerServer) ListDeviceUsers(context.Context, *ListDeviceUsersRequest) (*ListDeviceUsersResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method ListDeviceUsers not implemented")
+}
+func (UnimplementedControllerServer) SetXrayLogLevel(context.Context, *SetXrayLogLevelRequest) (*OperationResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetXrayLogLevel not implemented")
 }
 func (UnimplementedControllerServer) GetXrayTelemetry(context.Context, *EmptyRequest) (*XrayTelemetryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetXrayTelemetry not implemented")
@@ -651,6 +667,24 @@ func _Controller_ListDeviceUsers_Handler(srv interface{}, ctx context.Context, d
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Controller_SetXrayLogLevel_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetXrayLogLevelRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControllerServer).SetXrayLogLevel(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Controller_SetXrayLogLevel_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControllerServer).SetXrayLogLevel(ctx, req.(*SetXrayLogLevelRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Controller_GetXrayTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyRequest)
 	if err := dec(in); err != nil {
@@ -878,6 +912,10 @@ var Controller_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListDeviceUsers",
 			Handler:    _Controller_ListDeviceUsers_Handler,
+		},
+		{
+			MethodName: "SetXrayLogLevel",
+			Handler:    _Controller_SetXrayLogLevel_Handler,
 		},
 		{
 			MethodName: "GetXrayTelemetry",

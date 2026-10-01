@@ -50,6 +50,10 @@ type XrayStatsRuntime interface {
 	Poll(context.Context) ([]xrayapi.UserStats, error)
 }
 
+type XrayLogRuntime interface {
+	SetLogLevel(context.Context, string) error
+}
+
 // AmneziaWGRuntime owns AmneziaWG peer lifecycle and credential-bearing
 // profiles. Controller returns private material only on explicit delivery or
 // backup calls and never logs it.
@@ -125,6 +129,22 @@ func (s *Service) GetLogs(ctx context.Context, _ *controllerv1.EmptyRequest) (*c
 		return nil, err
 	}
 	return &controllerv1.LogsResponse{Lines: append([]string{}, lines...)}, nil
+}
+
+// SetXrayLogLevel changes the embedded runtime's redacted diagnostic filter
+// without restarting Xray listeners when the adapter supports it.
+func (s *Service) SetXrayLogLevel(ctx context.Context, request *controllerv1.SetXrayLogLevelRequest) (*controllerv1.OperationResponse, error) {
+	if request == nil || strings.TrimSpace(request.GetLevel()) == "" {
+		return nil, status.Error(codes.InvalidArgument, "log level is required")
+	}
+	runtime, ok := s.xray.(XrayLogRuntime)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "runtime log level control is unavailable")
+	}
+	if err := runtime.SetLogLevel(ctx, request.GetLevel()); err != nil {
+		return nil, err
+	}
+	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
 func (s *Service) ValidateConfig(ctx context.Context, request *controllerv1.ValidateConfigRequest) (*controllerv1.OperationResponse, error) {

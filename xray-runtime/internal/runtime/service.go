@@ -57,12 +57,13 @@ type EngineHandle interface {
 
 type coreLoader struct {
 	writeLog func(level, component, message string)
+	allowLog func(level string) bool
 }
 
 func (l coreLoader) Load(data []byte) (EngineHandle, error) {
 	if l.writeLog != nil {
 		_ = appLog.RegisterHandlerCreator(appLog.LogType_Console, func(appLog.LogType, appLog.HandlerCreatorOptions) (corelog.Handler, error) {
-			return capturedXrayLog{write: l.writeLog}, nil
+			return capturedXrayLog{write: l.writeLog, allow: l.allowLog}, nil
 		})
 	}
 	return LoadEngine(data)
@@ -97,6 +98,12 @@ type Service struct {
 	fatal             chan error
 	logs              []logRecord
 	logLimit          int
+	logLevel          string
+	eventMu           sync.Mutex
+	eventSequence     uint64
+	eventSubscribers  map[uint64]chan *xrayruntimev1.RuntimeEvent
+	nextSubscriberID  uint64
+	onlineState       map[string]bool
 }
 
 type logRecord struct {
@@ -128,10 +135,12 @@ func NewService(loader Loader, serviceVersion string, activeConfiguration []byte
 		state: xrayruntimev1.RuntimeState_RUNTIME_STATE_NO_CONFIGURATION, logLimit: 200,
 		activeConfig: append([]byte(nil), activeConfiguration...), inboundTags: make(map[xrayruntimev1.Protocol]string),
 		fence: fence, fatal: make(chan error, 1), activeRevision: activeRevision, lastSeen: make(map[string]time.Time),
+		logLevel: "warning", eventSubscribers: make(map[uint64]chan *xrayruntimev1.RuntimeEvent), onlineState: make(map[string]bool),
 		probeTarget: probeRealityTarget, probeIPv6: probeIPv6Egress,
 	}
+	service.logLevel = configuredLogLevel(activeConfiguration)
 	if loader == nil {
-		loader = coreLoader{writeLog: service.addLog}
+		loader = coreLoader{writeLog: service.addLog, allowLog: service.allowXrayLog}
 	}
 	service.loader = loader
 	service.addLog("info", "runtime", "embedded Xray runtime service starting")
@@ -165,6 +174,7 @@ func NewService(loader Loader, serviceVersion string, activeConfiguration []byte
 	service.protocols = protocols
 	service.telemetry = telemetryCapabilitiesFor(activeConfiguration, engine.StatsAvailable())
 	service.addLog("info", "runtime", "embedded Xray instance started")
+	service.emitEvent("info", "runtime", "runtime_started", xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, "", "", "embedded Xray instance started")
 	return service, nil
 }
 
@@ -178,9 +188,14 @@ func (s *Service) Close() error {
 	s.state = xrayruntimev1.RuntimeState_RUNTIME_STATE_STOPPING
 	s.mu.Unlock()
 	if engine == nil {
+		s.emitEvent("info", "runtime", "runtime_stopped", xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, "", "", "embedded Xray instance stopped")
 		return nil
 	}
-	return engine.Close()
+	err := engine.Close()
+	if err == nil {
+		s.emitEvent("info", "runtime", "runtime_stopped", xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, "", "", "embedded Xray instance stopped")
+	}
+	return err
 }
 
 // Fatal reports an unrecoverable core lifecycle error. The entrypoint should
@@ -200,6 +215,9 @@ func (s *Service) markFatal(err error) {
 }
 
 func (s *Service) addLog(level, component, message string) {
+	if component == "xray" && !s.allowXrayLog(level) {
+		return
+	}
 	s.mu.Lock()
 	if s.logLimit < 1 {
 		s.logLimit = 200
@@ -214,6 +232,47 @@ func (s *Service) addLog(level, component, message string) {
 	slog.Log(context.Background(), runtimeLogLevel(level), "runtime event", "service", "xray-runtime", "component", component, "message", entry.message)
 }
 
+func (s *Service) allowXrayLog(level string) bool {
+	s.mu.RLock()
+	configured := s.logLevel
+	s.mu.RUnlock()
+	if configured == "none" {
+		return false
+	}
+	threshold := map[string]int{"error": 1, "warn": 2, "info": 3, "debug": 4}
+	current, ok := threshold[level]
+	if !ok {
+		current = threshold["info"]
+	}
+	limit, ok := threshold[configured]
+	if !ok {
+		limit = threshold["warn"]
+	}
+	return current <= limit
+}
+
+func (s *Service) emitEvent(severity, component, name string, protocol xrayruntimev1.Protocol, email, sourceIP, detail string) {
+	s.eventMu.Lock()
+	s.eventSequence++
+	event := &xrayruntimev1.RuntimeEvent{Sequence: s.eventSequence, Timestamp: timestamppb.New(time.Now().UTC()), Severity: severity, Component: component, Event: name, Protocol: protocol, UserEmail: email, SourceIp: sourceIP, Detail: diagnostics.Redact(detail)}
+	for _, subscriber := range s.eventSubscribers {
+		select {
+		case subscriber <- event:
+		default:
+		}
+	}
+	s.eventMu.Unlock()
+}
+
+func firstSourceIP(observations []*xrayruntimev1.IPObservation) string {
+	for _, observation := range observations {
+		if observation != nil && strings.TrimSpace(observation.GetAddress()) != "" {
+			return observation.GetAddress()
+		}
+	}
+	return ""
+}
+
 func runtimeLogLevel(level string) slog.Level {
 	switch level {
 	case "error":
@@ -222,6 +281,100 @@ func runtimeLogLevel(level string) slog.Level {
 		return slog.LevelWarn
 	default:
 		return slog.LevelInfo
+	}
+}
+
+func configuredLogLevel(configuration []byte) string {
+	var document struct {
+		Log struct {
+			LogLevel string `json:"loglevel"`
+		} `json:"log"`
+	}
+	if json.Unmarshal(configuration, &document) == nil {
+		if domainLevel := strings.ToLower(strings.TrimSpace(document.Log.LogLevel)); domainLevel != "" {
+			return domainLevel
+		}
+	}
+	return "warning"
+}
+
+// SetLogLevel updates the product logging filter without stopping Xray
+// listeners. The backend persists the selected value for the next config
+// snapshot; this RPC applies it immediately to the embedded runtime.
+func (s *Service) SetLogLevel(ctx context.Context, request *xrayruntimev1.SetLogLevelRequest) (*xrayruntimev1.OperationResponse, error) {
+	if request == nil || !supportedLogLevel(request.GetLevel()) {
+		return nil, status.Error(codes.InvalidArgument, "supported log level is required")
+	}
+	if err := contextFailure(ctx); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	previous := s.logLevel
+	s.logLevel = strings.ToLower(strings.TrimSpace(request.GetLevel()))
+	s.mu.Unlock()
+	if previous != s.logLevel {
+		s.addLog("info", "logging", "Xray log level changed without restarting the runtime")
+		s.emitEvent("info", "logging", "log_level_changed", xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, "", "", previous+" -> "+s.logLevel)
+	}
+	return operationResponse(request.GetOperationId(), 0, previous == s.logLevel), nil
+}
+
+func supportedLogLevel(level string) bool {
+	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "debug", "info", "warning", "error", "none":
+		return true
+	default:
+		return false
+	}
+}
+
+// WatchEvents streams bounded, redacted runtime events. Slow consumers do not
+// block Xray operations; their dropped events are represented by a later
+// sequence gap.
+func (s *Service) WatchEvents(request *xrayruntimev1.WatchEventsRequest, stream xrayruntimev1.Runtime_WatchEventsServer) error {
+	if request == nil || stream == nil {
+		return status.Error(codes.InvalidArgument, "watch request and stream are required")
+	}
+	interval := time.Duration(request.GetHeartbeatIntervalMs()) * time.Millisecond
+	if interval < 5*time.Second {
+		interval = 15 * time.Second
+	}
+	if interval > 60*time.Second {
+		interval = 60 * time.Second
+	}
+	channel := make(chan *xrayruntimev1.RuntimeEvent, 32)
+	s.eventMu.Lock()
+	s.nextSubscriberID++
+	id := s.nextSubscriberID
+	s.eventSubscribers[id] = channel
+	s.eventMu.Unlock()
+	defer func() {
+		s.eventMu.Lock()
+		delete(s.eventSubscribers, id)
+		close(channel)
+		s.eventMu.Unlock()
+	}()
+	if err := stream.Send(&xrayruntimev1.RuntimeEvent{Timestamp: timestamppb.New(time.Now().UTC()), Severity: "info", Component: "runtime", Event: "event_stream_ready"}); err != nil {
+		return err
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case event := <-channel:
+			if event == nil {
+				return nil
+			}
+			if err := stream.Send(event); err != nil {
+				return err
+			}
+		case <-ticker.C:
+			if err := stream.Send(&xrayruntimev1.RuntimeEvent{Timestamp: timestamppb.New(time.Now().UTC()), Severity: "debug", Component: "runtime", Event: "heartbeat"}); err != nil {
+				return err
+			}
+		}
 	}
 }
 
@@ -500,6 +653,7 @@ func (s *Service) AddUser(ctx context.Context, request *xrayruntimev1.AddUserReq
 			return nil, status.Error(codes.Unavailable, "Xray revision state could not be committed; runtime is restarting")
 		}
 	}
+	s.emitEvent("info", "user", "user_added", request.GetProtocol(), request.GetEmail(), "", "Xray user became available")
 	return operationResponse(request.GetOperationId(), request.GetRevision(), wasPresent), nil
 }
 
@@ -540,6 +694,7 @@ func (s *Service) RemoveUser(ctx context.Context, request *xrayruntimev1.RemoveU
 			return nil, status.Error(codes.Unavailable, "Xray revision state could not be committed; runtime is restarting")
 		}
 	}
+	s.emitEvent("info", "user", "user_removed", request.GetProtocol(), request.GetEmail(), "", "Xray user was removed")
 	return operationResponse(request.GetOperationId(), request.GetRevision(), wasAbsent), nil
 }
 
@@ -679,6 +834,15 @@ func (s *Service) WatchTelemetry(request *xrayruntimev1.WatchTelemetryRequest, s
 				user.LastActivity = timestamppb.New(activity)
 			}
 			user.Online = !activity.IsZero() && now.Sub(activity) <= telemetryOnlineWindow
+			previousOnline := s.onlineState[user.GetEmail()]
+			if user.Online != previousOnline || (!previousOnline && user.Online) {
+				eventName, detail := "user_offline", "no traffic observed for the online window"
+				if user.Online {
+					eventName, detail = "user_online", "traffic activity observed"
+				}
+				s.emitEvent("info", "connection", eventName, user.GetProtocol(), user.GetEmail(), firstSourceIP(user.GetSourceIps()), detail)
+			}
+			s.onlineState[user.GetEmail()] = user.Online
 			if !user.Online {
 				user.SourceIps = nil
 			}

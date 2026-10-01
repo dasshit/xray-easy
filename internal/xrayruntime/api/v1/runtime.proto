@@ -19,8 +19,10 @@ service Runtime {
   rpc AddUser(AddUserRequest) returns (OperationResponse);
   rpc RemoveUser(RemoveUserRequest) returns (OperationResponse);
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc SetLogLevel(SetLogLevelRequest) returns (OperationResponse);
   rpc GetTelemetry(EmptyRequest) returns (TelemetryResponse);
   rpc WatchTelemetry(WatchTelemetryRequest) returns (stream TelemetryResponse);
+  rpc WatchEvents(WatchEventsRequest) returns (stream RuntimeEvent);
   rpc ProbeRealityTarget(ProbeRealityTargetRequest) returns (ProbeResponse);
   rpc ProbeIPv6Egress(EmptyRequest) returns (ProbeResponse);
 }
@@ -135,6 +137,27 @@ message RemoveUserRequest {
 
 message ListUsersRequest { Protocol protocol = 1; }
 message ListUsersResponse { repeated string emails = 1; }
+
+message SetLogLevelRequest {
+  string level = 1;
+  string operation_id = 2;
+}
+
+message WatchEventsRequest {
+  uint32 heartbeat_interval_ms = 1;
+}
+
+message RuntimeEvent {
+  uint64 sequence = 1;
+  google.protobuf.Timestamp timestamp = 2;
+  string severity = 3;
+  string component = 4;
+  string event = 5;
+  Protocol protocol = 6;
+  string user_email = 7;
+  string source_ip = 8;
+  string detail = 9;
+}
 
 message IPObservation {
   string address = 1;

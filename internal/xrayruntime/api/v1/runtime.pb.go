@@ -1068,6 +1068,210 @@ func (x *ListUsersResponse) GetEmails() []string {
 	return nil
 }
 
+type SetLogLevelRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Level         string                 `protobuf:"bytes,1,opt,name=level,proto3" json:"level,omitempty"`
+	OperationId   string                 `protobuf:"bytes,2,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetLogLevelRequest) Reset() {
+	*x = SetLogLevelRequest{}
+	mi := &file_runtime_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetLogLevelRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetLogLevelRequest) ProtoMessage() {}
+
+func (x *SetLogLevelRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_runtime_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetLogLevelRequest.ProtoReflect.Descriptor instead.
+func (*SetLogLevelRequest) Descriptor() ([]byte, []int) {
+	return file_runtime_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *SetLogLevelRequest) GetLevel() string {
+	if x != nil {
+		return x.Level
+	}
+	return ""
+}
+
+func (x *SetLogLevelRequest) GetOperationId() string {
+	if x != nil {
+		return x.OperationId
+	}
+	return ""
+}
+
+type WatchEventsRequest struct {
+	state               protoimpl.MessageState `protogen:"open.v1"`
+	HeartbeatIntervalMs uint32                 `protobuf:"varint,1,opt,name=heartbeat_interval_ms,json=heartbeatIntervalMs,proto3" json:"heartbeat_interval_ms,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
+}
+
+func (x *WatchEventsRequest) Reset() {
+	*x = WatchEventsRequest{}
+	mi := &file_runtime_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *WatchEventsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*WatchEventsRequest) ProtoMessage() {}
+
+func (x *WatchEventsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_runtime_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use WatchEventsRequest.ProtoReflect.Descriptor instead.
+func (*WatchEventsRequest) Descriptor() ([]byte, []int) {
+	return file_runtime_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *WatchEventsRequest) GetHeartbeatIntervalMs() uint32 {
+	if x != nil {
+		return x.HeartbeatIntervalMs
+	}
+	return 0
+}
+
+type RuntimeEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Sequence      uint64                 `protobuf:"varint,1,opt,name=sequence,proto3" json:"sequence,omitempty"`
+	Timestamp     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=timestamp,proto3" json:"timestamp,omitempty"`
+	Severity      string                 `protobuf:"bytes,3,opt,name=severity,proto3" json:"severity,omitempty"`
+	Component     string                 `protobuf:"bytes,4,opt,name=component,proto3" json:"component,omitempty"`
+	Event         string                 `protobuf:"bytes,5,opt,name=event,proto3" json:"event,omitempty"`
+	Protocol      Protocol               `protobuf:"varint,6,opt,name=protocol,proto3,enum=xrayeasy.xray.v1.Protocol" json:"protocol,omitempty"`
+	UserEmail     string                 `protobuf:"bytes,7,opt,name=user_email,json=userEmail,proto3" json:"user_email,omitempty"`
+	SourceIp      string                 `protobuf:"bytes,8,opt,name=source_ip,json=sourceIp,proto3" json:"source_ip,omitempty"`
+	Detail        string                 `protobuf:"bytes,9,opt,name=detail,proto3" json:"detail,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RuntimeEvent) Reset() {
+	*x = RuntimeEvent{}
+	mi := &file_runtime_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RuntimeEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RuntimeEvent) ProtoMessage() {}
+
+func (x *RuntimeEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_runtime_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RuntimeEvent.ProtoReflect.Descriptor instead.
+func (*RuntimeEvent) Descriptor() ([]byte, []int) {
+	return file_runtime_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *RuntimeEvent) GetSequence() uint64 {
+	if x != nil {
+		return x.Sequence
+	}
+	return 0
+}
+
+func (x *RuntimeEvent) GetTimestamp() *timestamppb.Timestamp {
+	if x != nil {
+		return x.Timestamp
+	}
+	return nil
+}
+
+func (x *RuntimeEvent) GetSeverity() string {
+	if x != nil {
+		return x.Severity
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetComponent() string {
+	if x != nil {
+		return x.Component
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetEvent() string {
+	if x != nil {
+		return x.Event
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetProtocol() Protocol {
+	if x != nil {
+		return x.Protocol
+	}
+	return Protocol_PROTOCOL_UNSPECIFIED
+}
+
+func (x *RuntimeEvent) GetUserEmail() string {
+	if x != nil {
+		return x.UserEmail
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetSourceIp() string {
+	if x != nil {
+		return x.SourceIp
+	}
+	return ""
+}
+
+func (x *RuntimeEvent) GetDetail() string {
+	if x != nil {
+		return x.Detail
+	}
+	return ""
+}
+
 type IPObservation struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Address       string                 `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
@@ -1078,7 +1282,7 @@ type IPObservation struct {
 
 func (x *IPObservation) Reset() {
 	*x = IPObservation{}
-	mi := &file_runtime_proto_msgTypes[15]
+	mi := &file_runtime_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1090,7 +1294,7 @@ func (x *IPObservation) String() string {
 func (*IPObservation) ProtoMessage() {}
 
 func (x *IPObservation) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[15]
+	mi := &file_runtime_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1103,7 +1307,7 @@ func (x *IPObservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IPObservation.ProtoReflect.Descriptor instead.
 func (*IPObservation) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{15}
+	return file_runtime_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *IPObservation) GetAddress() string {
@@ -1137,7 +1341,7 @@ type UserTelemetry struct {
 
 func (x *UserTelemetry) Reset() {
 	*x = UserTelemetry{}
-	mi := &file_runtime_proto_msgTypes[16]
+	mi := &file_runtime_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1149,7 +1353,7 @@ func (x *UserTelemetry) String() string {
 func (*UserTelemetry) ProtoMessage() {}
 
 func (x *UserTelemetry) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[16]
+	mi := &file_runtime_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1162,7 +1366,7 @@ func (x *UserTelemetry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UserTelemetry.ProtoReflect.Descriptor instead.
 func (*UserTelemetry) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{16}
+	return file_runtime_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *UserTelemetry) GetEmail() string {
@@ -1235,7 +1439,7 @@ type TelemetryResponse struct {
 
 func (x *TelemetryResponse) Reset() {
 	*x = TelemetryResponse{}
-	mi := &file_runtime_proto_msgTypes[17]
+	mi := &file_runtime_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1247,7 +1451,7 @@ func (x *TelemetryResponse) String() string {
 func (*TelemetryResponse) ProtoMessage() {}
 
 func (x *TelemetryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[17]
+	mi := &file_runtime_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1260,7 +1464,7 @@ func (x *TelemetryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TelemetryResponse.ProtoReflect.Descriptor instead.
 func (*TelemetryResponse) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{17}
+	return file_runtime_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *TelemetryResponse) GetSampledAt() *timestamppb.Timestamp {
@@ -1308,7 +1512,7 @@ type WatchTelemetryRequest struct {
 
 func (x *WatchTelemetryRequest) Reset() {
 	*x = WatchTelemetryRequest{}
-	mi := &file_runtime_proto_msgTypes[18]
+	mi := &file_runtime_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1320,7 +1524,7 @@ func (x *WatchTelemetryRequest) String() string {
 func (*WatchTelemetryRequest) ProtoMessage() {}
 
 func (x *WatchTelemetryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[18]
+	mi := &file_runtime_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1333,7 +1537,7 @@ func (x *WatchTelemetryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchTelemetryRequest.ProtoReflect.Descriptor instead.
 func (*WatchTelemetryRequest) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{18}
+	return file_runtime_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *WatchTelemetryRequest) GetSampleIntervalMs() uint32 {
@@ -1353,7 +1557,7 @@ type ProbeRealityTargetRequest struct {
 
 func (x *ProbeRealityTargetRequest) Reset() {
 	*x = ProbeRealityTargetRequest{}
-	mi := &file_runtime_proto_msgTypes[19]
+	mi := &file_runtime_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1365,7 +1569,7 @@ func (x *ProbeRealityTargetRequest) String() string {
 func (*ProbeRealityTargetRequest) ProtoMessage() {}
 
 func (x *ProbeRealityTargetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[19]
+	mi := &file_runtime_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1378,7 +1582,7 @@ func (x *ProbeRealityTargetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeRealityTargetRequest.ProtoReflect.Descriptor instead.
 func (*ProbeRealityTargetRequest) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{19}
+	return file_runtime_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *ProbeRealityTargetRequest) GetTarget() string {
@@ -1405,7 +1609,7 @@ type ProbeResponse struct {
 
 func (x *ProbeResponse) Reset() {
 	*x = ProbeResponse{}
-	mi := &file_runtime_proto_msgTypes[20]
+	mi := &file_runtime_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1417,7 +1621,7 @@ func (x *ProbeResponse) String() string {
 func (*ProbeResponse) ProtoMessage() {}
 
 func (x *ProbeResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[20]
+	mi := &file_runtime_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1430,7 +1634,7 @@ func (x *ProbeResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeResponse.ProtoReflect.Descriptor instead.
 func (*ProbeResponse) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{20}
+	return file_runtime_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *ProbeResponse) GetOk() bool {
@@ -1458,7 +1662,7 @@ type OperationResponse struct {
 
 func (x *OperationResponse) Reset() {
 	*x = OperationResponse{}
-	mi := &file_runtime_proto_msgTypes[21]
+	mi := &file_runtime_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1470,7 +1674,7 @@ func (x *OperationResponse) String() string {
 func (*OperationResponse) ProtoMessage() {}
 
 func (x *OperationResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_runtime_proto_msgTypes[21]
+	mi := &file_runtime_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1483,7 +1687,7 @@ func (x *OperationResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use OperationResponse.ProtoReflect.Descriptor instead.
 func (*OperationResponse) Descriptor() ([]byte, []int) {
-	return file_runtime_proto_rawDescGZIP(), []int{21}
+	return file_runtime_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *OperationResponse) GetOperationId() string {
@@ -1582,7 +1786,23 @@ const file_runtime_proto_rawDesc = "" +
 	"\x10ListUsersRequest\x126\n" +
 	"\bprotocol\x18\x01 \x01(\x0e2\x1a.xrayeasy.xray.v1.ProtocolR\bprotocol\"+\n" +
 	"\x11ListUsersResponse\x12\x16\n" +
-	"\x06emails\x18\x01 \x03(\tR\x06emails\"b\n" +
+	"\x06emails\x18\x01 \x03(\tR\x06emails\"M\n" +
+	"\x12SetLogLevelRequest\x12\x14\n" +
+	"\x05level\x18\x01 \x01(\tR\x05level\x12!\n" +
+	"\foperation_id\x18\x02 \x01(\tR\voperationId\"H\n" +
+	"\x12WatchEventsRequest\x122\n" +
+	"\x15heartbeat_interval_ms\x18\x01 \x01(\rR\x13heartbeatIntervalMs\"\xc0\x02\n" +
+	"\fRuntimeEvent\x12\x1a\n" +
+	"\bsequence\x18\x01 \x01(\x04R\bsequence\x128\n" +
+	"\ttimestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\ttimestamp\x12\x1a\n" +
+	"\bseverity\x18\x03 \x01(\tR\bseverity\x12\x1c\n" +
+	"\tcomponent\x18\x04 \x01(\tR\tcomponent\x12\x14\n" +
+	"\x05event\x18\x05 \x01(\tR\x05event\x126\n" +
+	"\bprotocol\x18\x06 \x01(\x0e2\x1a.xrayeasy.xray.v1.ProtocolR\bprotocol\x12\x1d\n" +
+	"\n" +
+	"user_email\x18\a \x01(\tR\tuserEmail\x12\x1b\n" +
+	"\tsource_ip\x18\b \x01(\tR\bsourceIp\x12\x16\n" +
+	"\x06detail\x18\t \x01(\tR\x06detail\"b\n" +
 	"\rIPObservation\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\x127\n" +
 	"\tlast_seen\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\blastSeen\"\xf9\x02\n" +
@@ -1629,7 +1849,7 @@ const file_runtime_proto_rawDesc = "" +
 	"\x1eRUNTIME_STATE_NO_CONFIGURATION\x10\x02\x12\x19\n" +
 	"\x15RUNTIME_STATE_RUNNING\x10\x03\x12\x1a\n" +
 	"\x16RUNTIME_STATE_STOPPING\x10\x04\x12\x18\n" +
-	"\x14RUNTIME_STATE_FAILED\x10\x052\xec\t\n" +
+	"\x14RUNTIME_STATE_FAILED\x10\x052\x9d\v\n" +
 	"\aRuntime\x12K\n" +
 	"\x06Health\x12\x1f.xrayeasy.xray.v1.HealthRequest\x1a .xrayeasy.xray.v1.HealthResponse\x12L\n" +
 	"\tGetStatus\x12\x1e.xrayeasy.xray.v1.EmptyRequest\x1a\x1f.xrayeasy.xray.v1.RuntimeStatus\x12Y\n" +
@@ -1641,9 +1861,11 @@ const file_runtime_proto_rawDesc = "" +
 	"\aAddUser\x12 .xrayeasy.xray.v1.AddUserRequest\x1a#.xrayeasy.xray.v1.OperationResponse\x12V\n" +
 	"\n" +
 	"RemoveUser\x12#.xrayeasy.xray.v1.RemoveUserRequest\x1a#.xrayeasy.xray.v1.OperationResponse\x12T\n" +
-	"\tListUsers\x12\".xrayeasy.xray.v1.ListUsersRequest\x1a#.xrayeasy.xray.v1.ListUsersResponse\x12S\n" +
+	"\tListUsers\x12\".xrayeasy.xray.v1.ListUsersRequest\x1a#.xrayeasy.xray.v1.ListUsersResponse\x12X\n" +
+	"\vSetLogLevel\x12$.xrayeasy.xray.v1.SetLogLevelRequest\x1a#.xrayeasy.xray.v1.OperationResponse\x12S\n" +
 	"\fGetTelemetry\x12\x1e.xrayeasy.xray.v1.EmptyRequest\x1a#.xrayeasy.xray.v1.TelemetryResponse\x12`\n" +
-	"\x0eWatchTelemetry\x12'.xrayeasy.xray.v1.WatchTelemetryRequest\x1a#.xrayeasy.xray.v1.TelemetryResponse0\x01\x12b\n" +
+	"\x0eWatchTelemetry\x12'.xrayeasy.xray.v1.WatchTelemetryRequest\x1a#.xrayeasy.xray.v1.TelemetryResponse0\x01\x12U\n" +
+	"\vWatchEvents\x12$.xrayeasy.xray.v1.WatchEventsRequest\x1a\x1e.xrayeasy.xray.v1.RuntimeEvent0\x01\x12b\n" +
 	"\x12ProbeRealityTarget\x12+.xrayeasy.xray.v1.ProbeRealityTargetRequest\x1a\x1f.xrayeasy.xray.v1.ProbeResponse\x12R\n" +
 	"\x0fProbeIPv6Egress\x12\x1e.xrayeasy.xray.v1.EmptyRequest\x1a\x1f.xrayeasy.xray.v1.ProbeResponseB5Z3xray-easy/internal/xrayruntime/api/v1;xrayruntimev1b\x06proto3"
 
@@ -1660,7 +1882,7 @@ func file_runtime_proto_rawDescGZIP() []byte {
 }
 
 var file_runtime_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 22)
+var file_runtime_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
 var file_runtime_proto_goTypes = []any{
 	(Protocol)(0),                     // 0: xrayeasy.xray.v1.Protocol
 	(RuntimeState)(0),                 // 1: xrayeasy.xray.v1.RuntimeState
@@ -1679,66 +1901,75 @@ var file_runtime_proto_goTypes = []any{
 	(*RemoveUserRequest)(nil),         // 14: xrayeasy.xray.v1.RemoveUserRequest
 	(*ListUsersRequest)(nil),          // 15: xrayeasy.xray.v1.ListUsersRequest
 	(*ListUsersResponse)(nil),         // 16: xrayeasy.xray.v1.ListUsersResponse
-	(*IPObservation)(nil),             // 17: xrayeasy.xray.v1.IPObservation
-	(*UserTelemetry)(nil),             // 18: xrayeasy.xray.v1.UserTelemetry
-	(*TelemetryResponse)(nil),         // 19: xrayeasy.xray.v1.TelemetryResponse
-	(*WatchTelemetryRequest)(nil),     // 20: xrayeasy.xray.v1.WatchTelemetryRequest
-	(*ProbeRealityTargetRequest)(nil), // 21: xrayeasy.xray.v1.ProbeRealityTargetRequest
-	(*ProbeResponse)(nil),             // 22: xrayeasy.xray.v1.ProbeResponse
-	(*OperationResponse)(nil),         // 23: xrayeasy.xray.v1.OperationResponse
-	(*timestamppb.Timestamp)(nil),     // 24: google.protobuf.Timestamp
+	(*SetLogLevelRequest)(nil),        // 17: xrayeasy.xray.v1.SetLogLevelRequest
+	(*WatchEventsRequest)(nil),        // 18: xrayeasy.xray.v1.WatchEventsRequest
+	(*RuntimeEvent)(nil),              // 19: xrayeasy.xray.v1.RuntimeEvent
+	(*IPObservation)(nil),             // 20: xrayeasy.xray.v1.IPObservation
+	(*UserTelemetry)(nil),             // 21: xrayeasy.xray.v1.UserTelemetry
+	(*TelemetryResponse)(nil),         // 22: xrayeasy.xray.v1.TelemetryResponse
+	(*WatchTelemetryRequest)(nil),     // 23: xrayeasy.xray.v1.WatchTelemetryRequest
+	(*ProbeRealityTargetRequest)(nil), // 24: xrayeasy.xray.v1.ProbeRealityTargetRequest
+	(*ProbeResponse)(nil),             // 25: xrayeasy.xray.v1.ProbeResponse
+	(*OperationResponse)(nil),         // 26: xrayeasy.xray.v1.OperationResponse
+	(*timestamppb.Timestamp)(nil),     // 27: google.protobuf.Timestamp
 }
 var file_runtime_proto_depIdxs = []int32{
 	1,  // 0: xrayeasy.xray.v1.RuntimeStatus.state:type_name -> xrayeasy.xray.v1.RuntimeState
-	24, // 1: xrayeasy.xray.v1.RuntimeStatus.started_at:type_name -> google.protobuf.Timestamp
+	27, // 1: xrayeasy.xray.v1.RuntimeStatus.started_at:type_name -> google.protobuf.Timestamp
 	0,  // 2: xrayeasy.xray.v1.ProtocolCapability.protocol:type_name -> xrayeasy.xray.v1.Protocol
 	6,  // 3: xrayeasy.xray.v1.CapabilitiesResponse.protocols:type_name -> xrayeasy.xray.v1.ProtocolCapability
-	24, // 4: xrayeasy.xray.v1.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
+	27, // 4: xrayeasy.xray.v1.LogEntry.timestamp:type_name -> google.protobuf.Timestamp
 	8,  // 5: xrayeasy.xray.v1.LogsResponse.entries:type_name -> xrayeasy.xray.v1.LogEntry
 	0,  // 6: xrayeasy.xray.v1.AddUserRequest.protocol:type_name -> xrayeasy.xray.v1.Protocol
 	0,  // 7: xrayeasy.xray.v1.RemoveUserRequest.protocol:type_name -> xrayeasy.xray.v1.Protocol
 	0,  // 8: xrayeasy.xray.v1.ListUsersRequest.protocol:type_name -> xrayeasy.xray.v1.Protocol
-	24, // 9: xrayeasy.xray.v1.IPObservation.last_seen:type_name -> google.protobuf.Timestamp
-	24, // 10: xrayeasy.xray.v1.UserTelemetry.last_seen:type_name -> google.protobuf.Timestamp
-	17, // 11: xrayeasy.xray.v1.UserTelemetry.source_ips:type_name -> xrayeasy.xray.v1.IPObservation
-	24, // 12: xrayeasy.xray.v1.UserTelemetry.last_activity:type_name -> google.protobuf.Timestamp
-	0,  // 13: xrayeasy.xray.v1.UserTelemetry.protocol:type_name -> xrayeasy.xray.v1.Protocol
-	24, // 14: xrayeasy.xray.v1.TelemetryResponse.sampled_at:type_name -> google.protobuf.Timestamp
-	18, // 15: xrayeasy.xray.v1.TelemetryResponse.users:type_name -> xrayeasy.xray.v1.UserTelemetry
-	24, // 16: xrayeasy.xray.v1.ProbeResponse.checked_at:type_name -> google.protobuf.Timestamp
-	3,  // 17: xrayeasy.xray.v1.Runtime.Health:input_type -> xrayeasy.xray.v1.HealthRequest
-	2,  // 18: xrayeasy.xray.v1.Runtime.GetStatus:input_type -> xrayeasy.xray.v1.EmptyRequest
-	2,  // 19: xrayeasy.xray.v1.Runtime.GetCapabilities:input_type -> xrayeasy.xray.v1.EmptyRequest
-	2,  // 20: xrayeasy.xray.v1.Runtime.GetRecentLogs:input_type -> xrayeasy.xray.v1.EmptyRequest
-	10, // 21: xrayeasy.xray.v1.Runtime.ValidateConfiguration:input_type -> xrayeasy.xray.v1.ConfigurationRequest
-	10, // 22: xrayeasy.xray.v1.Runtime.ApplyConfiguration:input_type -> xrayeasy.xray.v1.ConfigurationRequest
-	12, // 23: xrayeasy.xray.v1.Runtime.ReplaceInbound:input_type -> xrayeasy.xray.v1.ReplaceInboundRequest
-	13, // 24: xrayeasy.xray.v1.Runtime.AddUser:input_type -> xrayeasy.xray.v1.AddUserRequest
-	14, // 25: xrayeasy.xray.v1.Runtime.RemoveUser:input_type -> xrayeasy.xray.v1.RemoveUserRequest
-	15, // 26: xrayeasy.xray.v1.Runtime.ListUsers:input_type -> xrayeasy.xray.v1.ListUsersRequest
-	2,  // 27: xrayeasy.xray.v1.Runtime.GetTelemetry:input_type -> xrayeasy.xray.v1.EmptyRequest
-	20, // 28: xrayeasy.xray.v1.Runtime.WatchTelemetry:input_type -> xrayeasy.xray.v1.WatchTelemetryRequest
-	21, // 29: xrayeasy.xray.v1.Runtime.ProbeRealityTarget:input_type -> xrayeasy.xray.v1.ProbeRealityTargetRequest
-	2,  // 30: xrayeasy.xray.v1.Runtime.ProbeIPv6Egress:input_type -> xrayeasy.xray.v1.EmptyRequest
-	4,  // 31: xrayeasy.xray.v1.Runtime.Health:output_type -> xrayeasy.xray.v1.HealthResponse
-	5,  // 32: xrayeasy.xray.v1.Runtime.GetStatus:output_type -> xrayeasy.xray.v1.RuntimeStatus
-	7,  // 33: xrayeasy.xray.v1.Runtime.GetCapabilities:output_type -> xrayeasy.xray.v1.CapabilitiesResponse
-	9,  // 34: xrayeasy.xray.v1.Runtime.GetRecentLogs:output_type -> xrayeasy.xray.v1.LogsResponse
-	11, // 35: xrayeasy.xray.v1.Runtime.ValidateConfiguration:output_type -> xrayeasy.xray.v1.ConfigurationResponse
-	23, // 36: xrayeasy.xray.v1.Runtime.ApplyConfiguration:output_type -> xrayeasy.xray.v1.OperationResponse
-	23, // 37: xrayeasy.xray.v1.Runtime.ReplaceInbound:output_type -> xrayeasy.xray.v1.OperationResponse
-	23, // 38: xrayeasy.xray.v1.Runtime.AddUser:output_type -> xrayeasy.xray.v1.OperationResponse
-	23, // 39: xrayeasy.xray.v1.Runtime.RemoveUser:output_type -> xrayeasy.xray.v1.OperationResponse
-	16, // 40: xrayeasy.xray.v1.Runtime.ListUsers:output_type -> xrayeasy.xray.v1.ListUsersResponse
-	19, // 41: xrayeasy.xray.v1.Runtime.GetTelemetry:output_type -> xrayeasy.xray.v1.TelemetryResponse
-	19, // 42: xrayeasy.xray.v1.Runtime.WatchTelemetry:output_type -> xrayeasy.xray.v1.TelemetryResponse
-	22, // 43: xrayeasy.xray.v1.Runtime.ProbeRealityTarget:output_type -> xrayeasy.xray.v1.ProbeResponse
-	22, // 44: xrayeasy.xray.v1.Runtime.ProbeIPv6Egress:output_type -> xrayeasy.xray.v1.ProbeResponse
-	31, // [31:45] is the sub-list for method output_type
-	17, // [17:31] is the sub-list for method input_type
-	17, // [17:17] is the sub-list for extension type_name
-	17, // [17:17] is the sub-list for extension extendee
-	0,  // [0:17] is the sub-list for field type_name
+	27, // 9: xrayeasy.xray.v1.RuntimeEvent.timestamp:type_name -> google.protobuf.Timestamp
+	0,  // 10: xrayeasy.xray.v1.RuntimeEvent.protocol:type_name -> xrayeasy.xray.v1.Protocol
+	27, // 11: xrayeasy.xray.v1.IPObservation.last_seen:type_name -> google.protobuf.Timestamp
+	27, // 12: xrayeasy.xray.v1.UserTelemetry.last_seen:type_name -> google.protobuf.Timestamp
+	20, // 13: xrayeasy.xray.v1.UserTelemetry.source_ips:type_name -> xrayeasy.xray.v1.IPObservation
+	27, // 14: xrayeasy.xray.v1.UserTelemetry.last_activity:type_name -> google.protobuf.Timestamp
+	0,  // 15: xrayeasy.xray.v1.UserTelemetry.protocol:type_name -> xrayeasy.xray.v1.Protocol
+	27, // 16: xrayeasy.xray.v1.TelemetryResponse.sampled_at:type_name -> google.protobuf.Timestamp
+	21, // 17: xrayeasy.xray.v1.TelemetryResponse.users:type_name -> xrayeasy.xray.v1.UserTelemetry
+	27, // 18: xrayeasy.xray.v1.ProbeResponse.checked_at:type_name -> google.protobuf.Timestamp
+	3,  // 19: xrayeasy.xray.v1.Runtime.Health:input_type -> xrayeasy.xray.v1.HealthRequest
+	2,  // 20: xrayeasy.xray.v1.Runtime.GetStatus:input_type -> xrayeasy.xray.v1.EmptyRequest
+	2,  // 21: xrayeasy.xray.v1.Runtime.GetCapabilities:input_type -> xrayeasy.xray.v1.EmptyRequest
+	2,  // 22: xrayeasy.xray.v1.Runtime.GetRecentLogs:input_type -> xrayeasy.xray.v1.EmptyRequest
+	10, // 23: xrayeasy.xray.v1.Runtime.ValidateConfiguration:input_type -> xrayeasy.xray.v1.ConfigurationRequest
+	10, // 24: xrayeasy.xray.v1.Runtime.ApplyConfiguration:input_type -> xrayeasy.xray.v1.ConfigurationRequest
+	12, // 25: xrayeasy.xray.v1.Runtime.ReplaceInbound:input_type -> xrayeasy.xray.v1.ReplaceInboundRequest
+	13, // 26: xrayeasy.xray.v1.Runtime.AddUser:input_type -> xrayeasy.xray.v1.AddUserRequest
+	14, // 27: xrayeasy.xray.v1.Runtime.RemoveUser:input_type -> xrayeasy.xray.v1.RemoveUserRequest
+	15, // 28: xrayeasy.xray.v1.Runtime.ListUsers:input_type -> xrayeasy.xray.v1.ListUsersRequest
+	17, // 29: xrayeasy.xray.v1.Runtime.SetLogLevel:input_type -> xrayeasy.xray.v1.SetLogLevelRequest
+	2,  // 30: xrayeasy.xray.v1.Runtime.GetTelemetry:input_type -> xrayeasy.xray.v1.EmptyRequest
+	23, // 31: xrayeasy.xray.v1.Runtime.WatchTelemetry:input_type -> xrayeasy.xray.v1.WatchTelemetryRequest
+	18, // 32: xrayeasy.xray.v1.Runtime.WatchEvents:input_type -> xrayeasy.xray.v1.WatchEventsRequest
+	24, // 33: xrayeasy.xray.v1.Runtime.ProbeRealityTarget:input_type -> xrayeasy.xray.v1.ProbeRealityTargetRequest
+	2,  // 34: xrayeasy.xray.v1.Runtime.ProbeIPv6Egress:input_type -> xrayeasy.xray.v1.EmptyRequest
+	4,  // 35: xrayeasy.xray.v1.Runtime.Health:output_type -> xrayeasy.xray.v1.HealthResponse
+	5,  // 36: xrayeasy.xray.v1.Runtime.GetStatus:output_type -> xrayeasy.xray.v1.RuntimeStatus
+	7,  // 37: xrayeasy.xray.v1.Runtime.GetCapabilities:output_type -> xrayeasy.xray.v1.CapabilitiesResponse
+	9,  // 38: xrayeasy.xray.v1.Runtime.GetRecentLogs:output_type -> xrayeasy.xray.v1.LogsResponse
+	11, // 39: xrayeasy.xray.v1.Runtime.ValidateConfiguration:output_type -> xrayeasy.xray.v1.ConfigurationResponse
+	26, // 40: xrayeasy.xray.v1.Runtime.ApplyConfiguration:output_type -> xrayeasy.xray.v1.OperationResponse
+	26, // 41: xrayeasy.xray.v1.Runtime.ReplaceInbound:output_type -> xrayeasy.xray.v1.OperationResponse
+	26, // 42: xrayeasy.xray.v1.Runtime.AddUser:output_type -> xrayeasy.xray.v1.OperationResponse
+	26, // 43: xrayeasy.xray.v1.Runtime.RemoveUser:output_type -> xrayeasy.xray.v1.OperationResponse
+	16, // 44: xrayeasy.xray.v1.Runtime.ListUsers:output_type -> xrayeasy.xray.v1.ListUsersResponse
+	26, // 45: xrayeasy.xray.v1.Runtime.SetLogLevel:output_type -> xrayeasy.xray.v1.OperationResponse
+	22, // 46: xrayeasy.xray.v1.Runtime.GetTelemetry:output_type -> xrayeasy.xray.v1.TelemetryResponse
+	22, // 47: xrayeasy.xray.v1.Runtime.WatchTelemetry:output_type -> xrayeasy.xray.v1.TelemetryResponse
+	19, // 48: xrayeasy.xray.v1.Runtime.WatchEvents:output_type -> xrayeasy.xray.v1.RuntimeEvent
+	25, // 49: xrayeasy.xray.v1.Runtime.ProbeRealityTarget:output_type -> xrayeasy.xray.v1.ProbeResponse
+	25, // 50: xrayeasy.xray.v1.Runtime.ProbeIPv6Egress:output_type -> xrayeasy.xray.v1.ProbeResponse
+	35, // [35:51] is the sub-list for method output_type
+	19, // [19:35] is the sub-list for method input_type
+	19, // [19:19] is the sub-list for extension type_name
+	19, // [19:19] is the sub-list for extension extendee
+	0,  // [0:19] is the sub-list for field type_name
 }
 
 func init() { file_runtime_proto_init() }
@@ -1752,7 +1983,7 @@ func file_runtime_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_runtime_proto_rawDesc), len(file_runtime_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   22,
+			NumMessages:   25,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

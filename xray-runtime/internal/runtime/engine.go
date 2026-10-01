@@ -33,6 +33,7 @@ import (
 
 type capturedXrayLog struct {
 	write func(level, component, message string)
+	allow func(level string) bool
 }
 
 func (h capturedXrayLog) Handle(message corelog.Message) {
@@ -46,7 +47,14 @@ func (h capturedXrayLog) Handle(message corelog.Message) {
 		level = "error"
 	case corelog.Severity_Warning:
 		level = "warn"
+	case corelog.Severity_Info:
+		level = "info"
+	case corelog.Severity_Debug:
+		level = "debug"
 	default:
+		return
+	}
+	if h.allow != nil && !h.allow(level) {
 		return
 	}
 	h.write(level, "xray", redactXrayLog(fmt.Sprint(general.Content)))
@@ -143,6 +151,18 @@ func parseConfig(configuration []byte) (*core.Config, error) {
 	configuration, err := stripExternalAPIServer(configuration)
 	if err != nil {
 		return nil, fmt.Errorf("remove external Xray API server: %w", err)
+	}
+	// Keep the complete Xray diagnostic stream available to the embedded
+	// handler. Service-level filtering can then change the administrator's
+	// selected level without restarting listeners.
+	var document map[string]json.RawMessage
+	if json.Unmarshal(configuration, &document) == nil && document != nil {
+		var logConfig map[string]any
+		if raw, ok := document["log"]; ok && json.Unmarshal(raw, &logConfig) == nil {
+			logConfig["loglevel"] = "debug"
+			document["log"], _ = json.Marshal(logConfig)
+			configuration, _ = json.Marshal(document)
+		}
 	}
 	config, err := xrayserial.LoadJSONConfig(bytes.NewReader(configuration))
 	if err != nil {

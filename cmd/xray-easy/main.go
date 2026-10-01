@@ -77,6 +77,10 @@ type xrayRuntimeAPI interface {
 	Logs(context.Context) ([]string, error)
 }
 
+type xrayLogLevelAPI interface {
+	SetLogLevel(context.Context, string) error
+}
+
 type runtimeControl interface {
 	xrayRuntimeAPI
 	Health(context.Context) error
@@ -1696,7 +1700,7 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 			consequences = append(consequences, "existing profiles remain valid; new profiles use the updated default fingerprint")
 		}
 		if logLevelChanged {
-			consequences = append(consequences, "Xray will restart and active connections will be briefly interrupted; existing profiles remain valid")
+			consequences = append(consequences, "Xray log filtering changes through the control plane; active connections remain running when the runtime supports it")
 		}
 	}
 	revokedClients := 0
@@ -1791,6 +1795,29 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 		s.finishSettingsChange(req.ChangeID, true)
 		writeJSON(w, http.StatusOK, map[string]any{"applied": true, "settings": publicSettings(pending.Settings, s.vmessPort), "revoked_clients": 0})
 		return
+	}
+	if pending.ExpectedConfirmation == "" && pending.RequiresXrayApply && pending.Settings.ClientFingerprint == current.ClientFingerprint {
+		if runtime, ok := s.xrayRuntime.(xrayLogLevelAPI); ok {
+			if err := runtime.SetLogLevel(r.Context(), pending.Settings.LogLevel); err != nil {
+				s.finishSettingsChange(req.ChangeID, false)
+				writeJSON(w, http.StatusBadGateway, map[string]any{"code": "apply_failed", "error": "could not change Xray log level without restarting the runtime", "detail": err.Error()})
+				return
+			}
+			if err := updateActiveLogLevel(filepath.Join(s.configDir, "active.json"), pending.Settings.LogLevel); err != nil {
+				s.finishSettingsChange(req.ChangeID, false)
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "could not persist Xray log level", "detail": err.Error()})
+				return
+			}
+			if err := s.store.UpdateSettings(r.Context(), pending.Settings); err != nil {
+				s.finishSettingsChange(req.ChangeID, false)
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"code": "apply_failed", "error": "persist settings: " + err.Error()})
+				return
+			}
+			_ = s.store.AddAudit(r.Context(), admin.ID, "settings.update", "settings", "node", fmt.Sprintf("Xray log level changed from %s to %s without restarting the runtime", current.LogLevel, pending.Settings.LogLevel))
+			s.finishSettingsChange(req.ChangeID, true)
+			writeJSON(w, http.StatusOK, map[string]any{"applied": true, "settings": publicSettings(pending.Settings, s.vmessPort), "revoked_clients": 0, "runtime_restarted": false})
+			return
+		}
 	}
 	if pending.ExpectedConfirmation != "" {
 		if err := s.xrayRuntime.ProbeTarget(r.Context(), pending.Settings.RealityTarget, pending.Settings.RealitySNI); err != nil {
@@ -1932,6 +1959,45 @@ func settingsFingerprint(settings domain.Settings) string {
 	value := strings.Join([]string{settings.PublicHost, strconv.Itoa(settings.PublicPort), settings.XrayAPIListen, strconv.Itoa(settings.InternalInboundPort), settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel}, "\x00")
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
+}
+
+func updateActiveLogLevel(path, level string) error {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	var document map[string]any
+	if err := json.Unmarshal(data, &document); err != nil {
+		return err
+	}
+	logSection, ok := document["log"].(map[string]any)
+	if !ok {
+		logSection = make(map[string]any)
+		document["log"] = logSection
+	}
+	logSection["loglevel"] = level
+	updated, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	temporary, err := os.CreateTemp(filepath.Dir(path), ".active-log-*.json")
+	if err != nil {
+		return err
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(append(updated, '\n')); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	return os.Rename(temporaryPath, path)
 }
 
 func clientsFingerprint(clients []domain.Client) string {

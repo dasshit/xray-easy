@@ -942,6 +942,50 @@ func (x *ListDeviceUsersResponse) GetUsers() []string {
 	return nil
 }
 
+type SetXrayLogLevelRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Level         string                 `protobuf:"bytes,1,opt,name=level,proto3" json:"level,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetXrayLogLevelRequest) Reset() {
+	*x = SetXrayLogLevelRequest{}
+	mi := &file_controller_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetXrayLogLevelRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetXrayLogLevelRequest) ProtoMessage() {}
+
+func (x *SetXrayLogLevelRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_controller_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetXrayLogLevelRequest.ProtoReflect.Descriptor instead.
+func (*SetXrayLogLevelRequest) Descriptor() ([]byte, []int) {
+	return file_controller_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *SetXrayLogLevelRequest) GetLevel() string {
+	if x != nil {
+		return x.Level
+	}
+	return ""
+}
+
 type IPObservation struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Address       string                 `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
@@ -952,7 +996,7 @@ type IPObservation struct {
 
 func (x *IPObservation) Reset() {
 	*x = IPObservation{}
-	mi := &file_controller_proto_msgTypes[16]
+	mi := &file_controller_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -964,7 +1008,7 @@ func (x *IPObservation) String() string {
 func (*IPObservation) ProtoMessage() {}
 
 func (x *IPObservation) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[16]
+	mi := &file_controller_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -977,7 +1021,7 @@ func (x *IPObservation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use IPObservation.ProtoReflect.Descriptor instead.
 func (*IPObservation) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{16}
+	return file_controller_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *IPObservation) GetAddress() string {
@@ -1009,7 +1053,7 @@ type XrayUserTelemetry struct {
 
 func (x *XrayUserTelemetry) Reset() {
 	*x = XrayUserTelemetry{}
-	mi := &file_controller_proto_msgTypes[17]
+	mi := &file_controller_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1021,7 +1065,7 @@ func (x *XrayUserTelemetry) String() string {
 func (*XrayUserTelemetry) ProtoMessage() {}
 
 func (x *XrayUserTelemetry) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[17]
+	mi := &file_controller_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1034,7 +1078,7 @@ func (x *XrayUserTelemetry) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use XrayUserTelemetry.ProtoReflect.Descriptor instead.
 func (*XrayUserTelemetry) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{17}
+	return file_controller_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *XrayUserTelemetry) GetEmail() string {
@@ -1095,7 +1139,7 @@ type XrayTelemetryResponse struct {
 
 func (x *XrayTelemetryResponse) Reset() {
 	*x = XrayTelemetryResponse{}
-	mi := &file_controller_proto_msgTypes[18]
+	mi := &file_controller_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1107,7 +1151,7 @@ func (x *XrayTelemetryResponse) String() string {
 func (*XrayTelemetryResponse) ProtoMessage() {}
 
 func (x *XrayTelemetryResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[18]
+	mi := &file_controller_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1120,7 +1164,7 @@ func (x *XrayTelemetryResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use XrayTelemetryResponse.ProtoReflect.Descriptor instead.
 func (*XrayTelemetryResponse) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{18}
+	return file_controller_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *XrayTelemetryResponse) GetUsers() []*XrayUserTelemetry {
@@ -1140,7 +1184,7 @@ type WatchTelemetryRequest struct {
 
 func (x *WatchTelemetryRequest) Reset() {
 	*x = WatchTelemetryRequest{}
-	mi := &file_controller_proto_msgTypes[19]
+	mi := &file_controller_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1152,7 +1196,7 @@ func (x *WatchTelemetryRequest) String() string {
 func (*WatchTelemetryRequest) ProtoMessage() {}
 
 func (x *WatchTelemetryRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[19]
+	mi := &file_controller_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1165,7 +1209,7 @@ func (x *WatchTelemetryRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WatchTelemetryRequest.ProtoReflect.Descriptor instead.
 func (*WatchTelemetryRequest) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{19}
+	return file_controller_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *WatchTelemetryRequest) GetSampleIntervalMs() uint32 {
@@ -1191,7 +1235,7 @@ type TelemetryClient struct {
 
 func (x *TelemetryClient) Reset() {
 	*x = TelemetryClient{}
-	mi := &file_controller_proto_msgTypes[20]
+	mi := &file_controller_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1203,7 +1247,7 @@ func (x *TelemetryClient) String() string {
 func (*TelemetryClient) ProtoMessage() {}
 
 func (x *TelemetryClient) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[20]
+	mi := &file_controller_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1216,7 +1260,7 @@ func (x *TelemetryClient) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TelemetryClient.ProtoReflect.Descriptor instead.
 func (*TelemetryClient) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{20}
+	return file_controller_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *TelemetryClient) GetDeviceKey() string {
@@ -1283,7 +1327,7 @@ type TelemetrySourceStatus struct {
 
 func (x *TelemetrySourceStatus) Reset() {
 	*x = TelemetrySourceStatus{}
-	mi := &file_controller_proto_msgTypes[21]
+	mi := &file_controller_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1295,7 +1339,7 @@ func (x *TelemetrySourceStatus) String() string {
 func (*TelemetrySourceStatus) ProtoMessage() {}
 
 func (x *TelemetrySourceStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[21]
+	mi := &file_controller_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1308,7 +1352,7 @@ func (x *TelemetrySourceStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TelemetrySourceStatus.ProtoReflect.Descriptor instead.
 func (*TelemetrySourceStatus) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{21}
+	return file_controller_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *TelemetrySourceStatus) GetProtocol() string {
@@ -1366,7 +1410,7 @@ type TelemetryUpdate struct {
 
 func (x *TelemetryUpdate) Reset() {
 	*x = TelemetryUpdate{}
-	mi := &file_controller_proto_msgTypes[22]
+	mi := &file_controller_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1378,7 +1422,7 @@ func (x *TelemetryUpdate) String() string {
 func (*TelemetryUpdate) ProtoMessage() {}
 
 func (x *TelemetryUpdate) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[22]
+	mi := &file_controller_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1391,7 +1435,7 @@ func (x *TelemetryUpdate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TelemetryUpdate.ProtoReflect.Descriptor instead.
 func (*TelemetryUpdate) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{22}
+	return file_controller_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *TelemetryUpdate) GetSampledAt() *timestamppb.Timestamp {
@@ -1446,7 +1490,7 @@ type AmneziaWGStatusResponse struct {
 
 func (x *AmneziaWGStatusResponse) Reset() {
 	*x = AmneziaWGStatusResponse{}
-	mi := &file_controller_proto_msgTypes[23]
+	mi := &file_controller_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1458,7 +1502,7 @@ func (x *AmneziaWGStatusResponse) String() string {
 func (*AmneziaWGStatusResponse) ProtoMessage() {}
 
 func (x *AmneziaWGStatusResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[23]
+	mi := &file_controller_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1471,7 +1515,7 @@ func (x *AmneziaWGStatusResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AmneziaWGStatusResponse.ProtoReflect.Descriptor instead.
 func (*AmneziaWGStatusResponse) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{23}
+	return file_controller_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *AmneziaWGStatusResponse) GetRunning() bool {
@@ -1550,7 +1594,7 @@ type AmneziaWGPeer struct {
 
 func (x *AmneziaWGPeer) Reset() {
 	*x = AmneziaWGPeer{}
-	mi := &file_controller_proto_msgTypes[24]
+	mi := &file_controller_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1562,7 +1606,7 @@ func (x *AmneziaWGPeer) String() string {
 func (*AmneziaWGPeer) ProtoMessage() {}
 
 func (x *AmneziaWGPeer) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[24]
+	mi := &file_controller_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1575,7 +1619,7 @@ func (x *AmneziaWGPeer) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AmneziaWGPeer.ProtoReflect.Descriptor instead.
 func (*AmneziaWGPeer) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{24}
+	return file_controller_proto_rawDescGZIP(), []int{25}
 }
 
 func (x *AmneziaWGPeer) GetName() string {
@@ -1622,7 +1666,7 @@ type ListAmneziaWGPeersResponse struct {
 
 func (x *ListAmneziaWGPeersResponse) Reset() {
 	*x = ListAmneziaWGPeersResponse{}
-	mi := &file_controller_proto_msgTypes[25]
+	mi := &file_controller_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1634,7 +1678,7 @@ func (x *ListAmneziaWGPeersResponse) String() string {
 func (*ListAmneziaWGPeersResponse) ProtoMessage() {}
 
 func (x *ListAmneziaWGPeersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[25]
+	mi := &file_controller_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1647,7 +1691,7 @@ func (x *ListAmneziaWGPeersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAmneziaWGPeersResponse.ProtoReflect.Descriptor instead.
 func (*ListAmneziaWGPeersResponse) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{25}
+	return file_controller_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ListAmneziaWGPeersResponse) GetPeers() []*AmneziaWGPeer {
@@ -1666,7 +1710,7 @@ type CreateAmneziaWGPeerRequest struct {
 
 func (x *CreateAmneziaWGPeerRequest) Reset() {
 	*x = CreateAmneziaWGPeerRequest{}
-	mi := &file_controller_proto_msgTypes[26]
+	mi := &file_controller_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1678,7 +1722,7 @@ func (x *CreateAmneziaWGPeerRequest) String() string {
 func (*CreateAmneziaWGPeerRequest) ProtoMessage() {}
 
 func (x *CreateAmneziaWGPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[26]
+	mi := &file_controller_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1691,7 +1735,7 @@ func (x *CreateAmneziaWGPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAmneziaWGPeerRequest.ProtoReflect.Descriptor instead.
 func (*CreateAmneziaWGPeerRequest) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{26}
+	return file_controller_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *CreateAmneziaWGPeerRequest) GetName() string {
@@ -1710,7 +1754,7 @@ type RemoveAmneziaWGPeerRequest struct {
 
 func (x *RemoveAmneziaWGPeerRequest) Reset() {
 	*x = RemoveAmneziaWGPeerRequest{}
-	mi := &file_controller_proto_msgTypes[27]
+	mi := &file_controller_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1722,7 +1766,7 @@ func (x *RemoveAmneziaWGPeerRequest) String() string {
 func (*RemoveAmneziaWGPeerRequest) ProtoMessage() {}
 
 func (x *RemoveAmneziaWGPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[27]
+	mi := &file_controller_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1735,7 +1779,7 @@ func (x *RemoveAmneziaWGPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemoveAmneziaWGPeerRequest.ProtoReflect.Descriptor instead.
 func (*RemoveAmneziaWGPeerRequest) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{27}
+	return file_controller_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *RemoveAmneziaWGPeerRequest) GetName() string {
@@ -1758,7 +1802,7 @@ type AmneziaWGPeerStats struct {
 
 func (x *AmneziaWGPeerStats) Reset() {
 	*x = AmneziaWGPeerStats{}
-	mi := &file_controller_proto_msgTypes[28]
+	mi := &file_controller_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1770,7 +1814,7 @@ func (x *AmneziaWGPeerStats) String() string {
 func (*AmneziaWGPeerStats) ProtoMessage() {}
 
 func (x *AmneziaWGPeerStats) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[28]
+	mi := &file_controller_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1783,7 +1827,7 @@ func (x *AmneziaWGPeerStats) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AmneziaWGPeerStats.ProtoReflect.Descriptor instead.
 func (*AmneziaWGPeerStats) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{28}
+	return file_controller_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *AmneziaWGPeerStats) GetName() string {
@@ -1830,7 +1874,7 @@ type AmneziaWGPeerStatsResponse struct {
 
 func (x *AmneziaWGPeerStatsResponse) Reset() {
 	*x = AmneziaWGPeerStatsResponse{}
-	mi := &file_controller_proto_msgTypes[29]
+	mi := &file_controller_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1842,7 +1886,7 @@ func (x *AmneziaWGPeerStatsResponse) String() string {
 func (*AmneziaWGPeerStatsResponse) ProtoMessage() {}
 
 func (x *AmneziaWGPeerStatsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[29]
+	mi := &file_controller_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1855,7 +1899,7 @@ func (x *AmneziaWGPeerStatsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AmneziaWGPeerStatsResponse.ProtoReflect.Descriptor instead.
 func (*AmneziaWGPeerStatsResponse) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{29}
+	return file_controller_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *AmneziaWGPeerStatsResponse) GetPeers() []*AmneziaWGPeerStats {
@@ -1874,7 +1918,7 @@ type GetAmneziaWGClientConfigRequest struct {
 
 func (x *GetAmneziaWGClientConfigRequest) Reset() {
 	*x = GetAmneziaWGClientConfigRequest{}
-	mi := &file_controller_proto_msgTypes[30]
+	mi := &file_controller_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1886,7 +1930,7 @@ func (x *GetAmneziaWGClientConfigRequest) String() string {
 func (*GetAmneziaWGClientConfigRequest) ProtoMessage() {}
 
 func (x *GetAmneziaWGClientConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[30]
+	mi := &file_controller_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1899,7 +1943,7 @@ func (x *GetAmneziaWGClientConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAmneziaWGClientConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetAmneziaWGClientConfigRequest) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{30}
+	return file_controller_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *GetAmneziaWGClientConfigRequest) GetName() string {
@@ -1918,7 +1962,7 @@ type AmneziaWGClientConfigResponse struct {
 
 func (x *AmneziaWGClientConfigResponse) Reset() {
 	*x = AmneziaWGClientConfigResponse{}
-	mi := &file_controller_proto_msgTypes[31]
+	mi := &file_controller_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1930,7 +1974,7 @@ func (x *AmneziaWGClientConfigResponse) String() string {
 func (*AmneziaWGClientConfigResponse) ProtoMessage() {}
 
 func (x *AmneziaWGClientConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[31]
+	mi := &file_controller_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1943,7 +1987,7 @@ func (x *AmneziaWGClientConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AmneziaWGClientConfigResponse.ProtoReflect.Descriptor instead.
 func (*AmneziaWGClientConfigResponse) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{31}
+	return file_controller_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *AmneziaWGClientConfigResponse) GetConfig() string {
@@ -1962,7 +2006,7 @@ type AmneziaWGBackupResponse struct {
 
 func (x *AmneziaWGBackupResponse) Reset() {
 	*x = AmneziaWGBackupResponse{}
-	mi := &file_controller_proto_msgTypes[32]
+	mi := &file_controller_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1974,7 +2018,7 @@ func (x *AmneziaWGBackupResponse) String() string {
 func (*AmneziaWGBackupResponse) ProtoMessage() {}
 
 func (x *AmneziaWGBackupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[32]
+	mi := &file_controller_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1987,7 +2031,7 @@ func (x *AmneziaWGBackupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AmneziaWGBackupResponse.ProtoReflect.Descriptor instead.
 func (*AmneziaWGBackupResponse) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{32}
+	return file_controller_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AmneziaWGBackupResponse) GetData() []byte {
@@ -2006,7 +2050,7 @@ type RestoreAmneziaWGBackupRequest struct {
 
 func (x *RestoreAmneziaWGBackupRequest) Reset() {
 	*x = RestoreAmneziaWGBackupRequest{}
-	mi := &file_controller_proto_msgTypes[33]
+	mi := &file_controller_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2018,7 +2062,7 @@ func (x *RestoreAmneziaWGBackupRequest) String() string {
 func (*RestoreAmneziaWGBackupRequest) ProtoMessage() {}
 
 func (x *RestoreAmneziaWGBackupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_controller_proto_msgTypes[33]
+	mi := &file_controller_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2031,7 +2075,7 @@ func (x *RestoreAmneziaWGBackupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreAmneziaWGBackupRequest.ProtoReflect.Descriptor instead.
 func (*RestoreAmneziaWGBackupRequest) Descriptor() ([]byte, []int) {
-	return file_controller_proto_rawDescGZIP(), []int{33}
+	return file_controller_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *RestoreAmneziaWGBackupRequest) GetData() []byte {
@@ -2110,7 +2154,9 @@ const file_controller_proto_rawDesc = "" +
 	"\x16ListDeviceUsersRequest\x12\x1a\n" +
 	"\bprotocol\x18\x01 \x01(\tR\bprotocol\"/\n" +
 	"\x17ListDeviceUsersResponse\x12\x14\n" +
-	"\x05users\x18\x01 \x03(\tR\x05users\"b\n" +
+	"\x05users\x18\x01 \x03(\tR\x05users\".\n" +
+	"\x16SetXrayLogLevelRequest\x12\x14\n" +
+	"\x05level\x18\x01 \x01(\tR\x05level\"b\n" +
 	"\rIPObservation\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\x127\n" +
 	"\tlast_seen\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\blastSeen\"\xcf\x02\n" +
@@ -2198,7 +2244,7 @@ const file_controller_proto_rawDesc = "" +
 	"\x17AmneziaWGBackupResponse\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"3\n" +
 	"\x1dRestoreAmneziaWGBackupRequest\x12\x12\n" +
-	"\x04data\x18\x01 \x01(\fR\x04data2\xd3\x12\n" +
+	"\x04data\x18\x01 \x01(\fR\x04data2\xc1\x13\n" +
 	"\n" +
 	"Controller\x12V\n" +
 	"\x06Health\x12$.xrayeasy.controller.v1.EmptyRequest\x1a&.xrayeasy.controller.v1.HealthResponse\x12e\n" +
@@ -2212,7 +2258,8 @@ const file_controller_proto_rawDesc = "" +
 	"\tProbeIPv6\x12$.xrayeasy.controller.v1.EmptyRequest\x1a).xrayeasy.controller.v1.ProbeIPv6Response\x12h\n" +
 	"\rAddDeviceUser\x12,.xrayeasy.controller.v1.AddDeviceUserRequest\x1a).xrayeasy.controller.v1.OperationResponse\x12n\n" +
 	"\x10RemoveDeviceUser\x12/.xrayeasy.controller.v1.RemoveDeviceUserRequest\x1a).xrayeasy.controller.v1.OperationResponse\x12r\n" +
-	"\x0fListDeviceUsers\x12..xrayeasy.controller.v1.ListDeviceUsersRequest\x1a/.xrayeasy.controller.v1.ListDeviceUsersResponse\x12g\n" +
+	"\x0fListDeviceUsers\x12..xrayeasy.controller.v1.ListDeviceUsersRequest\x1a/.xrayeasy.controller.v1.ListDeviceUsersResponse\x12l\n" +
+	"\x0fSetXrayLogLevel\x12..xrayeasy.controller.v1.SetXrayLogLevelRequest\x1a).xrayeasy.controller.v1.OperationResponse\x12g\n" +
 	"\x10GetXrayTelemetry\x12$.xrayeasy.controller.v1.EmptyRequest\x1a-.xrayeasy.controller.v1.XrayTelemetryResponse\x12j\n" +
 	"\x0eWatchTelemetry\x12-.xrayeasy.controller.v1.WatchTelemetryRequest\x1a'.xrayeasy.controller.v1.TelemetryUpdate0\x01\x12k\n" +
 	"\x12GetAmneziaWGStatus\x12$.xrayeasy.controller.v1.EmptyRequest\x1a/.xrayeasy.controller.v1.AmneziaWGStatusResponse\x12n\n" +
@@ -2236,7 +2283,7 @@ func file_controller_proto_rawDescGZIP() []byte {
 	return file_controller_proto_rawDescData
 }
 
-var file_controller_proto_msgTypes = make([]protoimpl.MessageInfo, 34)
+var file_controller_proto_msgTypes = make([]protoimpl.MessageInfo, 35)
 var file_controller_proto_goTypes = []any{
 	(*EmptyRequest)(nil),                    // 0: xrayeasy.controller.v1.EmptyRequest
 	(*OperationResponse)(nil),               // 1: xrayeasy.controller.v1.OperationResponse
@@ -2254,45 +2301,46 @@ var file_controller_proto_goTypes = []any{
 	(*RemoveDeviceUserRequest)(nil),         // 13: xrayeasy.controller.v1.RemoveDeviceUserRequest
 	(*ListDeviceUsersRequest)(nil),          // 14: xrayeasy.controller.v1.ListDeviceUsersRequest
 	(*ListDeviceUsersResponse)(nil),         // 15: xrayeasy.controller.v1.ListDeviceUsersResponse
-	(*IPObservation)(nil),                   // 16: xrayeasy.controller.v1.IPObservation
-	(*XrayUserTelemetry)(nil),               // 17: xrayeasy.controller.v1.XrayUserTelemetry
-	(*XrayTelemetryResponse)(nil),           // 18: xrayeasy.controller.v1.XrayTelemetryResponse
-	(*WatchTelemetryRequest)(nil),           // 19: xrayeasy.controller.v1.WatchTelemetryRequest
-	(*TelemetryClient)(nil),                 // 20: xrayeasy.controller.v1.TelemetryClient
-	(*TelemetrySourceStatus)(nil),           // 21: xrayeasy.controller.v1.TelemetrySourceStatus
-	(*TelemetryUpdate)(nil),                 // 22: xrayeasy.controller.v1.TelemetryUpdate
-	(*AmneziaWGStatusResponse)(nil),         // 23: xrayeasy.controller.v1.AmneziaWGStatusResponse
-	(*AmneziaWGPeer)(nil),                   // 24: xrayeasy.controller.v1.AmneziaWGPeer
-	(*ListAmneziaWGPeersResponse)(nil),      // 25: xrayeasy.controller.v1.ListAmneziaWGPeersResponse
-	(*CreateAmneziaWGPeerRequest)(nil),      // 26: xrayeasy.controller.v1.CreateAmneziaWGPeerRequest
-	(*RemoveAmneziaWGPeerRequest)(nil),      // 27: xrayeasy.controller.v1.RemoveAmneziaWGPeerRequest
-	(*AmneziaWGPeerStats)(nil),              // 28: xrayeasy.controller.v1.AmneziaWGPeerStats
-	(*AmneziaWGPeerStatsResponse)(nil),      // 29: xrayeasy.controller.v1.AmneziaWGPeerStatsResponse
-	(*GetAmneziaWGClientConfigRequest)(nil), // 30: xrayeasy.controller.v1.GetAmneziaWGClientConfigRequest
-	(*AmneziaWGClientConfigResponse)(nil),   // 31: xrayeasy.controller.v1.AmneziaWGClientConfigResponse
-	(*AmneziaWGBackupResponse)(nil),         // 32: xrayeasy.controller.v1.AmneziaWGBackupResponse
-	(*RestoreAmneziaWGBackupRequest)(nil),   // 33: xrayeasy.controller.v1.RestoreAmneziaWGBackupRequest
-	(*timestamppb.Timestamp)(nil),           // 34: google.protobuf.Timestamp
+	(*SetXrayLogLevelRequest)(nil),          // 16: xrayeasy.controller.v1.SetXrayLogLevelRequest
+	(*IPObservation)(nil),                   // 17: xrayeasy.controller.v1.IPObservation
+	(*XrayUserTelemetry)(nil),               // 18: xrayeasy.controller.v1.XrayUserTelemetry
+	(*XrayTelemetryResponse)(nil),           // 19: xrayeasy.controller.v1.XrayTelemetryResponse
+	(*WatchTelemetryRequest)(nil),           // 20: xrayeasy.controller.v1.WatchTelemetryRequest
+	(*TelemetryClient)(nil),                 // 21: xrayeasy.controller.v1.TelemetryClient
+	(*TelemetrySourceStatus)(nil),           // 22: xrayeasy.controller.v1.TelemetrySourceStatus
+	(*TelemetryUpdate)(nil),                 // 23: xrayeasy.controller.v1.TelemetryUpdate
+	(*AmneziaWGStatusResponse)(nil),         // 24: xrayeasy.controller.v1.AmneziaWGStatusResponse
+	(*AmneziaWGPeer)(nil),                   // 25: xrayeasy.controller.v1.AmneziaWGPeer
+	(*ListAmneziaWGPeersResponse)(nil),      // 26: xrayeasy.controller.v1.ListAmneziaWGPeersResponse
+	(*CreateAmneziaWGPeerRequest)(nil),      // 27: xrayeasy.controller.v1.CreateAmneziaWGPeerRequest
+	(*RemoveAmneziaWGPeerRequest)(nil),      // 28: xrayeasy.controller.v1.RemoveAmneziaWGPeerRequest
+	(*AmneziaWGPeerStats)(nil),              // 29: xrayeasy.controller.v1.AmneziaWGPeerStats
+	(*AmneziaWGPeerStatsResponse)(nil),      // 30: xrayeasy.controller.v1.AmneziaWGPeerStatsResponse
+	(*GetAmneziaWGClientConfigRequest)(nil), // 31: xrayeasy.controller.v1.GetAmneziaWGClientConfigRequest
+	(*AmneziaWGClientConfigResponse)(nil),   // 32: xrayeasy.controller.v1.AmneziaWGClientConfigResponse
+	(*AmneziaWGBackupResponse)(nil),         // 33: xrayeasy.controller.v1.AmneziaWGBackupResponse
+	(*RestoreAmneziaWGBackupRequest)(nil),   // 34: xrayeasy.controller.v1.RestoreAmneziaWGBackupRequest
+	(*timestamppb.Timestamp)(nil),           // 35: google.protobuf.Timestamp
 }
 var file_controller_proto_depIdxs = []int32{
 	3,  // 0: xrayeasy.controller.v1.CapabilitiesResponse.xray:type_name -> xrayeasy.controller.v1.ProtocolCapability
 	3,  // 1: xrayeasy.controller.v1.CapabilitiesResponse.amneziawg:type_name -> xrayeasy.controller.v1.ProtocolCapability
-	34, // 2: xrayeasy.controller.v1.StatusResponse.started_at:type_name -> google.protobuf.Timestamp
-	34, // 3: xrayeasy.controller.v1.ProbeIPv6Response.checked_at:type_name -> google.protobuf.Timestamp
-	34, // 4: xrayeasy.controller.v1.IPObservation.last_seen:type_name -> google.protobuf.Timestamp
-	34, // 5: xrayeasy.controller.v1.XrayUserTelemetry.last_seen:type_name -> google.protobuf.Timestamp
-	16, // 6: xrayeasy.controller.v1.XrayUserTelemetry.source_ips:type_name -> xrayeasy.controller.v1.IPObservation
-	34, // 7: xrayeasy.controller.v1.XrayUserTelemetry.last_activity:type_name -> google.protobuf.Timestamp
-	17, // 8: xrayeasy.controller.v1.XrayTelemetryResponse.users:type_name -> xrayeasy.controller.v1.XrayUserTelemetry
-	34, // 9: xrayeasy.controller.v1.TelemetryClient.last_activity:type_name -> google.protobuf.Timestamp
-	34, // 10: xrayeasy.controller.v1.TelemetrySourceStatus.sampled_at:type_name -> google.protobuf.Timestamp
-	34, // 11: xrayeasy.controller.v1.TelemetryUpdate.sampled_at:type_name -> google.protobuf.Timestamp
-	20, // 12: xrayeasy.controller.v1.TelemetryUpdate.clients:type_name -> xrayeasy.controller.v1.TelemetryClient
-	21, // 13: xrayeasy.controller.v1.TelemetryUpdate.sources:type_name -> xrayeasy.controller.v1.TelemetrySourceStatus
-	34, // 14: xrayeasy.controller.v1.AmneziaWGPeer.created_at:type_name -> google.protobuf.Timestamp
-	24, // 15: xrayeasy.controller.v1.ListAmneziaWGPeersResponse.peers:type_name -> xrayeasy.controller.v1.AmneziaWGPeer
-	34, // 16: xrayeasy.controller.v1.AmneziaWGPeerStats.last_seen:type_name -> google.protobuf.Timestamp
-	28, // 17: xrayeasy.controller.v1.AmneziaWGPeerStatsResponse.peers:type_name -> xrayeasy.controller.v1.AmneziaWGPeerStats
+	35, // 2: xrayeasy.controller.v1.StatusResponse.started_at:type_name -> google.protobuf.Timestamp
+	35, // 3: xrayeasy.controller.v1.ProbeIPv6Response.checked_at:type_name -> google.protobuf.Timestamp
+	35, // 4: xrayeasy.controller.v1.IPObservation.last_seen:type_name -> google.protobuf.Timestamp
+	35, // 5: xrayeasy.controller.v1.XrayUserTelemetry.last_seen:type_name -> google.protobuf.Timestamp
+	17, // 6: xrayeasy.controller.v1.XrayUserTelemetry.source_ips:type_name -> xrayeasy.controller.v1.IPObservation
+	35, // 7: xrayeasy.controller.v1.XrayUserTelemetry.last_activity:type_name -> google.protobuf.Timestamp
+	18, // 8: xrayeasy.controller.v1.XrayTelemetryResponse.users:type_name -> xrayeasy.controller.v1.XrayUserTelemetry
+	35, // 9: xrayeasy.controller.v1.TelemetryClient.last_activity:type_name -> google.protobuf.Timestamp
+	35, // 10: xrayeasy.controller.v1.TelemetrySourceStatus.sampled_at:type_name -> google.protobuf.Timestamp
+	35, // 11: xrayeasy.controller.v1.TelemetryUpdate.sampled_at:type_name -> google.protobuf.Timestamp
+	21, // 12: xrayeasy.controller.v1.TelemetryUpdate.clients:type_name -> xrayeasy.controller.v1.TelemetryClient
+	22, // 13: xrayeasy.controller.v1.TelemetryUpdate.sources:type_name -> xrayeasy.controller.v1.TelemetrySourceStatus
+	35, // 14: xrayeasy.controller.v1.AmneziaWGPeer.created_at:type_name -> google.protobuf.Timestamp
+	25, // 15: xrayeasy.controller.v1.ListAmneziaWGPeersResponse.peers:type_name -> xrayeasy.controller.v1.AmneziaWGPeer
+	35, // 16: xrayeasy.controller.v1.AmneziaWGPeerStats.last_seen:type_name -> google.protobuf.Timestamp
+	29, // 17: xrayeasy.controller.v1.AmneziaWGPeerStatsResponse.peers:type_name -> xrayeasy.controller.v1.AmneziaWGPeerStats
 	0,  // 18: xrayeasy.controller.v1.Controller.Health:input_type -> xrayeasy.controller.v1.EmptyRequest
 	0,  // 19: xrayeasy.controller.v1.Controller.GetCapabilities:input_type -> xrayeasy.controller.v1.EmptyRequest
 	0,  // 20: xrayeasy.controller.v1.Controller.GetStatus:input_type -> xrayeasy.controller.v1.EmptyRequest
@@ -2305,40 +2353,42 @@ var file_controller_proto_depIdxs = []int32{
 	12, // 27: xrayeasy.controller.v1.Controller.AddDeviceUser:input_type -> xrayeasy.controller.v1.AddDeviceUserRequest
 	13, // 28: xrayeasy.controller.v1.Controller.RemoveDeviceUser:input_type -> xrayeasy.controller.v1.RemoveDeviceUserRequest
 	14, // 29: xrayeasy.controller.v1.Controller.ListDeviceUsers:input_type -> xrayeasy.controller.v1.ListDeviceUsersRequest
-	0,  // 30: xrayeasy.controller.v1.Controller.GetXrayTelemetry:input_type -> xrayeasy.controller.v1.EmptyRequest
-	19, // 31: xrayeasy.controller.v1.Controller.WatchTelemetry:input_type -> xrayeasy.controller.v1.WatchTelemetryRequest
-	0,  // 32: xrayeasy.controller.v1.Controller.GetAmneziaWGStatus:input_type -> xrayeasy.controller.v1.EmptyRequest
-	0,  // 33: xrayeasy.controller.v1.Controller.ListAmneziaWGPeers:input_type -> xrayeasy.controller.v1.EmptyRequest
-	26, // 34: xrayeasy.controller.v1.Controller.CreateAmneziaWGPeer:input_type -> xrayeasy.controller.v1.CreateAmneziaWGPeerRequest
-	27, // 35: xrayeasy.controller.v1.Controller.RemoveAmneziaWGPeer:input_type -> xrayeasy.controller.v1.RemoveAmneziaWGPeerRequest
-	0,  // 36: xrayeasy.controller.v1.Controller.GetAmneziaWGPeerStats:input_type -> xrayeasy.controller.v1.EmptyRequest
-	30, // 37: xrayeasy.controller.v1.Controller.GetAmneziaWGClientConfig:input_type -> xrayeasy.controller.v1.GetAmneziaWGClientConfigRequest
-	0,  // 38: xrayeasy.controller.v1.Controller.ExportAmneziaWGBackup:input_type -> xrayeasy.controller.v1.EmptyRequest
-	33, // 39: xrayeasy.controller.v1.Controller.RestoreAmneziaWGBackup:input_type -> xrayeasy.controller.v1.RestoreAmneziaWGBackupRequest
-	2,  // 40: xrayeasy.controller.v1.Controller.Health:output_type -> xrayeasy.controller.v1.HealthResponse
-	4,  // 41: xrayeasy.controller.v1.Controller.GetCapabilities:output_type -> xrayeasy.controller.v1.CapabilitiesResponse
-	5,  // 42: xrayeasy.controller.v1.Controller.GetStatus:output_type -> xrayeasy.controller.v1.StatusResponse
-	6,  // 43: xrayeasy.controller.v1.Controller.GetLogs:output_type -> xrayeasy.controller.v1.LogsResponse
-	1,  // 44: xrayeasy.controller.v1.Controller.ValidateConfig:output_type -> xrayeasy.controller.v1.OperationResponse
-	1,  // 45: xrayeasy.controller.v1.Controller.ApplyConfig:output_type -> xrayeasy.controller.v1.OperationResponse
-	1,  // 46: xrayeasy.controller.v1.Controller.ReplaceInbound:output_type -> xrayeasy.controller.v1.OperationResponse
-	1,  // 47: xrayeasy.controller.v1.Controller.ProbeTarget:output_type -> xrayeasy.controller.v1.OperationResponse
-	11, // 48: xrayeasy.controller.v1.Controller.ProbeIPv6:output_type -> xrayeasy.controller.v1.ProbeIPv6Response
-	1,  // 49: xrayeasy.controller.v1.Controller.AddDeviceUser:output_type -> xrayeasy.controller.v1.OperationResponse
-	1,  // 50: xrayeasy.controller.v1.Controller.RemoveDeviceUser:output_type -> xrayeasy.controller.v1.OperationResponse
-	15, // 51: xrayeasy.controller.v1.Controller.ListDeviceUsers:output_type -> xrayeasy.controller.v1.ListDeviceUsersResponse
-	18, // 52: xrayeasy.controller.v1.Controller.GetXrayTelemetry:output_type -> xrayeasy.controller.v1.XrayTelemetryResponse
-	22, // 53: xrayeasy.controller.v1.Controller.WatchTelemetry:output_type -> xrayeasy.controller.v1.TelemetryUpdate
-	23, // 54: xrayeasy.controller.v1.Controller.GetAmneziaWGStatus:output_type -> xrayeasy.controller.v1.AmneziaWGStatusResponse
-	25, // 55: xrayeasy.controller.v1.Controller.ListAmneziaWGPeers:output_type -> xrayeasy.controller.v1.ListAmneziaWGPeersResponse
-	24, // 56: xrayeasy.controller.v1.Controller.CreateAmneziaWGPeer:output_type -> xrayeasy.controller.v1.AmneziaWGPeer
-	1,  // 57: xrayeasy.controller.v1.Controller.RemoveAmneziaWGPeer:output_type -> xrayeasy.controller.v1.OperationResponse
-	29, // 58: xrayeasy.controller.v1.Controller.GetAmneziaWGPeerStats:output_type -> xrayeasy.controller.v1.AmneziaWGPeerStatsResponse
-	31, // 59: xrayeasy.controller.v1.Controller.GetAmneziaWGClientConfig:output_type -> xrayeasy.controller.v1.AmneziaWGClientConfigResponse
-	32, // 60: xrayeasy.controller.v1.Controller.ExportAmneziaWGBackup:output_type -> xrayeasy.controller.v1.AmneziaWGBackupResponse
-	1,  // 61: xrayeasy.controller.v1.Controller.RestoreAmneziaWGBackup:output_type -> xrayeasy.controller.v1.OperationResponse
-	40, // [40:62] is the sub-list for method output_type
-	18, // [18:40] is the sub-list for method input_type
+	16, // 30: xrayeasy.controller.v1.Controller.SetXrayLogLevel:input_type -> xrayeasy.controller.v1.SetXrayLogLevelRequest
+	0,  // 31: xrayeasy.controller.v1.Controller.GetXrayTelemetry:input_type -> xrayeasy.controller.v1.EmptyRequest
+	20, // 32: xrayeasy.controller.v1.Controller.WatchTelemetry:input_type -> xrayeasy.controller.v1.WatchTelemetryRequest
+	0,  // 33: xrayeasy.controller.v1.Controller.GetAmneziaWGStatus:input_type -> xrayeasy.controller.v1.EmptyRequest
+	0,  // 34: xrayeasy.controller.v1.Controller.ListAmneziaWGPeers:input_type -> xrayeasy.controller.v1.EmptyRequest
+	27, // 35: xrayeasy.controller.v1.Controller.CreateAmneziaWGPeer:input_type -> xrayeasy.controller.v1.CreateAmneziaWGPeerRequest
+	28, // 36: xrayeasy.controller.v1.Controller.RemoveAmneziaWGPeer:input_type -> xrayeasy.controller.v1.RemoveAmneziaWGPeerRequest
+	0,  // 37: xrayeasy.controller.v1.Controller.GetAmneziaWGPeerStats:input_type -> xrayeasy.controller.v1.EmptyRequest
+	31, // 38: xrayeasy.controller.v1.Controller.GetAmneziaWGClientConfig:input_type -> xrayeasy.controller.v1.GetAmneziaWGClientConfigRequest
+	0,  // 39: xrayeasy.controller.v1.Controller.ExportAmneziaWGBackup:input_type -> xrayeasy.controller.v1.EmptyRequest
+	34, // 40: xrayeasy.controller.v1.Controller.RestoreAmneziaWGBackup:input_type -> xrayeasy.controller.v1.RestoreAmneziaWGBackupRequest
+	2,  // 41: xrayeasy.controller.v1.Controller.Health:output_type -> xrayeasy.controller.v1.HealthResponse
+	4,  // 42: xrayeasy.controller.v1.Controller.GetCapabilities:output_type -> xrayeasy.controller.v1.CapabilitiesResponse
+	5,  // 43: xrayeasy.controller.v1.Controller.GetStatus:output_type -> xrayeasy.controller.v1.StatusResponse
+	6,  // 44: xrayeasy.controller.v1.Controller.GetLogs:output_type -> xrayeasy.controller.v1.LogsResponse
+	1,  // 45: xrayeasy.controller.v1.Controller.ValidateConfig:output_type -> xrayeasy.controller.v1.OperationResponse
+	1,  // 46: xrayeasy.controller.v1.Controller.ApplyConfig:output_type -> xrayeasy.controller.v1.OperationResponse
+	1,  // 47: xrayeasy.controller.v1.Controller.ReplaceInbound:output_type -> xrayeasy.controller.v1.OperationResponse
+	1,  // 48: xrayeasy.controller.v1.Controller.ProbeTarget:output_type -> xrayeasy.controller.v1.OperationResponse
+	11, // 49: xrayeasy.controller.v1.Controller.ProbeIPv6:output_type -> xrayeasy.controller.v1.ProbeIPv6Response
+	1,  // 50: xrayeasy.controller.v1.Controller.AddDeviceUser:output_type -> xrayeasy.controller.v1.OperationResponse
+	1,  // 51: xrayeasy.controller.v1.Controller.RemoveDeviceUser:output_type -> xrayeasy.controller.v1.OperationResponse
+	15, // 52: xrayeasy.controller.v1.Controller.ListDeviceUsers:output_type -> xrayeasy.controller.v1.ListDeviceUsersResponse
+	1,  // 53: xrayeasy.controller.v1.Controller.SetXrayLogLevel:output_type -> xrayeasy.controller.v1.OperationResponse
+	19, // 54: xrayeasy.controller.v1.Controller.GetXrayTelemetry:output_type -> xrayeasy.controller.v1.XrayTelemetryResponse
+	23, // 55: xrayeasy.controller.v1.Controller.WatchTelemetry:output_type -> xrayeasy.controller.v1.TelemetryUpdate
+	24, // 56: xrayeasy.controller.v1.Controller.GetAmneziaWGStatus:output_type -> xrayeasy.controller.v1.AmneziaWGStatusResponse
+	26, // 57: xrayeasy.controller.v1.Controller.ListAmneziaWGPeers:output_type -> xrayeasy.controller.v1.ListAmneziaWGPeersResponse
+	25, // 58: xrayeasy.controller.v1.Controller.CreateAmneziaWGPeer:output_type -> xrayeasy.controller.v1.AmneziaWGPeer
+	1,  // 59: xrayeasy.controller.v1.Controller.RemoveAmneziaWGPeer:output_type -> xrayeasy.controller.v1.OperationResponse
+	30, // 60: xrayeasy.controller.v1.Controller.GetAmneziaWGPeerStats:output_type -> xrayeasy.controller.v1.AmneziaWGPeerStatsResponse
+	32, // 61: xrayeasy.controller.v1.Controller.GetAmneziaWGClientConfig:output_type -> xrayeasy.controller.v1.AmneziaWGClientConfigResponse
+	33, // 62: xrayeasy.controller.v1.Controller.ExportAmneziaWGBackup:output_type -> xrayeasy.controller.v1.AmneziaWGBackupResponse
+	1,  // 63: xrayeasy.controller.v1.Controller.RestoreAmneziaWGBackup:output_type -> xrayeasy.controller.v1.OperationResponse
+	41, // [41:64] is the sub-list for method output_type
+	18, // [18:41] is the sub-list for method input_type
 	18, // [18:18] is the sub-list for extension type_name
 	18, // [18:18] is the sub-list for extension extendee
 	0,  // [0:18] is the sub-list for field type_name
@@ -2355,7 +2405,7 @@ func file_controller_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_controller_proto_rawDesc), len(file_controller_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   34,
+			NumMessages:   35,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

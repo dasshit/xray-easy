@@ -110,6 +110,13 @@ func (c *Client) Logs(ctx context.Context) ([]string, error) {
 	return append([]string{}, result.(*controllerv1.LogsResponse).Lines...), nil
 }
 
+// SetLogLevel updates Xray's runtime diagnostic filter without restarting the
+// embedded process when supported by the configured runtime.
+func (c *Client) SetLogLevel(ctx context.Context, level string) error {
+	_, err := c.call(ctx, "SetXrayLogLevel", &controllerv1.SetXrayLogLevelRequest{Level: level})
+	return err
+}
+
 // Validate asks the Xray adapter to validate a candidate config.
 func (c *Client) Validate(ctx context.Context, path, operationID string) error {
 	ctx = interaction.WithOperationID(ctx, operationID)
@@ -352,7 +359,7 @@ func newRPCResponse(method string) (proto.Message, error) {
 		return &controllerv1.StatusResponse{}, nil
 	case "GetLogs":
 		return &controllerv1.LogsResponse{}, nil
-	case "ValidateConfig", "ApplyConfig", "ReplaceInbound", "ProbeTarget", "AddDeviceUser", "RemoveDeviceUser", "RemoveAmneziaWGPeer", "RestoreAmneziaWGBackup":
+	case "ValidateConfig", "ApplyConfig", "ReplaceInbound", "ProbeTarget", "AddDeviceUser", "RemoveDeviceUser", "SetXrayLogLevel", "RemoveAmneziaWGPeer", "RestoreAmneziaWGBackup":
 		return &controllerv1.OperationResponse{}, nil
 	case "ProbeIPv6":
 		return &controllerv1.ProbeIPv6Response{}, nil

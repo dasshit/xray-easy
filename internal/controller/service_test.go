@@ -69,6 +69,10 @@ func (f *fakeRuntime) ProbeTarget(_ context.Context, target, sni string) error {
 	return f.err
 }
 func (f *fakeRuntime) ProbeIPv6(context.Context) error { f.called = "ProbeIPv6"; return f.err }
+func (f *fakeRuntime) SetLogLevel(context.Context, string) error {
+	f.called = "SetLogLevel"
+	return f.err
+}
 
 func TestServiceHealthStatusAndLogs(t *testing.T) {
 	runtime := &fakeRuntime{

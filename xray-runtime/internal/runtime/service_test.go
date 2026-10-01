@@ -984,7 +984,7 @@ func TestCapturedXrayLogsKeepWarningsAndHideAccessAndSecrets(t *testing.T) {
 	var captured []logRecord
 	handler := capturedXrayLog{write: func(level, component, message string) {
 		captured = append(captured, logRecord{level: level, component: component, message: message})
-	}}
+	}, allow: func(level string) bool { return level == "warn" || level == "error" }}
 	handler.Handle(&corelog.GeneralMessage{Severity: corelog.Severity_Info, Content: "informational log"})
 	handler.Handle(&corelog.AccessMessage{From: "192.0.2.10:1234"})
 	handler.Handle(&corelog.GeneralMessage{Severity: corelog.Severity_Warning, Content: `rejected 192.0.2.10:1234 password="visible-secret"`})

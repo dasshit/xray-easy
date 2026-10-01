@@ -20,6 +20,7 @@ service Controller {
   rpc AddDeviceUser(AddDeviceUserRequest) returns (OperationResponse);
   rpc RemoveDeviceUser(RemoveDeviceUserRequest) returns (OperationResponse);
   rpc ListDeviceUsers(ListDeviceUsersRequest) returns (ListDeviceUsersResponse);
+  rpc SetXrayLogLevel(SetXrayLogLevelRequest) returns (OperationResponse);
   rpc GetXrayTelemetry(EmptyRequest) returns (XrayTelemetryResponse);
   rpc WatchTelemetry(WatchTelemetryRequest) returns (stream TelemetryUpdate);
   rpc GetAmneziaWGStatus(EmptyRequest) returns (AmneziaWGStatusResponse);
@@ -116,6 +117,8 @@ message RemoveDeviceUserRequest {
 
 message ListDeviceUsersRequest { string protocol = 1; }
 message ListDeviceUsersResponse { repeated string users = 1; }
+
+message SetXrayLogLevelRequest { string level = 1; }
 
 message IPObservation {
   string address = 1;

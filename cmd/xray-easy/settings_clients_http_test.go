@@ -128,7 +128,7 @@ func TestSettingsLogLevelApplyRestartsXrayWithoutRevokingProfiles(t *testing.T) 
 	}
 	level := "debug"
 	prepared := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{LogLevel: &level}, true)
-	if prepared.Code != http.StatusOK || !strings.Contains(prepared.Body.String(), `"requires_confirmation":false`) || !strings.Contains(prepared.Body.String(), `"revoked_clients":0`) || !strings.Contains(prepared.Body.String(), "briefly interrupted") {
+	if prepared.Code != http.StatusOK || !strings.Contains(prepared.Body.String(), `"requires_confirmation":false`) || !strings.Contains(prepared.Body.String(), `"revoked_clients":0`) || !strings.Contains(prepared.Body.String(), "active connections remain running") {
 		t.Fatalf("prepare log-level change = %d %s", prepared.Code, prepared.Body.String())
 	}
 	change := decodeResponse[struct {

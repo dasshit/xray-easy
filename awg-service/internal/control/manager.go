@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/netip"
 	"os"
@@ -336,6 +337,7 @@ func (m *Manager) AddPeerForOperation(name, publicKey, operationID string) (Peer
 		return Peer{}, false, err
 	}
 	m.state = next
+	slog.Info("AWG peer event", "service", "amneziawg-service", "component", "peer", "event", "peer_added", "peer_name", name)
 	return peer, false, nil
 }
 
@@ -426,6 +428,7 @@ func (m *Manager) RemovePeerForOperation(name, operationID string) (bool, error)
 		return false, err
 	}
 	m.state = next
+	slog.Info("AWG peer event", "service", "amneziawg-service", "component", "peer", "event", "peer_removed", "peer_name", name)
 	return false, nil
 }
 
@@ -525,6 +528,7 @@ func (m *Manager) PeerTelemetry() ([]PeerTelemetry, error) {
 	}
 	snapshot, err := m.device.Snapshot()
 	if err != nil {
+		slog.Error("AWG telemetry error", "service", "amneziawg-service", "component", "telemetry", "event", "snapshot_failed")
 		return nil, fmt.Errorf("read AWG peer telemetry: %w", err)
 	}
 	observed, err := ParsePeerTelemetry(snapshot)

@@ -179,6 +179,15 @@ func (c *EmbeddedXrayClient) Logs(ctx context.Context) ([]string, error) {
 	return lines, nil
 }
 
+// SetLogLevel changes the runtime filter without replacing the Xray instance.
+func (c *EmbeddedXrayClient) SetLogLevel(ctx context.Context, level string) error {
+	request := &xrayruntimev1.SetLogLevelRequest{Level: level, OperationId: interaction.OperationID(ctx)}
+	_, err := c.call(ctx, embeddedControlIdentity, xrayruntimev1.Runtime_SetLogLevel_FullMethodName, request, func(outgoing context.Context, message proto.Message) (proto.Message, error) {
+		return c.rpc.SetLogLevel(outgoing, message.(*xrayruntimev1.SetLogLevelRequest))
+	})
+	return err
+}
+
 // Validate loads a path from the read-only config mount and validates its
 // bytes through the runtime API.
 func (c *EmbeddedXrayClient) Validate(ctx context.Context, path, operationID string) error {

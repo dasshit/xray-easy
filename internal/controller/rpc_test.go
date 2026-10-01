@@ -98,6 +98,7 @@ func TestGeneratedRPCDispatchesEveryTypedMethod(t *testing.T) {
 		{"ReplaceInbound", &controllerv1.ReplaceInboundRequest{}, &controllerv1.OperationResponse{}},
 		{"ProbeTarget", &controllerv1.ProbeTargetRequest{}, &controllerv1.OperationResponse{}},
 		{"ProbeIPv6", &controllerv1.EmptyRequest{}, &controllerv1.ProbeIPv6Response{}},
+		{"SetXrayLogLevel", &controllerv1.SetXrayLogLevelRequest{Level: "debug"}, &controllerv1.OperationResponse{}},
 		{"AddDeviceUser", &controllerv1.AddDeviceUserRequest{}, &controllerv1.OperationResponse{}},
 		{"RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{}, &controllerv1.OperationResponse{}},
 		{"ListDeviceUsers", &controllerv1.ListDeviceUsersRequest{}, &controllerv1.ListDeviceUsersResponse{}},
