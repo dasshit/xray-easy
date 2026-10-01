@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 	"sync"
@@ -120,6 +121,73 @@ func TestWatchPeerStatsReportsCounterGrowthAndStopsWhenCanceled(t *testing.T) {
 	}
 	if strings.Contains(initial.String(), "private") {
 		t.Fatalf("stream unexpectedly included private key material: %s", initial)
+	}
+}
+
+func TestWatchPeerStatsMarksPeerOfflineAfterTrafficTTL(t *testing.T) {
+	options := testOptions(t)
+	device := &telemetryTestDevice{}
+	manager, err := Open(options, telemetryTestFactory{device: device})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddPeer("ios-device", publicKey); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicHex := hex.EncodeToString(decoded)
+	activity := time.Now().UTC().Truncate(time.Second)
+	device.setSnapshot(fmt.Sprintf("public_key=%s\nendpoint=198.51.100.7:44500\nlast_handshake_time_sec=%d\nlast_handshake_time_nsec=%d\nrx_bytes=10\ntx_bytes=20\n", publicHex, activity.Unix(), activity.Nanosecond()))
+
+	service := NewService(manager, options)
+	sample := 0
+	service.telemetryNow = func() time.Time {
+		sample++
+		if sample == 1 {
+			return activity
+		}
+		return activity.Add(16 * time.Second)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	stream := &capturePeerStatsStream{ctx: ctx, updates: make(chan *awgapi.PeerStatsUpdate, 3)}
+	done := make(chan error, 1)
+	go func() {
+		done <- service.WatchPeerStats(&awgapi.WatchPeerStatsRequest{SampleIntervalMs: 500}, stream)
+	}()
+	var active, offline *awgapi.PeerStatsUpdate
+	select {
+	case active = <-stream.updates:
+	case <-time.After(time.Second):
+		t.Fatal("AWG did not send its initial peer snapshot")
+	}
+	if len(active.GetPeers()) != 1 || !active.GetPeers()[0].GetOnline() {
+		t.Fatalf("initial peer status = %+v, want online", active.GetPeers())
+	}
+	select {
+	case offline = <-stream.updates:
+	case <-time.After(2 * time.Second):
+		t.Fatal("AWG did not send the idle peer snapshot")
+	}
+	peer := offline.GetPeers()[0]
+	if peer.GetOnline() || peer.GetSourceIp() != "" {
+		t.Fatalf("peer after traffic TTL = %+v, want offline without source IP", peer)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != context.Canceled {
+			t.Fatalf("WatchPeerStats cancellation error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("AWG telemetry stream did not stop after cancellation")
 	}
 }
 

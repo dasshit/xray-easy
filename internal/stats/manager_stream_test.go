@@ -146,6 +146,10 @@ func TestApplyStreamUpdateExpiresOnlineAndSourceIPAfterTrafficTTL(t *testing.T) 
 	lastActivity := now
 	manager.now = func() time.Time { return now }
 	makeUpdate := func(sequence uint64, sampledAt time.Time, online bool) *controllerv1.TelemetryUpdate {
+		lastActivity = sampledAt
+		if !online {
+			lastActivity = sampledAt.Add(-time.Second)
+		}
 		at := timestamppb.New(sampledAt)
 		return &controllerv1.TelemetryUpdate{
 			SampledAt: at,
@@ -215,7 +219,9 @@ func TestApplyStreamUpdateMapsAWGPeerAndComputesRates(t *testing.T) {
 	makeUpdate := func(sequence uint64, upload, download int64, online bool) *controllerv1.TelemetryUpdate {
 		lastActivity := now
 		if !online {
-			lastActivity = now.Add(-onlineWindow - time.Second)
+			// The source's online flag is authoritative. A small clock/sample
+			// skew can leave last_activity inside the backend's local TTL.
+			lastActivity = now.Add(-time.Second)
 		}
 		return &controllerv1.TelemetryUpdate{
 			SampledAt: timestamppb.New(now),
@@ -248,6 +254,45 @@ func TestApplyStreamUpdateMapsAWGPeerAndComputesRates(t *testing.T) {
 	last := manager.Snapshot()["awg:ios"]
 	if last.Online || len(last.SourceIPs) != 0 || last.UploadBytes != 50 {
 		t.Fatalf("offline AWG stream stats = %+v", last)
+	}
+}
+
+func TestApplyStreamUpdateKeepsAWGOfflineStatusAcrossOtherSourceUpdates(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	manager := NewManager(db, &fakeStatsAPI{})
+	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	manager.now = func() time.Time { return now }
+	makeUpdate := func(xraySequence, awgSequence uint64, online bool) *controllerv1.TelemetryUpdate {
+		lastActivity := now
+		if !online {
+			lastActivity = now.Add(-time.Second)
+		}
+		return &controllerv1.TelemetryUpdate{
+			SampledAt: timestamppb.New(now),
+			Sources: []*controllerv1.TelemetrySourceStatus{
+				{Protocol: "xray", Available: true, Generation: "xray-runtime", Sequence: xraySequence},
+				{Protocol: "amneziawg", Available: true, Generation: "awg-runtime", Sequence: awgSequence},
+			},
+			Clients: []*controllerv1.TelemetryClient{{DeviceKey: "awg:ios", Protocol: "amneziawg", Online: online, LastActivity: timestamppb.New(lastActivity), SourceIps: []string{"203.0.113.9"}}},
+		}
+	}
+	if err := manager.ApplyStreamUpdate(context.Background(), makeUpdate(1, 1, true)); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Second)
+	if err := manager.ApplyStreamUpdate(context.Background(), makeUpdate(2, 2, false)); err != nil {
+		t.Fatal(err)
+	}
+	if got := manager.Snapshot()["awg:ios"]; got.Online {
+		t.Fatalf("AWG source offline status was ignored: %+v", got)
+	}
+	now = now.Add(time.Second)
+	if err := manager.ApplyStreamUpdate(context.Background(), makeUpdate(3, 2, false)); err != nil {
+		t.Fatal(err)
+	}
+	got := manager.Snapshot()["awg:ios"]
+	if got.Online || len(got.SourceIPs) != 0 {
+		t.Fatalf("AWG offline status was lost on an Xray-only update: %+v", got)
 	}
 }
 

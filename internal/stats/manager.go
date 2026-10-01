@@ -191,8 +191,13 @@ func (m *Manager) ApplyStreamUpdate(ctx context.Context, update *controllerv1.Te
 		now = update.GetSampledAt().AsTime().UTC()
 	}
 	fresh := make(map[string]bool, len(update.GetSources()))
+	available := make(map[string]bool, len(update.GetSources()))
 	for _, source := range update.GetSources() {
-		if source == nil || !source.GetAvailable() || source.GetGeneration() == "" || source.GetSequence() == 0 {
+		if source == nil {
+			continue
+		}
+		available[source.GetProtocol()] = source.GetAvailable()
+		if !source.GetAvailable() || source.GetGeneration() == "" || source.GetSequence() == 0 {
 			continue
 		}
 		prior := m.checkpoints[source.GetProtocol()]
@@ -261,6 +266,7 @@ func (m *Manager) ApplyStreamUpdate(ctx context.Context, update *controllerv1.Te
 			return err
 		}
 	}
+	applyStreamOnlineStatus(next, clients, update.GetClients(), available)
 	m.mu.Lock()
 	m.latest = next
 	m.lastError = ""
@@ -434,6 +440,45 @@ func preserveAWGStats(next, previous map[string]ClientStats, now time.Time) {
 			current.SourceIPs = nil
 		}
 		next[key] = current
+	}
+}
+
+func applyStreamOnlineStatus(next map[string]ClientStats, managed []domain.Client, reported []*controllerv1.TelemetryClient, available map[string]bool) {
+	clientIDsByEmail := make(map[string]string, len(managed))
+	for _, client := range managed {
+		clientIDsByEmail[client.Email] = client.ID
+	}
+	for _, item := range reported {
+		if item == nil {
+			continue
+		}
+		id := ""
+		switch item.GetProtocol() {
+		case "amneziawg":
+			if available["amneziawg"] && strings.HasPrefix(item.GetDeviceKey(), "awg:") {
+				id = item.GetDeviceKey()
+			}
+		case "vless", "vmess", "hysteria2":
+			if available["xray"] {
+				id = clientIDsByEmail[item.GetDeviceKey()]
+			}
+		}
+		current, ok := next[id]
+		if !ok {
+			continue
+		}
+		current.Online = item.GetOnline()
+		current.SourceIPs = nil
+		if current.Online {
+			for _, address := range item.GetSourceIps() {
+				if address != "" {
+					current.SourceIPs = appendUnique(current.SourceIPs, address)
+				}
+			}
+		} else {
+			current.UploadBytesPerSecond, current.DownloadBytesPerSecond = 0, 0
+		}
+		next[id] = current
 	}
 }
 

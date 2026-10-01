@@ -27,6 +27,7 @@ type Service struct {
 	mu                sync.Mutex
 	startedAt         time.Time
 	telemetrySequence uint64
+	telemetryNow      func() time.Time
 }
 
 var servicePeerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
@@ -136,6 +137,9 @@ func (s *Service) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream a
 			return mapError(err)
 		}
 		now := time.Now().UTC()
+		if s.telemetryNow != nil {
+			now = s.telemetryNow().UTC()
+		}
 		seenPeers := make(map[string]struct{}, len(peers))
 		update := &awgapi.PeerStatsUpdate{SampledAt: timestamppb.New(now), SourceGeneration: generation, FullSnapshot: true}
 		for _, peer := range peers {
