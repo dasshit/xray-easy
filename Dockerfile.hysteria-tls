@@ -1,10 +1,16 @@
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS mkcert-build
 ARG TARGETOS
 ARG TARGETARCH
-RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go install filippo.io/mkcert@v1.4.4
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go install filippo.io/mkcert@v1.4.4 \
+    && mkdir -p /out \
+    && if [ -x "/go/bin/${TARGETOS}_${TARGETARCH}/mkcert" ]; then \
+        cp "/go/bin/${TARGETOS}_${TARGETARCH}/mkcert" /out/mkcert; \
+    else \
+        cp /go/bin/mkcert /out/mkcert; \
+    fi
 
 FROM alpine:3.22
 RUN apk add --no-cache openssl
-COPY --from=mkcert-build /go/bin/mkcert /usr/local/bin/mkcert
+COPY --from=mkcert-build /out/mkcert /usr/local/bin/mkcert
 COPY --chmod=755 scripts/init-hysteria-tls.sh /usr/local/bin/init-hysteria-tls
 ENTRYPOINT ["/usr/local/bin/init-hysteria-tls"]
