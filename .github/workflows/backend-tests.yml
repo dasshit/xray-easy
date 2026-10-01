@@ -102,7 +102,7 @@ jobs:
         working-directory: awg-service
 
       - name: Enforce AWG coverage threshold
-        run: bash scripts/awg-coverage.sh awg-service/coverage.out
+        run: bash scripts/awg-coverage.sh
         env:
           AWG_COVERAGE_MIN: "90"
 
