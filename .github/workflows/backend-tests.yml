@@ -71,16 +71,14 @@ jobs:
           cache: true
 
       - name: Run Go unit tests
-        run: go test -count=1 ./cmd/... ./internal/...
+        run: go test ./cmd/... ./internal/...
 
-      - name: Run race detector
-        run: go test -race -count=1 ./cmd/... ./internal/...
-
-      - name: Enforce backend coverage thresholds
+      - name: Run Go tests with race detector and enforce coverage thresholds
         run: bash scripts/backend-coverage.sh coverage.out
         env:
           BACKEND_COVERAGE_MIN: "90"
           BACKEND_PACKAGE_COVERAGE_MIN: "80"
+          GO_TEST_RACE: "1"
 
   awg-prototype:
     name: AmneziaWG prototype tests and Linux builds
@@ -98,13 +96,14 @@ jobs:
           cache-dependency-path: awg-service/go.sum
 
       - name: Run AWG unit tests
-        run: go test -count=1 -race ./...
+        run: go test ./...
         working-directory: awg-service
 
-      - name: Enforce AWG coverage threshold
+      - name: Run AWG tests with race detector and enforce coverage threshold
         run: bash scripts/awg-coverage.sh
         env:
           AWG_COVERAGE_MIN: "90"
+          GO_TEST_RACE: "1"
 
       - name: Build Linux amd64 and arm64 services
         run: |
@@ -129,16 +128,13 @@ jobs:
 
       - name: Run embedded Xray runtime tests
         working-directory: xray-runtime
-        run: go test -count=1 ./...
+        run: go test ./...
 
-      - name: Run embedded Xray runtime race detector
-        working-directory: xray-runtime
-        run: go test -race -count=1 ./...
-
-      - name: Enforce per-file runtime coverage
+      - name: Run Xray runtime tests with race detector and enforce per-file coverage
         run: bash scripts/xray-runtime-coverage.sh
         env:
           XRAY_RUNTIME_FILE_COVERAGE_MIN: "90"
+          GO_TEST_RACE: "1"
 
   publish-images:
     name: Publish GHCR images (${{ matrix.image }})

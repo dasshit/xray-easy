@@ -12,7 +12,15 @@ if ! [[ "$minimum" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v value="$minimum" 'BEGI
 fi
 
 cd "$repo_root/awg-service"
-go test -count=1 -covermode=atomic -coverprofile="$profile" ./...
+# Keep -count=1 out so Go can reuse successful results from GOCACHE.
+run_go_tests() {
+	if [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
+		go test -race "$@"
+	else
+		go test "$@"
+	fi
+}
+run_go_tests -covermode=atomic -coverprofile="$profile" ./...
 
 awk -v minimum="$minimum" '
   NR == 1 { next }

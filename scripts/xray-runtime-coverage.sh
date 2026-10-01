@@ -12,8 +12,15 @@ if ! [[ "$minimum" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v value="$minimum" 'BEGI
 fi
 
 cd "$repo_root/xray-runtime"
-go test -count=1 -covermode=atomic -coverprofile="$profile_dir/runtime.out" ./internal/runtime
-go test -count=1 -covermode=atomic -coverprofile="$profile_dir/cmd.out" ./cmd/xray-runtime
+# Keep -count=1 out so Go can reuse successful results from GOCACHE.
+run_go_tests() {
+	if [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
+		go test -race "$@"
+	else
+		go test "$@"
+	fi
+}
+run_go_tests -covermode=atomic -coverprofile="$profile_dir/runtime.out" ./...
 
 awk -v minimum="$minimum" '
   $1 == "mode:" { next }
@@ -21,6 +28,7 @@ awk -v minimum="$minimum" '
     file = $1
     sub(/:.*/, "", file)
     if (file ~ /\.pb\.go$/ || file ~ /_test\.go$/) next
+    if (file !~ /\/internal\/runtime\// && file !~ /\/cmd\/xray-runtime\//) next
     total[file] += $2
     if ($3 > 0) covered[file] += $2
   }
@@ -41,4 +49,4 @@ awk -v minimum="$minimum" '
     if (failed) exit 1
     print "PASS every handwritten Xray runtime Go file meets the coverage gate"
   }
-' "$profile_dir/runtime.out" "$profile_dir/cmd.out"
+' "$profile_dir/runtime.out"
