@@ -13,7 +13,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -
 FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS mkcert-build
 ARG TARGETOS
 ARG TARGETARCH
-RUN GOBIN=/out GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go install filippo.io/mkcert@v1.4.4
+RUN GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go install filippo.io/mkcert@v1.4.4
 
 FROM --platform=$BUILDPLATFORM node:24-alpine AS web-build
 WORKDIR /web
@@ -27,7 +27,7 @@ FROM alpine:3.22
 RUN addgroup -S -g 10001 xray && adduser -S -D -H -u 10001 -G xray xray \
     && apk add --no-cache ca-certificates
 COPY --from=build /out/xray-easy /usr/local/bin/xray-easy
-COPY --from=mkcert-build /out/mkcert /usr/local/bin/mkcert
+COPY --from=mkcert-build /go/bin/mkcert /usr/local/bin/mkcert
 COPY --from=web-build /web/dist /usr/share/xray-easy/ui
 RUN mkdir -p /data /etc/xray \
     && chown -R xray:xray /data /etc/xray /usr/local/bin/xray-easy
