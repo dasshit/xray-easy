@@ -409,28 +409,29 @@ npm run build
 ~~~
 
 Push a version tag such as `v1.2.3` to publish the five service images and the
-installer image under the Docker Hub `xray-easy` namespace.
+installer image into the Docker Hub repository `dasshit/xray-easy`.
 The workflow reads `DOCKERHUB_USERNAME` and
 `DOCKERHUB_PERSONAL_ACCESS_TOKEN` from GitHub Actions secrets and pushes the
-`1.2.3`, `v1.2.3`, and `latest` tags after all test jobs pass. The default
-Compose namespace is `xray-easy`; set `XRAY_EASY_IMAGE_NAMESPACE` when running
-`install.sh` to use a different namespace. The authenticated Docker Hub user
-must have permission to publish to `xray-easy`. Docker Hub images include
-the Xray runtime, Controller, web backend, optional AmneziaWG service and
-Hysteria TLS initializer. Docker Hub image names use `namespace/repository`,
-so each component is published in its own repository:
+`1.2.3-<component>`, `v1.2.3-<component>`, and `latest-<component>` tags after
+all test jobs pass. All components share the `dasshit/xray-easy` repository;
+the component suffix distinguishes each image. The default Docker Hub namespace
+is `dasshit`; set `XRAY_EASY_IMAGE_NAMESPACE` when running `install.sh` to use
+another namespace containing the same repository and tag layout. The
+authenticated Docker Hub user must have permission to publish to the
+repository. Docker Hub images include the Xray runtime, Controller, web
+backend, optional AmneziaWG service, Hysteria TLS initializer and installer:
 
-| Compose service | Docker Hub repository |
+| Compose service | Docker Hub image tags |
 | --- | --- |
-| `control-plane` | `xray-easy/control-plane` |
-| `controller` | `xray-easy/controller` |
-| `xray-core-service` | `xray-easy/xray-core-service` |
-| `amneziawg-service` | `xray-easy/amneziawg-service` |
-| `hysteria-tls-init` | `xray-easy/hysteria-tls-init` |
-| Installer helper | `xray-easy/installer` |
+| `control-plane` | `dasshit/xray-easy:latest-control-plane` |
+| `controller` | `dasshit/xray-easy:latest-controller` |
+| `xray-core-service` | `dasshit/xray-easy:latest-xray-core-service` |
+| `amneziawg-service` | `dasshit/xray-easy:latest-amneziawg-service` |
+| `hysteria-tls-init` | `dasshit/xray-easy:latest-hysteria-tls-init` |
+| Installer helper | `dasshit/xray-easy:latest-installer` |
 
 On upgrade, `install.sh` migrates the previous generated default namespace
-`dasshit` to `xray-easy`. An explicit `XRAY_EASY_IMAGE_NAMESPACE` environment
+`xray-easy` to `dasshit`. An explicit `XRAY_EASY_IMAGE_NAMESPACE` environment
 variable takes precedence.
 
 Regenerate checked-in typed protobuf bindings from the repository root with

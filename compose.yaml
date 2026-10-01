@@ -100,7 +100,7 @@ services:
       - awg_control_token:/target
 
   hysteria-tls-init:
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-xray-easy}/hysteria-tls-init:${XRAY_EASY_IMAGE_TAG:-latest}
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy:${XRAY_EASY_IMAGE_TAG:-latest}-hysteria-tls-init
     build:
       context: .
       dockerfile: Dockerfile.hysteria-tls
@@ -122,7 +122,7 @@ services:
         condition: service_completed_successfully
 
   xray-core-service:
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-xray-easy}/xray-core-service:${XRAY_EASY_IMAGE_TAG:-latest}
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy:${XRAY_EASY_IMAGE_TAG:-latest}-xray-core-service
     build:
       context: .
       dockerfile: Dockerfile.xray-runtime
@@ -177,7 +177,7 @@ services:
       retries: 5
 
   controller:
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-xray-easy}/controller:${XRAY_EASY_IMAGE_TAG:-latest}
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy:${XRAY_EASY_IMAGE_TAG:-latest}-controller
     build:
       context: .
       dockerfile: Dockerfile.controller
@@ -220,7 +220,7 @@ services:
       retries: 5
 
   control-plane:
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-xray-easy}/control-plane:${XRAY_EASY_IMAGE_TAG:-latest}
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy:${XRAY_EASY_IMAGE_TAG:-latest}-control-plane
     build:
       context: .
       dockerfile: Dockerfile.control
@@ -287,7 +287,7 @@ services:
 
   amneziawg-service:
     profiles: ["awg", "awg-prototype"]
-    image: ${XRAY_EASY_IMAGE_NAMESPACE:-xray-easy}/amneziawg-service:${XRAY_EASY_IMAGE_TAG:-latest}
+    image: ${XRAY_EASY_IMAGE_NAMESPACE:-dasshit}/xray-easy:${XRAY_EASY_IMAGE_TAG:-latest}-amneziawg-service
     build:
       context: .
       dockerfile: Dockerfile.awg

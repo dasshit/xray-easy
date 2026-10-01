@@ -189,11 +189,12 @@ jobs:
         id: metadata
         uses: docker/metadata-action@v5
         with:
-          images: xray-easy/${{ matrix.image }}
+          images: ${{ secrets.DOCKERHUB_USERNAME }}/xray-easy
+          flavor: latest=false
           tags: |
-            type=semver,pattern={{version}}
-            type=ref,event=tag
-            type=raw,value=latest
+            type=semver,pattern={{version}},suffix=-${{ matrix.image }}
+            type=ref,event=tag,suffix=-${{ matrix.image }}
+            type=raw,value=latest-${{ matrix.image }}
 
       - name: Build and publish multi-platform image
         uses: docker/build-push-action@v7

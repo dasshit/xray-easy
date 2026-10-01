@@ -440,6 +440,13 @@ func TestConfigurationDoesNotCreateSupervisorTokenOrReplaceEnv(t *testing.T) {
 		t.Fatalf("configuration created a legacy supervisor token: %v", err)
 	}
 	firstEnv := readPrivateFile(t, filepath.Join(root, ".env"))
+	values, err := readEnvironmentFile(filepath.Join(root, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["XRAY_EASY_IMAGE_NAMESPACE"] != "dasshit" || values["XRAY_EASY_IMAGE_TAG"] != "latest" {
+		t.Fatalf("unexpected default image reference settings: namespace=%q tag=%q", values["XRAY_EASY_IMAGE_NAMESPACE"], values["XRAY_EASY_IMAGE_TAG"])
+	}
 	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080}); err == nil {
 		t.Fatal("second configuration write replaced .env")
 	}

@@ -60,10 +60,10 @@ read_env_value() {
 
 configured_image_namespace=$(read_env_value XRAY_EASY_IMAGE_NAMESPACE)
 image_namespace=${XRAY_EASY_IMAGE_NAMESPACE:-$configured_image_namespace}
-if [ -z "${XRAY_EASY_IMAGE_NAMESPACE:-}" ] && [ "$image_namespace" = "dasshit" ]; then
-  image_namespace=xray-easy
+if [ -z "${XRAY_EASY_IMAGE_NAMESPACE:-}" ] && [ "$image_namespace" = "xray-easy" ]; then
+  image_namespace=dasshit
 fi
-image_namespace=${image_namespace:-xray-easy}
+image_namespace=${image_namespace:-dasshit}
 image_tag=${XRAY_EASY_IMAGE_TAG:-$(read_env_value XRAY_EASY_IMAGE_TAG)}
 image_tag=${image_tag:-latest}
 case "$image_namespace" in
@@ -78,7 +78,10 @@ case "$image_tag" in
     exit 1
     ;;
 esac
-installer_image=${XRAY_EASY_INSTALLER_IMAGE:-$image_namespace/installer:$image_tag}
+installer_image=${XRAY_EASY_INSTALLER_IMAGE:-}
+if [ -z "$installer_image" ]; then
+  installer_image="$image_namespace/xray-easy:$image_tag-installer"
+fi
 
 if app_version=$(git -C "$project_dir" describe --tags --always --dirty 2>/dev/null); then
   :
