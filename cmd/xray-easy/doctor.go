@@ -481,7 +481,7 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 
 	if !settingsReady {
 		appendCheck(doctorWarn, "Xray Handler API", "inbound check skipped until server setup is complete", "Complete the first-run setup in the Web UI.")
-		appendCheck(doctorWarn, "Xray statistics API", "stats check skipped until server setup is complete", "Complete the first-run setup in the Web UI.")
+		appendCheck(doctorWarn, "Embedded Xray telemetry", "telemetry check skipped until server setup is complete", "Complete the first-run setup in the Web UI.")
 	} else if !runtimeReady {
 		appendCheck(doctorWarn, "Xray API", "gRPC checks skipped because Xray is unavailable", "Fix the Xray runtime checks above.")
 	} else {
@@ -496,9 +496,9 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 			appendCheck(doctorPass, "Xray Handler API", "inbound HandlerService is responding", "")
 		}
 		if _, err := stats.Poll(ctx); err != nil {
-			appendCheck(doctorWarn, "Xray statistics API", "GetUsersStats is unavailable; device traffic counters may not update", "Check whether the pinned XRAY_VERSION supports the StatsService method used by this release.")
+			appendCheck(doctorWarn, "Embedded Xray telemetry", "runtime telemetry could not be read; device traffic counters may not update", "Check Xray Runtime and Controller gRPC health, then inspect their logs.")
 		} else {
-			appendCheck(doctorPass, "Xray statistics API", "StatsService is responding", "")
+			appendCheck(doctorPass, "Embedded Xray telemetry", "in-process counters are readable through Controller", "")
 		}
 	}
 	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound TCP %s (VLESS) and TCP %s (VMess, when used) for IPv4 and IPv6 in the VDS firewall/security group; verify a client connection.", envOr("XRAY_PUBLIC_PORT", "443"), envOr("XRAY_VMESS_PORT", "9443")))

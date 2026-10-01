@@ -45,10 +45,10 @@ type Settings = domain.Settings
 type Client = domain.Client
 type ClientState = domain.ClientState
 
-// TrafficSnapshot is the durable checkpoint for the counters returned by
-// Xray's StatsService. Xray counters are process-local and can reset after a
-// restart, so total_* are accumulated by the control plane while raw_* keep
-// the last observed Xray values for reset detection.
+// TrafficSnapshot is the durable checkpoint for counters returned by the
+// embedded Xray runtime. Runtime counters are process-local and can reset after
+// a restart, so total_* are accumulated by the control plane while raw_* keep
+// the last observed values for reset detection.
 type TrafficSnapshot struct {
 	ClientID      string
 	RawUpload     int64

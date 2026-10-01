@@ -29,6 +29,28 @@ func TestWithRequestIDValidatesAndNormalizes(t *testing.T) {
 	if got := RequestID(WithRequestID(ctx, "invalid")); got != RequestID(ctx) {
 		t.Fatalf("invalid ID replaced existing value: %q", got)
 	}
+	ctx = WithOperationID(ctx, "ABCDEF0123456789ABCDEF0123456789")
+	if got := OperationID(ctx); got != "abcdef0123456789abcdef0123456789" {
+		t.Fatalf("OperationID() = %q", got)
+	}
+	if got := OperationID(WithOperationID(ctx, "invalid")); got != OperationID(ctx) {
+		t.Fatalf("invalid operation ID replaced existing value: %q", got)
+	}
+	ctx = WithAttempt(ctx, 4)
+	if got := Attempt(ctx); got != 4 || Attempt(WithAttempt(ctx, 0)) != 4 || Attempt(WithAttempt(ctx, 1_000_001)) != 4 {
+		t.Fatalf("invalid attempt replaced existing value: %d", got)
+	}
+	ctx = WithStateRevision(ctx, 7)
+	if got := StateRevision(ctx); got != 7 || StateRevision(WithStateRevision(ctx, 0)) != 7 {
+		t.Fatalf("invalid state revision replaced existing value: %d", got)
+	}
+}
+
+func TestTraceFromContext(t *testing.T) {
+	ctx := WithStateRevision(WithAttempt(WithOperationID(context.Background(), "abcdef0123456789abcdef0123456789"), 3), 12)
+	if got := TraceFromContext(ctx); got != (Trace{OperationID: "abcdef0123456789abcdef0123456789", Attempt: 3, StateRevision: 12}) {
+		t.Fatalf("TraceFromContext() = %+v", got)
+	}
 }
 
 func TestIncomingRequestID(t *testing.T) {

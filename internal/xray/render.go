@@ -360,7 +360,7 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	}
 	config := serverConfig{
 		Log:       logConfig{LogLevel: settings.LogLevel},
-		API:       apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "StatsService", "LoggerService"}},
+		API:       apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "LoggerService"}},
 		Stats:     map[string]any{},
 		Policy:    policyConfig{Levels: map[string]policyLevel{"0": {StatsUserUplink: true, StatsUserDownlink: true, StatsUserOnline: true}}},
 		Inbounds:  inbounds,

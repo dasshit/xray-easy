@@ -594,7 +594,7 @@ func TestRenderServerConfigIsDeterministicAndIncludesControlServices(t *testing.
 	if err := json.Unmarshal(first, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if len(decoded.API.Services) != 3 || decoded.API.Services[0] != "HandlerService" || decoded.API.Services[1] != "StatsService" || decoded.API.Services[2] != "LoggerService" {
+	if len(decoded.API.Services) != 2 || decoded.API.Services[0] != "HandlerService" || decoded.API.Services[1] != "LoggerService" {
 		t.Fatalf("Xray API services = %v", decoded.API.Services)
 	}
 	if len(decoded.Inbounds) != 1 {

@@ -191,7 +191,7 @@ func TestPollKeepsFreshCachedStatsWhenXrayTemporarilyFails(t *testing.T) {
 	}
 
 	now = now.Add(10 * time.Second)
-	api.set(nil, errors.New("temporary StatsService outage"))
+	api.set(nil, errors.New("temporary runtime telemetry outage"))
 	if err := manager.Poll(context.Background()); err == nil {
 		t.Fatal("Xray stats outage was not returned")
 	}
@@ -199,8 +199,8 @@ func TestPollKeepsFreshCachedStatsWhenXrayTemporarilyFails(t *testing.T) {
 	if !got.Online || got.UploadBytes != 30 || got.UploadBytesPerSecond != 0 || len(got.SourceIPs) != 1 || got.SourceIPs[0] != "198.51.100.9" {
 		t.Fatalf("fresh cached connection details were not preserved with rates cleared: %+v", got)
 	}
-	if !strings.Contains(manager.LastError(), "StatsService outage") {
-		t.Fatalf("Xray stats error was not reported: %q", manager.LastError())
+	if !strings.Contains(manager.LastError(), "runtime telemetry outage") {
+		t.Fatalf("runtime telemetry error was not reported: %q", manager.LastError())
 	}
 
 	now = now.Add(onlineWindow + time.Second)
@@ -376,14 +376,14 @@ func TestPollRecordsAndClearsStoreAndAPIErrors(t *testing.T) {
 			t.Fatalf("store error state=%q api calls=%d", manager.LastError(), api.callCount())
 		}
 	})
-	t.Run("Xray API", func(t *testing.T) {
+	t.Run("telemetry source", func(t *testing.T) {
 		db, _ := openStatsTestStore(t)
-		api := &fakeStatsAPI{err: errors.New("StatsService unavailable")}
+		api := &fakeStatsAPI{err: errors.New("runtime telemetry unavailable")}
 		manager := NewManager(db, api)
-		if err := manager.Poll(context.Background()); err == nil || err.Error() != "StatsService unavailable" {
+		if err := manager.Poll(context.Background()); err == nil || err.Error() != "runtime telemetry unavailable" {
 			t.Fatalf("Poll error = %v", err)
 		}
-		if manager.LastError() != "StatsService unavailable" {
+		if manager.LastError() != "runtime telemetry unavailable" {
 			t.Fatalf("LastError = %q", manager.LastError())
 		}
 	})

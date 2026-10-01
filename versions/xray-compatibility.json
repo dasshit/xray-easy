@@ -8,7 +8,6 @@
         "VLESS + REALITY + TCP/RAW + XTLS Vision",
         "V2Rage import and connection using the explicit minClientVer 1.0.0"
       ],
-      "stats_service": "GetUsersStats",
       "reality_min_client_version": "1.0.0",
       "hysteria2": "Implemented from the Xray configuration and HandlerService contracts; real V2Rage client and VPS traffic still require manual verification."
     }

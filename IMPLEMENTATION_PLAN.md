@@ -950,7 +950,7 @@ master-key rotation используют тот же maintenance protocol. `doct
 учётом ожидаемого режима `0400` внутри контейнера, SQLite и shared volumes,
 а также связность control plane → supervisor → Xray, активную конфигурацию,
 HandlerService и DNS/TLS-доступность выбранного REALITY target из сети Xray.
-Отсутствие поддержки `GetUsersStats` считается предупреждением; входящий
+Недоступность embedded Xray telemetry считается предупреждением; входящий
 firewall обозначается как требующий ручной проверки. При недоступном
 control-plane контейнере остаётся возможность запустить разовую проверку через
 `docker compose run --rm --no-deps xray-easy doctor`.

@@ -289,7 +289,7 @@ func TestDoctorBundleContainsRedactedReportStatusLogsAndConfig(t *testing.T) {
 	}
 }
 
-func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
+func TestDoctorReportsUnavailableEmbeddedTelemetryAsWarning(t *testing.T) {
 	dataDir, configDir, key := prepareDoctorState(t, true)
 	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
 	t.Setenv("XRAY_VERSION", "26.7.28")
@@ -297,15 +297,15 @@ func TestDoctorTreatsUnsupportedStatsAsWarning(t *testing.T) {
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
 	sup := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running", XrayVersion: "Xray 26.7.28"}}
 	handler := &doctorHandlerStub{}
-	stats := &doctorStatsStub{err: errors.New("unknown method GetUsersStats")}
+	stats := &doctorStatsStub{err: errors.New("runtime telemetry unavailable")}
 	var output bytes.Buffer
 
 	err := runDoctor(context.Background(), dataDir, configDir, &output, sup, handler, stats)
 	if err != nil {
 		t.Fatalf("unsupported statistics RPC should not fail installation: %v\n%s", err, output.String())
 	}
-	if !strings.Contains(output.String(), "WARN  Xray statistics API: GetUsersStats is unavailable") || !strings.Contains(output.String(), "Result: PASS (") {
-		t.Fatalf("unsupported stats API was not reported as a warning: %s", output.String())
+	if !strings.Contains(output.String(), "WARN  Embedded Xray telemetry: runtime telemetry could not be read") || !strings.Contains(output.String(), "Result: PASS (") {
+		t.Fatalf("unavailable runtime telemetry was not reported as a warning: %s", output.String())
 	}
 	if handler.calls != 1 || stats.calls != 1 {
 		t.Fatalf("Xray API calls = handler:%d stats:%d", handler.calls, stats.calls)

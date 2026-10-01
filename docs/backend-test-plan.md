@@ -57,9 +57,9 @@ go tool cover -html=coverage.out
 
 Добавлены сценарии миграции и инициализации SQLite, сессий, TOTP и одноразовых recovery-кодов, устройств, трафика, аудита и операций apply; создание, проверка, список, ротация retention и восстановление backup; эксклюзивность и отмена maintenance lock. Покрытие целевых пакетов: `internal/store` — 83,2%, `internal/backup` — 84,1%, `internal/maintenance` — 83,3%. Общее покрытие рукописного Go-кода — **707 / 2836 операторов (24,9%)**.
 
-### Результат этапа 3
+### Результат этапа 3 (исторический снимок)
 
-Покрыты связи между VLESS URI и JSON экспортом, правила генерации серверной конфигурации и REALITY short IDs, формат UUID/X25519/short ID. Для HandlerService и StatsService добавлены тестовые gRPC-серверы поверх `bufconn`: проверяются сериализация Add/Remove user, выбор inbound, статистика, восстановление соединения и ошибка `Unimplemented` для старого StatsService. Клиентам добавлена внутренняя точка внедрения gRPC dial options для таких тестов. Покрытие: `internal/xray` — 95,2%, `internal/xrayapi` — 98,5%; общее покрытие рукописного Go-кода — **923 / 2836 операторов (32,5%)**. `go test -race` проходит.
+На тот момент были покрыты связи между VLESS URI и JSON экспортом, правила генерации серверной конфигурации и REALITY short IDs, формат UUID/X25519/short ID и HandlerService/StatsService gRPC-адаптеры. После перехода на embedded Xray runtime прямой StatsService-клиент, его generated bindings и тесты удалены; текущие тесты проверяют in-process runtime telemetry, Controller RPC и unary fallback для накопления totals. Приведённые здесь показатели покрытия — исторический снимок до последующих миграций.
 
 ### Результат этапа 4
 
@@ -155,7 +155,7 @@ AWG gate отдельно проверяет 90% модуля. Runtime gate от
 
 ### 3. Генерация конфигурации и адаптеры Xray
 
-Довести `internal/xray`: профиль VLESS URI и клиентский JSON должны содержать одинаковые UUID, public key, short ID, SNI, fingerprint, flow и порт; проверить escape имени, невалидные настройки, отозванный профиль, пустой список клиентов и стабильный порядок конфигурации. Зафиксировать совместимость полей `password`/`publicKey` и `minClientVer` тестами на контракт. Для `internal/xrayapi` поднять локальный gRPC-сервер в тесте: HandlerService add/remove/list и обработка ошибок, StatsService `GetUsersStats`, отсутствие метода на старой версии Xray, сброс соединения и повторное подключение. Сгенерированные protobuf-файлы отдельно не тестировать.
+Довести `internal/xray`: профиль VLESS URI и клиентский JSON должны содержать одинаковые UUID, public key, short ID, SNI, fingerprint, flow и порт; проверить escape имени, невалидные настройки, отозванный профиль, пустой список клиентов и стабильный порядок конфигурации. Зафиксировать совместимость полей `password`/`publicKey` и `minClientVer` тестами на контракт. Для `internal/xrayapi` проверять HandlerService add/remove/list и обработку ошибок. Проверять user telemetry в embedded Xray runtime и её передачу через Controller; polling Controller/runtime остаётся fallback для SQLite snapshots, когда SSE stream неактивен. Сгенерированные protobuf-файлы отдельно не тестировать.
 
 ### 4. Управление процессом и статистика
 

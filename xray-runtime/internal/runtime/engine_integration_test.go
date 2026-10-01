@@ -108,11 +108,11 @@ func TestEmbeddedEngineManagesUsersAndReplacesInboundLive(t *testing.T) {
 	}
 }
 
-func TestEmbeddedEngineIgnoresLegacyAPIServerAddress(t *testing.T) {
-	configuration := []byte(`{"log":{"loglevel":"none"},"api":{"tag":"api","listen":"192.0.2.123:10085","services":["HandlerService","StatsService","LoggerService"]},"inbounds":[],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`)
+func TestEmbeddedEngineStartsWithoutStatsService(t *testing.T) {
+	configuration := []byte(`{"log":{"loglevel":"none"},"api":{"tag":"api","listen":"192.0.2.123:10085","services":["HandlerService","LoggerService"]},"stats":{},"inbounds":[],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`)
 	engine, err := LoadEngine(configuration)
 	if err != nil {
-		t.Fatalf("load config with legacy API listener: %v", err)
+		t.Fatalf("load config without StatsService: %v", err)
 	}
 	defer func() {
 		if err := engine.Close(); err != nil {
@@ -120,7 +120,10 @@ func TestEmbeddedEngineIgnoresLegacyAPIServerAddress(t *testing.T) {
 		}
 	}()
 	if err := engine.Start(); err != nil {
-		t.Fatalf("start embedded Xray with an address from another container: %v", err)
+		t.Fatalf("start embedded Xray without StatsService and with an address from another container: %v", err)
+	}
+	if !engine.StatsAvailable() {
+		t.Fatal("in-process stats manager is unavailable without the external StatsService API")
 	}
 }
 
