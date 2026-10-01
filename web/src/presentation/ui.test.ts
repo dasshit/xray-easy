@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { formatBytes, formatRate, formatTimestamp } from './format'
 import { persistLanguage, readLanguage, useI18n } from './i18n'
 import { persistTheme, readTheme } from './theme'
-import { translations } from './i18n/messages'
+import { isUILanguage, languageOptions, translations } from './i18n/messages'
 
 describe('browser preferences', () => {
   beforeEach(() => {
@@ -34,22 +34,26 @@ describe('browser preferences', () => {
     expect(window.localStorage.getItem('xray-easy-theme')).toBe('dark')
   })
 
-  it('uses saved language or derives Russian from the browser locale', () => {
+  it('uses a saved language or derives a supported language from the browser locale', () => {
     vi.stubGlobal('navigator', { language: 'ru-RU' })
     expect(readLanguage()).toBe('ru')
 
     vi.stubGlobal('navigator', { language: 'fr-FR' })
-    expect(readLanguage()).toBe('en')
+    expect(readLanguage()).toBe('fr')
 
     window.localStorage.setItem('xray-easy-language', 'ru')
     expect(readLanguage()).toBe('ru')
     window.localStorage.setItem('xray-easy-language', 'invalid')
-    expect(readLanguage()).toBe('en')
+    expect(readLanguage()).toBe('fr')
   })
 
   it('persists a manually selected language', () => {
     persistLanguage('ru')
     expect(window.localStorage.getItem('xray-easy-language')).toBe('ru')
+    expect(document.documentElement.lang).toBe('ru')
+    expect(document.documentElement.dir).toBe('ltr')
+    persistLanguage('ar')
+    expect(document.documentElement.dir).toBe('rtl')
   })
 
   it('changes the reactive language and translations together', () => {
@@ -63,7 +67,13 @@ describe('browser preferences', () => {
   })
 
   it('keeps translation keys aligned between supported languages', () => {
-    expect(Object.keys(translations.ru).sort()).toEqual(Object.keys(translations.en).sort())
+    expect(languageOptions.map(option => option.code)).toEqual(['ru', 'en', 'de', 'es', 'pt-BR', 'fr', 'tr', 'fa', 'ar', 'zh-CN', 'uk', 'pl'])
+    expect(languageOptions.map(option => option.label)).toContain('العربية')
+    expect(isUILanguage('zh-CN')).toBe(true)
+    expect(isUILanguage('xx')).toBe(false)
+    for (const language of Object.keys(translations)) {
+      expect(Object.keys(translations[language as keyof typeof translations]).sort()).toEqual(Object.keys(translations.en).sort())
+    }
   })
 })
 

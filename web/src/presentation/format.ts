@@ -1,3 +1,5 @@
+import type { UILanguage } from './i18n'
+
 /**
  * Format a byte count using a compact binary unit.
  * @param value - The number of bytes to format.
@@ -29,7 +31,10 @@ export function formatRate(value: number): string {
  * @param language - The interface language that selects the locale.
  * @returns A localized date and time, or an empty string when no timestamp is present.
  */
-export function formatTimestamp(value: string | undefined, language: 'en' | 'ru'): string {
+export function formatTimestamp(value: string | undefined, language: UILanguage): string {
   if (value === undefined || value === '') return ''
-  return new Date(value).toLocaleString(language === 'ru' ? 'ru-RU' : 'en-US')
+  const locales: Record<UILanguage, string> = {
+    ru: 'ru-RU', en: 'en-US', de: 'de-DE', es: 'es-ES', 'pt-BR': 'pt-BR', fr: 'fr-FR', tr: 'tr-TR', fa: 'fa-IR', ar: 'ar', 'zh-CN': 'zh-CN', uk: 'uk-UA', pl: 'pl-PL',
+  }
+  return new Date(value).toLocaleString(locales[language])
 }

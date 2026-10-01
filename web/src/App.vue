@@ -7,7 +7,7 @@ import type { AmneziaWGStatus, Client, ClientAction, ClientActionType, Settings,
 import type { Admin, CreateClientCommand, DiagnosticEntry, HysteriaSettings, NodeStatus, ProfileDelivery, SetupStatus, TOTPSetup, TOTPStatus } from './application/models'
 import { loadAuthenticatedDashboard, loadDiagnosticsSnapshot, loadNodeStatusSnapshot } from './application/services/dashboard'
 import { formatBytes, formatRate, formatTimestamp } from './presentation/format'
-import { useI18n } from './presentation/i18n'
+import { isUILanguage, useI18n } from './presentation/i18n'
 import { readTheme, persistTheme } from './presentation/theme'
 import { xrayEasyGatewayKey } from './presentation/api'
 import type { Section, Theme } from './presentation/models'
@@ -24,7 +24,7 @@ const copiedHysteria = ref(false)
 const copiedVMess = ref(false)
 const error = ref('')
 const busy = ref(false)
-const { language, t, toggleLanguage } = useI18n()
+const { language, t, changeLanguage, languageOptions } = useI18n()
 const api = requireGateway(inject(xrayEasyGatewayKey))
 const theme = ref<Theme>(readTheme())
 const activeSection = ref<Section>('profiles')
@@ -114,6 +114,16 @@ function applyTheme(next: Theme) {
  * Switch between the light and dark themes.
  */
 function toggleTheme() { applyTheme(theme.value === 'dark' ? 'light' : 'dark') }
+
+/**
+ * Apply a language selected from the native language picker.
+ * @param event - The change event emitted by the language select.
+ */
+function selectLanguage(event: Event): void {
+  if (!(event.target instanceof HTMLSelectElement)) return
+  const value = event.target.value
+  if (isUILanguage(value)) changeLanguage(value)
+}
 
 /**
  * Translate a server state into the status label shown in the UI.
@@ -580,7 +590,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       <div class="topbar-actions">
         <span v-if="admin" class="node-pill" :class="`node-pill-${statusTone(nodeStatus?.state)}`"><span class="status-dot" :class="{ online: nodeStatus?.state === 'running' }"></span>{{ statusLabel(nodeStatus?.state) }}</span>
         <button class="theme-toggle" :aria-label="theme === 'dark' ? t().useLightTheme : t().useDarkTheme" @click="toggleTheme"><span class="theme-icon" aria-hidden="true">{{ theme === 'dark' ? '☀' : '☾' }}</span><span>{{ theme === 'dark' ? t().useLightTheme : t().useDarkTheme }}</span></button>
-        <button class="language" @click="toggleLanguage">{{ t().language }}</button>
+        <label class="language-picker"><span class="sr-only">{{ t().language }}</span><select class="language" :value="language" :aria-label="t().language" @change="selectLanguage"><option v-for="option in languageOptions" :key="option.code" :value="option.code">{{ option.label }}</option></select></label>
         <button v-if="admin" class="secondary topbar-logout" type="button" @click="logout">{{ t().logout }}</button>
       </div>
     </header>

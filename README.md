@@ -1,5 +1,20 @@
 # Xray-easy
 
+<p align="center">
+  <a href="README.md">English</a> ·
+  <a href="docs/readme/ru/README.md">Русский</a> ·
+  <a href="docs/readme/de/README.md">Deutsch</a> ·
+  <a href="docs/readme/es/README.md">Español</a> ·
+  <a href="docs/readme/pt-BR/README.md">Português (Brasil)</a> ·
+  <a href="docs/readme/fr/README.md">Français</a> ·
+  <a href="docs/readme/tr/README.md">Türkçe</a> ·
+  <a href="docs/readme/fa/README.md">فارسی</a> ·
+  <a href="docs/readme/ar/README.md">العربية</a> ·
+  <a href="docs/readme/zh-CN/README.md">简体中文</a> ·
+  <a href="docs/readme/uk/README.md">Українська</a> ·
+  <a href="docs/readme/pl/README.md">Polski</a>
+</p>
+
 <div align="center">
   <p><img src="web/public/favicon-light.svg" width="48" height="48" alt="Xray-easy icon"></p>
   <p><img src="docs/assets/xray-easy-banner.svg" width="100%" alt="Xray-easy — a private VPN control panel for your own server"></p>

@@ -14,15 +14,14 @@ describe('theme and language preferences in the interface', () => {
     expect(window.localStorage.getItem('xray-easy-theme')).toBe('light')
   })
 
-  it('switches between English and Russian and persists the choice', async () => {
+  it('selects a language and persists the choice', async () => {
     const { wrapper } = await mountApp(defaultHandler())
     const language = wrapper.get('.language')
-    expect(language.text()).toBe('Русский')
-    await language.trigger('click')
+    expect((language.element as HTMLSelectElement).value).toBe('en')
+    await language.setValue('ru')
     expect(wrapper.text()).toContain('Войти')
-    expect(wrapper.get('.language').text()).toBe('English')
     expect(window.localStorage.getItem('xray-easy-language')).toBe('ru')
-    await wrapper.get('.language').trigger('click')
+    await wrapper.get('.language').setValue('en')
     expect(wrapper.text()).toContain('Sign in')
     expect(window.localStorage.getItem('xray-easy-language')).toBe('en')
   })
