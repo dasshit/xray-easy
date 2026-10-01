@@ -5,6 +5,7 @@ script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd -- "$script_dir/.." && pwd)"
 profile="${1:-$repo_root/awg-service/coverage.out}"
 minimum="${AWG_COVERAGE_MIN:-90}"
+test_json="${GO_TEST_JSON:-}"
 
 if ! [[ "$minimum" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v value="$minimum" 'BEGIN { exit !(value >= 0 && value <= 100) }'; then
 	printf 'AWG_COVERAGE_MIN must be a number between 0 and 100; got %q\n' "$minimum" >&2
@@ -14,7 +15,14 @@ fi
 cd "$repo_root/awg-service"
 # Keep -count=1 out so Go can reuse successful results from GOCACHE.
 run_go_tests() {
-	if [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
+	if [[ -n "$test_json" ]]; then
+		mkdir -p "$(dirname -- "$test_json")"
+		if [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
+			go test -json -race "$@" | tee "$test_json" >/dev/null
+		else
+			go test -json "$@" | tee "$test_json" >/dev/null
+		fi
+	elif [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
 		go test -race "$@"
 	else
 		go test "$@"

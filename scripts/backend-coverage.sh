@@ -4,6 +4,7 @@ set -euo pipefail
 profile="${1:-coverage.out}"
 overall_min="${BACKEND_COVERAGE_MIN:-90}"
 package_min="${BACKEND_PACKAGE_COVERAGE_MIN:-80}"
+test_json="${GO_TEST_JSON:-}"
 
 validate_threshold() {
 	local name="$1"
@@ -21,7 +22,14 @@ validate_threshold BACKEND_PACKAGE_COVERAGE_MIN "$package_min"
 # Go modules (for example web/node_modules/flatted/golang) that ./... discovers.
 # Keep -count=1 out so Go can reuse successful results from GOCACHE.
 run_go_tests() {
-	if [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
+	if [[ -n "$test_json" ]]; then
+		mkdir -p "$(dirname -- "$test_json")"
+		if [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
+			go test -json -race "$@" | tee "$test_json" >/dev/null
+		else
+			go test -json "$@" | tee "$test_json" >/dev/null
+		fi
+	elif [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
 		go test -race "$@"
 	else
 		go test "$@"

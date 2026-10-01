@@ -3,8 +3,17 @@ set -euo pipefail
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 minimum="${XRAY_RUNTIME_FILE_COVERAGE_MIN:-90}"
-profile_dir="$(mktemp -d)"
-trap 'rm -rf "$profile_dir"' EXIT
+profile_dir="${XRAY_RUNTIME_COVERAGE_DIR:-}"
+remove_profile_dir=0
+if [[ -z "$profile_dir" ]]; then
+	profile_dir="$(mktemp -d)"
+	remove_profile_dir=1
+fi
+mkdir -p "$profile_dir"
+if [[ "$remove_profile_dir" == "1" ]]; then
+	trap 'rm -rf "$profile_dir"' EXIT
+fi
+test_json="${GO_TEST_JSON:-}"
 
 if ! [[ "$minimum" =~ ^[0-9]+([.][0-9]+)?$ ]] || ! awk -v value="$minimum" 'BEGIN { exit !(value >= 0 && value <= 100) }'; then
 	printf 'XRAY_RUNTIME_FILE_COVERAGE_MIN must be a number between 0 and 100; got %q\n' "$minimum" >&2
@@ -14,7 +23,14 @@ fi
 cd "$repo_root/xray-runtime"
 # Keep -count=1 out so Go can reuse successful results from GOCACHE.
 run_go_tests() {
-	if [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
+	if [[ -n "$test_json" ]]; then
+		mkdir -p "$(dirname -- "$test_json")"
+		if [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
+			go test -json -race "$@" | tee "$test_json" >/dev/null
+		else
+			go test -json "$@" | tee "$test_json" >/dev/null
+		fi
+	elif [[ "${GO_TEST_RACE:-0}" == "1" ]]; then
 		go test -race "$@"
 	else
 		go test "$@"
