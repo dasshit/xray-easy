@@ -53,6 +53,16 @@ type recordingVMessHandler struct {
 	removeErr error
 }
 
+type recordingShadowsocksHandler struct {
+	*fakeXrayHandler
+	users     []string
+	added     []string
+	methods   []string
+	removed   []string
+	addErr    error
+	removeErr error
+}
+
 type reconcilingProtocolHandler struct {
 	*fakeXrayHandler
 	hysteriaUsers []string
@@ -125,6 +135,35 @@ func (h *recordingVMessHandler) RemoveVMessUser(_ context.Context, email string)
 		}
 	}
 	return nil
+}
+
+func (h *recordingShadowsocksHandler) AddShadowsocksUser(_ context.Context, email, password, method string) error {
+	if h.addErr != nil {
+		return h.addErr
+	}
+	h.added = append(h.added, email)
+	h.methods = append(h.methods, method)
+	h.users = append(h.users, email)
+	if password == "" {
+		return errors.New("empty Shadowsocks password")
+	}
+	return nil
+}
+
+func (h *recordingShadowsocksHandler) RemoveShadowsocksUser(_ context.Context, email string) error {
+	if h.removeErr != nil {
+		return h.removeErr
+	}
+	h.removed = append(h.removed, email)
+	h.users = removeEmail(h.users, email)
+	return nil
+}
+
+func (h *recordingShadowsocksHandler) UsersInInbound(_ context.Context, tag string) ([]string, error) {
+	if tag != xray.ShadowsocksInboundTag {
+		return nil, fmt.Errorf("unexpected inbound tag %q", tag)
+	}
+	return append([]string(nil), h.users...), nil
 }
 
 func (h *recordingVMessHandler) UsersInInbound(_ context.Context, tag string) ([]string, error) {
@@ -200,6 +239,20 @@ func createRuntimeVMessClient(t *testing.T, app testApp, name string) domain.Cli
 	response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolVMess), Name: name}, true)
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create VMess profile %s: %d %s", name, response.Code, response.Body.String())
+	}
+	created := decodeResponse[clientResponse](t, response)
+	client, err := app.server.store.GetClient(t.Context(), created.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}
+
+func createRuntimeShadowsocksClient(t *testing.T, app testApp, name string) domain.Client {
+	t.Helper()
+	response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolShadowsocks), Name: name}, true)
+	if response.Code != http.StatusCreated {
+		t.Fatalf("create Shadowsocks profile %s: %d %s", name, response.Code, response.Body.String())
 	}
 	created := decodeResponse[clientResponse](t, response)
 	client, err := app.server.store.GetClient(t.Context(), created.ID)
@@ -383,6 +436,50 @@ func TestVMessProfilesUseCertificateAndLiveUserLifecycle(t *testing.T) {
 	}
 	if got := requestJSON(t, app, http.MethodPost, "/api/clients/"+second.ID+"/enable", nil, true).Code; got != http.StatusConflict {
 		t.Fatalf("enable revoked VMess profile = %d", got)
+	}
+}
+
+func TestShadowsocksProfilesUseLiveUserLifecycleAndDelivery(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	t.Setenv("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305)
+	t.Setenv("XRAY_SHADOWSOCKS_NETWORK", domain.ShadowsocksNetworkTCPUDP)
+	app := newTestApp(t, true)
+	handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler}
+	app.server.handler = handler
+
+	first := createRuntimeShadowsocksClient(t, app, "phone-1")
+	if first.ShadowsocksPasswordEnc == "" || len(app.sup.applyCalls) != 1 || len(handler.added) != 0 {
+		t.Fatalf("first Shadowsocks profile lifecycle: client=%+v apply=%v additions=%v", first, app.sup.applyCalls, handler.added)
+	}
+	second := createRuntimeShadowsocksClient(t, app, "phone-2")
+	if len(handler.added) != 1 || handler.added[0] != second.Email || len(handler.methods) != 1 || handler.methods[0] != domain.ShadowsocksMethodChaCha20Poly1305 {
+		t.Fatalf("subsequent Shadowsocks profile did not use live user API: additions=%v methods=%v", handler.added, handler.methods)
+	}
+
+	profile := requestJSON(t, app, http.MethodGet, "/api/clients/"+second.ID+"/profile", nil, true)
+	if profile.Code != http.StatusOK || !strings.Contains(profile.Body.String(), `"protocol":"shadowsocks"`) || !strings.Contains(profile.Body.String(), `"ss_uri":"ss://`) || strings.Contains(profile.Body.String(), `"uri":`) {
+		t.Fatalf("Shadowsocks profile response = %d %s", profile.Code, profile.Body.String())
+	}
+	jsonProfile := requestJSON(t, app, http.MethodGet, "/api/clients/"+second.ID+"/profile?format=json", nil, true)
+	if jsonProfile.Code != http.StatusOK || !strings.Contains(jsonProfile.Body.String(), `"method": "chacha20-poly1305"`) {
+		t.Fatalf("Shadowsocks JSON profile = %d %s", jsonProfile.Code, jsonProfile.Body.String())
+	}
+	qr := requestJSON(t, app, http.MethodGet, "/api/clients/"+second.ID+"/profile?format=ss-qr", nil, true)
+	if qr.Code != http.StatusOK || qr.Header().Get("Content-Type") != "image/png" || qr.Body.Len() < 8 {
+		t.Fatalf("Shadowsocks QR response = %d %v", qr.Code, qr.Header())
+	}
+	disabled := requestJSON(t, app, http.MethodPost, "/api/clients/"+second.ID+"/disable", nil, true)
+	if disabled.Code != http.StatusOK || len(handler.removed) != 1 || handler.removed[0] != second.Email {
+		t.Fatalf("Shadowsocks disable = %d removals=%v body=%s", disabled.Code, handler.removed, disabled.Body.String())
+	}
+	enabled := requestJSON(t, app, http.MethodPost, "/api/clients/"+second.ID+"/enable", nil, true)
+	if enabled.Code != http.StatusOK || len(handler.added) != 2 {
+		t.Fatalf("Shadowsocks enable = %d additions=%v body=%s", enabled.Code, handler.added, enabled.Body.String())
+	}
+	revoked := requestJSON(t, app, http.MethodPost, "/api/clients/"+second.ID+"/revoke", nil, true)
+	if revoked.Code != http.StatusOK || len(handler.removed) != 2 {
+		t.Fatalf("Shadowsocks revoke = %d removals=%v body=%s", revoked.Code, handler.removed, revoked.Body.String())
 	}
 }
 
