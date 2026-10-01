@@ -150,16 +150,18 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - image: xray-easy-control-plane
+          - image: control-plane
             dockerfile: Dockerfile.control
-          - image: xray-easy-controller
+          - image: controller
             dockerfile: Dockerfile.controller
-          - image: xray-easy-xray-core-service
+          - image: xray-core-service
             dockerfile: Dockerfile.xray-runtime
-          - image: xray-easy-amneziawg-service
+          - image: amneziawg-service
             dockerfile: Dockerfile.awg
-          - image: xray-easy-hysteria-tls-init
+          - image: hysteria-tls-init
             dockerfile: Dockerfile.hysteria-tls
+          - image: installer
+            dockerfile: Dockerfile.installer
     steps:
       - name: Check out repository
         uses: actions/checkout@v7
@@ -187,7 +189,7 @@ jobs:
         id: metadata
         uses: docker/metadata-action@v5
         with:
-          images: ${{ secrets.DOCKERHUB_USERNAME }}/${{ matrix.image }}
+          images: xray-easy/${{ matrix.image }}
           tags: |
             type=semver,pattern={{version}}
             type=ref,event=tag

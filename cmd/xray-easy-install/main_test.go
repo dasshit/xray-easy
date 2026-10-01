@@ -57,7 +57,7 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 	if err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
-	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --remove-orphans --wait") || !strings.Contains(runner.calls[4], "exec -T control-plane xray-easy doctor") {
+	if len(runner.calls) != 6 || runner.calls[3] != "compose -f compose.yaml pull" || !strings.Contains(runner.calls[4], "up -d --remove-orphans --wait") || strings.Contains(runner.calls[4], "--build") || !strings.Contains(runner.calls[5], "exec -T control-plane xray-easy doctor") {
 		t.Fatalf("unexpected Docker calls: %v", runner.calls)
 	}
 	if !strings.Contains(output.String(), "Doctor completed. Review any warnings above") {
@@ -96,6 +96,22 @@ func TestInstallAndRetryPreserveSecrets(t *testing.T) {
 	}
 }
 
+func TestInstallBuildsServicesLocallyWhenImagePullFails(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{failOn: "compose -f compose.yaml pull"}
+	var output bytes.Buffer
+	if err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n"), &output, runner); err != nil {
+		t.Fatal(err)
+	}
+	calls := strings.Join(runner.calls, "\n")
+	if !strings.Contains(calls, "compose -f compose.yaml pull") || !strings.Contains(calls, "up -d --build --remove-orphans --wait") {
+		t.Fatalf("failed image pull did not trigger a local service build: %v", runner.calls)
+	}
+	if !strings.Contains(output.String(), "Docker Hub images are unavailable; building the installer services locally") {
+		t.Fatalf("local build fallback was not shown: %s", output.String())
+	}
+}
+
 func TestChangingAmneziaWGEndpointDoesNotForceRecreateXray(t *testing.T) {
 	root := t.TempDir()
 	cfg := configuration{
@@ -119,7 +135,7 @@ func TestChangingAmneziaWGEndpointDoesNotForceRecreateXray(t *testing.T) {
 	if strings.Contains(calls, "--force-recreate") {
 		t.Fatalf("AmneziaWG endpoint change forced unrelated container recreation: %s", calls)
 	}
-	if !strings.Contains(calls, "compose -f compose.yaml up -d --build --remove-orphans --wait --wait-timeout 180") {
+	if !strings.Contains(calls, "compose -f compose.yaml up -d --remove-orphans --wait --wait-timeout 180") {
 		t.Fatalf("Compose did not apply the changed service configuration: %s", calls)
 	}
 	if !strings.Contains(output.String(), "open each existing device profile") {
@@ -254,7 +270,7 @@ func TestDoctorFailurePreservesStartedStackAndShowsRetryCommand(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "docker compose -f compose.yaml exec -T control-plane xray-easy doctor") {
 		t.Fatalf("expected doctor failure with retry command, got %v", err)
 	}
-	if len(runner.calls) != 5 || !strings.Contains(runner.calls[3], "up -d --build --remove-orphans --wait") || !strings.Contains(runner.calls[4], "doctor") {
+	if len(runner.calls) != 6 || !strings.Contains(runner.calls[4], "up -d --remove-orphans --wait") || !strings.Contains(runner.calls[5], "doctor") {
 		t.Fatalf("doctor was not the final install step: %v", runner.calls)
 	}
 	if strings.Contains(strings.Join(runner.calls, "\n"), " down") {

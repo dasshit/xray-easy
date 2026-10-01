@@ -32,9 +32,10 @@ interface and is intended to be accessed through an SSH tunnel.
   Docker and firewall have working IPv6 routing.
 - An available public TCP port, **443** by default.
 
-The VPS needs outbound network access to build/download dependencies and to
-carry VPN traffic. Go and Node.js are not required on the VPS: the installer
-builds the project images from the cloned source.
+The VPS needs outbound network access to download images and carry VPN traffic.
+Go and Node.js are not required on the VPS. The installer normally pulls its
+prebuilt installer and service images; if Docker Hub cannot provide them, it
+builds the installer and services locally from this checkout.
 
 ### 1. Clone and install
 
@@ -48,15 +49,19 @@ cd xray-easy
 
 The installer opens a full-screen terminal wizard. It checks Docker, guides
 you through the public and panel ports, optional Hysteria 2 TLS and optional
-AmneziaWG, then creates the secrets, builds the images, starts Compose and runs
-the final health check. Use **↑/↓** or **Tab** to move, **Enter** to continue,
-**Esc** to cancel and **Ctrl+C** to stop.
+AmneziaWG, then creates the secrets, pulls the service images, starts Compose
+and runs the final health check. Use **↑/↓** or **Tab** to move, **Enter** to
+continue, **Esc** to cancel and **Ctrl+C** to stop. If pulling the installer
+image fails, `install.sh` builds that image locally. If pulling service images
+fails, the wizard builds the services locally from this checkout.
+Local builds still need their base images and Go dependencies from an available
+registry or the Docker/Go caches; the fallback cannot bootstrap a fresh host
+while all registry access is unavailable.
 
 Pushing a `v*` tag runs the tested Docker Hub publication workflow for
-**amd64** and **arm64**. The installer currently builds images from this
-checkout. If a service does not become healthy, the installer keeps the
-configuration for troubleshooting and prints recent logs and recovery
-commands. It reuses existing keys and Docker volumes on repeat runs.
+**amd64** and **arm64**. If a service does not become healthy, the installer
+keeps the configuration for troubleshooting and prints recent logs and
+recovery commands. It reuses existing keys and Docker volumes on repeat runs.
 
 ### 2. Open the panel through SSH
 
@@ -403,23 +408,30 @@ npm run typecheck
 npm run build
 ~~~
 
-Push a version tag such as `v1.2.3` to publish the five application images.
+Push a version tag such as `v1.2.3` to publish the five service images and the
+installer image under the Docker Hub `xray-easy` namespace.
 The workflow reads `DOCKERHUB_USERNAME` and
 `DOCKERHUB_PERSONAL_ACCESS_TOKEN` from GitHub Actions secrets and pushes the
 `1.2.3`, `v1.2.3`, and `latest` tags after all test jobs pass. The default
-Compose namespace is `dasshit`; set `XRAY_EASY_IMAGE_NAMESPACE` when running
-`install.sh` if the Docker Hub namespace differs. Docker Hub images include
+Compose namespace is `xray-easy`; set `XRAY_EASY_IMAGE_NAMESPACE` when running
+`install.sh` to use a different namespace. The authenticated Docker Hub user
+must have permission to publish to `xray-easy`. Docker Hub images include
 the Xray runtime, Controller, web backend, optional AmneziaWG service and
 Hysteria TLS initializer. Docker Hub image names use `namespace/repository`,
 so each component is published in its own repository:
 
 | Compose service | Docker Hub repository |
 | --- | --- |
-| `control-plane` | `dasshit/xray-easy-control-plane` |
-| `controller` | `dasshit/xray-easy-controller` |
-| `xray-core-service` | `dasshit/xray-easy-xray-core-service` |
-| `amneziawg-service` | `dasshit/xray-easy-amneziawg-service` |
-| `hysteria-tls-init` | `dasshit/xray-easy-hysteria-tls-init` |
+| `control-plane` | `xray-easy/control-plane` |
+| `controller` | `xray-easy/controller` |
+| `xray-core-service` | `xray-easy/xray-core-service` |
+| `amneziawg-service` | `xray-easy/amneziawg-service` |
+| `hysteria-tls-init` | `xray-easy/hysteria-tls-init` |
+| Installer helper | `xray-easy/installer` |
+
+On upgrade, `install.sh` migrates the previous generated default namespace
+`dasshit` to `xray-easy`. An explicit `XRAY_EASY_IMAGE_NAMESPACE` environment
+variable takes precedence.
 
 Regenerate checked-in typed protobuf bindings from the repository root with
 **scripts/generate-protobuf.sh**. See

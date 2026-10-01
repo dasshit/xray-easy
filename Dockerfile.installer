@@ -1,0 +1,22 @@
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY awg-contract ./awg-contract
+COPY third_party ./third_party
+COPY internal ./internal
+COPY cmd/xray-easy-install ./cmd/xray-easy-install
+RUN mkdir -p \
+      /out/linux/${TARGETARCH} \
+      /out/darwin/${TARGETARCH} \
+    && CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+      go build -mod=readonly -trimpath -ldflags='-s -w' \
+      -o /out/linux/${TARGETARCH}/xray-easy-install ./cmd/xray-easy-install \
+    && CGO_ENABLED=0 GOOS=darwin GOARCH=${TARGETARCH} \
+      go build -mod=readonly -trimpath -ldflags='-s -w' \
+      -o /out/darwin/${TARGETARCH}/xray-easy-install ./cmd/xray-easy-install
+
+FROM alpine:3.22
+ARG TARGETARCH
+COPY --from=build /out/linux/${TARGETARCH}/xray-easy-install /usr/share/xray-easy-installer/linux/${TARGETARCH}/xray-easy-install
+COPY --from=build /out/darwin/${TARGETARCH}/xray-easy-install /usr/share/xray-easy-installer/darwin/${TARGETARCH}/xray-easy-install
