@@ -558,3 +558,23 @@ func TestEmbeddedXrayClientOpensAuthenticatedTelemetryStream(t *testing.T) {
 		}
 	}
 }
+
+func TestEmbeddedRuntimeStateMappings(t *testing.T) {
+	for _, test := range []struct {
+		state xrayruntimev1.RuntimeState
+		want  string
+		valid bool
+	}{
+		{state: xrayruntimev1.RuntimeState_RUNTIME_STATE_STARTING, want: "starting", valid: true},
+		{state: xrayruntimev1.RuntimeState_RUNTIME_STATE_NO_CONFIGURATION, want: "no_configuration", valid: true},
+		{state: xrayruntimev1.RuntimeState_RUNTIME_STATE_RUNNING, want: "running", valid: true},
+		{state: xrayruntimev1.RuntimeState_RUNTIME_STATE_STOPPING, want: "stopping", valid: true},
+		{state: xrayruntimev1.RuntimeState_RUNTIME_STATE_FAILED, want: "failed", valid: true},
+		{state: xrayruntimev1.RuntimeState_RUNTIME_STATE_UNSPECIFIED, valid: false},
+	} {
+		got, valid := embeddedRuntimeState(test.state)
+		if got != test.want || valid != test.valid {
+			t.Errorf("embeddedRuntimeState(%s) = (%q, %t), want (%q, %t)", test.state, got, valid, test.want, test.valid)
+		}
+	}
+}

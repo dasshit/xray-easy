@@ -54,6 +54,24 @@ type oneSnapshotAWG struct {
 	ctx    chan context.Context
 }
 
+type unavailableXrayTelemetry struct {
+	*fakeRuntime
+	openErr error
+}
+
+func (r *unavailableXrayTelemetry) WatchTelemetry(context.Context, time.Duration) (xrayruntimev1.Runtime_WatchTelemetryClient, error) {
+	return nil, r.openErr
+}
+
+type unavailableAWGTelemetry struct {
+	*fakeAWGRuntime
+	openErr error
+}
+
+func (a *unavailableAWGTelemetry) WatchPeerStats(context.Context, time.Duration) (awgapi.Control_WatchPeerStatsClient, error) {
+	return nil, a.openErr
+}
+
 func (a *oneSnapshotAWG) WatchPeerStats(ctx context.Context, _ time.Duration) (awgapi.Control_WatchPeerStatsClient, error) {
 	a.ctx <- ctx
 	return &oneSnapshotAWGStream{ctx: ctx, update: a.update}, nil
@@ -220,6 +238,48 @@ func TestControllerTelemetryStreamFansInAWGAndReportsXrayAvailability(t *testing
 	case <-upstream.Done():
 	case <-time.After(time.Second):
 		t.Fatal("Controller did not cancel the AWG stream after downstream stopped")
+	}
+}
+
+func TestControllerTelemetryStreamReportsUnavailableXray(t *testing.T) {
+	stop := errors.New("stop after Xray source status")
+	service := NewServiceWithAdapters(&unavailableXrayTelemetry{fakeRuntime: &fakeRuntime{}, openErr: errors.New("private upstream error")}, nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &stopAfterTwoControllerUpdates{ctx: ctx, stop: stop}
+	err := service.WatchTelemetry(&controllerv1.WatchTelemetryRequest{SampleIntervalMs: 1000}, stream)
+	if !errors.Is(err, stop) {
+		t.Fatalf("WatchTelemetry error = %v", err)
+	}
+	source := stream.updates[1].GetSources()[0]
+	if source.GetAvailable() || source.GetError() != "telemetry source is temporarily unavailable" {
+		t.Fatalf("Xray unavailable source = %+v", source)
+	}
+}
+
+func TestControllerTelemetryStreamReportsUnavailableAWG(t *testing.T) {
+	stop := errors.New("stop after both source statuses")
+	service := NewServiceWithAdapters(
+		&fakeRuntime{}, nil, nil,
+		&unavailableAWGTelemetry{fakeAWGRuntime: &fakeAWGRuntime{}, openErr: errors.New("private upstream error")},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &stopAfterThreeControllerUpdates{ctx: ctx, stop: stop}
+	err := service.WatchTelemetry(&controllerv1.WatchTelemetryRequest{SampleIntervalMs: 1000}, stream)
+	if !errors.Is(err, stop) {
+		t.Fatalf("WatchTelemetry error = %v", err)
+	}
+	var unavailableAWG bool
+	for _, update := range stream.updates {
+		for _, source := range update.GetSources() {
+			if source.GetProtocol() == "amneziawg" && !source.GetAvailable() && source.GetError() == "telemetry source is temporarily unavailable" {
+				unavailableAWG = true
+			}
+		}
+	}
+	if !unavailableAWG {
+		t.Fatalf("AWG unavailable source was not reported: %+v", stream.updates)
 	}
 }
 
