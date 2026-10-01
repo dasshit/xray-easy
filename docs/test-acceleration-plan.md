@@ -96,3 +96,9 @@ bash scripts/xray-runtime-coverage.sh
 6. `test(web): tune Vitest worker count`
 7. `test(web): run pure tests in node environment`
 
+## Статус выполнения
+
+Все этапы плана реализованы локально и зафиксированы отдельными коммитами.
+`maxWorkers: 4` выбран по результату `vitest doctor` на текущем окружении;
+после первого CI-прогона его следует сравнить с `maxWorkers: 8` на том же
+runner. Race detector и публикация coverage-артефактов намеренно не менялись.
