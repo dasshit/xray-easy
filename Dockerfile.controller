@@ -1,4 +1,6 @@
-FROM golang:1.27.1-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY awg-contract ./awg-contract
@@ -6,7 +8,7 @@ COPY third_party ./third_party
 RUN for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/xray-controller ./cmd/xray-controller
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/xray-controller ./cmd/xray-controller
 
 FROM alpine:3.22
 RUN addgroup -S -g 10001 xray && adduser -S -D -H -u 10001 -G xray xray \

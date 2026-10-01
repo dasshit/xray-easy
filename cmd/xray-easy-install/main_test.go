@@ -432,6 +432,22 @@ func TestConfigurationDoesNotCreateSupervisorTokenOrReplaceEnv(t *testing.T) {
 	}
 }
 
+func TestConfigurationPersistsDockerImageNamespaceAndTag(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XRAY_EASY_IMAGE_NAMESPACE", "example-namespace")
+	t.Setenv("XRAY_EASY_IMAGE_TAG", "v1.2.3")
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080}); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readEnvironmentFile(filepath.Join(root, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["XRAY_EASY_IMAGE_NAMESPACE"] != "example-namespace" || values["XRAY_EASY_IMAGE_TAG"] != "v1.2.3" {
+		t.Fatalf("Docker image settings were not persisted: namespace=%q tag=%q", values["XRAY_EASY_IMAGE_NAMESPACE"], values["XRAY_EASY_IMAGE_TAG"])
+	}
+}
+
 func TestInvalidEnvironmentIsRejected(t *testing.T) {
 	root := t.TempDir()
 	key := base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{42}, 32))

@@ -52,8 +52,9 @@ AmneziaWG, then creates the secrets, builds the images, starts Compose and runs
 the final health check. Use **↑/↓** or **Tab** to move, **Enter** to continue,
 **Esc** to cancel and **Ctrl+C** to stop.
 
-Images are built locally from this checkout; prebuilt application images are
-not published. If a service does not become healthy, the installer keeps the
+Pushing a `v*` tag runs the tested Docker Hub publication workflow for
+**amd64** and **arm64**. The installer currently builds images from this
+checkout. If a service does not become healthy, the installer keeps the
 configuration for troubleshooting and prints recent logs and recovery
 commands. It reuses existing keys and Docker volumes on repeat runs.
 
@@ -401,6 +402,15 @@ npm run test:coverage
 npm run typecheck
 npm run build
 ~~~
+
+Push a version tag such as `v1.2.3` to publish the five application images.
+The workflow reads `DOCKERHUB_USERNAME` and
+`DOCKERHUB_PERSONAL_ACCESS_TOKEN` from GitHub Actions secrets and pushes the
+`1.2.3`, `v1.2.3`, and `latest` tags after all test jobs pass. The default
+Compose namespace is `dasshit`; set `XRAY_EASY_IMAGE_NAMESPACE` when running
+`install.sh` if the Docker Hub namespace differs. Docker Hub images include
+the Xray runtime, Controller, web backend, optional AmneziaWG service and
+Hysteria TLS initializer.
 
 Regenerate checked-in typed protobuf bindings from the repository root with
 **scripts/generate-protobuf.sh**. See

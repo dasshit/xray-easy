@@ -1,4 +1,6 @@
-FROM golang:1.27.1-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
 COPY awg-contract ./awg-contract
@@ -6,12 +8,14 @@ COPY third_party ./third_party
 RUN for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
 COPY cmd ./cmd
 COPY internal ./internal
-RUN CGO_ENABLED=0 GOOS=linux go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/xray-easy ./cmd/xray-easy
 
-FROM golang:1.27.1-alpine AS mkcert-build
-RUN GOBIN=/out go install filippo.io/mkcert@v1.4.4
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS mkcert-build
+ARG TARGETOS
+ARG TARGETARCH
+RUN GOBIN=/out GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go install filippo.io/mkcert@v1.4.4
 
-FROM node:24-alpine AS web-build
+FROM --platform=$BUILDPLATFORM node:24-alpine AS web-build
 WORKDIR /web
 COPY web/package.json ./
 COPY web/package-lock.json ./
