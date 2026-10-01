@@ -16,6 +16,7 @@ Xray-easy es una aplicación Docker Compose para un administrador y un servidor.
 ## Contents
 
 - [Quick start](#quick-start)
+- [Docker services](#docker-services)
 - [Ports and firewall](#ports-and-firewall)
 - [Protocol guide: Xray](#protocol-guide-xray)
 - [Protocol guide: AmneziaWG](#protocol-guide-amneziawg)
@@ -92,6 +93,71 @@ In the panel:
 The installer configures deployment-wide values such as public ports. The
 panel manages protocol settings and individual devices. Enable TOTP from the
 Security page after the first login.
+
+## Docker services
+
+Compose separates the public control plane from the VPN runtimes. The runtime
+gRPC endpoints and the Controller are reachable only on private Docker
+networks; the only published application port is the Web UI on the VPS
+loopback interface. `amneziawg-service` is started only when the `awg` Compose
+profile is enabled.
+
+```mermaid
+graph LR
+    admin[Administrator] -->|SSH tunnel| ui[control-plane]
+
+    subgraph bootstrap [Initialization jobs]
+        dataInit[data-init]
+        runtimeAuth[runtime-auth-init]
+        runtimeState[runtime-state-init]
+        controllerAuth[controller-auth-init]
+        awgAuth[awg-auth-init]
+        tlsInit[hysteria-tls-init]
+        awgData[awg-data-init]
+    end
+
+    subgraph vpn [VPN services]
+        xray[xray-core-service]
+        controller[controller]
+        awg[amneziawg-service]
+    end
+
+    ui <-->|Authenticated gRPC| controller
+    controller <-->|Authenticated gRPC| xray
+    controller <-->|Authenticated gRPC| awg
+
+    dataInit --> xray
+    runtimeAuth --> xray
+    runtimeState --> xray
+    tlsInit --> xray
+    controllerAuth --> controller
+    runtimeAuth --> controller
+    awgAuth --> controller
+    awgData --> awg
+    awgAuth --> awg
+
+    xray -.->|Xray protocols| internet((Public network))
+    awg -.->|AmneziaWG UDP| internet
+```
+
+| Service | Responsibility |
+| --- | --- |
+| `control-plane` | Serves the authenticated Web UI and HTTP API, stores devices and settings in SQLite, prepares Xray configuration, and forwards management and telemetry calls through the Controller. Its port is bound to the VPS loopback interface. |
+| `controller` | Internal protocol adapter. It exposes the stable application gRPC contract, validates revisions, routes commands to the embedded Xray runtime and optional AmneziaWG service, and aggregates health, statistics and telemetry. |
+| `xray-core-service` | Runs the pinned Xray-core version inside the embedded runtime, serves Xray's management APIs through the runtime wrapper, applies active configuration revisions, and carries VLESS, VMess, Hysteria 2 and Shadowsocks traffic. |
+| `amneziawg-service` | Optional AmneziaWG engine. It owns the TUN interface, peer lifecycle and WireGuard telemetry. Enable it with the `awg` Compose profile. |
+| `hysteria-tls-init` | One-shot certificate preparation job. It creates or copies the Hysteria 2 certificate into the shared volume before Xray starts. |
+| `data-init` | Creates the shared application/configuration directories and installs the initial Xray configuration. |
+| `runtime-auth-init` | Generates and protects the token used to authenticate calls to the Xray runtime. |
+| `runtime-state-init` | Creates the runtime state directory used to persist the applied configuration revision. |
+| `controller-auth-init` | Generates and protects the token used by the control plane and Controller gRPC clients. |
+| `awg-auth-init` | Generates and protects the token used for Controller-to-AmneziaWG gRPC calls. It also runs when AWG is disabled so the main stack has a consistent dependency graph. |
+| `awg-data-init` | Optional one-shot job that prepares ownership and permissions for the persistent AmneziaWG data volume. |
+
+The `*-init` services exit successfully after preparing shared volumes; they
+are not long-running daemons. Compose health checks then gate startup in the
+order shown above. All services use journald logging, so the stack can be
+inspected with `docker compose logs --since=3h`.
 
 ## Ports and firewall
 
