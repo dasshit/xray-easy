@@ -105,6 +105,35 @@ func TestShadowsocksProfileStoresEncryptedCredentialAndTransitionsState(t *testi
 	}
 }
 
+func TestProtocolSpecificCreateMethodsRejectIncompleteCredentials(t *testing.T) {
+	db, ctx := openTestStore(t, "protocol-create-validation.db")
+	cases := []struct {
+		name string
+		call func() error
+	}{
+		{"legacy missing ID", func() error { return db.CreateClient(ctx, domain.Client{}, "uuid", "email", "short") }},
+		{"Hysteria with VLESS credentials", func() error {
+			return db.CreateClient(ctx, domain.Client{ID: "h", Protocol: domain.ProtocolHysteria2}, "uuid", "email", "short")
+		}},
+		{"Hysteria missing auth", func() error {
+			return db.CreateHysteriaClient(ctx, domain.Client{ID: "h", Protocol: domain.ProtocolHysteria2, Email: "h@example.test"})
+		}},
+		{"VMess missing UUID", func() error {
+			return db.CreateVMessClient(ctx, domain.Client{ID: "v", Protocol: domain.ProtocolVMess, Email: "v@example.test"})
+		}},
+		{"Shadowsocks missing encrypted password", func() error {
+			return db.CreateShadowsocksClient(ctx, domain.Client{ID: "s", Protocol: domain.ProtocolShadowsocks, Email: "s@example.test"})
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.call(); err == nil {
+				t.Fatal("incomplete protocol credentials were accepted")
+			}
+		})
+	}
+}
+
 func TestProtocolStorageDefaultsAndCredentialNullability(t *testing.T) {
 	if got := nullableCredential(""); got != nil {
 		t.Fatalf("empty credential storage = %#v, want NULL", got)
@@ -127,6 +156,8 @@ func TestProtocolStorageDefaultsAndCredentialNullability(t *testing.T) {
 		{name: "Hysteria enabled fallback", client: domain.Client{Protocol: domain.ProtocolHysteria2, Enabled: true, HysteriaAuth: "password"}, protocol: string(domain.ProtocolHysteria2), auth: "password", states: [6]int{0, 0, 1, 0, 0, 0}},
 		{name: "VMess enabled", client: domain.Client{Protocol: domain.ProtocolVMess, Enabled: true}, protocol: string(domain.ProtocolVMess), states: [6]int{0, 0, 0, 0, 1, 0}},
 		{name: "unsupported protocol", client: domain.Client{Protocol: domain.ProtocolAmneziaWG, Enabled: true}, protocol: string(domain.ProtocolAmneziaWG), states: [6]int{}},
+		{name: "Shadowsocks enabled fallback", client: domain.Client{Protocol: domain.ProtocolShadowsocks, Enabled: true, ShadowsocksPasswordEnc: "enc"}, protocol: string(domain.ProtocolShadowsocks), states: [6]int{0, 0, 0, 0, 0, 0}},
+		{name: "Shadowsocks explicit revoked", client: domain.Client{Protocol: domain.ProtocolShadowsocks, ShadowsocksRevoked: true, ShadowsocksPasswordEnc: "enc"}, protocol: string(domain.ProtocolShadowsocks), states: [6]int{0, 0, 0, 0, 0, 0}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -861,5 +892,67 @@ func TestApplyRevisionHighWaterMarkSurvivesRestoringOlderDatabase(t *testing.T) 
 	restored, err := db.CreateApplyOperationWithNextRevision(ctx, ApplyOperation{ID: "after-restore", State: "pending", CreatedAt: now, UpdatedAt: now})
 	if err != nil || restored != 3 {
 		t.Fatalf("revision after older-state restore = %d, %v; want 3", restored, err)
+	}
+}
+
+func TestStoreOperationalSettingsAndApplyLifecycle(t *testing.T) {
+	db, ctx := openTestStore(t, "operational-lifecycle.db")
+	initTestAdmin(t, db, ctx)
+
+	hysteria := domain.HysteriaSettings{
+		Enabled: true, Host: "hysteria.example.test", TLSMode: domain.HysteriaTLSSelfSigned,
+		TLSCertIP: "192.0.2.10", TLSServerName: "192.0.2.10", UDPIdleTimeout: 90,
+		MasqueradeType: domain.HysteriaMasqueradeText, MasqueradeString: "https://example.test",
+	}
+	if err := db.InitializeHysteriaSettings(ctx, hysteria); err != nil {
+		t.Fatal(err)
+	}
+	gotHysteria, err := db.GetHysteriaSettings(ctx)
+	if err != nil || gotHysteria.Host != hysteria.Host || !gotHysteria.Enabled {
+		t.Fatalf("initialized Hysteria settings = %+v, %v", gotHysteria, err)
+	}
+	hysteria.Enabled = false
+	hysteria.MasqueradeType = domain.HysteriaMasqueradeOff
+	hysteria.MasqueradeString = ""
+	if err := db.UpdateHysteriaSettings(ctx, hysteria); err != nil {
+		t.Fatal(err)
+	}
+	gotHysteria, err = db.GetHysteriaSettings(ctx)
+	if err != nil || gotHysteria.Enabled || gotHysteria.MasqueradeType != domain.HysteriaMasqueradeOff {
+		t.Fatalf("updated Hysteria settings = %+v, %v", gotHysteria, err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Second)
+	operation := ApplyOperation{ID: "operational-apply", State: "pending", Error: "", CreatedAt: now, UpdatedAt: now}
+	revision, err := db.CreateApplyOperationWithNextRevision(ctx, operation)
+	if err != nil || revision < 1 {
+		t.Fatalf("create apply operation revision = %d, %v", revision, err)
+	}
+	stored, err := db.GetApplyOperation(ctx, operation.ID)
+	if err != nil || stored.Revision != revision || stored.State != operation.State {
+		t.Fatalf("stored apply operation = %+v, %v", stored, err)
+	}
+	if err := db.UpdateApplyOperation(ctx, operation.ID, "applied", ""); err != nil {
+		t.Fatal(err)
+	}
+	stored, err = db.GetApplyOperation(ctx, operation.ID)
+	if err != nil || stored.State != "applied" {
+		t.Fatalf("updated apply operation = %+v, %v", stored, err)
+	}
+	if err := db.AddAudit(ctx, "admin", "apply", "configuration", operation.ID, "{}\n"); err != nil {
+		t.Fatal(err)
+	}
+
+	client := domain.Client{ID: "operational-client", Name: "phone", Protocol: domain.ProtocolVLESS, Enabled: true, ClientFingerprint: "chrome"}
+	if err := db.CreateClient(ctx, client, "123e4567-e89b-42d3-a456-426614174000", "operational@example.test", "abc123"); err != nil {
+		t.Fatal(err)
+	}
+	clients, err := db.ListClients(ctx)
+	if err != nil || len(clients) != 1 || clients[0].ShortID != "abc123" {
+		t.Fatalf("listed operational clients = %+v, %v", clients, err)
+	}
+	reserved, err := db.ListReservedShortIDs(ctx)
+	if err != nil || len(reserved) != 0 {
+		t.Fatalf("reserved IDs after assigned client = %v, %v", reserved, err)
 	}
 }

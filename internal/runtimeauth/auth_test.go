@@ -2,9 +2,12 @@ package runtimeauth
 
 import (
 	"context"
+	"crypto/rand"
+	"errors"
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -17,6 +20,12 @@ import (
 type authTestServerStream struct {
 	ctx     context.Context
 	request proto.Message
+}
+
+type failingAuthRandomSource struct{}
+
+func (failingAuthRandomSource) Read([]byte) (int, error) {
+	return 0, errors.New("random source unavailable")
 }
 
 func (s *authTestServerStream) SetHeader(metadata.MD) error  { return nil }
@@ -57,6 +66,11 @@ func TestStreamInterceptorAuthenticatesInitialProtobufRequest(t *testing.T) {
 		if err := wrapped.RecvMsg(&received); err != nil {
 			return err
 		}
+		// A stream is authenticated once; subsequent messages must pass through
+		// without replaying the HMAC verification.
+		if err := wrapped.RecvMsg(&received); err != nil {
+			return err
+		}
 		if got := IdentityFromContext(wrapped.Context()); got != "control-plane" {
 			t.Fatalf("stream identity = %q", got)
 		}
@@ -82,6 +96,15 @@ func TestStreamInterceptorAuthenticatesInitialProtobufRequest(t *testing.T) {
 	})
 	if status.Code(err) != codes.Unauthenticated || called {
 		t.Fatalf("unauthorized stream called=%t error=%v", called, err)
+	}
+}
+
+func TestSignContextReportsRandomNonceFailure(t *testing.T) {
+	original := rand.Reader
+	rand.Reader = failingAuthRandomSource{}
+	t.Cleanup(func() { rand.Reader = original })
+	if _, err := SignContext(context.Background(), []byte(strings.Repeat("t", 32)), "id", "/runtime/Health", &emptypb.Empty{}); err == nil || !strings.Contains(err.Error(), "generate runtime authentication nonce") {
+		t.Fatalf("SignContext() = %v; want random nonce error", err)
 	}
 }
 
@@ -156,5 +179,74 @@ func TestAuthenticatorRequiresLongTokenAndAuthorizer(t *testing.T) {
 	}
 	if _, err := NewAuthenticator([]byte(strings.Repeat("t", 32)), nil); err == nil {
 		t.Fatal("missing authorizer was accepted")
+	}
+}
+
+func TestAuthenticatorRejectsMalformedRequestsAndExpiresNonces(t *testing.T) {
+	token := []byte(strings.Repeat("a", 32))
+	authenticator, err := NewAuthenticator(token, func(string, string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &emptypb.Empty{}
+	if _, err := authenticator.authenticate(context.Background(), request, "/runtime/Health"); err == nil {
+		t.Fatal("request without metadata was accepted")
+	}
+	if _, err := authenticator.authenticate(metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-xray-operation", "id", "x-xray-operation", "other")), request, "/runtime/Health"); err == nil {
+		t.Fatal("repeated metadata was accepted")
+	}
+	if _, err := authenticator.authenticate(metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-xray-operation", "id", "x-xray-nonce", "not-hex", "x-xray-signature", "bad")), request, "/runtime/Health"); err == nil {
+		t.Fatal("malformed nonce was accepted")
+	}
+	validContext, err := SignContext(context.Background(), token, "id", "/runtime/Health", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validMD, _ := metadata.FromOutgoingContext(validContext)
+	validIncoming := metadata.NewIncomingContext(context.Background(), validMD)
+	if _, err := authenticator.authenticate(validIncoming, request, "/runtime/Other"); err == nil {
+		t.Fatal("authorizer was bypassed")
+	}
+	badSignature := metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-xray-operation", "id", "x-xray-nonce", "00112233445566778899aabbccddeeff", "x-xray-signature", strings.Repeat("00", 32)))
+	if _, err := authenticator.authenticate(badSignature, request, "/runtime/Health"); err == nil {
+		t.Fatal("invalid signature was accepted")
+	}
+	if _, err := authenticator.authenticate(context.Background(), struct{}{}, "/runtime/Health"); err == nil {
+		t.Fatal("non-protobuf request was accepted")
+	}
+	for _, test := range []struct {
+		name     string
+		identity string
+		method   string
+		request  proto.Message
+	}{
+		{"short identity", " ", "/runtime/Health", request},
+		{"short method", "id", " ", request},
+		{"nil request", "id", "/runtime/Health", nil},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := SignContext(context.Background(), token, test.identity, test.method, test.request); err == nil {
+				t.Fatal("invalid signing input was accepted")
+			}
+		})
+	}
+	current := time.Now()
+	authenticator.now = func() time.Time { return current }
+	first, err := SignContext(context.Background(), token, "id", "/runtime/Health", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstMD, _ := metadata.FromOutgoingContext(first)
+	if _, err := authenticator.authenticate(metadata.NewIncomingContext(context.Background(), firstMD), request, "/runtime/Health"); err != nil {
+		t.Fatal(err)
+	}
+	authenticator.now = func() time.Time { return current.Add(nonceTTL + time.Second) }
+	second, err := SignContext(context.Background(), token, "id", "/runtime/Health", request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondMD, _ := metadata.FromOutgoingContext(second)
+	if _, err := authenticator.authenticate(metadata.NewIncomingContext(context.Background(), secondMD), request, "/runtime/Health"); err != nil {
+		t.Fatal(err)
 	}
 }

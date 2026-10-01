@@ -243,3 +243,45 @@ func TestRenderVMessInboundUsesTLSAndRetainsDisabledProfiles(t *testing.T) {
 		t.Fatalf("VMess certificate files = %+v", certificates)
 	}
 }
+
+func TestRenderServerConfigRejectsInvalidOptionalProtocolClients(t *testing.T) {
+	base := validTestSettings()
+	cases := []struct {
+		name   string
+		change func(*Settings, *[]Client)
+		want   string
+	}{
+		{"Hysteria credentials", func(settings *Settings, clients *[]Client) {
+			settings.Hysteria2Enabled = true
+			*clients = []Client{{ID: "h", Protocol: domain.ProtocolHysteria2, Email: "h@example.test", HysteriaEnabled: true}}
+		}, "missing Hysteria 2 credentials"},
+		{"VMess public port", func(settings *Settings, clients *[]Client) {
+			settings.VMessPublicPort = 0
+			*clients = []Client{{ID: "v", Protocol: domain.ProtocolVMess, UUID: "uuid", Email: "v@example.test", VMessEnabled: true}}
+		}, "VMess public port"},
+		{"VMess credentials", func(settings *Settings, clients *[]Client) {
+			settings.VMessPublicPort = 9443
+			*clients = []Client{{ID: "v", Protocol: domain.ProtocolVMess, Email: "v@example.test", VMessEnabled: true}}
+		}, "missing VMess credentials"},
+		{"Shadowsocks method", func(settings *Settings, clients *[]Client) {
+			settings.ShadowsocksEnabled, settings.ShadowsocksPublicPort, settings.ShadowsocksMethod, settings.ShadowsocksNetwork = true, 8388, "unsupported", domain.ShadowsocksNetworkTCPUDP
+		}, "unsupported Shadowsocks method"},
+		{"Shadowsocks network", func(settings *Settings, clients *[]Client) {
+			settings.ShadowsocksEnabled, settings.ShadowsocksPublicPort, settings.ShadowsocksMethod, settings.ShadowsocksNetwork = true, 8388, domain.ShadowsocksMethodChaCha20Poly1305, "sctp"
+		}, "unsupported Shadowsocks network"},
+		{"Shadowsocks credentials", func(settings *Settings, clients *[]Client) {
+			settings.ShadowsocksEnabled, settings.ShadowsocksPublicPort, settings.ShadowsocksMethod, settings.ShadowsocksNetwork = true, 8388, domain.ShadowsocksMethodChaCha20Poly1305, domain.ShadowsocksNetworkTCPUDP
+			*clients = []Client{{ID: "s", Protocol: domain.ProtocolShadowsocks, Email: "s@example.test", ShadowsocksEnabled: true}}
+		}, "missing Shadowsocks credentials"},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			settings := base
+			clients := []Client{}
+			test.change(&settings, &clients)
+			if _, err := RenderServerConfig(settings, clients); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("RenderServerConfig() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}

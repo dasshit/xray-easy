@@ -3,6 +3,8 @@ package main
 import (
 	"bytes"
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -74,5 +76,19 @@ func TestValidateShadowsocksConfiguration(t *testing.T) {
 		if err := validateShadowsocksConfiguration(invalid); err == nil {
 			t.Fatalf("invalid settings accepted: %+v", invalid)
 		}
+	}
+}
+
+func TestUpdateShadowsocksConfigurationRejectsMissingAndDuplicateEnvironment(t *testing.T) {
+	root := t.TempDir()
+	if err := updateShadowsocksConfiguration(root, configuration{}); err == nil {
+		t.Fatal("missing .env was accepted")
+	}
+	path := filepath.Join(root, ".env")
+	if err := os.WriteFile(path, []byte("XRAY_SHADOWSOCKS_PORT=8388\nXRAY_SHADOWSOCKS_PORT=8389\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateShadowsocksConfiguration(root, configuration{shadowsocks: 8390}); err == nil || !strings.Contains(err.Error(), "duplicate XRAY_SHADOWSOCKS_PORT") {
+		t.Fatalf("duplicate Shadowsocks setting error = %v", err)
 	}
 }

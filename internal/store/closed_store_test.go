@@ -66,6 +66,9 @@ func TestClosedStoreOperationsReturnDatabaseErrors(t *testing.T) {
 		"create VMess profile": func() error {
 			return db.CreateVMessClient(ctx, domain.Client{ID: "vmess", Name: "vmess", Email: "v@example.test", Protocol: domain.ProtocolVMess, UUID: "uuid"})
 		},
+		"create Shadowsocks profile": func() error {
+			return db.CreateShadowsocksClient(ctx, domain.Client{ID: "shadowsocks", Name: "shadowsocks", Email: "s@example.test", Protocol: domain.ProtocolShadowsocks, ShadowsocksPasswordEnc: "encrypted"})
+		},
 		"ensure short ID pool": func() error {
 			return db.EnsureReservedShortIDs(ctx, 1, func() (string, error) { return "0123456789abcdef", nil })
 		},
@@ -80,10 +83,17 @@ func TestClosedStoreOperationsReturnDatabaseErrors(t *testing.T) {
 		"set protocol state": func() error {
 			return db.SetClientProtocolState(ctx, client.ID, domain.ProtocolVLESS, domain.ClientState{Enabled: false})
 		},
+		"set protocol states": func() error {
+			return db.SetClientProtocolStates(ctx, client.ID, map[domain.ClientProtocol]domain.ClientState{domain.ProtocolVLESS: {Enabled: false}})
+		},
 		"delete client":          func() error { return db.DeleteClient(ctx, client.ID) },
 		"upsert traffic":         func() error { return db.UpsertTrafficSnapshot(ctx, TrafficSnapshot{ClientID: client.ID}) },
 		"upsert AWG traffic":     func() error { return db.UpsertAWGTrafficSnapshot(ctx, AWGTrafficSnapshot{PeerName: "peer"}) },
 		"create apply operation": func() error { return db.CreateApplyOperation(ctx, ApplyOperation{ID: "op"}) },
+		"create apply operation with revision": func() error {
+			_, err := db.CreateApplyOperationWithNextRevision(ctx, ApplyOperation{ID: "revision-op"})
+			return err
+		},
 		"update apply operation": func() error { return db.UpdateApplyOperation(ctx, "op", "failed", "error") },
 		"add audit":              func() error { return db.AddAudit(ctx, admin.ID, "test", "client", client.ID, "diff") },
 	} {
@@ -113,6 +123,9 @@ func TestClosedStoreOperationsReturnDatabaseErrors(t *testing.T) {
 	}
 	if _, err := db.ListAWGTrafficSnapshots(ctx); err == nil {
 		t.Fatal("ListAWGTrafficSnapshots succeeded after the database was closed")
+	}
+	if _, err := db.GetApplyOperation(ctx, "op"); err == nil {
+		t.Fatal("GetApplyOperation succeeded after the database was closed")
 	}
 	if _, err := db.RecoveryCodeCount(ctx, admin.ID); err == nil {
 		t.Fatal("RecoveryCodeCount succeeded after the database was closed")

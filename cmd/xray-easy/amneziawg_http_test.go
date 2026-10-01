@@ -13,6 +13,7 @@ import (
 	"xray-easy/internal/domain"
 	"xray-easy/internal/maintenance"
 	"xray-easy/internal/stats"
+	"xray-easy/internal/store"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -342,6 +343,11 @@ func TestAmneziaWGStatusAndClientHandlersCoverBoundaryFailures(t *testing.T) {
 	}
 
 	gateway.statusErr = nil
+	statusRecorder = httptest.NewRecorder()
+	app.server.amneziaWGStatus(statusRecorder, request)
+	if statusRecorder.Code != http.StatusOK || !strings.Contains(statusRecorder.Body.String(), `"available":true`) {
+		t.Fatalf("successful AWG status = %d %s", statusRecorder.Code, statusRecorder.Body.String())
+	}
 	peer := domain.AmneziaWGPeer{Name: "phone", CreatedAt: time.Now().UTC()}
 	app.server.stats = stats.NewManager(app.server.store, fixedStatsAPI{})
 	result := app.server.withAWGStats([]domain.AmneziaWGPeer{peer})
@@ -362,5 +368,95 @@ func TestAmneziaWGStatusAndClientHandlersCoverBoundaryFailures(t *testing.T) {
 	newMux(app.server).ServeHTTP(response, request)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Fatalf("peer create during maintenance = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAmneziaWGRevocationReportsPeerListFailure(t *testing.T) {
+	t.Parallel()
+	app := newTestApp(t, true)
+	app.server.awg = &fakeAmneziaWGGateway{listErr: errors.New("peer list unavailable")}
+	request := httptest.NewRequest(http.MethodPost, "/api/clients/awg%3Aphone/revoke", nil)
+	request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+	response := httptest.NewRecorder()
+	app.server.revokeAmneziaWGPeer(response, request, app.admin, "phone")
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("AWG revoke list failure = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAmneziaWGProfileRouteRejectsUnsupportedFormatAndBusyMaintenance(t *testing.T) {
+	t.Parallel()
+	app := newTestApp(t, true)
+	app.server.awg = &fakeAmneziaWGGateway{
+		peers:    map[string]domain.AmneziaWGPeer{"phone": {Name: "phone"}},
+		profiles: map[string]string{"phone": "[Interface]\n"},
+	}
+	unsupported := requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aphone/profile?format=json", nil, true)
+	if unsupported.Code != http.StatusBadRequest {
+		t.Fatalf("unsupported AWG profile format = %d %s", unsupported.Code, unsupported.Body.String())
+	}
+	lock, err := maintenance.Acquire(t.Context(), app.server.maintenancePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond)
+	defer cancel()
+	request := httptest.NewRequest(http.MethodPost, "/api/clients/awg%3Aphone/revoke", nil).WithContext(ctx)
+	request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+	response := httptest.NewRecorder()
+	app.server.revokeAmneziaWGPeer(response, request, app.admin, "phone")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("busy AWG revoke = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAmneziaWGRevocationRecordsTrafficCleanupWarning(t *testing.T) {
+	t.Parallel()
+	app := newTestApp(t, true)
+	app.server.awg = &fakeAmneziaWGGateway{
+		peers:    map[string]domain.AmneziaWGPeer{"phone": {Name: "phone"}},
+		profiles: make(map[string]string),
+	}
+	if err := app.server.store.UpsertAWGTrafficSnapshot(t.Context(), store.AWGTrafficSnapshot{PeerName: "phone", TotalUpload: 1}); err != nil {
+		t.Fatal(err)
+	}
+	execSQLiteTestMutation(t, app, "reject AWG traffic cleanup", `CREATE TRIGGER reject_awg_traffic_delete BEFORE DELETE ON awg_traffic_snapshots BEGIN SELECT RAISE(ABORT, 'injected cleanup failure'); END`)
+	request := httptest.NewRequest(http.MethodPost, "/api/clients/awg%3Aphone/revoke", nil)
+	request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+	response := httptest.NewRecorder()
+	app.server.revokeAmneziaWGPeer(response, request, app.admin, "phone")
+	if response.Code != http.StatusOK {
+		t.Fatalf("AWG revoke with rejected traffic cleanup = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAmneziaWGProfileQRReportsOversizedPayload(t *testing.T) {
+	t.Parallel()
+	app := newTestApp(t, true)
+	app.server.awg = &fakeAmneziaWGGateway{
+		peers:    map[string]domain.AmneziaWGPeer{"phone": {Name: "phone"}},
+		profiles: map[string]string{"phone": strings.Repeat("x", 100_000)},
+	}
+	response := requestJSON(t, app, http.MethodGet, "/api/clients/awg%3Aphone/profile?format=qr", nil, true)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not render AmneziaWG profile QR") {
+		t.Fatalf("oversized AWG QR = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestAmneziaWGClientRouteRejectsInvalidNamesAndUnavailableService(t *testing.T) {
+	t.Parallel()
+	app := newTestApp(t, true)
+	request := httptest.NewRequest(http.MethodGet, "/api/clients/awg%3Abad_name/profile?format=conf", nil)
+	response := httptest.NewRecorder()
+	app.server.amneziaWGClientRoute(response, request, app.admin, []string{"profile"}, "bad_name")
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("invalid AWG peer name route = %d %s", response.Code, response.Body.String())
+	}
+	request = httptest.NewRequest(http.MethodGet, "/api/clients/awg%3Aphone/profile?format=conf", nil)
+	response = httptest.NewRecorder()
+	app.server.amneziaWGClientRoute(response, request, app.admin, []string{"profile"}, "phone")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("unavailable AWG profile route = %d %s", response.Code, response.Body.String())
 	}
 }

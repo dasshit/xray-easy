@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
@@ -12,6 +13,48 @@ import (
 	"xray-easy/internal/domain"
 	"xray-easy/internal/store"
 )
+
+func TestDoctorFormattingHelpersSanitizeVersionsPortsAndOptionalServices(t *testing.T) {
+	t.Setenv("XRAY_EASY_VERSION", "bad version")
+	t.Setenv("XRAY_VERSION", "26.7.28")
+	t.Setenv("XRAY_PUBLIC_PORT", "443")
+	t.Setenv("XRAY_VMESS_PORT", "bad")
+	t.Setenv("XRAY_EASY_UI_PORT", "8080")
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
+	t.Setenv("AWG_PUBLIC_PORT", "1234")
+	if got := safeRuntimeXrayVersion("not an Xray version"); got != "unknown" {
+		t.Fatalf("safe runtime version = %q", got)
+	}
+	if got := safeDoctorVersion("XRAY_EASY_VERSION", "dev"); got != "invalid" {
+		t.Fatalf("safe doctor version = %q", got)
+	}
+	if got := safeDoctorPort("XRAY_VMESS_PORT", "9443"); got != "invalid" {
+		t.Fatalf("safe doctor port = %q", got)
+	}
+	if _, err := doctorConfiguredPort("XRAY_VMESS_PORT", "9443"); err == nil {
+		t.Fatal("invalid doctor port was accepted")
+	}
+	var report bytes.Buffer
+	writeDoctorHeader(&report)
+	for _, want := range []string{"Shadowsocks TCP+UDP: 8388", "AmneziaWG public UDP: 1234", "Xray image: 26.7.28"} {
+		if !strings.Contains(report.String(), want) {
+			t.Fatalf("doctor header omitted %q: %s", want, report.String())
+		}
+	}
+}
+
+func TestDoctorCLIRequiresControllerAddressBeforeDialing(t *testing.T) {
+	t.Setenv("XRAY_CONTROLLER_ADDR", "")
+	if err := runDoctorCLI(context.Background(), nil, t.TempDir(), t.TempDir(), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "XRAY_CONTROLLER_ADDR must be configured") {
+		t.Fatalf("doctor CLI without Controller address = %v", err)
+	}
+	t.Setenv("XRAY_CONTROLLER_ADDR", "bad address")
+	if err := runDoctorCLI(context.Background(), nil, t.TempDir(), t.TempDir(), &bytes.Buffer{}); err == nil || !strings.Contains(err.Error(), "initialize Controller") {
+		t.Fatalf("doctor CLI invalid Controller address = %v", err)
+	}
+}
 
 func doctorCheckContains(checks []doctorCheck, name, detail string) bool {
 	for _, check := range checks {

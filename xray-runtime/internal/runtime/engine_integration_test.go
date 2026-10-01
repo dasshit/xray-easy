@@ -298,6 +298,17 @@ func TestAccountFactoryRejectsUnsupportedProtocolAndInvalidUUID(t *testing.T) {
 	if _, err := accountFor(xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, "auth-secret", "flow"); err == nil {
 		t.Fatal("Hysteria flow was accepted")
 	}
+	for _, method := range []string{"AES-128-GCM", " aes-256-gcm ", "chacha20-poly1305"} {
+		if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, "secret-password", "", method); err != nil {
+			t.Fatalf("Shadowsocks method %q was rejected: %v", method, err)
+		}
+	}
+	if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, "secret-password", "flow", "chacha20-poly1305"); err == nil {
+		t.Fatal("Shadowsocks flow was accepted")
+	}
+	if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, "secret-password", "", "unsupported"); err == nil {
+		t.Fatal("unsupported Shadowsocks method was accepted")
+	}
 }
 
 func TestInboundConfigurationLookupAndUninitializedEngine(t *testing.T) {

@@ -65,6 +65,17 @@ func TestHTTPBoundaryValidationAndProfileRenderingErrors(t *testing.T) {
 	if profile.Code != http.StatusConflict || !strings.Contains(profile.Body.String(), "host:port") {
 		t.Fatalf("invalid persisted settings profile response = %d %s", profile.Code, profile.Body.String())
 	}
+	for _, path := range []string{
+		"/api/setup/initialize", "/api/auth/login", "/api/auth/logout-all",
+		"/api/auth/password", "/api/auth/totp/setup", "/api/auth/totp/enable", "/api/auth/totp/disable",
+		"/api/settings", "/api/transports/hysteria2", "/api/transports/amneziawg",
+		"/api/transports/hysteria2/certificate", "/api/transports/hysteria2/certificate/mkcert",
+		"/api/transports/hysteria2/preview", "/api/transports/hysteria2/apply", "/api/clients", "/api/backups",
+	} {
+		if response := requestJSON(t, app, http.MethodPut, path, nil, true); response.Code != http.StatusMethodNotAllowed {
+			t.Errorf("unsupported PUT %s status = %d %s", path, response.Code, response.Body.String())
+		}
+	}
 }
 
 func TestSSEStopsOnStatsAndStatusWriteFailures(t *testing.T) {

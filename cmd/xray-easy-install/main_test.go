@@ -197,6 +197,50 @@ func TestDefaultVMessPortAvoidsInstallerPortSelections(t *testing.T) {
 	}
 }
 
+func TestInstallerConfigurationHelpersCoverDefaultsAndCollisions(t *testing.T) {
+	if got := defaultShadowsocksPort(443, 9443, 8388); got != 8389 {
+		t.Fatalf("default Shadowsocks port = %d, want 8389", got)
+	}
+	if err := createConfiguration(t.TempDir(), configuration{project: defaultProject, version: defaultVersion, public: 443, vmess: 443, ui: 8080}); err == nil {
+		t.Fatal("VMess/public port collision was accepted by createConfiguration")
+	}
+
+	root := t.TempDir()
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, vmess: 9443, ui: 8080}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ".env")
+	data := readPrivateFile(t, path)
+	data = strings.Replace(data, "XRAY_SHADOWSOCKS_PORT=8388", "XRAY_SHADOWSOCKS_PORT=443", 1)
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := loadConfiguration(root); err == nil || !strings.Contains(err.Error(), "XRAY_SHADOWSOCKS_PORT") {
+		t.Fatalf("Shadowsocks port collision was accepted: %v", err)
+	}
+}
+
+func TestPrintNextStepsIncludesEnabledTransportFirewallGuidance(t *testing.T) {
+	var output bytes.Buffer
+	printNextSteps(&output, configuration{
+		public: 443, vmess: 9443, ui: 8080, shadowsocks: 8388,
+		shadowsocksEnabled: true, hysteriaEnabled: true, awgEnabled: true,
+		awgPublicPort: 1234,
+	})
+	text := output.String()
+	for _, want := range []string{
+		"ssh -N -L 8080:127.0.0.1:8080",
+		"Allow inbound TCP 443",
+		"Allow inbound TCP and UDP 8388",
+		"Allow inbound UDP 443 through the VDS firewall for Hysteria 2",
+		"Allow inbound UDP 1234 through the VDS firewall for AmneziaWG",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("next-step guidance omitted %q: %s", want, text)
+		}
+	}
+}
+
 func TestInvalidExistingKeyIsNeverReplaced(t *testing.T) {
 	root := t.TempDir()
 	envPath := filepath.Join(root, ".env")

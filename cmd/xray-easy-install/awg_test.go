@@ -111,6 +111,54 @@ func TestUpdateAWGConfigurationDisablesProfileAndRejectsDuplicateKeys(t *testing
 	}
 }
 
+func TestUpdateAWGConfigurationRejectsMissingEnvironment(t *testing.T) {
+	if err := updateAWGConfiguration(t.TempDir(), configuration{}); err == nil {
+		t.Fatal("missing .env was accepted")
+	}
+}
+
+func TestUpdateAWGConfigurationReportsTemporaryFileFailure(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".env")
+	if err := os.WriteFile(path, []byte("AWG_PUBLIC_PORT=1234\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(root, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(root, 0o700) })
+	if err := updateAWGConfiguration(root, configuration{awgPublicPort: 1235}); err == nil {
+		t.Fatal("update succeeded in a read-only directory")
+	}
+}
+
+func TestLoadConfigurationRejectsInvalidAWGSettings(t *testing.T) {
+	root := t.TempDir()
+	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080}); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ".env")
+	data := readPrivateFile(t, path)
+	for _, test := range []struct {
+		name string
+		line string
+		want string
+	}{
+		{name: "invalid port", line: "AWG_PUBLIC_PORT=bad", want: "AWG_PUBLIC_PORT"},
+		{name: "invalid host", line: "AWG_PUBLIC_HOST=not a host!", want: "AWG_PUBLIC_HOST"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			updated := data + "COMPOSE_PROFILES=awg\n" + test.line + "\n"
+			if err := os.WriteFile(path, []byte(updated), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := loadConfiguration(root); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("invalid AmneziaWG setting accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestLoadConfigurationReadsAWGComposeSettings(t *testing.T) {
 	root := t.TempDir()
 	if err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080}); err != nil {
@@ -153,6 +201,32 @@ func TestAmneziaWGTUISelection(t *testing.T) {
 		cfg, err := wizard.amneziaWG(t.Context(), configuration{awgPublicPort: defaultAWGPort})
 		if err != nil || !cfg.awgEnabled || cfg.awgPublicHost != "89.169.13.234" {
 			t.Fatalf("enabled selection: config=%+v error=%v", cfg, err)
+		}
+	})
+	t.Run("reprompt empty host", func(t *testing.T) {
+		var output strings.Builder
+		wizard := newWizard(strings.NewReader("\x1b[B\n\nvalid.example.com\n"), &output)
+		defer wizard.close()
+		cfg, err := wizard.amneziaWG(t.Context(), configuration{awgPublicPort: defaultAWGPort})
+		if err != nil || !cfg.awgEnabled || cfg.awgPublicHost != "valid.example.com" {
+			t.Fatalf("reprompted host: config=%+v error=%v", cfg, err)
+		}
+		if !strings.Contains(output.String(), "public IP address") {
+			t.Fatal("invalid host guidance was not rendered")
+		}
+	})
+	t.Run("requires a large terminal", func(t *testing.T) {
+		var output strings.Builder
+		wizard := newWizard(strings.NewReader("x"), &output)
+		defer wizard.close()
+		wizard.mu.Lock()
+		wizard.width, wizard.height = 50, 18
+		wizard.mu.Unlock()
+		if _, err := wizard.amneziaWG(t.Context(), configuration{}); err == nil {
+			t.Fatal("small terminal unexpectedly completed")
+		}
+		if !strings.Contains(output.String(), "Enlarge the terminal") {
+			t.Fatal("small terminal guidance was not rendered")
 		}
 	})
 }

@@ -109,6 +109,70 @@ func TestConfigurationHelpersValidatePortsHostsAndHysteriaFallbacks(t *testing.T
 	}
 }
 
+func TestShadowsocksConfigurationHelpersValidatePortsAndPublicSettings(t *testing.T) {
+	t.Setenv("XRAY_PUBLIC_PORT", "443")
+	t.Setenv("XRAY_VMESS_PORT", "9443")
+	t.Setenv("XRAY_EASY_UI_PORT", "8080")
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", " TRUE ")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	t.Setenv("XRAY_SHADOWSOCKS_METHOD", "aes-256-gcm")
+	t.Setenv("XRAY_SHADOWSOCKS_NETWORK", "tcp")
+	settings, err := configuredShadowsocksSettings()
+	if err != nil || !settings.Enabled || settings.PublicPort != 8388 || settings.Method != "aes-256-gcm" || settings.Network != "tcp" {
+		t.Fatalf("configured Shadowsocks settings = %+v, %v", settings, err)
+	}
+	if !configuredShadowsocksEnabled() || configuredShadowsocksMethod() != "aes-256-gcm" {
+		t.Fatal("Shadowsocks environment helpers did not preserve configured values")
+	}
+	public := publicSettings(domain.Settings{PublicHost: "vpn.example.test", PublicPort: 443}, 9443)
+	if public["shadowsocks_enabled"] != true || public["shadowsocks_public_port"] != 8388 || public["shadowsocks_method"] != "aes-256-gcm" || public["shadowsocks_network"] != "tcp" {
+		t.Fatalf("public Shadowsocks settings = %#v", public)
+	}
+	for _, test := range []struct {
+		name  string
+		value string
+	}{
+		{"invalid", "bad"}, {"zero", "0"}, {"public port", "443"}, {"VMess port", "9443"}, {"UI port", "8080"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XRAY_SHADOWSOCKS_PORT", test.value)
+			if _, err := configuredShadowsocksPort(); err == nil {
+				t.Fatal("invalid Shadowsocks port was accepted")
+			}
+		})
+	}
+	// A malformed port must not make the public settings endpoint fail; it uses
+	// the documented fallback while the doctor reports the invalid environment.
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "bad")
+	fallback := publicSettings(domain.Settings{PublicHost: "vpn.example.test", PublicPort: 443}, 9443)
+	if fallback["shadowsocks_public_port"] != 8388 || fallback["shadowsocks_method"] != domain.ShadowsocksMethodChaCha20Poly1305 {
+		t.Fatalf("invalid-port public settings fallback = %#v", fallback)
+	}
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "public port", key: "XRAY_SHADOWSOCKS_PORT", value: "443"},
+		{name: "vmess port", key: "XRAY_SHADOWSOCKS_PORT", value: "9443"},
+		{name: "ui port", key: "XRAY_SHADOWSOCKS_PORT", value: "8080"},
+		{name: "invalid public", key: "XRAY_PUBLIC_PORT", value: "bad"},
+		{name: "invalid vmess", key: "XRAY_VMESS_PORT", value: "bad"},
+		{name: "invalid ui", key: "XRAY_EASY_UI_PORT", value: "bad"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+			t.Setenv("XRAY_PUBLIC_PORT", "443")
+			t.Setenv("XRAY_VMESS_PORT", "9443")
+			t.Setenv("XRAY_EASY_UI_PORT", "8080")
+			t.Setenv(test.key, test.value)
+			if _, err := configuredShadowsocksPort(); err == nil {
+				t.Fatal("invalid Shadowsocks port dependency was accepted")
+			}
+		})
+	}
+}
+
 func TestClientStateChangeReportsPreparationAndRuntimeFailures(t *testing.T) {
 	t.Run("maintenance lock is busy", func(t *testing.T) {
 		app := newTestApp(t, true)

@@ -72,3 +72,23 @@ func TestAcquireReturnsParentPathError(t *testing.T) {
 		t.Fatal("Acquire succeeded below a regular file")
 	}
 }
+
+func TestAcquireReturnsLockFileOpenError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "invalid\x00lock")
+	if _, err := Acquire(context.Background(), path); err == nil {
+		t.Fatal("Acquire accepted a path containing a NUL byte")
+	}
+}
+
+func TestCloseReportsUnlockError(t *testing.T) {
+	file, err := os.OpenFile(filepath.Join(t.TempDir(), "lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := (&Lock{file: file}).Close(); err == nil {
+		t.Fatal("Close ignored an unlock error from an already closed file")
+	}
+}

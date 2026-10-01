@@ -61,6 +61,7 @@ type recordingShadowsocksHandler struct {
 	removed   []string
 	addErr    error
 	removeErr error
+	listErr   error
 }
 
 type reconcilingProtocolHandler struct {
@@ -163,7 +164,7 @@ func (h *recordingShadowsocksHandler) UsersInInbound(_ context.Context, tag stri
 	if tag != xray.ShadowsocksInboundTag {
 		return nil, fmt.Errorf("unexpected inbound tag %q", tag)
 	}
-	return append([]string(nil), h.users...), nil
+	return append([]string(nil), h.users...), h.listErr
 }
 
 func (h *recordingVMessHandler) UsersInInbound(_ context.Context, tag string) ([]string, error) {
@@ -483,6 +484,148 @@ func TestShadowsocksProfilesUseLiveUserLifecycleAndDelivery(t *testing.T) {
 	}
 }
 
+func TestShadowsocksProfileRejectsUnavailableCredentialsAndDisabledTransport(t *testing.T) {
+	t.Run("transport disabled", func(t *testing.T) {
+		t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "false")
+		app := newTestApp(t, true)
+		response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolShadowsocks), Name: "phone"}, true)
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "transport_disabled") {
+			t.Fatalf("disabled Shadowsocks creation = %d %s", response.Code, response.Body.String())
+		}
+	})
+	t.Run("invalid listener port", func(t *testing.T) {
+		t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+		t.Setenv("XRAY_SHADOWSOCKS_PORT", "443")
+		app := newTestApp(t, true)
+		response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolShadowsocks), Name: "phone"}, true)
+		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "transport_disabled") {
+			t.Fatalf("invalid Shadowsocks port creation = %d %s", response.Code, response.Body.String())
+		}
+	})
+}
+
+func TestShadowsocksProfileFailsClosedWhenStoredPasswordCannotBeDecrypted(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	app := newTestApp(t, true)
+	client := createRuntimeShadowsocksClient(t, app, "phone")
+	execSQLiteTestMutation(t, app, "corrupt stored Shadowsocks credential", `UPDATE clients SET shadowsocks_password_enc='invalid-envelope' WHERE id='`+client.ID+`'`)
+	response := requestJSON(t, app, http.MethodGet, "/api/clients/"+client.ID+"/profile", nil, true)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not decrypt Shadowsocks password") {
+		t.Fatalf("corrupt Shadowsocks profile delivery = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestShadowsocksCreationFallsBackToFullApplyWhenLiveHandlerIsUnavailable(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	app := newTestApp(t, true)
+	// The first profile creates the optional inbound through a full apply. The
+	// generic handler deliberately lacks the Shadowsocks extension, so the next
+	// profile must use the same safe fallback instead of silently persisting a
+	// user that Xray did not receive.
+	createRuntimeShadowsocksClient(t, app, "phone-1")
+	applyCalls := len(app.sup.applyCalls)
+	createRuntimeShadowsocksClient(t, app, "phone-2")
+	if len(app.sup.applyCalls) != applyCalls+1 {
+		t.Fatalf("Shadowsocks handler-unavailable fallback applied %d times, before=%d after=%d", len(app.sup.applyCalls), applyCalls, len(app.sup.applyCalls))
+	}
+}
+
+func TestShadowsocksCreationFallsBackWhenLiveAddFails(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	app := newTestApp(t, true)
+	handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler}
+	app.server.handler = handler
+	createRuntimeShadowsocksClient(t, app, "phone-1")
+	applyCalls := len(app.sup.applyCalls)
+	handler.addErr = errors.New("live Shadowsocks add failed")
+	createRuntimeShadowsocksClient(t, app, "phone-2")
+	if len(app.sup.applyCalls) != applyCalls+1 {
+		t.Fatalf("Shadowsocks add failure did not fall back to apply: before=%d after=%d", applyCalls, len(app.sup.applyCalls))
+	}
+}
+
+func TestShadowsocksCreationRollsBackProfileWhenFallbackApplyFails(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	app := newTestApp(t, true)
+	handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler}
+	app.server.handler = handler
+	createRuntimeShadowsocksClient(t, app, "phone-1")
+	applyCalls := len(app.sup.applyCalls)
+	handler.addErr = errors.New("live add unavailable")
+	app.sup.applyErrors = []error{errors.New("fallback apply rejected")}
+	response := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Protocol: string(domain.ProtocolShadowsocks), Name: "phone-2"}, true)
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "fallback apply rejected") || !strings.Contains(response.Body.String(), "live add unavailable") {
+		t.Fatalf("failed fallback response = %d %s", response.Code, response.Body.String())
+	}
+	clients, err := app.server.store.ListClients(t.Context())
+	if err != nil || len(clients) != 1 || clients[0].Name != "phone-1" {
+		t.Fatalf("failed Shadowsocks create remained persisted: %+v, %v", clients, err)
+	}
+	if len(app.sup.applyCalls) != applyCalls+1 {
+		t.Fatalf("failed fallback Xray apply calls = %d, want %d", len(app.sup.applyCalls), applyCalls+1)
+	}
+}
+
+func TestShadowsocksProfileCreationReportsEncryptionSetupErrors(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	app := newTestApp(t, true)
+	settings, err := app.server.store.GetSettings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	app.server.masterKey = []byte("too-short")
+	if _, err := app.server.createProtocolClient(t.Context(), settings, domain.ProtocolShadowsocks, "phone", "", "", app.admin.ID); err == nil || !strings.Contains(err.Error(), "master key") {
+		t.Fatalf("invalid master key create error = %v", err)
+	}
+}
+
+func TestShadowsocksReconcilerRepairsLiveRoster(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	app := newTestApp(t, true)
+	handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler, users: []string{"stale@example.test"}}
+	app.server.handler = handler
+	client := createRuntimeShadowsocksClient(t, app, "phone")
+	// The profile creation path used a full apply; emulate an empty live
+	// Shadowsocks roster so reconciliation has to add the persisted user and
+	// remove a stale one through the protocol-specific HandlerService methods.
+	handler.users = []string{"stale@example.test"}
+	if err := app.server.reconcileRunning(t.Context()); err != nil {
+		t.Fatalf("reconcile Shadowsocks roster: %v", err)
+	}
+	if len(handler.removed) != 1 || handler.removed[0] != "stale@example.test" || len(handler.added) != 1 || handler.added[0] != client.Email {
+		t.Fatalf("reconciled Shadowsocks roster: removed=%v added=%v", handler.removed, handler.added)
+	}
+}
+
+func TestShadowsocksReconcilerReportsHandlerCapabilityAndCredentialFailures(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	t.Run("handler unavailable", func(t *testing.T) {
+		app := newTestApp(t, true)
+		createRuntimeShadowsocksClient(t, app, "phone")
+		app.server.handler = app.handler
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Shadowsocks HandlerService is unavailable") {
+			t.Fatalf("missing Shadowsocks handler error = %v", err)
+		}
+	})
+	t.Run("stale roster error", func(t *testing.T) {
+		app := newTestApp(t, true)
+		handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler}
+		app.server.handler = handler
+		createRuntimeShadowsocksClient(t, app, "phone")
+		handler.listErr = errors.New("Shadowsocks roster unavailable")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "roster unavailable") {
+			t.Fatalf("Shadowsocks roster error = %v", err)
+		}
+	})
+}
+
 func TestVMessCreationRequiresAValidSharedTLSCertificate(t *testing.T) {
 	app := newTestApp(t, true)
 	if err := os.Remove(filepath.Join(app.server.dataDir, "hysteria-tls", "fullchain.pem")); err != nil {
@@ -554,6 +697,36 @@ func TestProtocolSpecificProfilesKeepAccessAndCredentialsIsolated(t *testing.T) 
 	storedVLESS, err := app.server.store.GetClient(t.Context(), vless.ID)
 	if err != nil || !storedVLESS.VLESSCanConnect() {
 		t.Fatalf("Hysteria state transitions affected VLESS profile: %+v, %v", storedVLESS, err)
+	}
+}
+
+func TestClientListIncludesAccessSummariesForEveryXrayProtocol(t *testing.T) {
+	t.Setenv("XRAY_HYSTERIA2_ENABLED", "true")
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", domain.HysteriaTLSCustom)
+	t.Setenv("XRAY_HYSTERIA2_TLS_SERVER_NAME", "cert.example.test")
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	app := newTestApp(t, true)
+	createRuntimeTestClient(t, app, "vless")
+	createRuntimeHysteriaClient(t, app, "hysteria")
+	createRuntimeVMessClient(t, app, "vmess")
+	createRuntimeShadowsocksClient(t, app, "shadowsocks")
+	response := requestJSON(t, app, http.MethodGet, "/api/clients", nil, true)
+	if response.Code != http.StatusOK {
+		t.Fatalf("client list = %d %s", response.Code, response.Body.String())
+	}
+	var listed []clientResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &listed); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[string]bool{}
+	for _, client := range listed {
+		seen[string(client.Protocol)] = true
+	}
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks} {
+		if !seen[string(protocol)] {
+			t.Errorf("client list omitted %s: %+v", protocol, listed)
+		}
 	}
 }
 

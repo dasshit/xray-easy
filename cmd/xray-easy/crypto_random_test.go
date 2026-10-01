@@ -20,6 +20,9 @@ func TestSecretGeneratorsReturnRandomSourceErrors(t *testing.T) {
 	if value, err := newHysteriaAuth(); err == nil || value != "" || !strings.Contains(err.Error(), "random source unavailable") {
 		t.Fatalf("newHysteriaAuth() = %q, %v; want random source error", value, err)
 	}
+	if value, err := newShadowsocksPassword(); err == nil || value != "" || !strings.Contains(err.Error(), "random source unavailable") {
+		t.Fatalf("newShadowsocksPassword() = %q, %v; want random source error", value, err)
+	}
 	if value, err := randomID(); err == nil || value != "" || !strings.Contains(err.Error(), "random source unavailable") {
 		t.Fatalf("randomID() = %q, %v; want random source error", value, err)
 	}

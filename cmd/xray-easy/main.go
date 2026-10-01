@@ -2313,7 +2313,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		} else if err := s.handler.AddUser(ctx, client.Email, client.UUID, xray.Flow); err != nil {
 			// If Xray has no live inbound yet, a normal first start is needed.
 			if applyErr := s.xrayRuntime.Apply(ctx, path, operationID); applyErr != nil {
-				return failCreate(err)
+				return failCreate(fmt.Errorf("add VLESS user through HandlerService: %v; apply full Xray configuration: %w", err, applyErr))
 			}
 			fullApply = true
 		} else {
@@ -2328,7 +2328,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 			fullApply = true
 		} else if err := hysteria.AddHysteriaUser(ctx, client.Email, client.HysteriaAuth); err != nil {
 			if applyErr := s.xrayRuntime.Apply(ctx, path, operationID); applyErr != nil {
-				return failCreate(err)
+				return failCreate(fmt.Errorf("add Hysteria 2 user through HandlerService: %v; apply full Xray configuration: %w", err, applyErr))
 			}
 			fullApply = true
 		} else {
@@ -2343,7 +2343,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 			fullApply = true
 		} else if err := api.AddShadowsocksUser(ctx, client.Email, mustDecryptShadowsocksPassword(s.masterKey, client), configuredShadowsocksMethod()); err != nil {
 			if applyErr := s.xrayRuntime.Apply(ctx, path, operationID); applyErr != nil {
-				return failCreate(err)
+				return failCreate(fmt.Errorf("add Shadowsocks user through HandlerService: %v; apply full Xray configuration: %w", err, applyErr))
 			}
 			fullApply = true
 		} else {

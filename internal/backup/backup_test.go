@@ -719,3 +719,21 @@ func TestHMACAndHashFiles(t *testing.T) {
 		t.Fatal("hashFiles accepted a missing file")
 	}
 }
+
+func TestCreateReportsBackupDirectoryFilesystemFailure(t *testing.T) {
+	manager, _ := newTestManager(t)
+	// A regular file at the backup root makes MkdirAll fail before any backup
+	// artifact is created; this keeps the failure deterministic and verifies the
+	// installer-visible error path.
+	root := filepath.Join(manager.DataDir, "blocked-backups")
+	if err := os.MkdirAll(manager.DataDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager.DataDir = root
+	if _, err := manager.Create("filesystem-failure"); err == nil {
+		t.Fatal("backup creation succeeded below a regular file")
+	}
+}
