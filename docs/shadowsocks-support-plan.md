@@ -1,6 +1,6 @@
 # Shadowsocks support plan
 
-Status: implementation started
+Status: implemented in code; VDS acceptance remains manual
 
 ## Scope and decisions
 
@@ -157,6 +157,18 @@ version exposes a reliable live user-management API. Otherwise it must use an
 explicit full-inbound apply with a visible connection-impact warning, or a
 single shared server key without per-device dynamic management. It must not be
 silently mixed with the classic Shadowsocks profile format.
+
+## Implementation notes
+
+The classic Shadowsocks path is implemented through the embedded Xray runtime
+and Controller. The Web UI exposes protocol selection, read-only listener
+settings, `ss://`/QR/JSON delivery, and streamed status and traffic telemetry.
+Installer and doctor use the dedicated `XRAY_SHADOWSOCKS_*` settings, and
+Compose publishes the configured port in both TCP and UDP namespaces. The
+automated unit and component suites cover persistence, rendering, live user
+lifecycle, profile delivery, telemetry, API schemas, and the installer. A real
+VDS/client pass is still required for TCP/UDP reachability and dual-stack
+firewall behavior.
 
 ## Commit boundaries
 

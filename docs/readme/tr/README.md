@@ -103,12 +103,14 @@ firewall and the provider security group, for IPv4 and IPv6 where enabled.
 | VLESS + REALITY | 443 | TCP | Default Xray profile |
 | Hysteria 2 | 443 | UDP | Optional; shares the public port number with VLESS |
 | VMess + TLS | 9443 | TCP | Optional separate Xray inbound |
+| Shadowsocks | 8388 | TCP and UDP | Optional classic AEAD inbound |
 | AmneziaWG | 1234 | UDP | Optional separate service |
 | Web UI | 8080 | TCP, loopback only | Reach through SSH; never open publicly |
 
 Ports are configurable during installation and stored in the root **.env**
 file. Xray uses **XRAY_PUBLIC_PORT** for VLESS TCP and optional Hysteria 2 UDP,
-and **XRAY_VMESS_PORT** for VMess TCP. AmneziaWG uses **AWG_PUBLIC_PORT**.
+**XRAY_VMESS_PORT** for VMess TCP and **XRAY_SHADOWSOCKS_PORT** for Shadowsocks
+TCP and UDP. AmneziaWG uses **AWG_PUBLIC_PORT**.
 
 ## Protocol guide: Xray
 
@@ -125,6 +127,7 @@ other versions as experimental until tested with your clients.
 | VLESS | TCP/RAW + REALITY + XTLS Vision | QR, VLESS link, JSON |
 | Hysteria 2 | UDP + TLS | QR, hysteria2 link |
 | VMess | TCP + TLS, alterId 0 | QR, vmess link, JSON |
+| Shadowsocks | TCP/UDP + classic AEAD | QR, ss link, JSON |
 
 Each new profile uses one protocol. To give one device multiple transports,
 create a separate profile for each one with the same device name.
@@ -177,6 +180,35 @@ certificate fingerprint and the downloadable Xray JSON uses
 minutes. Re-import profiles after replacing the certificate. VMess is provided
 for compatibility and is easier to identify by traffic analysis than VLESS +
 REALITY or Hysteria 2; it is not presented as a DPI-resistance improvement.
+
+### Shadowsocks
+
+Shadowsocks is an optional classic AEAD inbound in the embedded Xray runtime.
+Enable it during installation by setting **XRAY_SHADOWSOCKS_ENABLED=true** and
+choose its public port, method and network in the installer or `.env`:
+
+~~~dotenv
+XRAY_SHADOWSOCKS_ENABLED=true
+XRAY_SHADOWSOCKS_PORT=8388
+XRAY_SHADOWSOCKS_METHOD=chacha20-poly1305
+XRAY_SHADOWSOCKS_NETWORK=tcp,udp
+~~~
+
+The supported methods are `chacha20-poly1305`, `aes-256-gcm` and
+`aes-128-gcm`. Each device receives a unique random password. The password is
+encrypted at rest with **XRAY_EASY_MASTER_KEY** and is exposed only in the
+authenticated profile delivery response. The panel provides an `ss://` link,
+QR code and a JSON client configuration; use a client with explicit
+Shadowsocks support because v2RAGE does not list Shadowsocks among its
+supported protocols.
+
+The listener uses one port number in two socket namespaces, so TCP and UDP can
+share **XRAY_SHADOWSOCKS_PORT**. It cannot share a TCP port with VLESS/VMess or
+an UDP port with Hysteria 2. Open both TCP and UDP for the configured port when
+both networks are enabled. Classic Shadowsocks users can be added and removed
+through the live HandlerService without replacing the inbound. Shadowsocks
+does not provide REALITY camouflage; choose it for client compatibility and
+simple UDP/TCP access rather than as a replacement for VLESS + REALITY.
 
 ### Xray status and troubleshooting
 
