@@ -89,6 +89,7 @@ function mapClient(dto: ClientDto): Client {
     ...(dto.vless === undefined ? {} : { vless: dto.vless }),
     ...(dto.hysteria2 === undefined ? {} : { hysteria2: dto.hysteria2 }),
     ...(dto.vmess === undefined ? {} : { vmess: dto.vmess }),
+    ...(dto.shadowsocks === undefined ? {} : { shadowsocks: dto.shadowsocks }),
     enabled: dto.enabled,
     revoked: dto.revoked,
     online: dto.online,
@@ -112,6 +113,10 @@ function mapSettings(dto: SettingsDto): Settings {
     publicHost: dto.public_host,
     publicPort: dto.public_port,
     vmessPublicPort: dto.vmess_public_port,
+    shadowsocksEnabled: dto.shadowsocks_enabled,
+    shadowsocksPublicPort: dto.shadowsocks_public_port,
+    shadowsocksMethod: dto.shadowsocks_method,
+    shadowsocksNetwork: dto.shadowsocks_network,
     realityTarget: dto.reality_target,
     realitySni: dto.reality_sni,
     clientFingerprint: dto.client_fingerprint,
@@ -349,6 +354,7 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
         if (dto.protocol === 'vless') return { clientId: dto.client_id, protocol: dto.protocol, uri: dto.uri, json: dto.json }
         if (dto.protocol === 'hysteria2') return { clientId: dto.client_id, protocol: dto.protocol, hysteriaUri: dto.hysteria_uri }
         if (dto.protocol === 'vmess') return { clientId: dto.client_id, protocol: dto.protocol, vmessUri: dto.vmess_uri, json: dto.json }
+        if (dto.protocol === 'shadowsocks') return { clientId: dto.client_id, protocol: dto.protocol, ssUri: dto.ss_uri, json: dto.json }
         if (dto.protocol === 'amneziawg') return { clientId: dto.client_id, protocol: dto.protocol, name: dto.name }
         return {
           clientId: dto.client_id, protocol: dto.protocol,
@@ -370,6 +376,7 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
       profileAmneziaWGQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=qr`,
       profileHysteriaQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=hysteria-qr`,
       profileVMessQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=vmess-qr`,
+      profileShadowsocksQrUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=ss-qr`,
       profileJsonUrl: (clientId: string): string => `/api/clients/${encodeURIComponent(clientId)}/profile?format=json`,
     },
     settings: {

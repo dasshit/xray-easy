@@ -56,6 +56,21 @@ describe('ProfileDeliveryModal', () => {
     expect(wrapper.emitted('copyVmess')).toHaveLength(1)
   })
 
+  it('shows the Shadowsocks URI, QR, and JSON export', async () => {
+    const wrapper = mount(ProfileDeliveryModal, { props: {
+      profile: { clientId: client.id, protocol: 'shadowsocks', ssUri: 'ss://encoded#tablet', json: { server: 'vpn.test' } },
+      client: { ...client, protocol: 'shadowsocks', protocols: ['shadowsocks'], shadowsocks: { enabled: true, revoked: false } },
+      language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr', shadowsocksQrUrl: '/ss-qr', jsonUrl: '/json', copiedVless: false, copiedHysteria: false, copiedVmess: false, copiedShadowsocks: false,
+    } })
+
+    expect(wrapper.text()).toContain('Shadowsocks profile')
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('ss://encoded#tablet')
+    expect(wrapper.find('img').attributes('src')).toBe('/ss-qr')
+    expect(wrapper.find('a.download-link').attributes('href')).toBe('/json')
+    await wrapper.findAll('button').find(button => button.text().includes('Copy Shadowsocks link'))?.trigger('click')
+    expect(wrapper.emitted('copyShadowsocks')).toHaveLength(1)
+  })
+
   it('shows AmneziaWG QR and downloads its private profile from the AWG service', () => {
     const wrapper = mount(ProfileDeliveryModal, { props: {
       profile: { clientId: 'awg:iphone', protocol: 'amneziawg', name: 'iphone' },

@@ -4,7 +4,7 @@ import type { CreateClientCommand } from '../application/models'
 import { translations } from './i18n/messages'
 import type { UILanguage } from './i18n'
 
-const props = defineProps<{ language: UILanguage; hysteriaAvailable: boolean; vmessAvailable: boolean; awgAvailable?: boolean; busy: boolean }>()
+const props = defineProps<{ language: UILanguage; hysteriaAvailable: boolean; vmessAvailable: boolean; shadowsocksAvailable?: boolean; awgAvailable?: boolean; busy: boolean }>()
 const emit = defineEmits<{
   cancel: []
   submit: [command: CreateClientCommand]
@@ -12,7 +12,7 @@ const emit = defineEmits<{
 }>()
 const text = computed(() => translations[props.language])
 const nameInput = ref<HTMLInputElement | null>(null)
-const form = ref<{ name: string; protocol: 'vless' | 'vmess' | 'hysteria2' | 'amneziawg'; fingerprint: string; auth: string }>({ name: '', protocol: 'vless', fingerprint: '', auth: '' })
+const form = ref<{ name: string; protocol: 'vless' | 'vmess' | 'hysteria2' | 'shadowsocks' | 'amneziawg'; fingerprint: string; auth: string }>({ name: '', protocol: 'vless', fingerprint: '', auth: '' })
 
 /** Focus the device name field when the dialog appears. */
 onMounted(() => { void nextTick(() => nameInput.value?.focus()) })
@@ -20,7 +20,7 @@ onMounted(() => { void nextTick(() => nameInput.value?.focus()) })
 /** Submit only the options belonging to the selected transport. */
 function submit(): void {
   const name = form.value.name.trim()
-  if (!name || (form.value.protocol === 'hysteria2' && !props.hysteriaAvailable) || (form.value.protocol === 'vmess' && !props.vmessAvailable)) return
+  if (!name || (form.value.protocol === 'hysteria2' && !props.hysteriaAvailable) || (form.value.protocol === 'vmess' && !props.vmessAvailable) || (form.value.protocol === 'shadowsocks' && !props.shadowsocksAvailable)) return
   if (form.value.protocol === 'amneziawg' && !props.awgAvailable) return
   if (form.value.protocol === 'vless') {
     emit('submit', { name, protocol: 'vless', ...(form.value.fingerprint ? { fingerprint: form.value.fingerprint } : {}) })
@@ -32,6 +32,10 @@ function submit(): void {
   }
   if (form.value.protocol === 'hysteria2') {
     emit('submit', { name, protocol: 'hysteria2', ...(form.value.auth.trim() ? { auth: form.value.auth.trim() } : {}) })
+    return
+  }
+  if (form.value.protocol === 'shadowsocks') {
+    emit('submit', { name, protocol: 'shadowsocks' })
     return
   }
   emit('submit', { name, protocol: 'amneziawg' })
@@ -56,10 +60,11 @@ function submit(): void {
             <option value="vless">VLESS + REALITY</option>
             <option value="vmess" :disabled="!vmessAvailable">VMess + TLS</option>
             <option value="hysteria2" :disabled="!hysteriaAvailable">Hysteria 2</option>
+            <option value="shadowsocks" :disabled="!shadowsocksAvailable">Shadowsocks</option>
             <option value="amneziawg" :disabled="!awgAvailable">AmneziaWG</option>
           </select>
         </label>
-        <p v-if="!hysteriaAvailable && form.protocol !== 'vmess' && form.protocol !== 'amneziawg'" class="hint" role="status">
+        <p v-if="!hysteriaAvailable && form.protocol !== 'vmess' && form.protocol !== 'shadowsocks' && form.protocol !== 'amneziawg'" class="hint" role="status">
           {{ text.hysteriaUnavailable }}
           <button class="text-button" type="button" @click="emit('openSettings')">{{ text.hysteriaSettingsLink }}</button>
         </p>
@@ -94,13 +99,17 @@ function submit(): void {
         <template v-else-if="form.protocol === 'vmess'">
           <p class="hint">{{ text.profileCreateSummaryVMess }}</p>
         </template>
+        <template v-else-if="form.protocol === 'shadowsocks'">
+          <p class="hint">{{ text.profileCreateSummaryShadowsocks }}</p>
+          <p v-if="!shadowsocksAvailable" class="hint" role="status">{{ text.shadowsocksUnavailable }} <button class="text-button" type="button" @click="emit('openSettings')">{{ text.shadowsocksSettingsLink }}</button></p>
+        </template>
         <template v-else>
           <p class="hint">{{ text.profileCreateSummaryAmneziaWG }}</p>
           <p v-if="!awgAvailable" class="hint" role="status">{{ text.awgUnavailable }}</p>
         </template>
         <div class="modal-actions">
           <button class="secondary" type="button" :disabled="busy" @click="emit('cancel')">{{ text.cancel }}</button>
-          <button type="submit" :disabled="busy || !form.name.trim() || (form.protocol === 'hysteria2' && !hysteriaAvailable) || (form.protocol === 'vmess' && !vmessAvailable) || (form.protocol === 'amneziawg' && !awgAvailable)">{{ text.createDevice }}</button>
+          <button type="submit" :disabled="busy || !form.name.trim() || (form.protocol === 'hysteria2' && !hysteriaAvailable) || (form.protocol === 'vmess' && !vmessAvailable) || (form.protocol === 'shadowsocks' && !shadowsocksAvailable) || (form.protocol === 'amneziawg' && !awgAvailable)">{{ text.createDevice }}</button>
         </div>
       </form>
     </div>

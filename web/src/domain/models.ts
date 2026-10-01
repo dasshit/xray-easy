@@ -12,6 +12,8 @@ export type Client = {
   hysteria2?: ClientProtocolAccess
   /** Access state when the profile includes a VMess inbound. */
   vmess?: ClientProtocolAccess
+  /** Access state when the profile includes a Shadowsocks inbound. */
+  shadowsocks?: ClientProtocolAccess
   /** Whether the profile is enabled in the active Xray configuration. */
   enabled: boolean
   /** Whether the profile was permanently revoked and cannot be re-enabled. */
@@ -34,7 +36,7 @@ export type Client = {
 }
 
 /** Protocols supported by a device profile, including migrated combined profiles. */
-export type ClientProtocol = 'vless' | 'vmess' | 'hysteria2' | 'amneziawg' | 'legacy_dual'
+export type ClientProtocol = 'vless' | 'vmess' | 'hysteria2' | 'shadowsocks' | 'amneziawg' | 'legacy_dual'
 
 /** Enabled and revoked state for one protocol access. */
 export type ClientProtocolAccess = { enabled: boolean; revoked: boolean }
@@ -63,6 +65,14 @@ export type Settings = {
   publicPort: number
   /** VMess + TLS public TCP port from the active Compose environment. */
   vmessPublicPort: number
+  /** Whether the classic Shadowsocks inbound is enabled. */
+  shadowsocksEnabled?: boolean
+  /** Public TCP/UDP port used by Shadowsocks. */
+  shadowsocksPublicPort?: number
+  /** Configured classic Shadowsocks cipher. */
+  shadowsocksMethod?: string
+  /** Configured Shadowsocks transport networks. */
+  shadowsocksNetwork?: string
   realityTarget: string
   realitySni: string
   clientFingerprint: string

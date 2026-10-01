@@ -177,6 +177,27 @@ describe('Xray-easy API adapter', () => {
     expect(api.clients.profileVMessQrUrl('vmess-1')).toBe('/api/clients/vmess-1/profile?format=vmess-qr')
   })
 
+  it('creates a Shadowsocks profile and validates its link, JSON export, and QR URL', async () => {
+    const shadowsocksDto = {
+      id: 'ss-1', name: 'tablet', protocol: 'shadowsocks', protocols: ['shadowsocks'],
+      shadowsocks: { enabled: true, revoked: false }, enabled: true, revoked: false, online: false, upload_bytes: 0, download_bytes: 0,
+    }
+    const { send, calls } = requester({
+      '/api/clients': shadowsocksDto,
+      '/api/clients/ss-1/profile?format=uri': { client_id: 'ss-1', protocol: 'shadowsocks', ss_uri: 'ss://encoded#tablet', json: { server: 'vpn.test' } },
+    })
+    const api = createXrayEasyApi(send)
+
+    await expect(api.clients.create({ name: 'tablet', protocol: 'shadowsocks' })).resolves.toMatchObject({
+      protocol: 'shadowsocks', protocols: ['shadowsocks'], shadowsocks: { enabled: true, revoked: false },
+    })
+    expect(calls[0]?.options?.body).toBe(JSON.stringify({ name: 'tablet', protocol: 'shadowsocks' }))
+    await expect(api.clients.profile('ss-1')).resolves.toEqual({
+      clientId: 'ss-1', protocol: 'shadowsocks', ssUri: 'ss://encoded#tablet', json: { server: 'vpn.test' },
+    })
+    expect(api.clients.profileShadowsocksQrUrl('ss-1')).toBe('/api/clients/ss-1/profile?format=ss-qr')
+  })
+
   it('rejects a profile response that omits its protocol discriminator', async () => {
     const { send } = requester({
       '/api/clients/device-1/profile?format=uri': { client_id: 'device-1', uri: 'vless://id', json: {} },
@@ -211,7 +232,7 @@ describe('Xray-easy API adapter', () => {
     })
     const api = createXrayEasyApi(send)
     const settings = {
-      publicHost: 'vpn.example.test', publicPort: 443, vmessPublicPort: 9443, realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
+      publicHost: 'vpn.example.test', publicPort: 443, vmessPublicPort: 9443, shadowsocksEnabled: false, shadowsocksPublicPort: 8388, shadowsocksMethod: 'chacha20-poly1305', shadowsocksNetwork: 'tcp,udp', realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
       clientFingerprint: 'chrome', logLevel: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
     }
 

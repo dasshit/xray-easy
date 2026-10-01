@@ -3720,7 +3720,17 @@ func fatal(err error) {
 }
 
 func publicSettings(settings domain.Settings, vmessPublicPort int) map[string]any {
-	return map[string]any{"public_host": settings.PublicHost, "public_port": settings.PublicPort, "vmess_public_port": vmessPublicPort, "reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint, "log_level": settings.LogLevel, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow}
+	shadowsocks, err := configuredShadowsocksSettings()
+	if err != nil {
+		shadowsocks = domain.ShadowsocksSettings{PublicPort: 8388, Method: domain.ShadowsocksMethodChaCha20Poly1305, Network: domain.ShadowsocksNetworkTCPUDP}
+	}
+	return map[string]any{
+		"public_host": settings.PublicHost, "public_port": settings.PublicPort, "vmess_public_port": vmessPublicPort,
+		"shadowsocks_enabled": shadowsocks.Enabled, "shadowsocks_public_port": shadowsocks.PublicPort,
+		"shadowsocks_method": shadowsocks.Method, "shadowsocks_network": shadowsocks.Network,
+		"reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint,
+		"log_level": settings.LogLevel, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow,
+	}
 }
 
 func randomID() (string, error) {

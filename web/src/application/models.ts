@@ -143,6 +143,14 @@ export type VMessProfileDelivery = {
   json: unknown
 }
 
+/** Authenticated classic Shadowsocks delivery with a share URI and JSON profile. */
+export type ShadowsocksProfileDelivery = {
+  clientId: string
+  protocol: 'shadowsocks'
+  ssUri: string
+  json: unknown
+}
+
 /** AmneziaWG profile reference; its private `.conf` stays in the AWG service. */
 export type AmneziaWGProfileDelivery = {
   clientId: string
@@ -160,7 +168,7 @@ export type LegacyProfileDelivery = {
 }
 
 /** Delivery payload discriminated by the protocol credentials on the profile. */
-export type ProfileDelivery = VLESSProfileDelivery | VMessProfileDelivery | HysteriaProfileDelivery | AmneziaWGProfileDelivery | LegacyProfileDelivery
+export type ProfileDelivery = VLESSProfileDelivery | VMessProfileDelivery | ShadowsocksProfileDelivery | HysteriaProfileDelivery | AmneziaWGProfileDelivery | LegacyProfileDelivery
 
 /** Proposed server settings submitted for preview before applying changes. */
 export type SettingsPreviewCommand = {

@@ -55,6 +55,17 @@ describe('CreateProfileModal', () => {
     expect(wrapper.text()).not.toContain('Hysteria 2 needs to be enabled')
   })
 
+  it('creates a Shadowsocks profile when the listener is enabled', async () => {
+    const wrapper = mount(CreateProfileModal, { props: { language: 'en', hysteriaAvailable: false, vmessAvailable: false, shadowsocksAvailable: true, busy: false } })
+    await wrapper.get('input[autocomplete="off"]').setValue('tablet')
+    await wrapper.get('[data-testid="profile-protocol"]').setValue('shadowsocks')
+
+    expect(wrapper.text()).toContain('Creates a classic Shadowsocks profile')
+    await wrapper.get('form').trigger('submit')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual({ name: 'tablet', protocol: 'shadowsocks' })
+  })
+
   it('selects AmneziaWG when the optional service is available', async () => {
     const wrapper = mount(CreateProfileModal, { props: { language: 'en', hysteriaAvailable: false, vmessAvailable: false, awgAvailable: true, busy: false } })
     await wrapper.get('input[autocomplete="off"]').setValue('iphone')
