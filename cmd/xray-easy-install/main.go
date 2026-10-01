@@ -281,7 +281,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 	pullErr := runner.run(ctx, root, true, "compose", "-f", "compose.yaml", "pull")
 	upArgs := []string{"compose", "-f", "compose.yaml", "up", "-d"}
 	if pullErr != nil {
-		ui.message("Docker Hub images are unavailable; building the installer services locally from this checkout.")
+		ui.message("Published images are unavailable; building the services locally from this checkout.")
 		upArgs = append(upArgs, "--build")
 	}
 	upArgs = append(upArgs, "--remove-orphans", "--wait", "--wait-timeout", "180")

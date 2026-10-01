@@ -80,7 +80,7 @@ case "$image_tag" in
 esac
 installer_image=${XRAY_EASY_INSTALLER_IMAGE:-}
 if [ -z "$installer_image" ]; then
-  installer_image="$image_namespace/xray-easy:$image_tag-installer"
+  installer_image="ghcr.io/$image_namespace/xray-easy/installer:$image_tag"
 fi
 
 if app_version=$(git -C "$project_dir" describe --tags --always --dirty 2>/dev/null); then

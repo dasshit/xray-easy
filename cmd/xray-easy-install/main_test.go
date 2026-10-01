@@ -107,7 +107,7 @@ func TestInstallBuildsServicesLocallyWhenImagePullFails(t *testing.T) {
 	if !strings.Contains(calls, "compose -f compose.yaml pull") || !strings.Contains(calls, "up -d --build --remove-orphans --wait") {
 		t.Fatalf("failed image pull did not trigger a local service build: %v", runner.calls)
 	}
-	if !strings.Contains(output.String(), "Docker Hub images are unavailable; building the installer services locally") {
+	if !strings.Contains(output.String(), "Published images are unavailable; building the services locally") {
 		t.Fatalf("local build fallback was not shown: %s", output.String())
 	}
 }
