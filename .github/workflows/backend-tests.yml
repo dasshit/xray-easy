@@ -86,7 +86,7 @@ jobs:
       - name: Publish backend Go test results
         if: always()
         continue-on-error: true
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         with:
           name: Backend Go tests
           path: reports/backend/junit.xml
@@ -135,7 +135,7 @@ jobs:
       - name: Publish AWG Go test results
         if: always()
         continue-on-error: true
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         with:
           name: AmneziaWG Go tests
           path: reports/awg/junit.xml
@@ -189,7 +189,7 @@ jobs:
       - name: Publish Xray runtime Go test results
         if: always()
         continue-on-error: true
-        uses: dorny/test-reporter@v2
+        uses: dorny/test-reporter@v3
         with:
           name: Xray runtime Go tests
           path: reports/xray/junit.xml
