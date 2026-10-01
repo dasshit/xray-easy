@@ -29,6 +29,7 @@ const (
 	Protocol_PROTOCOL_VLESS       Protocol = 1
 	Protocol_PROTOCOL_VMESS       Protocol = 2
 	Protocol_PROTOCOL_HYSTERIA2   Protocol = 3
+	Protocol_PROTOCOL_SHADOWSOCKS Protocol = 4
 )
 
 // Enum value maps for Protocol.
@@ -38,12 +39,14 @@ var (
 		1: "PROTOCOL_VLESS",
 		2: "PROTOCOL_VMESS",
 		3: "PROTOCOL_HYSTERIA2",
+		4: "PROTOCOL_SHADOWSOCKS",
 	}
 	Protocol_value = map[string]int32{
 		"PROTOCOL_UNSPECIFIED": 0,
 		"PROTOCOL_VLESS":       1,
 		"PROTOCOL_VMESS":       2,
 		"PROTOCOL_HYSTERIA2":   3,
+		"PROTOCOL_SHADOWSOCKS": 4,
 	}
 )
 
@@ -821,9 +824,11 @@ type AddUserRequest struct {
 	OperationId string `protobuf:"bytes,5,opt,name=operation_id,json=operationId,proto3" json:"operation_id,omitempty"`
 	// Zero denotes idempotent runtime user-roster convergence without a
 	// persisted config revision. Positive revisions are fenced and committed.
-	Revision      int64 `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Revision int64 `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
+	// Classic Shadowsocks method, for example chacha20-poly1305.
+	ShadowsocksMethod string `protobuf:"bytes,7,opt,name=shadowsocks_method,json=shadowsocksMethod,proto3" json:"shadowsocks_method,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *AddUserRequest) Reset() {
@@ -896,6 +901,13 @@ func (x *AddUserRequest) GetRevision() int64 {
 		return x.Revision
 	}
 	return 0
+}
+
+func (x *AddUserRequest) GetShadowsocksMethod() string {
+	if x != nil {
+		return x.ShadowsocksMethod
+	}
+	return ""
 }
 
 type RemoveUserRequest struct {
@@ -1551,7 +1563,7 @@ const file_runtime_proto_rawDesc = "" +
 	"\vinbound_tag\x18\x03 \x01(\tR\n" +
 	"inboundTag\x12!\n" +
 	"\foperation_id\x18\x04 \x01(\tR\voperationId\x12\x1a\n" +
-	"\brevision\x18\x05 \x01(\x03R\brevision\"\xd1\x01\n" +
+	"\brevision\x18\x05 \x01(\x03R\brevision\"\x80\x02\n" +
 	"\x0eAddUserRequest\x126\n" +
 	"\bprotocol\x18\x01 \x01(\x0e2\x1a.xrayeasy.xray.v1.ProtocolR\bprotocol\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12\x1e\n" +
@@ -1560,7 +1572,8 @@ const file_runtime_proto_rawDesc = "" +
 	"credential\x12\x12\n" +
 	"\x04flow\x18\x04 \x01(\tR\x04flow\x12!\n" +
 	"\foperation_id\x18\x05 \x01(\tR\voperationId\x12\x1a\n" +
-	"\brevision\x18\x06 \x01(\x03R\brevision\"\xa0\x01\n" +
+	"\brevision\x18\x06 \x01(\x03R\brevision\x12-\n" +
+	"\x12shadowsocks_method\x18\a \x01(\tR\x11shadowsocksMethod\"\xa0\x01\n" +
 	"\x11RemoveUserRequest\x126\n" +
 	"\bprotocol\x18\x01 \x01(\x0e2\x1a.xrayeasy.xray.v1.ProtocolR\bprotocol\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12!\n" +
@@ -1603,12 +1616,13 @@ const file_runtime_proto_rawDesc = "" +
 	"\x11OperationResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x03R\brevision\x12'\n" +
-	"\x0falready_applied\x18\x03 \x01(\bR\x0ealreadyApplied*d\n" +
+	"\x0falready_applied\x18\x03 \x01(\bR\x0ealreadyApplied*~\n" +
 	"\bProtocol\x12\x18\n" +
 	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0ePROTOCOL_VLESS\x10\x01\x12\x12\n" +
 	"\x0ePROTOCOL_VMESS\x10\x02\x12\x16\n" +
-	"\x12PROTOCOL_HYSTERIA2\x10\x03*\xbe\x01\n" +
+	"\x12PROTOCOL_HYSTERIA2\x10\x03\x12\x18\n" +
+	"\x14PROTOCOL_SHADOWSOCKS\x10\x04*\xbe\x01\n" +
 	"\fRuntimeState\x12\x1d\n" +
 	"\x19RUNTIME_STATE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16RUNTIME_STATE_STARTING\x10\x01\x12\"\n" +

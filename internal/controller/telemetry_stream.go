@@ -248,6 +248,8 @@ func xrayProtocolName(protocol xrayruntimev1.Protocol) string {
 		return "vmess"
 	case xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2:
 		return "hysteria2"
+	case xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS:
+		return "shadowsocks"
 	default:
 		return ""
 	}

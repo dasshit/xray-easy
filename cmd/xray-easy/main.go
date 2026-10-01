@@ -49,6 +49,7 @@ type server struct {
 	configDir        string
 	publicPort       int
 	vmessPort        int
+	shadowsocksPort  int
 	dataDir          string
 	maintenancePath  string
 	defaultAPIListen string
@@ -98,6 +99,12 @@ type hysteriaHandlerAPI interface {
 type vmessHandlerAPI interface {
 	AddVMessUser(context.Context, string, string) error
 	RemoveVMessUser(context.Context, string) error
+	UsersInInbound(context.Context, string) ([]string, error)
+}
+
+type shadowsocksHandlerAPI interface {
+	AddShadowsocksUser(context.Context, string, string, string) error
+	RemoveShadowsocksUser(context.Context, string) error
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
@@ -238,6 +245,7 @@ type clientResponse struct {
 	VLESS             *clientAccessResponse `json:"vless,omitempty"`
 	Hysteria2         *clientAccessResponse `json:"hysteria2,omitempty"`
 	VMess             *clientAccessResponse `json:"vmess,omitempty"`
+	Shadowsocks       *clientAccessResponse `json:"shadowsocks,omitempty"`
 	ID                string                `json:"id"`
 	Name              string                `json:"name"`
 	ClientFingerprint string                `json:"fingerprint,omitempty"`
@@ -329,6 +337,11 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		_ = db.Close()
 		return nil, nil, err
 	}
+	shadowsocksPort, err := configuredShadowsocksPort()
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, err
+	}
 	apiListen := envOr("XRAY_API_LISTEN", "172.31.241.2:10085")
 	address := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR"))
 	if address == "" {
@@ -350,6 +363,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		configDir:        configDir,
 		publicPort:       publicPort,
 		vmessPort:        vmessPort,
+		shadowsocksPort:  shadowsocksPort,
 		dataDir:          dataDir,
 		maintenancePath:  filepath.Join(dataDir, "maintenance.lock"),
 		defaultAPIListen: apiListen,
@@ -740,7 +754,10 @@ func applyRestoredStateWithRuntime(ctx context.Context, db *store.Store, masterK
 	if err != nil {
 		return err
 	}
-	xrayClients := xray.ClientsFromDomain(clients)
+	xrayClients, err := rendererClientsWithSecrets(masterKey, clients)
+	if err != nil {
+		return err
+	}
 	if err := db.SeedReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
 		return err
 	}
@@ -831,6 +848,36 @@ func configuredVMessPort() (int, error) {
 	}
 	if port == uiPort {
 		return 0, errors.New("XRAY_VMESS_PORT must differ from XRAY_EASY_UI_PORT")
+	}
+	return port, nil
+}
+
+func configuredShadowsocksPort() (int, error) {
+	value := envOr("XRAY_SHADOWSOCKS_PORT", "8388")
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, errors.New("XRAY_SHADOWSOCKS_PORT must be an integer between 1 and 65535")
+	}
+	publicPort, err := configuredPublicPort()
+	if err != nil {
+		return 0, err
+	}
+	if port == publicPort {
+		return 0, errors.New("XRAY_SHADOWSOCKS_PORT must differ from XRAY_PUBLIC_PORT")
+	}
+	vmessPort, err := configuredVMessPort()
+	if err != nil {
+		return 0, err
+	}
+	if port == vmessPort {
+		return 0, errors.New("XRAY_SHADOWSOCKS_PORT must differ from XRAY_VMESS_PORT")
+	}
+	uiPort, err := strconv.Atoi(envOr("XRAY_EASY_UI_PORT", "8080"))
+	if err != nil || uiPort < 1 || uiPort > 65535 {
+		return 0, errors.New("XRAY_EASY_UI_PORT must be an integer between 1 and 65535")
+	}
+	if port == uiPort {
+		return 0, errors.New("XRAY_SHADOWSOCKS_PORT must differ from XRAY_EASY_UI_PORT")
 	}
 	return port, nil
 }
@@ -1896,6 +1943,7 @@ func clientsFingerprint(clients []domain.Client) string {
 			client.ID, client.Protocol, client.UUID, client.HysteriaAuth, client.Enabled, client.Revoked,
 			client.VLESSEnabled, client.VLESSRevoked, client.HysteriaEnabled, client.HysteriaRevoked)
 		fmt.Fprintf(&value, "%t\x00%t\n", client.VMessEnabled, client.VMessRevoked)
+		fmt.Fprintf(&value, "%t\x00%t\x00%s\n", client.ShadowsocksEnabled, client.ShadowsocksRevoked, client.ShadowsocksPasswordEnc)
 	}
 	hash := sha256.Sum256([]byte(value.String()))
 	return hex.EncodeToString(hash[:])
@@ -1986,8 +2034,8 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	if protocol == "" {
 		protocol = domain.ProtocolVLESS
 	}
-	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 && protocol != domain.ProtocolVMess && protocol != domain.ProtocolAmneziaWG {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless, vmess, hysteria2, or amneziawg"})
+	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 && protocol != domain.ProtocolVMess && protocol != domain.ProtocolShadowsocks && protocol != domain.ProtocolAmneziaWG {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless, vmess, hysteria2, shadowsocks, or amneziawg"})
 		return
 	}
 	if protocol == domain.ProtocolAmneziaWG {
@@ -2036,10 +2084,16 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": err.Error()})
 			return
 		}
-	} else {
+	} else if protocol == domain.ProtocolVMess {
 		status, statusErr := s.hysteriaSettingsStatus(r.Context())
 		if statusErr != nil || status.CertificateError != "" || status.Certificate == nil {
 			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "a valid TLS certificate matching the VMess server name must be configured in Hysteria 2 Settings"})
+			return
+		}
+	} else if protocol == domain.ProtocolShadowsocks {
+		ss, settingsErr := configuredShadowsocksSettings()
+		if settingsErr != nil || !ss.Enabled {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "transport_disabled", "error": "Shadowsocks is disabled; enable it in the environment and restart the stack"})
 			return
 		}
 	}
@@ -2129,6 +2183,16 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		return domain.Client{}, err
 	}
 	client.Email = "device-" + clientID + "-" + string(protocol) + "@xray-easy"
+	if protocol == domain.ProtocolShadowsocks {
+		password, generationErr := newShadowsocksPassword()
+		if generationErr != nil {
+			return domain.Client{}, generationErr
+		}
+		client.ShadowsocksPasswordEnc, err = secret.Seal(s.masterKey, password, "shadowsocks_password")
+		if err != nil {
+			return domain.Client{}, fmt.Errorf("encrypt Shadowsocks password: %w", err)
+		}
+	}
 	shortID, replaceInbound := "", false
 	switch protocol {
 	case domain.ProtocolVLESS:
@@ -2144,13 +2208,19 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		}
 	case domain.ProtocolHysteria2:
 		err = s.store.CreateHysteriaClient(ctx, client)
+	case domain.ProtocolShadowsocks:
+		err = s.store.CreateShadowsocksClient(ctx, client)
 	default:
-		return domain.Client{}, errors.New("new profiles must use VLESS, VMess, or Hysteria 2")
+		return domain.Client{}, errors.New("new profiles must use VLESS, VMess, Hysteria 2, or Shadowsocks")
 	}
 	if err != nil {
 		return domain.Client{}, fmt.Errorf("create client: %w", err)
 	}
 	client.ShortID = shortID
+	if protocol == domain.ProtocolShadowsocks && mustDecryptShadowsocksPassword(s.masterKey, client) == "" {
+		_ = s.store.DeleteClient(ctx, clientID)
+		return domain.Client{}, errors.New("could not decrypt Shadowsocks password")
+	}
 	clients = append(clients, client)
 	reserved, err := s.store.ListReservedShortIDs(ctx)
 	if err != nil {
@@ -2171,7 +2241,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	activePath := filepath.Join(s.configDir, "active.json")
 	usedReplace := protocol == domain.ProtocolVLESS && replaceInbound
-	fullApply, vlessReplaced, vlessAdded, hysteriaAdded, vmessReplaced, vmessAdded := false, false, false, false, false, false
+	fullApply, vlessReplaced, vlessAdded, hysteriaAdded, vmessReplaced, vmessAdded, shadowsocksAdded := false, false, false, false, false, false, false
 	rollbackRuntime := func() {
 		if fullApply {
 			_ = s.xrayRuntime.Apply(ctx, activePath, operationID+"-rollback")
@@ -2197,6 +2267,11 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 				_ = vmess.RemoveVMessUser(ctx, client.Email)
 			}
 		}
+		if shadowsocksAdded {
+			if api, ok := s.handler.(shadowsocksHandlerAPI); ok {
+				_ = api.RemoveShadowsocksUser(ctx, client.Email)
+			}
+		}
 		if vlessAdded {
 			_ = s.handler.RemoveUser(ctx, client.Email)
 		}
@@ -2208,7 +2283,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		_ = s.store.DeleteClient(ctx, clientID)
 		return domain.Client{}, cause
 	}
-	if !hasInboundTag(activePath, "vless-reality") || (s.hysteriaEnabled(ctx) && !hasInboundTag(activePath, xray.HysteriaInboundTag)) {
+	if !hasInboundTag(activePath, "vless-reality") || (s.hysteriaEnabled(ctx) && !hasInboundTag(activePath, xray.HysteriaInboundTag)) || (configuredShadowsocksEnabled() && !hasInboundTag(activePath, xray.ShadowsocksInboundTag)) {
 		usedReplace = false
 		// First enablement of an optional inbound changes the process-level
 		// topology, so use the normal validated Xray runtime apply once.
@@ -2259,6 +2334,21 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		} else {
 			hysteriaAdded = true
 		}
+	} else if protocol == domain.ProtocolShadowsocks {
+		api, ok := s.handler.(shadowsocksHandlerAPI)
+		if !ok {
+			if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		} else if err := api.AddShadowsocksUser(ctx, client.Email, mustDecryptShadowsocksPassword(s.masterKey, client), configuredShadowsocksMethod()); err != nil {
+			if applyErr := s.xrayRuntime.Apply(ctx, path, operationID); applyErr != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		} else {
+			shadowsocksAdded = true
+		}
 	} else {
 		if !hasInboundTag(activePath, xray.VMessInboundTag) {
 			replacer, ok := s.xrayRuntime.(inboundReplacer)
@@ -2295,6 +2385,14 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 }
 
 func newHysteriaAuth() (string, error) {
+	value := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func newShadowsocksPassword() (string, error) {
 	value := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, value); err != nil {
 		return "", err
@@ -2353,10 +2451,12 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 	hysteriaChanged := stateChanged(client, next, domain.ProtocolHysteria2)
 	vlessChanged := stateChanged(client, next, domain.ProtocolVLESS)
 	vmessChanged := stateChanged(client, next, domain.ProtocolVMess)
+	shadowsocksChanged := stateChanged(client, next, domain.ProtocolShadowsocks)
 	vlessRevoked := client.HasVLESS() && !client.VLESSRevoked && next.VLESSRevoked
 	hysteriaEnabled := s.hysteriaEnabled(r.Context())
 	vmessInboundChanged := hasInboundTag(activePath, xray.VMessInboundTag) != hasInboundTag(path, xray.VMessInboundTag)
-	needsFullApply := !hasInboundTag(activePath, "vless-reality") || (hysteriaEnabled && !hasInboundTag(activePath, xray.HysteriaInboundTag))
+	shadowsocksInboundChanged := hasInboundTag(activePath, xray.ShadowsocksInboundTag) != hasInboundTag(path, xray.ShadowsocksInboundTag)
+	needsFullApply := !hasInboundTag(activePath, "vless-reality") || (hysteriaEnabled && !hasInboundTag(activePath, xray.HysteriaInboundTag)) || (configuredShadowsocksEnabled() && !hasInboundTag(activePath, xray.ShadowsocksInboundTag))
 	if hysteriaChanged && hysteriaEnabled {
 		if _, ok := s.handler.(hysteriaHandlerAPI); !ok {
 			needsFullApply = true
@@ -2370,12 +2470,17 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 			needsFullApply = true
 		}
 	}
+	if shadowsocksChanged && !shadowsocksInboundChanged {
+		if _, ok := s.handler.(shadowsocksHandlerAPI); !ok {
+			needsFullApply = true
+		}
+	}
 	replacer, canReplace := s.xrayRuntime.(inboundReplacer)
 	if (vlessRevoked || vmessInboundChanged) && !canReplace {
 		needsFullApply = true
 	}
 	fullApplied, vlessReplaced := false, false
-	vlessAdded, vlessRemoved, hysteriaAdded, hysteriaRemoved, vmessAdded, vmessRemoved, vmessReplaced := false, false, false, false, false, false, false
+	vlessAdded, vlessRemoved, hysteriaAdded, hysteriaRemoved, vmessAdded, vmessRemoved, vmessReplaced, shadowsocksAdded, shadowsocksRemoved := false, false, false, false, false, false, false, false, false
 	rollbackRuntime := func() {
 		if fullApplied {
 			if rollbackErr := s.xrayRuntime.Apply(r.Context(), activePath, operationID+"-rollback"); rollbackErr != nil {
@@ -2414,6 +2519,15 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 					_ = api.RemoveVMessUser(r.Context(), client.Email)
 				} else {
 					_ = api.AddVMessUser(r.Context(), client.Email, client.UUID)
+				}
+			}
+		}
+		if shadowsocksAdded || shadowsocksRemoved {
+			if api, ok := s.handler.(shadowsocksHandlerAPI); ok {
+				if shadowsocksAdded {
+					_ = api.RemoveShadowsocksUser(r.Context(), client.Email)
+				} else {
+					_ = api.AddShadowsocksUser(r.Context(), client.Email, mustDecryptShadowsocksPassword(s.masterKey, client), configuredShadowsocksMethod())
 				}
 			}
 		}
@@ -2493,6 +2607,32 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 				vmessRemoved = true
 			}
 		}
+		if shadowsocksInboundChanged {
+			if err := replacer.ReplaceInbound(r.Context(), path, activePath, xray.ShadowsocksInboundTag, operationID); err != nil {
+				failApply(err)
+				return
+			}
+		} else if shadowsocksChanged {
+			api := s.handler.(shadowsocksHandlerAPI)
+			password := mustDecryptShadowsocksPassword(s.masterKey, next)
+			if password == "" {
+				failApply(errors.New("Shadowsocks password is unavailable"))
+				return
+			}
+			if next.ShadowsocksCanConnect() {
+				if err := api.AddShadowsocksUser(r.Context(), client.Email, password, configuredShadowsocksMethod()); err != nil {
+					failApply(err)
+					return
+				}
+				shadowsocksAdded = true
+			} else {
+				if err := api.RemoveShadowsocksUser(r.Context(), client.Email); err != nil {
+					failApply(err)
+					return
+				}
+				shadowsocksRemoved = true
+			}
+		}
 	}
 	if err := s.store.SetClientProtocolStates(r.Context(), client.ID, states); err != nil {
 		failApply(err)
@@ -2511,7 +2651,7 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 func transitionClientAccesses(client domain.Client, action domain.ClientAction) (map[domain.ClientProtocol]domain.ClientState, domain.Client, error) {
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
 	next := client
-	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess} {
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks} {
 		state, err := client.AccessState(protocol)
 		if err != nil {
 			continue
@@ -2534,15 +2674,17 @@ func transitionClientAccesses(client domain.Client, action domain.ClientAction) 
 			next.VLESSEnabled, next.VLESSRevoked = state.Enabled, state.Revoked
 		} else if protocol == domain.ProtocolHysteria2 {
 			next.HysteriaEnabled, next.HysteriaRevoked = state.Enabled, state.Revoked
-		} else {
+		} else if protocol == domain.ProtocolVMess {
 			next.VMessEnabled, next.VMessRevoked = state.Enabled, state.Revoked
+		} else {
+			next.ShadowsocksEnabled, next.ShadowsocksRevoked = state.Enabled, state.Revoked
 		}
 	}
 	if len(states) == 0 {
 		return nil, domain.Client{}, errors.New("profile has no supported protocol access")
 	}
-	next.Enabled = (next.HasVLESS() && next.VLESSEnabled && !next.VLESSRevoked) || (next.HasHysteria2() && next.HysteriaEnabled && !next.HysteriaRevoked) || (next.HasVMess() && next.VMessEnabled && !next.VMessRevoked)
-	next.Revoked = (!next.HasVLESS() || next.VLESSRevoked) && (!next.HasHysteria2() || next.HysteriaRevoked) && (!next.HasVMess() || next.VMessRevoked)
+	next.Enabled = (next.HasVLESS() && next.VLESSEnabled && !next.VLESSRevoked) || (next.HasHysteria2() && next.HysteriaEnabled && !next.HysteriaRevoked) || (next.HasVMess() && next.VMessEnabled && !next.VMessRevoked) || (next.HasShadowsocks() && next.ShadowsocksEnabled && !next.ShadowsocksRevoked)
+	next.Revoked = (!next.HasVLESS() || next.VLESSRevoked) && (!next.HasHysteria2() || next.HysteriaRevoked) && (!next.HasVMess() || next.VMessRevoked) && (!next.HasShadowsocks() || next.ShadowsocksRevoked)
 	return states, next, nil
 }
 
@@ -2554,7 +2696,7 @@ func stateChanged(before, after domain.Client, protocol domain.ClientProtocol) b
 
 func previousAccessStates(client domain.Client) map[domain.ClientProtocol]domain.ClientState {
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
-	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess} {
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks} {
 		if state, err := client.AccessState(protocol); err == nil {
 			states[protocol] = state
 		}
@@ -2598,6 +2740,10 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 		if client.HasVMess() {
 			response.Protocols = append(response.Protocols, string(domain.ProtocolVMess))
 			response.VMess = &clientAccessResponse{Enabled: client.VMessEnabled, Revoked: client.VMessRevoked}
+		}
+		if client.HasShadowsocks() {
+			response.Protocols = append(response.Protocols, string(domain.ProtocolShadowsocks))
+			response.Shadowsocks = &clientAccessResponse{Enabled: client.ShadowsocksEnabled, Revoked: client.ShadowsocksRevoked}
 		}
 		result = append(result, response)
 	}
@@ -2672,6 +2818,7 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 	activeVLESS := make(map[string]domain.Client)
 	activeHysteria := make(map[string]domain.Client)
 	activeVMess := make(map[string]domain.Client)
+	activeShadowsocks := make(map[string]domain.Client)
 	for _, client := range clients {
 		if client.VLESSCanConnect() {
 			activeVLESS[client.Email] = client
@@ -2681,6 +2828,9 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 		}
 		if client.VMessCanConnect() {
 			activeVMess[client.Email] = client
+		}
+		if client.ShadowsocksCanConnect() {
+			activeShadowsocks[client.Email] = client
 		}
 	}
 	runningSet := make(map[string]struct{}, len(running))
@@ -2754,6 +2904,37 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 			}
 		}
 	}
+	if configuredShadowsocksEnabled() {
+		ss, ok := s.handler.(shadowsocksHandlerAPI)
+		if !ok {
+			return errors.New("Shadowsocks HandlerService is unavailable")
+		}
+		users, err := ss.UsersInInbound(ctx, xray.ShadowsocksInboundTag)
+		if err != nil {
+			return err
+		}
+		runningSS := make(map[string]struct{}, len(users))
+		for _, email := range users {
+			runningSS[email] = struct{}{}
+			if _, ok := activeShadowsocks[email]; !ok {
+				if err := ss.RemoveShadowsocksUser(ctx, email); err != nil {
+					return err
+				}
+			}
+		}
+		for email, client := range activeShadowsocks {
+			if _, ok := runningSS[email]; ok {
+				continue
+			}
+			password := mustDecryptShadowsocksPassword(s.masterKey, client)
+			if password == "" {
+				return errors.New("Shadowsocks password is unavailable")
+			}
+			if err := ss.AddShadowsocksUser(ctx, email, password, configuredShadowsocksMethod()); err != nil {
+				return err
+			}
+		}
+	}
 	if err := s.reconcilePersistedClientConfigLocked(ctx, clients); err != nil {
 		return fmt.Errorf("persist reconciled client state: %w", err)
 	}
@@ -2804,8 +2985,9 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 			Tag      string `json:"tag"`
 			Settings struct {
 				Clients []struct {
-					ID    string `json:"id"`
-					Email string `json:"email"`
+					ID     string `json:"id"`
+					Email  string `json:"email"`
+					Method string `json:"method"`
 				} `json:"clients"`
 				Users []struct {
 					Auth  string `json:"auth"`
@@ -2820,6 +3002,7 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 	wantVLESS := make(map[string]struct{})
 	wantHysteria := make(map[string]struct{})
 	wantVMess := make(map[string]struct{})
+	wantShadowsocks := make(map[string]struct{})
 	for _, client := range clients {
 		if client.VLESSCanConnect() && client.UUID != "" {
 			wantVLESS[client.Email+"\x00"+client.UUID] = struct{}{}
@@ -2830,9 +3013,13 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 		if client.VMessCanConnect() && client.UUID != "" {
 			wantVMess[client.Email+"\x00"+client.UUID] = struct{}{}
 		}
+		if client.ShadowsocksCanConnect() {
+			wantShadowsocks[client.Email] = struct{}{}
+		}
 	}
 	var vless, hysteria, vmess []string
-	foundHysteria, foundVMess := false, false
+	var shadowsocks []string
+	foundHysteria, foundVMess, foundShadowsocks := false, false, false
 	for _, inbound := range config.Inbounds {
 		if inbound.Tag == "vless-reality" {
 			for _, client := range inbound.Settings.Clients {
@@ -2851,6 +3038,12 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 				vmess = append(vmess, client.Email+"\x00"+client.ID)
 			}
 		}
+		if inbound.Tag == xray.ShadowsocksInboundTag {
+			foundShadowsocks = true
+			for _, client := range inbound.Settings.Clients {
+				shadowsocks = append(shadowsocks, client.Email)
+			}
+		}
 	}
 	if !stringSliceMatchesSet(vless, wantVLESS) {
 		return false
@@ -2863,12 +3056,29 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 	if foundVMess != vmessInboundExpected(clients) || !stringSliceMatchesSet(vmess, wantVMess) {
 		return false
 	}
+	if configuredShadowsocksEnabled() {
+		if !foundShadowsocks || !stringSliceMatchesSet(shadowsocks, wantShadowsocks) {
+			return false
+		}
+	}
 	return true
 }
 
 func vmessInboundExpected(clients []domain.Client) bool {
 	for _, client := range clients {
 		if client.HasVMess() && !client.VMessRevoked {
+			return true
+		}
+	}
+	return false
+}
+
+func shadowsocksInboundExpected(clients []domain.Client) bool {
+	if !configuredShadowsocksEnabled() {
+		return false
+	}
+	for _, client := range clients {
+		if client.HasShadowsocks() && !client.ShadowsocksRevoked {
 			return true
 		}
 	}
@@ -2935,7 +3145,8 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	vlessIDsChanged := !sameStringSet(currentSet, expectedSet)
 	hysteriaTopologyChanged := hasInboundTag(activePath, xray.HysteriaInboundTag) != s.hysteriaEnabled(ctx)
 	vmessTopologyChanged := hasInboundTag(activePath, xray.VMessInboundTag) != vmessInboundExpected(clients)
-	if hysteriaTopologyChanged || vmessTopologyChanged {
+	shadowsocksTopologyChanged := hasInboundTag(activePath, xray.ShadowsocksInboundTag) != shadowsocksInboundExpected(clients)
+	if hysteriaTopologyChanged || vmessTopologyChanged || shadowsocksTopologyChanged {
 		needApply = true
 	}
 	if !needApply {
@@ -2949,12 +3160,15 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	fullApply := false
 	replacer, canReplace := s.xrayRuntime.(inboundReplacer)
-	changedTags := make([]string, 0, 2)
+	changedTags := make([]string, 0, 3)
 	if vlessIDsChanged {
 		changedTags = append(changedTags, "vless-reality")
 	}
 	if vmessTopologyChanged {
 		changedTags = append(changedTags, xray.VMessInboundTag)
+	}
+	if shadowsocksTopologyChanged {
+		changedTags = append(changedTags, xray.ShadowsocksInboundTag)
 	}
 	if !hasInboundTag(activePath, "vless-reality") || hysteriaTopologyChanged || !canReplace {
 		fullApply = true
@@ -3122,7 +3336,10 @@ func (s *server) prepareCandidateWithReservedLocked(ctx context.Context, setting
 }
 
 func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, reserved []string, hysteriaSettings domain.HysteriaSettings) (string, string, error) {
-	xrayClients := xray.ClientsFromDomain(clients)
+	xrayClients, err := rendererClientsWithSecrets(s.masterKey, clients)
+	if err != nil {
+		return "", "", err
+	}
 	renderSettings := rendererSettingsWithHysteria(settings, privateKey, hysteriaSettings)
 	renderSettings.ReservedShortIDs = append([]string(nil), reserved...)
 	rendered, err := xray.RenderServerConfig(renderSettings, xrayClients)
@@ -3151,6 +3368,32 @@ func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, setting
 	return path, operationID, nil
 }
 
+func rendererClientsWithSecrets(masterKey []byte, clients []domain.Client) ([]xray.Client, error) {
+	result := xray.ClientsFromDomain(clients)
+	for index := range clients {
+		if clients[index].ShadowsocksPasswordEnc == "" {
+			continue
+		}
+		password, err := secret.Open(masterKey, clients[index].ShadowsocksPasswordEnc, "shadowsocks_password")
+		if err != nil {
+			return nil, fmt.Errorf("decrypt Shadowsocks password for client %s", clients[index].ID)
+		}
+		result[index].ShadowsocksPassword = password
+	}
+	return result, nil
+}
+
+func mustDecryptShadowsocksPassword(masterKey []byte, client domain.Client) string {
+	if client.ShadowsocksPasswordEnc == "" {
+		return ""
+	}
+	value, err := secret.Open(masterKey, client.ShadowsocksPasswordEnc, "shadowsocks_password")
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
 func (s *server) traceApplyOperation(ctx context.Context, operationID string) context.Context {
 	ctx = interaction.WithOperationID(ctx, operationID)
 	operation, err := s.store.GetApplyOperation(ctx, operationID)
@@ -3168,7 +3411,30 @@ func rendererSettingsWithHysteria(settings domain.Settings, privateKey string, h
 	result := xray.SettingsFromDomain(settings, privateKey)
 	xray.ApplyHysteriaSettings(&result, hysteriaSettings)
 	result.VMessPublicPort, _ = configuredVMessPort()
+	shadowsocks, _ := configuredShadowsocksSettings()
+	xray.ApplyShadowsocksSettings(&result, shadowsocks)
 	return result
+}
+
+func configuredShadowsocksSettings() (domain.ShadowsocksSettings, error) {
+	port, err := configuredShadowsocksPort()
+	if err != nil {
+		return domain.ShadowsocksSettings{}, err
+	}
+	return domain.ShadowsocksSettings{
+		Enabled:    strings.EqualFold(strings.TrimSpace(envOr("XRAY_SHADOWSOCKS_ENABLED", "false")), "true"),
+		PublicPort: port,
+		Method:     envOr("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305),
+		Network:    envOr("XRAY_SHADOWSOCKS_NETWORK", domain.ShadowsocksNetworkTCPUDP),
+	}, nil
+}
+
+func configuredShadowsocksEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(envOr("XRAY_SHADOWSOCKS_ENABLED", "false")), "true")
+}
+
+func configuredShadowsocksMethod() string {
+	return envOr("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305)
 }
 
 func hysteria2Enabled() bool {
@@ -3291,7 +3557,16 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		}
 		renderSettings.HysteriaTLSFingerprint = certificate.Fingerprint
 	}
-	profile, err := xray.BuildProfile(renderSettings, xray.ClientFromDomain(client))
+	renderClient := xray.ClientFromDomain(client)
+	if client.ShadowsocksPasswordEnc != "" {
+		password := mustDecryptShadowsocksPassword(s.masterKey, client)
+		if password == "" {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt Shadowsocks password"})
+			return
+		}
+		renderClient.ShadowsocksPassword = password
+	}
+	profile, err := xray.BuildProfile(renderSettings, renderClient)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
@@ -3301,13 +3576,17 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 	format := r.URL.Query().Get("format")
 	switch format {
 	case "json":
-		if len(profile.JSON) == 0 {
+		jsonProfile := profile.JSON
+		if client.Protocol == domain.ProtocolShadowsocks {
+			jsonProfile = profile.ShadowsocksJSON
+		}
+		if len(jsonProfile) == 0 {
 			writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_format_unavailable", "error": "JSON profile is unavailable for this device"})
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Content-Disposition", `attachment; filename="`+client.Name+`.json"`)
-		_, _ = w.Write(profile.JSON)
+		_, _ = w.Write(jsonProfile)
 	case "qr":
 		if profile.URI == "" {
 			writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_format_unavailable", "error": "VLESS is not available for this profile"})
@@ -3344,6 +3623,18 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		}
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(png)
+	case "ss-qr":
+		if profile.ShadowsocksURI == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "Shadowsocks is not enabled"})
+			return
+		}
+		png, err := qrcode.Encode(profile.ShadowsocksURI, qrcode.Medium, 512)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encode Shadowsocks QR"})
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(png)
 	default:
 		response := map[string]any{"client_id": client.ID, "protocol": client.Protocol, "name": profile.Name}
 		if client.Protocol == domain.ProtocolLegacyDual || client.Protocol == "" {
@@ -3369,6 +3660,11 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 			response["vmess_uri"] = profile.VMessURI
 			if len(profile.JSON) > 0 {
 				response["json"] = json.RawMessage(profile.JSON)
+			}
+		} else if client.Protocol == domain.ProtocolShadowsocks {
+			response["ss_uri"] = profile.ShadowsocksURI
+			if len(profile.ShadowsocksJSON) > 0 {
+				response["json"] = json.RawMessage(profile.ShadowsocksJSON)
 			}
 		}
 		writeJSON(w, http.StatusOK, response)

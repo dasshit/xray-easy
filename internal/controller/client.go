@@ -193,6 +193,18 @@ func (c *Client) AddVMessUser(ctx context.Context, email, id string) error {
 	return err
 }
 
+// AddShadowsocksUser installs a classic Shadowsocks password with its AEAD method.
+func (c *Client) AddShadowsocksUser(ctx context.Context, email, password, method string) error {
+	_, err := c.call(ctx, "AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "shadowsocks", Email: email, Id: password, Method: method})
+	return err
+}
+
+// RemoveShadowsocksUser revokes a Shadowsocks user from Xray.
+func (c *Client) RemoveShadowsocksUser(ctx context.Context, email string) error {
+	_, err := c.call(ctx, "RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{Protocol: "shadowsocks", Email: email})
+	return err
+}
+
 // RemoveVMessUser revokes a VMess user from Xray.
 func (c *Client) RemoveVMessUser(ctx context.Context, email string) error {
 	_, err := c.call(ctx, "RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{Protocol: "vmess", Email: email})

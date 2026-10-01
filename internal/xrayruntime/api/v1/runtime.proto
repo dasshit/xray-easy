@@ -43,6 +43,7 @@ enum Protocol {
   PROTOCOL_VLESS = 1;
   PROTOCOL_VMESS = 2;
   PROTOCOL_HYSTERIA2 = 3;
+  PROTOCOL_SHADOWSOCKS = 4;
 }
 
 enum RuntimeState {
@@ -119,6 +120,8 @@ message AddUserRequest {
   // Zero denotes idempotent runtime user-roster convergence without a
   // persisted config revision. Positive revisions are fenced and committed.
   int64 revision = 6;
+  // Classic Shadowsocks method, for example chacha20-poly1305.
+  string shadowsocks_method = 7;
 }
 
 message RemoveUserRequest {

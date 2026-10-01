@@ -23,6 +23,7 @@ import (
 	xrayserial "github.com/xtls/xray-core/infra/conf/serial"
 	"github.com/xtls/xray-core/proxy"
 	hysteriaaccount "github.com/xtls/xray-core/proxy/hysteria/account"
+	shadowsocks "github.com/xtls/xray-core/proxy/shadowsocks"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
 	"google.golang.org/protobuf/proto"
@@ -261,11 +262,17 @@ func (e *Engine) ReplaceInbound(ctx context.Context, tag string, configuration [
 // AddUser inserts a protocol user or reports that the matching user already
 // exists. A conflicting credential for the same email is rejected.
 func (e *Engine) AddUser(ctx context.Context, protocolType xrayruntimev1.Protocol, tag, email, credential, flow string) (bool, error) {
+	return e.AddUserWithMethod(ctx, protocolType, tag, email, credential, flow, "")
+}
+
+// AddUserWithMethod inserts a user and supplies the classic Shadowsocks
+// cipher when that protocol is selected. Other protocols ignore method.
+func (e *Engine) AddUserWithMethod(ctx context.Context, protocolType xrayruntimev1.Protocol, tag, email, credential, flow, method string) (bool, error) {
 	manager, err := e.userManager(ctx, tag)
 	if err != nil {
 		return false, err
 	}
-	account, err := accountFor(protocolType, credential, flow)
+	account, err := accountForWithMethod(protocolType, credential, flow, method)
 	if err != nil {
 		return false, err
 	}
@@ -352,6 +359,10 @@ func (e *Engine) userManager(ctx context.Context, tag string) (proxy.UserManager
 }
 
 func accountFor(protocolType xrayruntimev1.Protocol, credential, flow string) (protocol.Account, error) {
+	return accountForWithMethod(protocolType, credential, flow, "")
+}
+
+func accountForWithMethod(protocolType xrayruntimev1.Protocol, credential, flow, method string) (protocol.Account, error) {
 	var account protocol.Account
 	var err error
 	switch protocolType {
@@ -376,6 +387,15 @@ func accountFor(protocolType xrayruntimev1.Protocol, credential, flow string) (p
 			return nil, errors.New("Hysteria 2 does not accept a flow")
 		}
 		account, err = (&hysteriaaccount.Account{Auth: credential}).AsAccount()
+	case xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS:
+		if flow != "" {
+			return nil, errors.New("Shadowsocks does not accept a flow")
+		}
+		cipherType, ok := shadowsocksCipherType(method)
+		if !ok {
+			return nil, errors.New("unsupported Shadowsocks method")
+		}
+		account, err = (&shadowsocks.Account{Password: credential, CipherType: cipherType}).AsAccount()
 	default:
 		return nil, errors.New("unsupported Xray protocol")
 	}
@@ -383,6 +403,19 @@ func accountFor(protocolType xrayruntimev1.Protocol, credential, flow string) (p
 		return nil, errors.New("invalid Xray user credential")
 	}
 	return account, nil
+}
+
+func shadowsocksCipherType(method string) (shadowsocks.CipherType, bool) {
+	switch strings.ToLower(strings.TrimSpace(method)) {
+	case "aes-128-gcm":
+		return shadowsocks.CipherType_AES_128_GCM, true
+	case "aes-256-gcm":
+		return shadowsocks.CipherType_AES_256_GCM, true
+	case "chacha20-poly1305":
+		return shadowsocks.CipherType_CHACHA20_POLY1305, true
+	default:
+		return shadowsocks.CipherType_UNKNOWN, false
+	}
 }
 
 // Version reports the embedded Xray-core version.
@@ -495,7 +528,7 @@ func ConfiguredProtocols(configuration []byte) ([]string, error) {
 	var result []string
 	for _, inbound := range document.Inbounds {
 		protocol := inbound.Protocol
-		if protocol != "vless" && protocol != "vmess" && protocol != "hysteria" {
+		if protocol != "vless" && protocol != "vmess" && protocol != "hysteria" && protocol != "shadowsocks" {
 			continue
 		}
 		if protocol == "hysteria" {

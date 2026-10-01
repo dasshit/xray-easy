@@ -305,14 +305,29 @@ func (c *EmbeddedXrayClient) RemoveVMessUser(ctx context.Context, email string) 
 	return c.mutateUser(ctx, xrayruntimev1.Protocol_PROTOCOL_VMESS, email, "", "", false)
 }
 
+// AddShadowsocksUser installs a classic Shadowsocks credential with its
+// configured AEAD method into the embedded runtime.
+func (c *EmbeddedXrayClient) AddShadowsocksUser(ctx context.Context, email, password, method string) error {
+	return c.mutateUserWithMethod(ctx, xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, email, password, "", method, true)
+}
+
+// RemoveShadowsocksUser revokes a Shadowsocks user from the inbound.
+func (c *EmbeddedXrayClient) RemoveShadowsocksUser(ctx context.Context, email string) error {
+	return c.mutateUserWithMethod(ctx, xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, email, "", "", "", false)
+}
+
 func (c *EmbeddedXrayClient) mutateUser(ctx context.Context, protocol xrayruntimev1.Protocol, email, credential, flow string, add bool) error {
+	return c.mutateUserWithMethod(ctx, protocol, email, credential, flow, "", add)
+}
+
+func (c *EmbeddedXrayClient) mutateUserWithMethod(ctx context.Context, protocol xrayruntimev1.Protocol, email, credential, flow, method string, add bool) error {
 	ctx, _, err := interaction.OutgoingContext(ctx)
 	if err != nil {
 		return fmt.Errorf("create embedded Xray operation ID: %w", err)
 	}
 	operationID, revision := interaction.OperationID(ctx), interaction.StateRevision(ctx)
 	if add {
-		request := &xrayruntimev1.AddUserRequest{Protocol: protocol, Email: email, Credential: credential, Flow: flow, OperationId: operationID, Revision: revision}
+		request := &xrayruntimev1.AddUserRequest{Protocol: protocol, Email: email, Credential: credential, Flow: flow, ShadowsocksMethod: method, OperationId: operationID, Revision: revision}
 		response, callErr := c.call(ctx, embeddedControlIdentity, xrayruntimev1.Runtime_AddUser_FullMethodName, request, func(ctx context.Context, request proto.Message) (proto.Message, error) {
 			return c.rpc.AddUser(ctx, request.(*xrayruntimev1.AddUserRequest))
 		})
@@ -342,6 +357,7 @@ func (c *EmbeddedXrayClient) UsersInInbound(ctx context.Context, inbound string)
 		"vless-reality": xrayruntimev1.Protocol_PROTOCOL_VLESS,
 		"vmess-tls":     xrayruntimev1.Protocol_PROTOCOL_VMESS,
 		"hysteria2":     xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2,
+		"shadowsocks":   xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS,
 	}[inbound]
 	if !ok {
 		return nil, fmt.Errorf("unsupported Xray inbound %q", inbound)

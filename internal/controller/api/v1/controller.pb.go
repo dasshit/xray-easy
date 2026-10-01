@@ -732,6 +732,7 @@ type AddDeviceUserRequest struct {
 	Email         string                 `protobuf:"bytes,2,opt,name=email,proto3" json:"email,omitempty"`
 	Id            string                 `protobuf:"bytes,3,opt,name=id,proto3" json:"id,omitempty"`
 	Flow          string                 `protobuf:"bytes,4,opt,name=flow,proto3" json:"flow,omitempty"`
+	Method        string                 `protobuf:"bytes,5,opt,name=method,proto3" json:"method,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -790,6 +791,13 @@ func (x *AddDeviceUserRequest) GetId() string {
 func (x *AddDeviceUserRequest) GetFlow() string {
 	if x != nil {
 		return x.Flow
+	}
+	return ""
+}
+
+func (x *AddDeviceUserRequest) GetMethod() string {
+	if x != nil {
+		return x.Method
 	}
 	return ""
 }
@@ -2089,12 +2097,13 @@ const file_controller_proto_rawDesc = "" +
 	"\x11ProbeIPv6Response\x12\x0e\n" +
 	"\x02ok\x18\x01 \x01(\bR\x02ok\x129\n" +
 	"\n" +
-	"checked_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcheckedAt\"l\n" +
+	"checked_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\tcheckedAt\"\x84\x01\n" +
 	"\x14AddDeviceUserRequest\x12\x1a\n" +
 	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\x12\x0e\n" +
 	"\x02id\x18\x03 \x01(\tR\x02id\x12\x12\n" +
-	"\x04flow\x18\x04 \x01(\tR\x04flow\"K\n" +
+	"\x04flow\x18\x04 \x01(\tR\x04flow\x12\x16\n" +
+	"\x06method\x18\x05 \x01(\tR\x06method\"K\n" +
 	"\x17RemoveDeviceUserRequest\x12\x1a\n" +
 	"\bprotocol\x18\x01 \x01(\tR\bprotocol\x12\x14\n" +
 	"\x05email\x18\x02 \x01(\tR\x05email\"4\n" +

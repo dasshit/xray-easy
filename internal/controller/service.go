@@ -40,6 +40,8 @@ type XrayHandlerRuntime interface {
 	RemoveHysteriaUser(context.Context, string) error
 	AddVMessUser(context.Context, string, string) error
 	RemoveVMessUser(context.Context, string) error
+	AddShadowsocksUser(context.Context, string, string, string) error
+	RemoveShadowsocksUser(context.Context, string) error
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
@@ -253,6 +255,8 @@ func (s *Service) AddDeviceUser(ctx context.Context, request *controllerv1.AddDe
 		mutationErr = handler.AddHysteriaUser(ctx, request.Email, request.Id)
 	case "vmess":
 		mutationErr = handler.AddVMessUser(ctx, request.Email, request.Id)
+	case "shadowsocks":
+		mutationErr = handler.AddShadowsocksUser(ctx, request.Email, request.Id, request.Method)
 	}
 	if mutationErr != nil {
 		return nil, mutationErr
@@ -290,6 +294,8 @@ func (s *Service) RemoveDeviceUser(ctx context.Context, request *controllerv1.Re
 		mutationErr = handler.RemoveHysteriaUser(ctx, request.Email)
 	case "vmess":
 		mutationErr = handler.RemoveVMessUser(ctx, request.Email)
+	case "shadowsocks":
+		mutationErr = handler.RemoveShadowsocksUser(ctx, request.Email)
 	}
 	if mutationErr != nil {
 		return nil, mutationErr
@@ -305,6 +311,8 @@ func deviceUsers(ctx context.Context, handler XrayHandlerRuntime, protocol strin
 		return handler.UsersInInbound(ctx, "hysteria2")
 	case "vmess":
 		return handler.UsersInInbound(ctx, "vmess-tls")
+	case "shadowsocks":
+		return handler.UsersInInbound(ctx, "shadowsocks")
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", protocol)
 	}
@@ -479,7 +487,7 @@ func (s *Service) xrayHandler() (XrayHandlerRuntime, error) {
 
 func supportedXrayProtocol(protocol string) bool {
 	switch protocol {
-	case "vless", "vmess", "hysteria2":
+	case "vless", "vmess", "hysteria2", "shadowsocks":
 		return true
 	default:
 		return false

@@ -74,6 +74,18 @@ func (f *fakeXrayHandler) RemoveVMessUser(_ context.Context, email string) error
 	f.users = withoutUser(f.users, email)
 	return f.err
 }
+func (f *fakeXrayHandler) AddShadowsocksUser(_ context.Context, email, password, method string) error {
+	f.called, f.args = "add-shadowsocks", []string{email, password, method}
+	f.adds++
+	f.users = append(f.users, email)
+	return f.err
+}
+func (f *fakeXrayHandler) RemoveShadowsocksUser(_ context.Context, email string) error {
+	f.called, f.args = "remove-shadowsocks", []string{email}
+	f.removes++
+	f.users = withoutUser(f.users, email)
+	return f.err
+}
 func (f *fakeXrayHandler) UsersInInbound(_ context.Context, inbound string) ([]string, error) {
 	f.called, f.args = "list-"+inbound, []string{inbound}
 	return f.users, f.err

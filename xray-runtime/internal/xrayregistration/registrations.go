@@ -14,6 +14,7 @@ import (
 	_ "github.com/xtls/xray-core/app/stats"
 	_ "github.com/xtls/xray-core/proxy/freedom"
 	_ "github.com/xtls/xray-core/proxy/hysteria"
+	_ "github.com/xtls/xray-core/proxy/shadowsocks"
 	_ "github.com/xtls/xray-core/proxy/vless/inbound"
 	_ "github.com/xtls/xray-core/proxy/vmess/inbound"
 	_ "github.com/xtls/xray-core/transport/internet/hysteria"

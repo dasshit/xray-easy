@@ -97,6 +97,9 @@ func (e *fakeEngine) AddUser(_ context.Context, _ xrayruntimev1.Protocol, _ stri
 	e.users[email] = credential
 	return false, nil
 }
+func (e *fakeEngine) AddUserWithMethod(ctx context.Context, protocol xrayruntimev1.Protocol, tag, email, credential, flow, _ string) (bool, error) {
+	return e.AddUser(ctx, protocol, tag, email, credential, flow)
+}
 func (e *fakeEngine) RemoveUser(_ context.Context, _ string, email string) (bool, error) {
 	if e.removeErr != nil {
 		return false, e.removeErr

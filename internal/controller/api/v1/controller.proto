@@ -106,6 +106,7 @@ message AddDeviceUserRequest {
   string email = 2;
   string id = 3;
   string flow = 4;
+  string method = 5;
 }
 
 message RemoveDeviceUserRequest {

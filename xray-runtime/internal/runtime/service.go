@@ -50,6 +50,7 @@ type EngineHandle interface {
 	GetTelemetry(context.Context, map[xrayruntimev1.Protocol]string) ([]RuntimeUserTelemetry, error)
 	ReplaceInbound(context.Context, string, []byte) (bool, error)
 	AddUser(context.Context, xrayruntimev1.Protocol, string, string, string, string) (bool, error)
+	AddUserWithMethod(context.Context, xrayruntimev1.Protocol, string, string, string, string, string) (bool, error)
 	RemoveUser(context.Context, string, string) (bool, error)
 	ListUsers(context.Context, string) ([]string, error)
 }
@@ -489,7 +490,7 @@ func (s *Service) AddUser(ctx context.Context, request *xrayruntimev1.AddUserReq
 			return operationResponse(request.GetOperationId(), request.GetRevision(), true), nil
 		}
 	}
-	wasPresent, err := engine.AddUser(ctx, request.GetProtocol(), tag, request.GetEmail(), request.GetCredential(), request.GetFlow())
+	wasPresent, err := engine.AddUserWithMethod(ctx, request.GetProtocol(), tag, request.GetEmail(), request.GetCredential(), request.GetFlow(), request.GetShadowsocksMethod())
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "Xray user could not be added")
 	}
@@ -760,6 +761,8 @@ func protocolFromName(name string) (xrayruntimev1.Protocol, bool) {
 		return xrayruntimev1.Protocol_PROTOCOL_VMESS, true
 	case "hysteria2":
 		return xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, true
+	case "shadowsocks":
+		return xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, true
 	default:
 		return xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, false
 	}
@@ -767,7 +770,7 @@ func protocolFromName(name string) (xrayruntimev1.Protocol, bool) {
 
 func supportedProtocol(protocol xrayruntimev1.Protocol) bool {
 	switch protocol {
-	case xrayruntimev1.Protocol_PROTOCOL_VLESS, xrayruntimev1.Protocol_PROTOCOL_VMESS, xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2:
+	case xrayruntimev1.Protocol_PROTOCOL_VLESS, xrayruntimev1.Protocol_PROTOCOL_VMESS, xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS:
 		return true
 	default:
 		return false
