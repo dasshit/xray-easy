@@ -555,8 +555,9 @@ IPv6 connectivity from the Xray container, not public inbound reachability.
   group/other users. Duplicate authorization metadata is rejected.
 - Pin `XRAY_EASY_IMAGE_TAG` to a tested release (for example `v1.4.1`) in
   production instead of using the development-friendly `latest` default.
-- CI runs `go vet` in every Go module and audits production web dependencies
-  with `npm audit --omit=dev --audit-level=high`.
+- CI runs `go vet` in every Go module, requires Godoc comments for handwritten
+  exported Go APIs, and audits production web dependencies with
+  `npm audit --omit=dev --audit-level=high`.
 
 ## Development
 
@@ -568,6 +569,7 @@ Run the root backend tests and coverage gate:
 
 ~~~sh
 go test ./...
+go run ./scripts/check-go-docs.go
 bash scripts/backend-coverage.sh
 ~~~
 
