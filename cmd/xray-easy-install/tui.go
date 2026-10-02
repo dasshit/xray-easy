@@ -605,6 +605,55 @@ func (w *wizard) shadowsocks(ctx context.Context, cfg configuration) (configurat
 	}
 }
 
+func (w *wizard) trojan(ctx context.Context, cfg configuration) (configuration, error) {
+	w.mu.Lock()
+	w.configPage = "trojan-choice"
+	w.focus = 0
+	w.tlsSelection = 0
+	if cfg.trojanEnabled {
+		w.tlsSelection = 1
+	}
+	if cfg.trojan == 0 {
+		cfg.trojan = defaultTrojanPort(cfg.public, cfg.vmess, cfg.shadowsocks, cfg.ui)
+	}
+	w.config = cfg
+	w.title = "Trojan"
+	w.notice = ""
+	w.renderLocked()
+	w.mu.Unlock()
+	for {
+		key, err := w.key(ctx)
+		if err != nil {
+			return configuration{}, err
+		}
+		w.mu.Lock()
+		if (w.width < 64 || w.height < 22) && key.kind != keyEscape {
+			w.notice = "Enlarge the terminal before continuing."
+			w.renderLocked()
+			w.mu.Unlock()
+			continue
+		}
+		if key.kind == keyEscape {
+			w.mu.Unlock()
+			return configuration{}, errCancelled
+		}
+		switch key.kind {
+		case keyUp, keyLeft, keyDown, keyRight, keyTab:
+			w.tlsSelection = 1 - w.tlsSelection
+		case keyCharacter:
+			if key.char == '1' || key.char == '2' {
+				w.tlsSelection = int(key.char - '1')
+			}
+		case keyEnter:
+			cfg.trojanEnabled = w.tlsSelection == 1
+			w.mu.Unlock()
+			return cfg, nil
+		}
+		w.renderLocked()
+		w.mu.Unlock()
+	}
+}
+
 func (w *wizard) ports(ctx context.Context, publicDefault, uiDefault int) (int, int, error) {
 	defaults := [2]int{publicDefault, uiDefault}
 	for {
@@ -857,6 +906,12 @@ func (w *wizard) renderLocked() {
 				put(12, panelLine("  "+optionText("Enable on TCP + UDP", w.tlsSelection == 1), panelWidth), fieldStyle(w.tlsSelection == 1))
 				put(14, panelLine(fmt.Sprintf("  Public port: %d · method: %s · network: %s", w.config.shadowsocks, valueOr(w.config.shadowsocksMethod, "chacha20-poly1305"), valueOr(w.config.shadowsocksNetwork, "tcp,udp")), panelWidth), "dim")
 				put(15, panelLine("  Allow both TCP and UDP on this port in the VDS firewall.", panelWidth), "dim")
+			case "trojan-choice":
+				put(9, panelLine("  Optional Trojan TCP/TLS inbound", panelWidth), "normal")
+				put(11, panelLine("  "+optionText("Off", w.tlsSelection == 0), panelWidth), fieldStyle(w.tlsSelection == 0))
+				put(12, panelLine("  "+optionText("Enable on TCP", w.tlsSelection == 1), panelWidth), fieldStyle(w.tlsSelection == 1))
+				put(14, panelLine(fmt.Sprintf("  Public port: %d · TLS certificate shared with VMess", w.config.trojan), panelWidth), "dim")
+				put(15, panelLine("  Allow TCP port in the VDS firewall.", panelWidth), "dim")
 			default:
 				put(10, panelLine("  Public Xray TCP / UDP port", panelWidth), "normal")
 				put(11, panelLine("  "+fieldText(w.fields[0], "443", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))
@@ -869,8 +924,9 @@ func (w *wizard) renderLocked() {
 			put(10, panelLine(fmt.Sprintf("  VLESS TCP/UDP:      %d", w.config.public), panelWidth), "normal")
 			put(11, panelLine(fmt.Sprintf("  VMess TCP:          %d", w.config.vmess), panelWidth), "normal")
 			put(12, panelLine(fmt.Sprintf("  Shadowsocks:        %d (%s/%s)", w.config.shadowsocks, valueOr(w.config.shadowsocksMethod, "chacha20-poly1305"), valueOr(w.config.shadowsocksNetwork, "tcp,udp")), panelWidth), "normal")
-			put(13, panelLine(fmt.Sprintf("  Web UI:             127.0.0.1:%d", w.config.ui), panelWidth), "normal")
-			put(14, panelLine("  Compose project:    "+w.config.project, panelWidth), "normal")
+			put(13, panelLine(fmt.Sprintf("  Trojan TCP:         %d (%t)", w.config.trojan, w.config.trojanEnabled), panelWidth), "normal")
+			put(14, panelLine(fmt.Sprintf("  Web UI:             127.0.0.1:%d", w.config.ui), panelWidth), "normal")
+			put(15, panelLine("  Compose project:    "+w.config.project, panelWidth), "normal")
 			hysteriaDescription := "off"
 			if w.config.hysteriaEnabled {
 				hysteriaDescription = w.config.hysteriaMode
@@ -878,12 +934,11 @@ func (w *wizard) renderLocked() {
 					hysteriaDescription += " for " + w.config.hysteriaCertIP
 				}
 			}
-			put(15, panelLine("  Hysteria 2 TLS:     "+hysteriaDescription, panelWidth), "normal")
 			awgDescription := "off"
 			if w.config.awgEnabled {
 				awgDescription = fmt.Sprintf("%s · UDP %d", w.config.awgPublicHost, w.config.awgPublicPort)
 			}
-			put(16, panelLine("  AmneziaWG:          "+awgDescription, panelWidth), "normal")
+			put(16, panelLine("  Hysteria 2: "+hysteriaDescription+" · AmneziaWG: "+awgDescription, panelWidth), "normal")
 			put(17, panelLine("  "+optionText("Build and start", w.choice), panelWidth), fieldStyle(w.choice))
 			put(18, panelLine("  "+optionText("Cancel", !w.choice), panelWidth), fieldStyle(!w.choice))
 		case 4:

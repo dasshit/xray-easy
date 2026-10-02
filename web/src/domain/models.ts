@@ -14,6 +14,8 @@ export type Client = {
   vmess?: ClientProtocolAccess
   /** Access state when the profile includes a Shadowsocks inbound. */
   shadowsocks?: ClientProtocolAccess
+  /** Access state when the profile includes a Trojan inbound. */
+  trojan?: ClientProtocolAccess
   /** Whether the profile is enabled in the active Xray configuration. */
   enabled: boolean
   /** Whether the profile was permanently revoked and cannot be re-enabled. */
@@ -36,7 +38,7 @@ export type Client = {
 }
 
 /** Protocols supported by a device profile, including migrated combined profiles. */
-export type ClientProtocol = 'vless' | 'vmess' | 'hysteria2' | 'shadowsocks' | 'amneziawg' | 'legacy_dual'
+export type ClientProtocol = 'vless' | 'vmess' | 'hysteria2' | 'shadowsocks' | 'trojan' | 'amneziawg' | 'legacy_dual'
 
 /** Enabled and revoked state for one protocol access. */
 export type ClientProtocolAccess = { enabled: boolean; revoked: boolean }
@@ -73,6 +75,10 @@ export type Settings = {
   shadowsocksMethod?: string
   /** Configured Shadowsocks transport networks. */
   shadowsocksNetwork?: string
+  /** Whether the Trojan TCP/TLS inbound is enabled by Compose. */
+  trojanEnabled?: boolean
+  /** Public TCP port mapped to the Trojan inbound. */
+  trojanPublicPort?: number
   realityTarget: string
   realitySni: string
   clientFingerprint: string

@@ -170,6 +170,8 @@ export interface XrayEasyGateway {
     profileVMessQrUrl(clientId: string): string
     /** Build the authenticated URL for a Shadowsocks share URI QR code. */
     profileShadowsocksQrUrl(clientId: string): string
+    /** Build the authenticated URL for a Trojan share URI QR code. */
+    profileTrojanQrUrl(clientId: string): string
     /**
      * Build the authenticated URL for a device’s JSON profile.
      * @param clientId - The internal ID of the device.

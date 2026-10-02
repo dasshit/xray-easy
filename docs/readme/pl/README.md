@@ -177,7 +177,7 @@ bootstrap dependencies; solid arrows show runtime traffic or control calls.
 | --- | --- |
 | `control-plane` | Serves the authenticated Web UI and HTTP API, stores devices and settings in SQLite, prepares Xray configuration, and forwards management and telemetry calls through the Controller. Its port is bound to the VPS loopback interface. |
 | `controller` | Internal protocol adapter. It exposes the stable application gRPC contract, validates revisions, routes commands to the embedded Xray runtime and optional AmneziaWG service, and aggregates health, statistics and telemetry. |
-| `xray-core-service` | Runs the pinned Xray-core version inside the embedded runtime, serves Xray's management APIs through the runtime wrapper, applies active configuration revisions, and carries VLESS, VMess, Hysteria 2 and Shadowsocks traffic. |
+| `xray-core-service` | Runs the pinned Xray-core version inside the embedded runtime, serves Xray's management APIs through the runtime wrapper, applies active configuration revisions, and carries VLESS, VMess, Hysteria 2, Shadowsocks and Trojan traffic. |
 | `amneziawg-service` | Optional AmneziaWG engine. It owns the TUN interface, peer lifecycle and WireGuard telemetry. Enable it with the `awg` Compose profile. |
 | `hysteria-tls-init` | One-shot certificate preparation job. It creates or copies the Hysteria 2 certificate into the shared volume before Xray starts. |
 | `data-init` | Creates the shared application/configuration directories and installs the initial Xray configuration. |
@@ -203,13 +203,15 @@ firewall and the provider security group, for IPv4 and IPv6 where enabled.
 | Hysteria 2 | 443 | UDP | Optional; shares the public port number with VLESS |
 | VMess + TLS | 9443 | TCP | Optional separate Xray inbound |
 | Shadowsocks | 8388 | TCP and UDP | Optional classic AEAD inbound |
+| Trojan + TLS | 10443 | TCP | Optional inbound using the VMess TLS certificate |
 | AmneziaWG | 1234 | UDP | Optional separate service |
 | Web UI | 8080 | TCP, loopback only | Reach through SSH; never open publicly |
 
 Ports are configurable during installation and stored in the root **.env**
 file. Xray uses **XRAY_PUBLIC_PORT** for VLESS TCP and optional Hysteria 2 UDP,
-**XRAY_VMESS_PORT** for VMess TCP and **XRAY_SHADOWSOCKS_PORT** for Shadowsocks
-TCP and UDP. AmneziaWG uses **AWG_PUBLIC_PORT**.
+**XRAY_VMESS_PORT** for VMess TCP, **XRAY_SHADOWSOCKS_PORT** for Shadowsocks
+TCP and UDP, and **XRAY_TROJAN_PORT** for Trojan TCP. AmneziaWG uses
+**AWG_PUBLIC_PORT**.
 
 ## Protocol guide: Xray
 
@@ -227,6 +229,7 @@ other versions as experimental until tested with your clients.
 | Hysteria 2 | UDP + TLS | QR, hysteria2 link |
 | VMess | TCP + TLS, alterId 0 | QR, vmess link, JSON |
 | Shadowsocks | TCP/UDP + classic AEAD | QR, ss link, JSON |
+| Trojan | TCP + TLS | QR, trojan link, JSON |
 
 Each new profile uses one protocol. To give one device multiple transports,
 create a separate profile for each one with the same device name.
@@ -308,6 +311,17 @@ both networks are enabled. Classic Shadowsocks users can be added and removed
 through the live HandlerService without replacing the inbound. Shadowsocks
 does not provide REALITY camouflage; choose it for client compatibility and
 simple UDP/TCP access rather than as a replacement for VLESS + REALITY.
+
+### Trojan + TLS
+
+Trojan is an optional TCP/TLS inbound in the embedded Xray runtime. Enable it
+with **XRAY_TROJAN_ENABLED=true** and choose **XRAY_TROJAN_PORT** (10443 by
+default). It shares the certificate and SNI configured under **Settings →
+Hysteria 2**. Each device receives a unique encrypted password and the panel
+provides a `trojan://` link, QR code and JSON profile. Self-signed or legacy
+certificates use insecure TLS verification in exported profiles; trusted
+certificates keep normal verification. Users are added and removed through the
+live HandlerService when the inbound is already running.
 
 ### Xray status and troubleshooting
 

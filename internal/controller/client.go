@@ -212,6 +212,18 @@ func (c *Client) RemoveShadowsocksUser(ctx context.Context, email string) error 
 	return err
 }
 
+// AddTrojanUser installs a Trojan password into Xray.
+func (c *Client) AddTrojanUser(ctx context.Context, email, password string) error {
+	_, err := c.call(ctx, "AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "trojan", Email: email, Id: password})
+	return err
+}
+
+// RemoveTrojanUser revokes a Trojan password from Xray.
+func (c *Client) RemoveTrojanUser(ctx context.Context, email string) error {
+	_, err := c.call(ctx, "RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{Protocol: "trojan", Email: email})
+	return err
+}
+
 // RemoveVMessUser revokes a VMess user from Xray.
 func (c *Client) RemoveVMessUser(ctx context.Context, email string) error {
 	_, err := c.call(ctx, "RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{Protocol: "vmess", Email: email})
@@ -225,7 +237,7 @@ func (c *Client) Users(ctx context.Context) ([]string, error) {
 
 // UsersInInbound reads loaded Xray users for the supported inbound tag.
 func (c *Client) UsersInInbound(ctx context.Context, inbound string) ([]string, error) {
-	protocol := map[string]string{"vless-reality": "vless", "hysteria2": "hysteria2", "vmess-tls": "vmess"}[inbound]
+	protocol := map[string]string{"vless-reality": "vless", "hysteria2": "hysteria2", "vmess-tls": "vmess", "shadowsocks": "shadowsocks", "trojan-tls": "trojan"}[inbound]
 	if protocol == "" {
 		return nil, fmt.Errorf("unsupported Xray inbound %q", inbound)
 	}

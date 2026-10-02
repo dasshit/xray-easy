@@ -86,6 +86,18 @@ func (f *fakeXrayHandler) RemoveShadowsocksUser(_ context.Context, email string)
 	f.users = withoutUser(f.users, email)
 	return f.err
 }
+func (f *fakeXrayHandler) AddTrojanUser(_ context.Context, email, password string) error {
+	f.called, f.args = "add-trojan", []string{email, password}
+	f.adds++
+	f.users = append(f.users, email)
+	return f.err
+}
+func (f *fakeXrayHandler) RemoveTrojanUser(_ context.Context, email string) error {
+	f.called, f.args = "remove-trojan", []string{email}
+	f.removes++
+	f.users = withoutUser(f.users, email)
+	return f.err
+}
 func (f *fakeXrayHandler) UsersInInbound(_ context.Context, inbound string) ([]string, error) {
 	f.called, f.args = "list-"+inbound, []string{inbound}
 	return f.users, f.err

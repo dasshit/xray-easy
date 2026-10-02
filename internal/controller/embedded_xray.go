@@ -325,6 +325,16 @@ func (c *EmbeddedXrayClient) RemoveShadowsocksUser(ctx context.Context, email st
 	return c.mutateUserWithMethod(ctx, xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, email, "", "", "", false)
 }
 
+// AddTrojanUser installs a Trojan password into the embedded runtime.
+func (c *EmbeddedXrayClient) AddTrojanUser(ctx context.Context, email, password string) error {
+	return c.mutateUser(ctx, xrayruntimev1.Protocol_PROTOCOL_TROJAN, email, password, "", true)
+}
+
+// RemoveTrojanUser revokes a Trojan password from the embedded runtime.
+func (c *EmbeddedXrayClient) RemoveTrojanUser(ctx context.Context, email string) error {
+	return c.mutateUser(ctx, xrayruntimev1.Protocol_PROTOCOL_TROJAN, email, "", "", false)
+}
+
 func (c *EmbeddedXrayClient) mutateUser(ctx context.Context, protocol xrayruntimev1.Protocol, email, credential, flow string, add bool) error {
 	return c.mutateUserWithMethod(ctx, protocol, email, credential, flow, "", add)
 }
@@ -367,6 +377,7 @@ func (c *EmbeddedXrayClient) UsersInInbound(ctx context.Context, inbound string)
 		"vmess-tls":     xrayruntimev1.Protocol_PROTOCOL_VMESS,
 		"hysteria2":     xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2,
 		"shadowsocks":   xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS,
+		"trojan-tls":    xrayruntimev1.Protocol_PROTOCOL_TROJAN,
 	}[inbound]
 	if !ok {
 		return nil, fmt.Errorf("unsupported Xray inbound %q", inbound)

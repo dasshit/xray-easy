@@ -29,6 +29,7 @@ const (
 	ProtocolHysteria2   ClientProtocol = "hysteria2"
 	ProtocolVMess       ClientProtocol = "vmess"
 	ProtocolShadowsocks ClientProtocol = "shadowsocks"
+	ProtocolTrojan      ClientProtocol = "trojan"
 	ProtocolAmneziaWG   ClientProtocol = "amneziawg"
 )
 
@@ -60,6 +61,9 @@ type Client struct {
 	ShadowsocksPasswordEnc string
 	ShadowsocksEnabled     bool
 	ShadowsocksRevoked     bool
+	TrojanPasswordEnc      string
+	TrojanEnabled          bool
+	TrojanRevoked          bool
 	CreatedAt              time.Time
 	UpdatedAt              time.Time
 }
@@ -80,6 +84,9 @@ func (c Client) HasVMess() bool { return c.Protocol == ProtocolVMess }
 // HasShadowsocks reports whether this profile contains Shadowsocks credentials.
 func (c Client) HasShadowsocks() bool { return c.Protocol == ProtocolShadowsocks }
 
+// HasTrojan reports whether this profile contains Trojan credentials.
+func (c Client) HasTrojan() bool { return c.Protocol == ProtocolTrojan }
+
 // VLESSCanConnect reports whether the VLESS access for this profile is active.
 func (c Client) VLESSCanConnect() bool {
 	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked
@@ -97,6 +104,9 @@ func (c Client) VMessCanConnect() bool { return c.HasVMess() && c.Enabled && !c.
 func (c Client) ShadowsocksCanConnect() bool {
 	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked
 }
+
+// TrojanCanConnect reports whether the Trojan access is active.
+func (c Client) TrojanCanConnect() bool { return c.HasTrojan() && c.TrojanEnabled && !c.TrojanRevoked }
 
 // HysteriaCredential returns the stored password or the legacy UUID fallback.
 func (c Client) HysteriaCredential() string {
@@ -134,6 +144,11 @@ func (c Client) AccessState(protocol ClientProtocol) (ClientState, error) {
 			return ClientState{}, errors.New("profile has no Shadowsocks access")
 		}
 		return ClientState{Enabled: c.ShadowsocksEnabled, Revoked: c.ShadowsocksRevoked}, nil
+	case ProtocolTrojan:
+		if !c.HasTrojan() {
+			return ClientState{}, errors.New("profile has no Trojan access")
+		}
+		return ClientState{Enabled: c.TrojanEnabled, Revoked: c.TrojanRevoked}, nil
 	default:
 		return ClientState{}, errors.New("unsupported protocol access")
 	}
@@ -196,8 +211,10 @@ func NewProtocolClient(id, name string, protocol ClientProtocol, fingerprint, hy
 		return Client{ID: id, Name: name, Protocol: protocol, Enabled: true, VMessEnabled: true}, nil
 	case ProtocolShadowsocks:
 		return Client{ID: id, Name: name, Protocol: protocol, Enabled: true, ShadowsocksEnabled: true}, nil
+	case ProtocolTrojan:
+		return Client{ID: id, Name: name, Protocol: protocol, Enabled: true, TrojanEnabled: true}, nil
 	default:
-		return Client{}, errors.New("new profiles must use VLESS, VMess, Hysteria 2, or Shadowsocks")
+		return Client{}, errors.New("new profiles must use VLESS, VMess, Hysteria 2, Shadowsocks, or Trojan")
 	}
 }
 

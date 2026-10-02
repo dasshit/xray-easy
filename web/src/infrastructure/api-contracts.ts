@@ -21,7 +21,7 @@ export const AdminDtoSchema = z.object({
 export type AdminDto = z.infer<typeof AdminDtoSchema>
 
 /** Runtime validator for the protocol variants accepted from the server. */
-export const ClientProtocolDtoSchema = z.enum(['vless', 'vmess', 'hysteria2', 'shadowsocks', 'amneziawg', 'legacy_dual'])
+export const ClientProtocolDtoSchema = z.enum(['vless', 'vmess', 'hysteria2', 'shadowsocks', 'trojan', 'amneziawg', 'legacy_dual'])
 /** Wire-format protocol access state. */
 export const ClientProtocolAccessDtoSchema = z.object({ enabled: z.boolean(), revoked: z.boolean() })
 
@@ -35,6 +35,7 @@ export const ClientDtoSchema = z.object({
   hysteria2: ClientProtocolAccessDtoSchema.optional(),
   vmess: ClientProtocolAccessDtoSchema.optional(),
   shadowsocks: ClientProtocolAccessDtoSchema.optional(),
+  trojan: ClientProtocolAccessDtoSchema.optional(),
   enabled: z.boolean(),
   revoked: z.boolean(),
   fingerprint: z.string().optional(),
@@ -91,6 +92,8 @@ const VMessProfileDeliveryDtoSchema = z.object({
 const ShadowsocksProfileDeliveryDtoSchema = z.object({
   client_id: z.string(), protocol: z.literal('shadowsocks'), ss_uri: z.string(), json: z.json(),
 })
+/** Runtime validator for Trojan TCP/TLS profile delivery. */
+const TrojanProfileDeliveryDtoSchema = z.object({ client_id: z.string(), protocol: z.literal('trojan'), trojan_uri: z.string(), json: z.json() })
 /** Runtime validator for an AmneziaWG profile reference; secret config is fetched separately. */
 const AmneziaWGProfileDeliveryDtoSchema = z.object({
   client_id: z.string(), protocol: z.literal('amneziawg'), name: z.string(),
@@ -103,7 +106,7 @@ const LegacyProfileDeliveryDtoSchema = z.object({
 /** Runtime validator for a protocol-discriminated profile delivery response. */
 export const ProfileDeliveryDtoSchema = z.discriminatedUnion('protocol', [
   VLESSProfileDeliveryDtoSchema, HysteriaProfileDeliveryDtoSchema, LegacyProfileDeliveryDtoSchema,
-  VMessProfileDeliveryDtoSchema, ShadowsocksProfileDeliveryDtoSchema, AmneziaWGProfileDeliveryDtoSchema,
+  VMessProfileDeliveryDtoSchema, ShadowsocksProfileDeliveryDtoSchema, TrojanProfileDeliveryDtoSchema, AmneziaWGProfileDeliveryDtoSchema,
 ])
 /** Wire-format type inferred from {@link ProfileDeliveryDtoSchema}. */
 export type ProfileDeliveryDto = z.infer<typeof ProfileDeliveryDtoSchema>
@@ -194,6 +197,8 @@ export const SettingsDtoSchema = z.object({
   shadowsocks_public_port: z.number().default(8388),
   shadowsocks_method: z.string().default('chacha20-poly1305'),
   shadowsocks_network: z.string().default('tcp,udp'),
+  trojan_enabled: z.boolean().default(false),
+  trojan_public_port: z.number().default(10443),
   reality_target: z.string(),
   reality_sni: z.string(),
   client_fingerprint: z.string(),

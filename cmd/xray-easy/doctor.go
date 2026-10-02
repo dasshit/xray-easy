@@ -152,6 +152,9 @@ func writeDoctorHeader(out io.Writer) {
 	if strings.EqualFold(envOr("XRAY_SHADOWSOCKS_ENABLED", "false"), "true") {
 		fmt.Fprintf(out, "  Shadowsocks TCP+UDP: %s -> container TCP/UDP 8388\n", safeDoctorPort("XRAY_SHADOWSOCKS_PORT", "8388"))
 	}
+	if configuredTrojanEnabled() {
+		fmt.Fprintf(out, "  Trojan TCP: %s -> container TCP 8445\n", safeDoctorPort("XRAY_TROJAN_PORT", "10443"))
+	}
 	fmt.Fprintf(out, "  Web UI loopback: %s -> container TCP 8080\n", safeDoctorPort("XRAY_EASY_UI_PORT", "8080"))
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
 		fmt.Fprintf(out, "  AmneziaWG public UDP: %s -> container UDP 51820\n", safeDoctorPort("AWG_PUBLIC_PORT", "1234"))
@@ -307,6 +310,13 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 			appendCheck(doctorFail, "Shadowsocks port", err.Error(), "Set XRAY_SHADOWSOCKS_PORT to a free port distinct from XRAY_PUBLIC_PORT, XRAY_VMESS_PORT, and XRAY_EASY_UI_PORT, then rerun Compose.")
 		} else {
 			appendCheck(doctorPass, "Shadowsocks TCP/UDP port", fmt.Sprintf("port %d is configured", port), "")
+		}
+	}
+	if configuredTrojanEnabled() {
+		if port, err := configuredTrojanPort(); err != nil {
+			appendCheck(doctorFail, "Trojan TCP port", err.Error(), "Set XRAY_TROJAN_PORT to a free port distinct from the other Xray and Web UI ports, then rerun Compose.")
+		} else {
+			appendCheck(doctorPass, "Trojan TCP port", fmt.Sprintf("port %d is configured", port), "")
 		}
 	}
 
@@ -514,6 +524,9 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 	inboundHint := fmt.Sprintf("Allow inbound TCP %s (VLESS) and TCP %s (VMess, when used) for IPv4 and IPv6 in the VDS firewall/security group; verify a client connection.", envOr("XRAY_PUBLIC_PORT", "443"), envOr("XRAY_VMESS_PORT", "9443"))
 	if configuredShadowsocksEnabled() {
 		inboundHint += fmt.Sprintf(" Allow TCP and UDP %s for Shadowsocks.", envOr("XRAY_SHADOWSOCKS_PORT", "8388"))
+	}
+	if configuredTrojanEnabled() {
+		inboundHint += fmt.Sprintf(" Allow inbound TCP %s for Trojan.", envOr("XRAY_TROJAN_PORT", "10443"))
 	}
 	appendCheck(doctorWarn, "Inbound firewall", "public TCP reachability cannot be checked from inside the Compose network", inboundHint)
 	if hysteria2Enabled() {

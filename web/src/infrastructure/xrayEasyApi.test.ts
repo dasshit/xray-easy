@@ -198,6 +198,7 @@ describe('Xray-easy API adapter', () => {
       clientId: 'ss-1', protocol: 'shadowsocks', ssUri: 'ss://encoded#tablet', json: { server: 'vpn.test' },
     })
     expect(api.clients.profileShadowsocksQrUrl('ss-1')).toBe('/api/clients/ss-1/profile?format=ss-qr')
+    expect(api.clients.profileTrojanQrUrl('trojan-1')).toBe('/api/clients/trojan-1/profile?format=trojan-qr')
   })
 
   it('rejects a profile response that omits its protocol discriminator', async () => {
@@ -235,7 +236,7 @@ describe('Xray-easy API adapter', () => {
     const api = createXrayEasyApi(send)
     const settings = {
       publicHost: 'vpn.example.test', publicPort: 443, vmessPublicPort: 9443, shadowsocksEnabled: false, shadowsocksPublicPort: 8388, shadowsocksMethod: 'chacha20-poly1305', shadowsocksNetwork: 'tcp,udp', realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
-      clientFingerprint: 'chrome', logLevel: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
+      clientFingerprint: 'chrome', logLevel: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision', trojanEnabled: false, trojanPublicPort: 10443,
     }
 
     await expect(api.settings.get()).resolves.toEqual(settings)

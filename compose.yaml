@@ -150,6 +150,7 @@ services:
       - "${XRAY_VMESS_PORT:-9443}:8444/tcp"
       - "${XRAY_SHADOWSOCKS_PORT:-8388}:8388/tcp"
       - "${XRAY_SHADOWSOCKS_PORT:-8388}:8388/udp"
+      - "${XRAY_TROJAN_PORT:-10443}:8445/tcp"
     volumes:
       - xray_config:/etc/xray:ro
       - xray_runtime_state:/var/lib/xray-runtime
@@ -240,6 +241,8 @@ services:
       XRAY_SHADOWSOCKS_ENABLED: ${XRAY_SHADOWSOCKS_ENABLED:-false}
       XRAY_SHADOWSOCKS_METHOD: ${XRAY_SHADOWSOCKS_METHOD:-chacha20-poly1305}
       XRAY_SHADOWSOCKS_NETWORK: ${XRAY_SHADOWSOCKS_NETWORK:-tcp,udp}
+      XRAY_TROJAN_PORT: ${XRAY_TROJAN_PORT:-10443}
+      XRAY_TROJAN_ENABLED: ${XRAY_TROJAN_ENABLED:-false}
       XRAY_VERSION: ${XRAY_VERSION:-26.7.28}
       XRAY_HYSTERIA2_ENABLED: ${XRAY_HYSTERIA2_ENABLED:-false}
       XRAY_HYSTERIA2_TLS_MODE: ${XRAY_HYSTERIA2_TLS_MODE:-legacy}

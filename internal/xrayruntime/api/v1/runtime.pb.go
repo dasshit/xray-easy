@@ -30,6 +30,7 @@ const (
 	Protocol_PROTOCOL_VMESS       Protocol = 2
 	Protocol_PROTOCOL_HYSTERIA2   Protocol = 3
 	Protocol_PROTOCOL_SHADOWSOCKS Protocol = 4
+	Protocol_PROTOCOL_TROJAN      Protocol = 5
 )
 
 // Enum value maps for Protocol.
@@ -40,6 +41,7 @@ var (
 		2: "PROTOCOL_VMESS",
 		3: "PROTOCOL_HYSTERIA2",
 		4: "PROTOCOL_SHADOWSOCKS",
+		5: "PROTOCOL_TROJAN",
 	}
 	Protocol_value = map[string]int32{
 		"PROTOCOL_UNSPECIFIED": 0,
@@ -47,6 +49,7 @@ var (
 		"PROTOCOL_VMESS":       2,
 		"PROTOCOL_HYSTERIA2":   3,
 		"PROTOCOL_SHADOWSOCKS": 4,
+		"PROTOCOL_TROJAN":      5,
 	}
 )
 
@@ -1836,13 +1839,14 @@ const file_runtime_proto_rawDesc = "" +
 	"\x11OperationResponse\x12!\n" +
 	"\foperation_id\x18\x01 \x01(\tR\voperationId\x12\x1a\n" +
 	"\brevision\x18\x02 \x01(\x03R\brevision\x12'\n" +
-	"\x0falready_applied\x18\x03 \x01(\bR\x0ealreadyApplied*~\n" +
+	"\x0falready_applied\x18\x03 \x01(\bR\x0ealreadyApplied*\x93\x01\n" +
 	"\bProtocol\x12\x18\n" +
 	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0ePROTOCOL_VLESS\x10\x01\x12\x12\n" +
 	"\x0ePROTOCOL_VMESS\x10\x02\x12\x16\n" +
 	"\x12PROTOCOL_HYSTERIA2\x10\x03\x12\x18\n" +
-	"\x14PROTOCOL_SHADOWSOCKS\x10\x04*\xbe\x01\n" +
+	"\x14PROTOCOL_SHADOWSOCKS\x10\x04\x12\x13\n" +
+	"\x0fPROTOCOL_TROJAN\x10\x05*\xbe\x01\n" +
 	"\fRuntimeState\x12\x1d\n" +
 	"\x19RUNTIME_STATE_UNSPECIFIED\x10\x00\x12\x1a\n" +
 	"\x16RUNTIME_STATE_STARTING\x10\x01\x12\"\n" +

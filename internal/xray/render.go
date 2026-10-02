@@ -36,8 +36,10 @@ const (
 	HysteriaInboundTag      = "hysteria2"
 	VMessInboundTag         = "vmess-tls"
 	ShadowsocksInboundTag   = "shadowsocks"
+	TrojanInboundTag        = "trojan-tls"
 	VMessInternalPort       = 8444
 	ShadowsocksInternalPort = 8388
+	TrojanInternalPort      = 8445
 	HysteriaTLSCertPath     = "/etc/xray/hysteria-tls/fullchain.pem"
 	HysteriaTLSKeyPath      = "/etc/xray/hysteria-tls/privkey.pem"
 	HysteriaTLSSelfSigned   = "self-signed"
@@ -73,6 +75,8 @@ type Settings struct {
 	ShadowsocksPublicPort    int
 	ShadowsocksMethod        string
 	ShadowsocksNetwork       string
+	TrojanEnabled            bool
+	TrojanPublicPort         int
 }
 
 type Client struct {
@@ -95,6 +99,9 @@ type Client struct {
 	ShadowsocksPassword string
 	ShadowsocksEnabled  bool
 	ShadowsocksRevoked  bool
+	TrojanPassword      string
+	TrojanEnabled       bool
+	TrojanRevoked       bool
 }
 
 type Profile struct {
@@ -104,6 +111,8 @@ type Profile struct {
 	VMessURI        string
 	ShadowsocksURI  string
 	ShadowsocksJSON []byte
+	TrojanURI       string
+	TrojanJSON      []byte
 	JSON            []byte
 	Name            string
 	UUID            string
@@ -261,6 +270,24 @@ type shadowsocksServerClient struct {
 	Email    string `json:"email"`
 }
 
+type trojanInbound struct {
+	Listen         string                `json:"listen"`
+	Port           int                   `json:"port"`
+	Protocol       string                `json:"protocol"`
+	Tag            string                `json:"tag"`
+	Settings       trojanInboundSettings `json:"settings"`
+	StreamSettings vmessStreamSettings   `json:"streamSettings"`
+}
+
+type trojanInboundSettings struct {
+	Clients []trojanServerClient `json:"clients"`
+}
+
+type trojanServerClient struct {
+	Password string `json:"password"`
+	Email    string `json:"email"`
+}
+
 func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	if settings.LogLevel == "" {
 		settings.LogLevel = "warning"
@@ -272,6 +299,7 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	activeHysteria := make([]Client, 0, len(clients))
 	activeVMess := make([]Client, 0, len(clients))
 	activeShadowsocks := make([]Client, 0, len(clients))
+	activeTrojan := make([]Client, 0, len(clients))
 	hasVMessProfile := false
 	for _, client := range clients {
 		if client.VLESSCanConnect() {
@@ -289,11 +317,15 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		if client.HasShadowsocks() && !client.ShadowsocksIsRevoked() && client.ShadowsocksCanConnect() {
 			activeShadowsocks = append(activeShadowsocks, client)
 		}
+		if client.HasTrojan() && !client.TrojanIsRevoked() && client.TrojanCanConnect() {
+			activeTrojan = append(activeTrojan, client)
+		}
 	}
 	sort.Slice(activeVLESS, func(i, j int) bool { return activeVLESS[i].ID < activeVLESS[j].ID })
 	sort.Slice(activeHysteria, func(i, j int) bool { return activeHysteria[i].ID < activeHysteria[j].ID })
 	sort.Slice(activeVMess, func(i, j int) bool { return activeVMess[i].ID < activeVMess[j].ID })
 	sort.Slice(activeShadowsocks, func(i, j int) bool { return activeShadowsocks[i].ID < activeShadowsocks[j].ID })
+	sort.Slice(activeTrojan, func(i, j int) bool { return activeTrojan[i].ID < activeTrojan[j].ID })
 	serverClients := make([]serverClient, 0, len(activeVLESS))
 	shortIDs := make([]string, 0, len(clients)+len(settings.ReservedShortIDs))
 	shortIDSet := make(map[string]struct{}, cap(shortIDs))
@@ -415,6 +447,30 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 			Settings: shadowsocksInboundSettings{Network: settings.ShadowsocksNetwork, Clients: ssUsers},
 		})
 	}
+	if settings.TrojanEnabled {
+		if settings.TrojanPublicPort < 1 || settings.TrojanPublicPort > 65535 {
+			return nil, errors.New("Trojan public port is not configured")
+		}
+		trojanUsers := make([]trojanServerClient, 0, len(activeTrojan))
+		for _, client := range activeTrojan {
+			if client.TrojanPassword == "" || client.Email == "" {
+				return nil, fmt.Errorf("client %s is missing Trojan credentials", client.ID)
+			}
+			trojanUsers = append(trojanUsers, trojanServerClient{Password: client.TrojanPassword, Email: client.Email})
+		}
+		certPath, keyPath := settings.HysteriaTLSCertPath, settings.HysteriaTLSKeyPath
+		if certPath == "" {
+			certPath = HysteriaTLSCertPath
+		}
+		if keyPath == "" {
+			keyPath = HysteriaTLSKeyPath
+		}
+		inbounds = append(inbounds, trojanInbound{
+			Listen: "0.0.0.0", Port: TrojanInternalPort, Protocol: "trojan", Tag: TrojanInboundTag,
+			Settings:       trojanInboundSettings{Clients: trojanUsers},
+			StreamSettings: vmessStreamSettings{Network: "tcp", Security: "tls", TLSSettings: hysteriaTLSSettings{Certificates: []hysteriaCertificate{{CertificateFile: certPath, KeyFile: keyPath}}}},
+		})
+	}
 	config := serverConfig{
 		Log:       logConfig{LogLevel: settings.LogLevel},
 		API:       apiConfig{Tag: "api", Listen: settings.XrayAPIListen, Services: []string{"HandlerService", "LoggerService"}},
@@ -502,10 +558,37 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 			return Profile{}, err
 		}
 	}
-	if profile.URI == "" && profile.HysteriaURI == "" && profile.VMessURI == "" && profile.ShadowsocksURI == "" {
+	if client.HasTrojan() && !client.TrojanIsRevoked() {
+		if err := validateTrojanProfileSettings(settings); err != nil {
+			return Profile{}, err
+		}
+		if client.TrojanPassword == "" {
+			return Profile{}, errors.New("Trojan profile is unavailable")
+		}
+		profile.TrojanURI = BuildTrojanURI(settings, client)
+		var err error
+		profile.TrojanJSON, err = buildTrojanClientJSON(settings, client)
+		if err != nil {
+			return Profile{}, err
+		}
+	}
+	if profile.URI == "" && profile.HysteriaURI == "" && profile.VMessURI == "" && profile.ShadowsocksURI == "" && profile.TrojanURI == "" {
 		return Profile{}, errors.New("client profile is unavailable")
 	}
 	return profile, nil
+}
+
+func validateTrojanProfileSettings(settings Settings) error {
+	if !settings.TrojanEnabled {
+		return errors.New("Trojan is not enabled")
+	}
+	if settings.TrojanPublicPort < 1 || settings.TrojanPublicPort > 65535 {
+		return errors.New("Trojan public port is not configured")
+	}
+	if _, err := domain.NormalizePublicHost(settings.PublicHost); err != nil {
+		return fmt.Errorf("Trojan public host: %w", err)
+	}
+	return nil
 }
 
 func validateShadowsocksProfileSettings(settings Settings) error {
@@ -609,6 +692,8 @@ func (c Client) HasVMess() bool { return c.protocol() == domain.ProtocolVMess }
 
 func (c Client) HasShadowsocks() bool { return c.protocol() == domain.ProtocolShadowsocks }
 
+func (c Client) HasTrojan() bool { return c.protocol() == domain.ProtocolTrojan }
+
 func (c Client) VLESSCanConnect() bool {
 	if c.Protocol == "" {
 		return c.Enabled && !c.Revoked
@@ -635,6 +720,13 @@ func (c Client) ShadowsocksCanConnect() bool {
 		return false
 	}
 	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked
+}
+
+func (c Client) TrojanCanConnect() bool {
+	if c.Protocol == "" {
+		return false
+	}
+	return c.HasTrojan() && c.TrojanEnabled && !c.TrojanRevoked
 }
 
 func (c Client) VMESSEnabled() bool {
@@ -670,6 +762,13 @@ func (c Client) ShadowsocksIsRevoked() bool {
 		return false
 	}
 	return c.ShadowsocksRevoked
+}
+
+func (c Client) TrojanIsRevoked() bool {
+	if c.Protocol == "" {
+		return false
+	}
+	return c.TrojanRevoked
 }
 
 func (c Client) HysteriaCredential() string {
@@ -723,6 +822,40 @@ func BuildShadowsocksURI(settings Settings, client Client) string {
 	credentials := base64.RawURLEncoding.EncodeToString([]byte(settings.ShadowsocksMethod + ":" + client.ShadowsocksPassword))
 	u := &url.URL{Scheme: "ss", Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.ShadowsocksPublicPort)), Fragment: client.Name}
 	return "ss://" + credentials + "@" + u.Host + "#" + url.PathEscape(client.Name)
+}
+
+// BuildTrojanURI creates a Trojan TCP/TLS share link.
+func BuildTrojanURI(settings Settings, client Client) string {
+	query := url.Values{"security": []string{"tls"}, "type": []string{"tcp"}}
+	serverName := vmessServerName(settings)
+	if serverName != "" {
+		query.Set("sni", serverName)
+	}
+	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
+		query.Set("allowInsecure", "1")
+	}
+	u := &url.URL{Scheme: "trojan", User: url.User(client.TrojanPassword), Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.TrojanPublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
+	return u.String()
+}
+
+func buildTrojanClientJSON(settings Settings, client Client) ([]byte, error) {
+	value := map[string]any{
+		"log":      map[string]any{"loglevel": "warning"},
+		"inbounds": []any{map[string]any{"listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": map[string]any{"udp": true}}},
+		"outbounds": []any{map[string]any{
+			"protocol":       "trojan",
+			"settings":       map[string]any{"servers": []any{map[string]any{"address": settings.PublicHost, "port": settings.TrojanPublicPort, "password": client.TrojanPassword}}},
+			"streamSettings": map[string]any{"network": "tcp", "security": "tls", "tlsSettings": map[string]any{"serverName": vmessServerName(settings), "allowInsecure": settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy}},
+		}},
+	}
+	var out bytes.Buffer
+	encoder := json.NewEncoder(&out)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	if err := encoder.Encode(value); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
 }
 
 func buildShadowsocksClientJSON(settings Settings, client Client) ([]byte, error) {

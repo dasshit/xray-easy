@@ -213,6 +213,7 @@ func restoreClients(tx *sql.Tx) error {
 	hasProtocol := false
 	hasVMessEnabled, hasVMessRevoked := false, false
 	hasShadowsocksPassword, hasShadowsocksEnabled, hasShadowsocksRevoked := false, false, false
+	hasTrojanPassword, hasTrojanEnabled, hasTrojanRevoked := false, false, false
 	rows, err := tx.Query(`PRAGMA restore_source.table_info(clients)`)
 	if err != nil {
 		return err
@@ -243,6 +244,15 @@ func restoreClients(tx *sql.Tx) error {
 		if name == "shadowsocks_revoked" {
 			hasShadowsocksRevoked = true
 		}
+		if name == "trojan_password_enc" {
+			hasTrojanPassword = true
+		}
+		if name == "trojan_enabled" {
+			hasTrojanEnabled = true
+		}
+		if name == "trojan_revoked" {
+			hasTrojanRevoked = true
+		}
 	}
 	if err := rows.Err(); err != nil {
 		_ = rows.Close()
@@ -269,15 +279,25 @@ func restoreClients(tx *sql.Tx) error {
 		if hasShadowsocksRevoked {
 			ssRevoked = `shadowsocks_revoked`
 		}
+		trojanPassword, trojanEnabled, trojanRevoked := `''`, `0`, `0`
+		if hasTrojanPassword {
+			trojanPassword = `trojan_password_enc`
+		}
+		if hasTrojanEnabled {
+			trojanEnabled = `trojan_enabled`
+		}
+		if hasTrojanRevoked {
+			trojanRevoked = `trojan_revoked`
+		}
 		_, err = tx.Exec(`INSERT INTO main.clients(
 			id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 			protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
 			hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc,
-			shadowsocks_enabled, shadowsocks_revoked, created_at, updated_at
+			shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at
 		) SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 			protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
 			hysteria_revoked, ` + vmessEnabled + `, ` + vmessRevoked + `, ` + ssPassword + `,
-			` + ssEnabled + `, ` + ssRevoked + `, created_at, updated_at
+			` + ssEnabled + `, ` + ssRevoked + `, ` + trojanPassword + `, ` + trojanEnabled + `, ` + trojanRevoked + `, created_at, updated_at
 			FROM restore_source.clients`)
 		return err
 	}
@@ -285,9 +305,9 @@ func restoreClients(tx *sql.Tx) error {
 		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
 		hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc,
-		shadowsocks_enabled, shadowsocks_revoked, created_at, updated_at
+		shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at
 	) SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
-		'legacy_dual', uuid, enabled, revoked, enabled, revoked, 0, 0, '', 0, 0, created_at, updated_at
+		'legacy_dual', uuid, enabled, revoked, enabled, revoked, 0, 0, '', 0, 0, '', 0, 0, created_at, updated_at
 		FROM restore_source.clients`)
 	return err
 }
@@ -468,6 +488,9 @@ CREATE TABLE IF NOT EXISTS clients (
   shadowsocks_password_enc TEXT NOT NULL DEFAULT '',
   shadowsocks_enabled INTEGER NOT NULL DEFAULT 0,
   shadowsocks_revoked INTEGER NOT NULL DEFAULT 0,
+  trojan_password_enc TEXT NOT NULL DEFAULT '',
+  trojan_enabled INTEGER NOT NULL DEFAULT 0,
+  trojan_revoked INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -551,6 +574,9 @@ CREATE TABLE IF NOT EXISTS awg_traffic_snapshots (
 		`ALTER TABLE clients ADD COLUMN shadowsocks_password_enc TEXT NOT NULL DEFAULT ''`,
 		`ALTER TABLE clients ADD COLUMN shadowsocks_enabled INTEGER NOT NULL DEFAULT 0`,
 		`ALTER TABLE clients ADD COLUMN shadowsocks_revoked INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE clients ADD COLUMN trojan_password_enc TEXT NOT NULL DEFAULT ''`,
+		`ALTER TABLE clients ADD COLUMN trojan_enabled INTEGER NOT NULL DEFAULT 0`,
+		`ALTER TABLE clients ADD COLUMN trojan_revoked INTEGER NOT NULL DEFAULT 0`,
 	} {
 		if _, err := s.db.ExecContext(ctx, column); err != nil && !strings.Contains(strings.ToLower(err.Error()), "duplicate column name") {
 			return fmt.Errorf("migrate settings: %w", err)
@@ -639,6 +665,9 @@ func (s *Store) migrateClientProtocols(ctx context.Context) error {
   shadowsocks_password_enc TEXT NOT NULL DEFAULT '',
   shadowsocks_enabled INTEGER NOT NULL DEFAULT 0,
   shadowsocks_revoked INTEGER NOT NULL DEFAULT 0,
+  trojan_password_enc TEXT NOT NULL DEFAULT '',
+  trojan_enabled INTEGER NOT NULL DEFAULT 0,
+  trojan_revoked INTEGER NOT NULL DEFAULT 0,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 )`
@@ -648,9 +677,9 @@ func (s *Store) migrateClientProtocols(ctx context.Context) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO clients_protocol_migration (
 		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
-		hysteria_revoked, shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked, created_at, updated_at
+		hysteria_revoked, shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at
 	) SELECT id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
-		'legacy_dual', uuid, enabled, revoked, enabled, revoked, '', 0, 0, created_at, updated_at
+		'legacy_dual', uuid, enabled, revoked, enabled, revoked, '', 0, 0, '', 0, 0, created_at, updated_at
 		FROM clients`); err != nil {
 		return fmt.Errorf("copy existing profiles as legacy dual-protocol profiles: %w", err)
 	}
@@ -1009,7 +1038,7 @@ func (s *Store) UpdateSettingsAndClientStates(ctx context.Context, settings doma
 		return err
 	}
 	for id, state := range states {
-		result, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, updated_at=? WHERE id=?`, boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
+		result, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, trojan_enabled=?, trojan_revoked=?, updated_at=? WHERE id=?`, boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), boolInt(state.Enabled), boolInt(state.Revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
 		if err != nil {
 			return err
 		}
@@ -1035,8 +1064,8 @@ func (s *Store) UpdateSettingsAndClientProtocolStates(ctx context.Context, setti
 	}
 	for id, transitions := range states {
 		var protocol string
-		var vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssEnabled, ssRevoked int
-		if err := tx.QueryRowContext(ctx, `SELECT protocol, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_enabled, shadowsocks_revoked FROM clients WHERE id=?`, id).Scan(&protocol, &vlessEnabled, &vlessRevoked, &hysteriaEnabled, &hysteriaRevoked, &vmessEnabled, &vmessRevoked, &ssEnabled, &ssRevoked); err != nil {
+		var vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssEnabled, ssRevoked, trojanEnabled, trojanRevoked int
+		if err := tx.QueryRowContext(ctx, `SELECT protocol, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_enabled, shadowsocks_revoked, trojan_enabled, trojan_revoked FROM clients WHERE id=?`, id).Scan(&protocol, &vlessEnabled, &vlessRevoked, &hysteriaEnabled, &hysteriaRevoked, &vmessEnabled, &vmessRevoked, &ssEnabled, &ssRevoked, &trojanEnabled, &trojanRevoked); err != nil {
 			return err
 		}
 		clientProtocol := domain.ClientProtocol(protocol)
@@ -1044,6 +1073,7 @@ func (s *Store) UpdateSettingsAndClientProtocolStates(ctx context.Context, setti
 		hasHysteria := clientProtocol == domain.ProtocolHysteria2 || clientProtocol == domain.ProtocolLegacyDual
 		hasVMess := clientProtocol == domain.ProtocolVMess
 		hasShadowsocks := clientProtocol == domain.ProtocolShadowsocks
+		hasTrojan := clientProtocol == domain.ProtocolTrojan
 		for access, state := range transitions {
 			if state.Enabled && state.Revoked {
 				return errors.New("revoked protocol access cannot be enabled")
@@ -1069,13 +1099,18 @@ func (s *Store) UpdateSettingsAndClientProtocolStates(ctx context.Context, setti
 					return errors.New("profile has no Shadowsocks access")
 				}
 				ssEnabled, ssRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+			case domain.ProtocolTrojan:
+				if !hasTrojan {
+					return errors.New("profile has no Trojan access")
+				}
+				trojanEnabled, trojanRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
 			default:
 				return errors.New("unsupported protocol access")
 			}
 		}
-		enabled := (hasVLESS && vlessEnabled != 0 && vlessRevoked == 0) || (hasHysteria && hysteriaEnabled != 0 && hysteriaRevoked == 0) || (hasVMess && vmessEnabled != 0 && vmessRevoked == 0) || (hasShadowsocks && ssEnabled != 0 && ssRevoked == 0)
-		revoked := (!hasVLESS || vlessRevoked != 0) && (!hasHysteria || hysteriaRevoked != 0) && (!hasVMess || vmessRevoked != 0) && (!hasShadowsocks || ssRevoked != 0)
-		if _, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, updated_at=? WHERE id=?`, boolInt(enabled), boolInt(revoked), vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssEnabled, ssRevoked, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
+		enabled := (hasVLESS && vlessEnabled != 0 && vlessRevoked == 0) || (hasHysteria && hysteriaEnabled != 0 && hysteriaRevoked == 0) || (hasVMess && vmessEnabled != 0 && vmessRevoked == 0) || (hasShadowsocks && ssEnabled != 0 && ssRevoked == 0) || (hasTrojan && trojanEnabled != 0 && trojanRevoked == 0)
+		revoked := (!hasVLESS || vlessRevoked != 0) && (!hasHysteria || hysteriaRevoked != 0) && (!hasVMess || vmessRevoked != 0) && (!hasShadowsocks || ssRevoked != 0) && (!hasTrojan || trojanRevoked != 0)
+		if _, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, trojan_enabled=?, trojan_revoked=?, updated_at=? WHERE id=?`, boolInt(enabled), boolInt(revoked), vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssEnabled, ssRevoked, trojanEnabled, trojanRevoked, time.Now().UTC().Format(time.RFC3339Nano), id); err != nil {
 			return err
 		}
 	}
@@ -1095,8 +1130,8 @@ func (s *Store) CreateClient(ctx context.Context, client domain.Client, uuid, em
 	if client.Protocol == domain.ProtocolHysteria2 {
 		return errors.New("Hysteria 2 profiles must be created without VLESS credentials")
 	}
-	protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked := clientProtocolStorage(client, uuid)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, nullableCredential(uuid), email, nullableCredential(shortID), client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked, now, now); err != nil {
+	protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked, trojanPassword, trojanEnabled, trojanRevoked := clientProtocolStorage(client, uuid)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, nullableCredential(uuid), email, nullableCredential(shortID), client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked, trojanPassword, trojanEnabled, trojanRevoked, now, now); err != nil {
 		return err
 	}
 	if shortID != "" {
@@ -1117,11 +1152,11 @@ func (s *Store) CreateHysteriaClient(ctx context.Context, client domain.Client) 
 		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
 		hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc,
-		shadowsocks_enabled, shadowsocks_revoked, created_at, updated_at
-	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		client.ID, client.Name, nil, client.Email, nil, "", boolInt(client.Enabled), boolInt(client.Revoked),
 		string(client.Protocol), client.HysteriaAuth, 0, 0, boolInt(client.HysteriaEnabled),
-		boolInt(client.HysteriaRevoked), 0, 0, "", 0, 0, now, now)
+		boolInt(client.HysteriaRevoked), 0, 0, "", 0, 0, "", 0, 0, now, now)
 	return err
 }
 
@@ -1135,10 +1170,10 @@ func (s *Store) CreateVMessClient(ctx context.Context, client domain.Client) err
 		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
 		hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc,
-		shadowsocks_enabled, shadowsocks_revoked, created_at, updated_at
-	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		client.ID, client.Name, client.UUID, client.Email, nil, "", boolInt(client.Enabled), boolInt(client.Revoked),
-		string(client.Protocol), "", 0, 0, 0, 0, boolInt(client.Enabled), boolInt(client.Revoked), "", 0, 0, now, now)
+		string(client.Protocol), "", 0, 0, 0, 0, boolInt(client.Enabled), boolInt(client.Revoked), "", 0, 0, "", 0, 0, now, now)
 	return err
 }
 
@@ -1153,11 +1188,29 @@ func (s *Store) CreateShadowsocksClient(ctx context.Context, client domain.Clien
 		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
 		hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc,
-		shadowsocks_enabled, shadowsocks_revoked, created_at, updated_at
-	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		client.ID, client.Name, nil, client.Email, nil, "", boolInt(client.Enabled), boolInt(client.Revoked),
 		string(client.Protocol), "", 0, 0, 0, 0, 0, 0, client.ShadowsocksPasswordEnc,
-		boolInt(client.ShadowsocksEnabled), boolInt(client.ShadowsocksRevoked), now, now)
+		boolInt(client.ShadowsocksEnabled), boolInt(client.ShadowsocksRevoked), "", 0, 0, now, now)
+	return err
+}
+
+// CreateTrojanClient stores a Trojan-only profile with its encrypted password.
+func (s *Store) CreateTrojanClient(ctx context.Context, client domain.Client) error {
+	if client.ID == "" || client.Protocol != domain.ProtocolTrojan || client.TrojanPasswordEnc == "" || client.Email == "" {
+		return errors.New("valid Trojan profile credentials are required")
+	}
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO clients(
+		id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
+		protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled,
+		hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc,
+		shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at
+	) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+		client.ID, client.Name, nil, client.Email, nil, "", boolInt(client.Enabled), boolInt(client.Revoked),
+		string(client.Protocol), "", 0, 0, 0, 0, 0, 0, "", 0, 0, client.TrojanPasswordEnc,
+		boolInt(client.TrojanEnabled), boolInt(client.TrojanRevoked), now, now)
 	return err
 }
 
@@ -1168,7 +1221,7 @@ func nullableCredential(value string) any {
 	return value
 }
 
-func clientProtocolStorage(client domain.Client, uuid string) (string, string, int, int, int, int, int, int, string, int, int) {
+func clientProtocolStorage(client domain.Client, uuid string) (string, string, int, int, int, int, int, int, string, int, int, string, int, int) {
 	protocol := client.Protocol
 	if protocol == "" {
 		protocol = domain.ProtocolLegacyDual
@@ -1177,7 +1230,7 @@ func clientProtocolStorage(client domain.Client, uuid string) (string, string, i
 	if protocol == domain.ProtocolLegacyDual && hysteriaAuth == "" {
 		hysteriaAuth = uuid
 	}
-	vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, shadowsocksEnabled, shadowsocksRevoked := false, false, false, false, false, false, false, false
+	vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, shadowsocksEnabled, shadowsocksRevoked, trojanEnabled, trojanRevoked := false, false, false, false, false, false, false, false, false, false
 	switch protocol {
 	case domain.ProtocolLegacyDual:
 		vlessEnabled, vlessRevoked = client.Enabled, client.Revoked
@@ -1202,8 +1255,13 @@ func clientProtocolStorage(client domain.Client, uuid string) (string, string, i
 		if !shadowsocksEnabled && !shadowsocksRevoked && client.Enabled && !client.Revoked {
 			shadowsocksEnabled = true
 		}
+	case domain.ProtocolTrojan:
+		trojanEnabled, trojanRevoked = client.TrojanEnabled, client.TrojanRevoked
+		if !trojanEnabled && !trojanRevoked && client.Enabled && !client.Revoked {
+			trojanEnabled = true
+		}
 	}
-	return string(protocol), hysteriaAuth, boolInt(vlessEnabled), boolInt(vlessRevoked), boolInt(hysteriaEnabled), boolInt(hysteriaRevoked), boolInt(vmessEnabled), boolInt(vmessRevoked), client.ShadowsocksPasswordEnc, boolInt(shadowsocksEnabled), boolInt(shadowsocksRevoked)
+	return string(protocol), hysteriaAuth, boolInt(vlessEnabled), boolInt(vlessRevoked), boolInt(hysteriaEnabled), boolInt(hysteriaRevoked), boolInt(vmessEnabled), boolInt(vmessRevoked), client.ShadowsocksPasswordEnc, boolInt(shadowsocksEnabled), boolInt(shadowsocksRevoked), client.TrojanPasswordEnc, boolInt(trojanEnabled), boolInt(trojanRevoked)
 }
 
 // ListReservedShortIDs returns the durable, unassigned REALITY IDs in issuance order.
@@ -1330,8 +1388,8 @@ func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client doma
 		}
 	}
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked := clientProtocolStorage(client, uuid)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, nullableCredential(uuid), email, nullableCredential(shortID), client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked, now, now); err != nil {
+	protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked, trojanPassword, trojanEnabled, trojanRevoked := clientProtocolStorage(client, uuid)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO clients(id, name, uuid, email, short_id, client_fingerprint, enabled, revoked, protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, vmess_enabled, vmess_revoked, shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, client.ID, client.Name, nullableCredential(uuid), email, nullableCredential(shortID), client.ClientFingerprint, boolInt(client.Enabled), boolInt(client.Revoked), protocol, hysteriaAuth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked, trojanPassword, trojanEnabled, trojanRevoked, now, now); err != nil {
 		return "", false, err
 	}
 	if err := markShortIDPoolInitialized(ctx, tx); err != nil {
@@ -1416,7 +1474,7 @@ func (s *Store) GetClient(ctx context.Context, id string) (domain.Client, error)
 }
 
 func (s *Store) SetClientState(ctx context.Context, id string, enabled, revoked bool) error {
-	result, err := s.db.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, updated_at=? WHERE id=?`, boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
+	result, err := s.db.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, trojan_enabled=?, trojan_revoked=?, updated_at=? WHERE id=?`, boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return err
 	}
@@ -1445,11 +1503,11 @@ func (s *Store) SetClientProtocolStates(ctx context.Context, id string, states m
 	defer tx.Rollback()
 	var client domain.Client
 	var uuid, shortID sql.NullString
-	var email, storedProtocol, hysteriaAuth, shadowsocksPassword, created, updated string
-	var enabled, revoked, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, shadowsocksEnabled, shadowsocksRevoked int
+	var email, storedProtocol, hysteriaAuth, shadowsocksPassword, trojanPassword, created, updated string
+	var enabled, revoked, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, shadowsocksEnabled, shadowsocksRevoked, trojanEnabled, trojanRevoked int
 	if err := tx.QueryRowContext(ctx, `SELECT `+clientSelectColumns+` FROM clients WHERE id=?`, id).Scan(
 		&client.ID, &client.Name, &uuid, &email, &shortID, &client.ClientFingerprint, &enabled, &revoked,
-		&storedProtocol, &hysteriaAuth, &vlessEnabled, &vlessRevoked, &hysteriaEnabled, &hysteriaRevoked, &vmessEnabled, &vmessRevoked, &shadowsocksPassword, &shadowsocksEnabled, &shadowsocksRevoked, &created, &updated,
+		&storedProtocol, &hysteriaAuth, &vlessEnabled, &vlessRevoked, &hysteriaEnabled, &hysteriaRevoked, &vmessEnabled, &vmessRevoked, &shadowsocksPassword, &shadowsocksEnabled, &shadowsocksRevoked, &trojanPassword, &trojanEnabled, &trojanRevoked, &created, &updated,
 	); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return errors.New("client not found")
@@ -1461,6 +1519,7 @@ func (s *Store) SetClientProtocolStates(ctx context.Context, id string, states m
 		client.Protocol = domain.ProtocolLegacyDual
 	}
 	client.ShadowsocksPasswordEnc = shadowsocksPassword
+	client.TrojanPasswordEnc = trojanPassword
 	for protocol, state := range states {
 		if state.Enabled && state.Revoked {
 			return errors.New("revoked protocol access cannot be enabled")
@@ -1486,13 +1545,18 @@ func (s *Store) SetClientProtocolStates(ctx context.Context, id string, states m
 				return errors.New("profile has no Shadowsocks access")
 			}
 			shadowsocksEnabled, shadowsocksRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
+		case domain.ProtocolTrojan:
+			if !client.HasTrojan() {
+				return errors.New("profile has no Trojan access")
+			}
+			trojanEnabled, trojanRevoked = boolInt(state.Enabled), boolInt(state.Revoked)
 		default:
 			return errors.New("unsupported protocol access")
 		}
 	}
-	anyEnabled := (client.HasVLESS() && vlessEnabled != 0 && vlessRevoked == 0) || (client.HasHysteria2() && hysteriaEnabled != 0 && hysteriaRevoked == 0) || (client.HasVMess() && vmessEnabled != 0 && vmessRevoked == 0) || (client.HasShadowsocks() && shadowsocksEnabled != 0 && shadowsocksRevoked == 0)
-	allRevoked := (!client.HasVLESS() || vlessRevoked != 0) && (!client.HasHysteria2() || hysteriaRevoked != 0) && (!client.HasVMess() || vmessRevoked != 0) && (!client.HasShadowsocks() || shadowsocksRevoked != 0)
-	result, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, updated_at=? WHERE id=?`, boolInt(anyEnabled), boolInt(allRevoked), vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, shadowsocksEnabled, shadowsocksRevoked, time.Now().UTC().Format(time.RFC3339Nano), id)
+	anyEnabled := (client.HasVLESS() && vlessEnabled != 0 && vlessRevoked == 0) || (client.HasHysteria2() && hysteriaEnabled != 0 && hysteriaRevoked == 0) || (client.HasVMess() && vmessEnabled != 0 && vmessRevoked == 0) || (client.HasShadowsocks() && shadowsocksEnabled != 0 && shadowsocksRevoked == 0) || (client.HasTrojan() && trojanEnabled != 0 && trojanRevoked == 0)
+	allRevoked := (!client.HasVLESS() || vlessRevoked != 0) && (!client.HasHysteria2() || hysteriaRevoked != 0) && (!client.HasVMess() || vmessRevoked != 0) && (!client.HasShadowsocks() || shadowsocksRevoked != 0) && (!client.HasTrojan() || trojanRevoked != 0)
+	result, err := tx.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, trojan_enabled=?, trojan_revoked=?, updated_at=? WHERE id=?`, boolInt(anyEnabled), boolInt(allRevoked), vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, shadowsocksEnabled, shadowsocksRevoked, trojanEnabled, trojanRevoked, time.Now().UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
 		return err
 	}
@@ -1668,18 +1732,18 @@ type scanner interface{ Scan(...any) error }
 
 const clientSelectColumns = `id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 	protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, vmess_enabled, vmess_revoked,
-	shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked,
+	shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked,
 	created_at, updated_at`
 
 func scanClient(row scanner) (domain.Client, error) {
 	var client domain.Client
 	var uuid, shortID sql.NullString
-	var email, protocol, hysteriaAuth, shadowsocksPassword string
-	var enabled, revoked, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, shadowsocksEnabled, shadowsocksRevoked int
+	var email, protocol, hysteriaAuth, shadowsocksPassword, trojanPassword string
+	var enabled, revoked, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, shadowsocksEnabled, shadowsocksRevoked, trojanEnabled, trojanRevoked int
 	var created, updated string
 	err := row.Scan(&client.ID, &client.Name, &uuid, &email, &shortID, &client.ClientFingerprint,
 		&enabled, &revoked, &protocol, &hysteriaAuth, &vlessEnabled, &vlessRevoked,
-		&hysteriaEnabled, &hysteriaRevoked, &vmessEnabled, &vmessRevoked, &shadowsocksPassword, &shadowsocksEnabled, &shadowsocksRevoked, &created, &updated)
+		&hysteriaEnabled, &hysteriaRevoked, &vmessEnabled, &vmessRevoked, &shadowsocksPassword, &shadowsocksEnabled, &shadowsocksRevoked, &trojanPassword, &trojanEnabled, &trojanRevoked, &created, &updated)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return domain.Client{}, errors.New("client not found")
@@ -1701,6 +1765,8 @@ func scanClient(row scanner) (domain.Client, error) {
 	client.VMessEnabled, client.VMessRevoked = vmessEnabled != 0, vmessRevoked != 0
 	client.ShadowsocksPasswordEnc = shadowsocksPassword
 	client.ShadowsocksEnabled, client.ShadowsocksRevoked = shadowsocksEnabled != 0, shadowsocksRevoked != 0
+	client.TrojanPasswordEnc = trojanPassword
+	client.TrojanEnabled, client.TrojanRevoked = trojanEnabled != 0, trojanRevoked != 0
 	client.CreatedAt, _ = time.Parse(time.RFC3339Nano, created)
 	client.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updated)
 	return client, nil

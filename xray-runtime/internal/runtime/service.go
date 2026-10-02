@@ -927,6 +927,8 @@ func protocolFromName(name string) (xrayruntimev1.Protocol, bool) {
 		return xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, true
 	case "shadowsocks":
 		return xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, true
+	case "trojan":
+		return xrayruntimev1.Protocol_PROTOCOL_TROJAN, true
 	default:
 		return xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, false
 	}
@@ -934,7 +936,7 @@ func protocolFromName(name string) (xrayruntimev1.Protocol, bool) {
 
 func supportedProtocol(protocol xrayruntimev1.Protocol) bool {
 	switch protocol {
-	case xrayruntimev1.Protocol_PROTOCOL_VLESS, xrayruntimev1.Protocol_PROTOCOL_VMESS, xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS:
+	case xrayruntimev1.Protocol_PROTOCOL_VLESS, xrayruntimev1.Protocol_PROTOCOL_VMESS, xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, xrayruntimev1.Protocol_PROTOCOL_TROJAN:
 		return true
 	default:
 		return false

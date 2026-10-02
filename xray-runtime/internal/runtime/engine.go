@@ -24,6 +24,7 @@ import (
 	"github.com/xtls/xray-core/proxy"
 	hysteriaaccount "github.com/xtls/xray-core/proxy/hysteria/account"
 	shadowsocks "github.com/xtls/xray-core/proxy/shadowsocks"
+	trojan "github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
 	"google.golang.org/protobuf/proto"
@@ -416,6 +417,14 @@ func accountForWithMethod(protocolType xrayruntimev1.Protocol, credential, flow,
 			return nil, errors.New("unsupported Shadowsocks method")
 		}
 		account, err = (&shadowsocks.Account{Password: credential, CipherType: cipherType}).AsAccount()
+	case xrayruntimev1.Protocol_PROTOCOL_TROJAN:
+		if flow != "" {
+			return nil, errors.New("Trojan does not accept a flow")
+		}
+		if strings.TrimSpace(credential) == "" || strings.ContainsAny(credential, "\r\n") {
+			return nil, errors.New("invalid Trojan password")
+		}
+		account, err = (&trojan.Account{Password: credential}).AsAccount()
 	default:
 		return nil, errors.New("unsupported Xray protocol")
 	}
@@ -548,7 +557,7 @@ func ConfiguredProtocols(configuration []byte) ([]string, error) {
 	var result []string
 	for _, inbound := range document.Inbounds {
 		protocol := inbound.Protocol
-		if protocol != "vless" && protocol != "vmess" && protocol != "hysteria" && protocol != "shadowsocks" {
+		if protocol != "vless" && protocol != "vmess" && protocol != "hysteria" && protocol != "shadowsocks" && protocol != "trojan" {
 			continue
 		}
 		if protocol == "hysteria" {

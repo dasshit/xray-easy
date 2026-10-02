@@ -14,6 +14,7 @@ const props = defineProps<{
   hysteriaQrUrl: string
   vmessQrUrl: string
   shadowsocksQrUrl?: string
+  trojanQrUrl?: string
   awgQrUrl?: string
   awgProfileUrl?: string
   jsonUrl: string
@@ -21,13 +22,15 @@ const props = defineProps<{
   copiedHysteria: boolean
   copiedVmess: boolean
   copiedShadowsocks?: boolean
+  copiedTrojan?: boolean
 }>()
-const emit = defineEmits<{ close: []; copyVless: []; copyHysteria: []; copyVmess: []; copyShadowsocks: [] }>()
+const emit = defineEmits<{ close: []; copyVless: []; copyHysteria: []; copyVmess: []; copyShadowsocks: []; copyTrojan: [] }>()
 const text = computed(() => translations[props.language])
 const vlessUri = computed(() => props.profile.protocol === 'vless' || props.profile.protocol === 'legacy_dual' ? props.profile.uri : undefined)
 const hysteriaUri = computed(() => props.profile.protocol === 'hysteria2' || props.profile.protocol === 'legacy_dual' ? props.profile.hysteriaUri : undefined)
 const vmessUri = computed(() => props.profile.protocol === 'vmess' ? props.profile.vmessUri : undefined)
 const shadowsocksUri = computed(() => props.profile.protocol === 'shadowsocks' ? props.profile.ssUri : undefined)
+const trojanUri = computed(() => props.profile.protocol === 'trojan' ? props.profile.trojanUri : undefined)
 const isAmneziaWG = computed(() => props.profile.protocol === 'amneziawg')
 const hasJsonProfile = computed(() => props.profile.protocol === 'vless' || props.profile.protocol === 'vmess' || (props.profile.protocol === 'legacy_dual' && props.profile.json !== undefined))
 
@@ -40,6 +43,7 @@ function profileLabel(): string {
   if (props.profile.protocol === 'hysteria2') return text.value.hysteria2Profile
   if (props.profile.protocol === 'vmess') return text.value.vmessProfile
   if (props.profile.protocol === 'shadowsocks') return text.value.shadowsocksProfile
+  if (props.profile.protocol === 'trojan') return text.value.trojanProfile
   if (props.profile.protocol === 'amneziawg') return text.value.amneziawg
   return 'VLESS + REALITY'
 }
@@ -90,6 +94,15 @@ function profileLabel(): string {
           <button class="secondary copy-button" type="button" @click="emit('copyShadowsocks')"><span aria-hidden="true">⧉</span>{{ copiedShadowsocks ? text.copied : text.copyShadowsocks }}</button>
           <a class="download-link" :href="jsonUrl"><span aria-hidden="true">↓</span>{{ text.jsonFile }}</a>
           <p class="hint">{{ text.shadowsocksSettingsHelp }}</p>
+        </div>
+      </div>
+      <div v-if="trojanUri" class="profile-delivery hysteria-delivery">
+        <div class="qr-panel"><span class="qr-label">{{ text.trojanProfile }}</span><img class="qr" :src="trojanQrUrl" :alt="text.qr" /></div>
+        <div class="profile-link-panel">
+          <label>{{ text.trojanUri }}<textarea readonly :value="trojanUri"></textarea></label>
+          <button class="secondary copy-button" type="button" @click="emit('copyTrojan')"><span aria-hidden="true">⧉</span>{{ copiedTrojan ? text.copied : text.copyTrojan }}</button>
+          <a class="download-link" :href="jsonUrl"><span aria-hidden="true">↓</span>{{ text.jsonFile }}</a>
+          <p class="hint">{{ text.profileCreateSummaryTrojan }}</p>
         </div>
       </div>
       <div v-if="isAmneziaWG" class="profile-delivery hysteria-delivery">

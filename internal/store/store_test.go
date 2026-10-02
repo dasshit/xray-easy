@@ -161,7 +161,7 @@ func TestProtocolStorageDefaultsAndCredentialNullability(t *testing.T) {
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, _, _, _ := clientProtocolStorage(test.client, test.uuid)
+			protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, _, _, _, _, _, _ := clientProtocolStorage(test.client, test.uuid)
 			if protocol != test.protocol || auth != test.auth || [6]int{vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked} != test.states {
 				t.Fatalf("stored protocol credentials = %q/%q [%d %d %d %d %d %d]", protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked)
 			}

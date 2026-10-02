@@ -23,6 +23,7 @@ const copiedProfile = ref(false)
 const copiedHysteria = ref(false)
 const copiedVMess = ref(false)
 const copiedShadowsocks = ref(false)
+const copiedTrojan = ref(false)
 const error = ref('')
 const busy = ref(false)
 const { language, t, changeLanguage, languageOptions } = useI18n()
@@ -64,6 +65,7 @@ const vmessAvailable = computed(() => {
   return status !== null && status.certificate !== undefined && (status.certificateError === undefined || status.certificateError === '')
 })
 const shadowsocksAvailable = computed(() => settings.value?.shadowsocksEnabled === true)
+const trojanAvailable = computed(() => settings.value?.trojanEnabled === true && vmessAvailable.value)
 const amneziaWGAvailable = computed(() => amneziaWGStatus.value?.enabled === true && amneziaWGStatus.value.available && amneziaWGStatus.value.running)
 const amneziaWGClients = computed(() => clients.value.filter(client => client.protocol === 'amneziawg'))
 const onlineAmneziaWGClients = computed(() => amneziaWGClients.value.filter(client => client.online))
@@ -401,11 +403,11 @@ async function createDevice(input: CreateClientCommand) {
  * @param client - The device whose profile should be displayed.
  * @returns A promise that resolves after the profile has been loaded or an error is shown.
  */
-async function showProfile(client: Client) { try { copiedProfile.value = false; copiedHysteria.value = false; copiedVMess.value = false; copiedShadowsocks.value = false; selectedProfile.value = await api.clients.profile(client.id) } catch (cause) { showError(cause) } }
+async function showProfile(client: Client) { try { copiedProfile.value = false; copiedHysteria.value = false; copiedVMess.value = false; copiedShadowsocks.value = false; copiedTrojan.value = false; selectedProfile.value = await api.clients.profile(client.id) } catch (cause) { showError(cause) } }
 /**
  * Close the profile dialog when no operation is in progress.
  */
-function closeProfile() { if (!busy.value) { selectedProfile.value = null; copiedProfile.value = false; copiedHysteria.value = false; copiedVMess.value = false; copiedShadowsocks.value = false } }
+function closeProfile() { if (!busy.value) { selectedProfile.value = null; copiedProfile.value = false; copiedHysteria.value = false; copiedVMess.value = false; copiedShadowsocks.value = false; copiedTrojan.value = false } }
 /**
  * Find the device associated with the currently displayed profile.
  * @returns The matching device, or undefined if it is no longer in the list.
@@ -422,6 +424,7 @@ function clientProtocolLabel(client: Client) {
   if (client.protocol === 'hysteria2') return 'Hysteria 2'
   if (client.protocol === 'vmess') return 'VMess + TLS'
   if (client.protocol === 'shadowsocks') return 'Shadowsocks'
+  if (client.protocol === 'trojan') return 'Trojan'
   return 'VLESS + REALITY'
 }
 /**
@@ -435,6 +438,7 @@ function clientAccessSummary(client: Client) {
   if (client.protocol === 'hysteria2') return state(client.hysteria2)
   if (client.protocol === 'vmess') return state(client.vmess)
   if (client.protocol === 'shadowsocks') return state(client.shadowsocks)
+  if (client.protocol === 'trojan') return state(client.trojan)
   if (client.protocol === 'amneziawg') return client.enabled ? t().enabled : t().disabled
   return state(client.vless)
 }
@@ -470,6 +474,14 @@ async function copyShadowsocksUri() {
   const uri = profile?.protocol === 'shadowsocks' ? profile.ssUri : undefined
   if (uri === undefined || uri === '') return
   try { await navigator.clipboard.writeText(uri); copiedShadowsocks.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedShadowsocks.value = false }, 2200) }
+  catch (cause) { showError(cause) }
+}
+/** Copy the Trojan share link and report the result. */
+async function copyTrojanUri() {
+  const profile = selectedProfile.value
+  const uri = profile?.protocol === 'trojan' ? profile.trojanUri : undefined
+  if (uri === undefined || uri === '') return
+  try { await navigator.clipboard.writeText(uri); copiedTrojan.value = true; showSuccess(t().profileCopied); window.setTimeout(() => { copiedTrojan.value = false }, 2200) }
   catch (cause) { showError(cause) }
 }
 /**
@@ -671,6 +683,17 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
             </dl>
           </article>
 
+          <article class="settings-card settings-trojan-card">
+            <div class="card-heading"><div><h3>{{ t().trojanSettingsTitle }}</h3><p class="hint">{{ t().trojanSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
+            <p class="status-badge" :class="trojanAvailable ? 'positive' : 'muted'">{{ trojanAvailable ? t().running : t().trojanUnavailable }}</p>
+            <dl class="vmess-settings-list">
+              <div><dt>{{ t().host }}</dt><dd>{{ settings.publicHost }}</dd></div>
+              <div><dt>{{ t().trojanPort }}</dt><dd>{{ settings.trojanPublicPort || '—' }}/TCP</dd></div>
+              <div><dt>{{ t().vmessServerName }}</dt><dd>{{ hysteriaStatus?.tlsServerName || '—' }}</dd></div>
+              <div><dt>{{ t().vmessCertificate }}</dt><dd class="hysteria-fingerprint">{{ hysteriaStatus?.certificate?.fingerprint || '—' }}</dd></div>
+            </dl>
+          </article>
+
           <article class="settings-card settings-awg-card">
             <div class="card-heading"><div><h3>{{ t().amneziawg }}</h3><p class="hint">{{ t().awgSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
             <p class="status-badge" :class="amneziaWGAvailable ? 'positive' : 'muted'">{{ amneziaWGAvailable ? t().running : amneziaWGStatus?.enabled ? t().unavailable : t().awgNotEnabled }}</p>
@@ -777,9 +800,9 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         </div>
       </section>
 
-      <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" :vmess-available="vmessAvailable" :shadowsocks-available="shadowsocksAvailable" :awg-available="amneziaWGAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
+      <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" :vmess-available="vmessAvailable" :shadowsocks-available="shadowsocksAvailable" :trojan-available="trojanAvailable" :awg-available="amneziaWGAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
       <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p><p v-if="clientAction.action === 'revoke' && clientAction.client.protocol === 'amneziawg'" class="hint">{{ t().awgConfirmRevoke }}</p><p v-else-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ clientAction.client.protocol === 'amneziawg' ? t().awgRevoke : actionLabel(clientAction.action) }}</button></div></div></div>
-      <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :vmess-qr-url="api.clients.profileVMessQrUrl(selectedProfile.clientId)" :shadowsocks-qr-url="api.clients.profileShadowsocksQrUrl(selectedProfile.clientId)" :awg-qr-url="api.clients.profileAmneziaWGQrUrl(selectedProfile.clientId)" :awg-profile-url="api.clients.profileAmneziaWGUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" :copied-vmess="copiedVMess" :copied-shadowsocks="copiedShadowsocks" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" @copy-vmess="copyVMessUri" @copy-shadowsocks="copyShadowsocksUri" />
+      <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :vmess-qr-url="api.clients.profileVMessQrUrl(selectedProfile.clientId)" :shadowsocks-qr-url="api.clients.profileShadowsocksQrUrl(selectedProfile.clientId)" :trojan-qr-url="api.clients.profileTrojanQrUrl(selectedProfile.clientId)" :awg-qr-url="api.clients.profileAmneziaWGQrUrl(selectedProfile.clientId)" :awg-profile-url="api.clients.profileAmneziaWGUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" :copied-vmess="copiedVMess" :copied-shadowsocks="copiedShadowsocks" :copied-trojan="copiedTrojan" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" @copy-vmess="copyVMessUri" @copy-shadowsocks="copyShadowsocksUri" @copy-trojan="copyTrojanUri" />
       <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
     </section>
   </main>

@@ -186,6 +186,57 @@ func TestRenderAndBuildShadowsocksProfile(t *testing.T) {
 	}
 }
 
+func TestRenderAndBuildTrojanProfile(t *testing.T) {
+	settings := validTestSettings()
+	settings.TrojanEnabled = true
+	settings.TrojanPublicPort = 10443
+	settings.HysteriaTLSMode = HysteriaTLSCustom
+	settings.HysteriaTLSServerName = "vpn.example.com"
+	settings.HysteriaTLSCertPath = "/certs/fullchain.pem"
+	settings.HysteriaTLSKeyPath = "/certs/privkey.pem"
+	client := Client{ID: "trojan", Name: "iPhone", Protocol: domain.ProtocolTrojan, Email: "trojan@xray-easy", TrojanPassword: "secret-password", Enabled: true, TrojanEnabled: true}
+	config, err := RenderServerConfig(settings, []Client{client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Inbounds []struct {
+			Tag      string `json:"tag"`
+			Port     int    `json:"port"`
+			Protocol string `json:"protocol"`
+			Settings struct {
+				Clients []struct{ Password, Email string } `json:"clients"`
+			} `json:"settings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(config, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, inbound := range decoded.Inbounds {
+		if inbound.Tag == TrojanInboundTag {
+			found = true
+			if inbound.Port != TrojanInternalPort || inbound.Protocol != "trojan" || len(inbound.Settings.Clients) != 1 || inbound.Settings.Clients[0].Password != client.TrojanPassword {
+				t.Fatalf("unexpected Trojan inbound: %+v", inbound)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Trojan inbound missing: %+v", decoded.Inbounds)
+	}
+	profile, err := BuildProfile(settings, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(profile.TrojanURI)
+	if err != nil || parsed.Scheme != "trojan" || parsed.Host != "vpn.example.com:10443" || parsed.User.Username() != client.TrojanPassword || parsed.Query().Get("security") != "tls" {
+		t.Fatalf("unexpected Trojan URI: %s (%v)", profile.TrojanURI, err)
+	}
+	if len(profile.TrojanJSON) == 0 || !strings.Contains(string(profile.TrojanJSON), client.TrojanPassword) {
+		t.Fatal("Trojan JSON profile missing password")
+	}
+}
+
 func TestRenderVMessInboundUsesTLSAndRetainsDisabledProfiles(t *testing.T) {
 	settings := validTestSettings()
 	settings.VMessPublicPort = 9443

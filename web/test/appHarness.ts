@@ -33,6 +33,8 @@ export const settings: SettingsDto = {
   shadowsocks_public_port: 8388,
   shadowsocks_method: 'chacha20-poly1305',
   shadowsocks_network: 'tcp,udp',
+  trojan_enabled: false,
+  trojan_public_port: 10443,
   reality_target: 'www.example.com:443',
   reality_sni: 'www.example.com',
   client_fingerprint: 'chrome',

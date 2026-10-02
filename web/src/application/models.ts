@@ -168,7 +168,11 @@ export type LegacyProfileDelivery = {
 }
 
 /** Delivery payload discriminated by the protocol credentials on the profile. */
-export type ProfileDelivery = VLESSProfileDelivery | VMessProfileDelivery | ShadowsocksProfileDelivery | HysteriaProfileDelivery | AmneziaWGProfileDelivery | LegacyProfileDelivery
+/** Authenticated Trojan delivery with a share URI and client JSON configuration. */
+export type TrojanProfileDelivery = { clientId: string; protocol: 'trojan'; trojanUri: string; json: unknown }
+
+/** Protocol-specific authenticated profile payload returned by the backend. */
+export type ProfileDelivery = VLESSProfileDelivery | VMessProfileDelivery | ShadowsocksProfileDelivery | TrojanProfileDelivery | HysteriaProfileDelivery | AmneziaWGProfileDelivery | LegacyProfileDelivery
 
 /** Proposed server settings submitted for preview before applying changes. */
 export type SettingsPreviewCommand = {

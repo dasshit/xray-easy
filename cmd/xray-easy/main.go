@@ -50,6 +50,7 @@ type server struct {
 	publicPort       int
 	vmessPort        int
 	shadowsocksPort  int
+	trojanPort       int
 	dataDir          string
 	maintenancePath  string
 	defaultAPIListen string
@@ -109,6 +110,12 @@ type vmessHandlerAPI interface {
 type shadowsocksHandlerAPI interface {
 	AddShadowsocksUser(context.Context, string, string, string) error
 	RemoveShadowsocksUser(context.Context, string) error
+	UsersInInbound(context.Context, string) ([]string, error)
+}
+
+type trojanHandlerAPI interface {
+	AddTrojanUser(context.Context, string, string) error
+	RemoveTrojanUser(context.Context, string) error
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
@@ -250,6 +257,7 @@ type clientResponse struct {
 	Hysteria2         *clientAccessResponse `json:"hysteria2,omitempty"`
 	VMess             *clientAccessResponse `json:"vmess,omitempty"`
 	Shadowsocks       *clientAccessResponse `json:"shadowsocks,omitempty"`
+	Trojan            *clientAccessResponse `json:"trojan,omitempty"`
 	ID                string                `json:"id"`
 	Name              string                `json:"name"`
 	ClientFingerprint string                `json:"fingerprint,omitempty"`
@@ -346,6 +354,11 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		_ = db.Close()
 		return nil, nil, err
 	}
+	trojanPort, err := configuredTrojanPort()
+	if err != nil {
+		_ = db.Close()
+		return nil, nil, err
+	}
 	apiListen := envOr("XRAY_API_LISTEN", "172.31.241.2:10085")
 	address := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR"))
 	if address == "" {
@@ -368,6 +381,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 		publicPort:       publicPort,
 		vmessPort:        vmessPort,
 		shadowsocksPort:  shadowsocksPort,
+		trojanPort:       trojanPort,
 		dataDir:          dataDir,
 		maintenancePath:  filepath.Join(dataDir, "maintenance.lock"),
 		defaultAPIListen: apiListen,
@@ -882,6 +896,41 @@ func configuredShadowsocksPort() (int, error) {
 	}
 	if port == uiPort {
 		return 0, errors.New("XRAY_SHADOWSOCKS_PORT must differ from XRAY_EASY_UI_PORT")
+	}
+	return port, nil
+}
+
+func configuredTrojanPort() (int, error) {
+	value := envOr("XRAY_TROJAN_PORT", "10443")
+	port, err := strconv.Atoi(value)
+	if err != nil || port < 1 || port > 65535 {
+		return 0, errors.New("XRAY_TROJAN_PORT must be an integer between 1 and 65535")
+	}
+	publicPort, err := configuredPublicPort()
+	if err != nil {
+		return 0, err
+	}
+	vmessPort, err := configuredVMessPort()
+	if err != nil {
+		return 0, err
+	}
+	shadowsocksPort, err := configuredShadowsocksPort()
+	if err != nil {
+		return 0, err
+	}
+	uiPort, err := strconv.Atoi(envOr("XRAY_EASY_UI_PORT", "8080"))
+	if err != nil || uiPort < 1 || uiPort > 65535 {
+		return 0, errors.New("XRAY_EASY_UI_PORT must be an integer between 1 and 65535")
+	}
+	for name, other := range map[string]int{
+		"XRAY_PUBLIC_PORT":      publicPort,
+		"XRAY_VMESS_PORT":       vmessPort,
+		"XRAY_SHADOWSOCKS_PORT": shadowsocksPort,
+		"XRAY_EASY_UI_PORT":     uiPort,
+	} {
+		if port == other {
+			return 0, fmt.Errorf("XRAY_TROJAN_PORT must differ from %s", name)
+		}
 	}
 	return port, nil
 }
@@ -2010,6 +2059,7 @@ func clientsFingerprint(clients []domain.Client) string {
 			client.VLESSEnabled, client.VLESSRevoked, client.HysteriaEnabled, client.HysteriaRevoked)
 		fmt.Fprintf(&value, "%t\x00%t\n", client.VMessEnabled, client.VMessRevoked)
 		fmt.Fprintf(&value, "%t\x00%t\x00%s\n", client.ShadowsocksEnabled, client.ShadowsocksRevoked, client.ShadowsocksPasswordEnc)
+		fmt.Fprintf(&value, "%t\x00%t\x00%s\n", client.TrojanEnabled, client.TrojanRevoked, client.TrojanPasswordEnc)
 	}
 	hash := sha256.Sum256([]byte(value.String()))
 	return hex.EncodeToString(hash[:])
@@ -2100,15 +2150,15 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	if protocol == "" {
 		protocol = domain.ProtocolVLESS
 	}
-	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 && protocol != domain.ProtocolVMess && protocol != domain.ProtocolShadowsocks && protocol != domain.ProtocolAmneziaWG {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless, vmess, hysteria2, shadowsocks, or amneziawg"})
+	if protocol != domain.ProtocolVLESS && protocol != domain.ProtocolHysteria2 && protocol != domain.ProtocolVMess && protocol != domain.ProtocolShadowsocks && protocol != domain.ProtocolTrojan && protocol != domain.ProtocolAmneziaWG {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "protocol must be vless, vmess, hysteria2, shadowsocks, trojan, or amneziawg"})
 		return
 	}
 	if protocol == domain.ProtocolAmneziaWG {
 		s.createAWGClient(w, r, admin, name, fingerprint, authValue)
 		return
 	}
-	if protocol == domain.ProtocolVLESS && authValue != "" {
+	if protocol != domain.ProtocolHysteria2 && authValue != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "auth is only valid for Hysteria 2 profiles"})
 		return
 	}
@@ -2160,6 +2210,16 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		ss, settingsErr := configuredShadowsocksSettings()
 		if settingsErr != nil || !ss.Enabled {
 			writeJSON(w, http.StatusConflict, map[string]any{"code": "transport_disabled", "error": "Shadowsocks is disabled; enable it in the environment and restart the stack"})
+			return
+		}
+	} else if protocol == domain.ProtocolTrojan {
+		if !strings.EqualFold(strings.TrimSpace(envOr("XRAY_TROJAN_ENABLED", "false")), "true") {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "transport_disabled", "error": "Trojan is disabled; enable it in the environment and restart the stack"})
+			return
+		}
+		status, statusErr := s.hysteriaSettingsStatus(r.Context())
+		if statusErr != nil || status.CertificateError != "" || status.Certificate == nil {
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "a valid TLS certificate matching the VMess server name must be configured in Hysteria 2 Settings"})
 			return
 		}
 	}
@@ -2259,6 +2319,16 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 			return domain.Client{}, fmt.Errorf("encrypt Shadowsocks password: %w", err)
 		}
 	}
+	if protocol == domain.ProtocolTrojan {
+		password, generationErr := newTrojanPassword()
+		if generationErr != nil {
+			return domain.Client{}, generationErr
+		}
+		client.TrojanPasswordEnc, err = secret.Seal(s.masterKey, password, "trojan_password")
+		if err != nil {
+			return domain.Client{}, fmt.Errorf("encrypt Trojan password: %w", err)
+		}
+	}
 	shortID, replaceInbound := "", false
 	switch protocol {
 	case domain.ProtocolVLESS:
@@ -2276,8 +2346,10 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		err = s.store.CreateHysteriaClient(ctx, client)
 	case domain.ProtocolShadowsocks:
 		err = s.store.CreateShadowsocksClient(ctx, client)
+	case domain.ProtocolTrojan:
+		err = s.store.CreateTrojanClient(ctx, client)
 	default:
-		return domain.Client{}, errors.New("new profiles must use VLESS, VMess, Hysteria 2, or Shadowsocks")
+		return domain.Client{}, errors.New("new profiles must use VLESS, VMess, Hysteria 2, Shadowsocks, or Trojan")
 	}
 	if err != nil {
 		return domain.Client{}, fmt.Errorf("create client: %w", err)
@@ -2286,6 +2358,10 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	if protocol == domain.ProtocolShadowsocks && mustDecryptShadowsocksPassword(s.masterKey, client) == "" {
 		_ = s.store.DeleteClient(ctx, clientID)
 		return domain.Client{}, errors.New("could not decrypt Shadowsocks password")
+	}
+	if protocol == domain.ProtocolTrojan && mustDecryptTrojanPassword(s.masterKey, client) == "" {
+		_ = s.store.DeleteClient(ctx, clientID)
+		return domain.Client{}, errors.New("could not decrypt Trojan password")
 	}
 	clients = append(clients, client)
 	reserved, err := s.store.ListReservedShortIDs(ctx)
@@ -2307,7 +2383,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	_ = s.store.UpdateApplyOperation(ctx, operationID, "applying", "")
 	activePath := filepath.Join(s.configDir, "active.json")
 	usedReplace := protocol == domain.ProtocolVLESS && replaceInbound
-	fullApply, vlessReplaced, vlessAdded, hysteriaAdded, vmessReplaced, vmessAdded, shadowsocksAdded := false, false, false, false, false, false, false
+	fullApply, vlessReplaced, vlessAdded, hysteriaAdded, vmessReplaced, vmessAdded, shadowsocksAdded, trojanAdded := false, false, false, false, false, false, false, false
 	rollbackRuntime := func() {
 		if fullApply {
 			_ = s.xrayRuntime.Apply(ctx, activePath, operationID+"-rollback")
@@ -2338,6 +2414,11 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 				_ = api.RemoveShadowsocksUser(ctx, client.Email)
 			}
 		}
+		if trojanAdded {
+			if api, ok := s.handler.(trojanHandlerAPI); ok {
+				_ = api.RemoveTrojanUser(ctx, client.Email)
+			}
+		}
 		if vlessAdded {
 			_ = s.handler.RemoveUser(ctx, client.Email)
 		}
@@ -2349,7 +2430,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		_ = s.store.DeleteClient(ctx, clientID)
 		return domain.Client{}, cause
 	}
-	if !hasInboundTag(activePath, "vless-reality") || (s.hysteriaEnabled(ctx) && !hasInboundTag(activePath, xray.HysteriaInboundTag)) || (configuredShadowsocksEnabled() && !hasInboundTag(activePath, xray.ShadowsocksInboundTag)) {
+	if !hasInboundTag(activePath, "vless-reality") || (s.hysteriaEnabled(ctx) && !hasInboundTag(activePath, xray.HysteriaInboundTag)) || (configuredShadowsocksEnabled() && !hasInboundTag(activePath, xray.ShadowsocksInboundTag)) || (configuredTrojanEnabled() && !hasInboundTag(activePath, xray.TrojanInboundTag)) {
 		usedReplace = false
 		// First enablement of an optional inbound changes the process-level
 		// topology, so use the normal validated Xray runtime apply once.
@@ -2415,6 +2496,21 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		} else {
 			shadowsocksAdded = true
 		}
+	} else if protocol == domain.ProtocolTrojan {
+		api, ok := s.handler.(trojanHandlerAPI)
+		if !ok {
+			if err := s.xrayRuntime.Apply(ctx, path, operationID); err != nil {
+				return failCreate(err)
+			}
+			fullApply = true
+		} else if err := api.AddTrojanUser(ctx, client.Email, mustDecryptTrojanPassword(s.masterKey, client)); err != nil {
+			if applyErr := s.xrayRuntime.Apply(ctx, path, operationID); applyErr != nil {
+				return failCreate(fmt.Errorf("add Trojan user through HandlerService: %v; apply full Xray configuration: %w", err, applyErr))
+			}
+			fullApply = true
+		} else {
+			trojanAdded = true
+		}
 	} else {
 		if !hasInboundTag(activePath, xray.VMessInboundTag) {
 			replacer, ok := s.xrayRuntime.(inboundReplacer)
@@ -2465,6 +2561,8 @@ func newShadowsocksPassword() (string, error) {
 	}
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
+
+func newTrojanPassword() (string, error) { return newShadowsocksPassword() }
 
 func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client domain.Client, action domain.ClientAction, actorID string) {
 	states, next, err := transitionClientAccesses(client, action)
@@ -2518,11 +2616,13 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 	vlessChanged := stateChanged(client, next, domain.ProtocolVLESS)
 	vmessChanged := stateChanged(client, next, domain.ProtocolVMess)
 	shadowsocksChanged := stateChanged(client, next, domain.ProtocolShadowsocks)
+	trojanChanged := stateChanged(client, next, domain.ProtocolTrojan)
 	vlessRevoked := client.HasVLESS() && !client.VLESSRevoked && next.VLESSRevoked
 	hysteriaEnabled := s.hysteriaEnabled(r.Context())
 	vmessInboundChanged := hasInboundTag(activePath, xray.VMessInboundTag) != hasInboundTag(path, xray.VMessInboundTag)
 	shadowsocksInboundChanged := hasInboundTag(activePath, xray.ShadowsocksInboundTag) != hasInboundTag(path, xray.ShadowsocksInboundTag)
-	needsFullApply := !hasInboundTag(activePath, "vless-reality") || (hysteriaEnabled && !hasInboundTag(activePath, xray.HysteriaInboundTag)) || (configuredShadowsocksEnabled() && !hasInboundTag(activePath, xray.ShadowsocksInboundTag))
+	trojanInboundChanged := hasInboundTag(activePath, xray.TrojanInboundTag) != hasInboundTag(path, xray.TrojanInboundTag)
+	needsFullApply := !hasInboundTag(activePath, "vless-reality") || (hysteriaEnabled && !hasInboundTag(activePath, xray.HysteriaInboundTag)) || (configuredShadowsocksEnabled() && !hasInboundTag(activePath, xray.ShadowsocksInboundTag)) || (configuredTrojanEnabled() && !hasInboundTag(activePath, xray.TrojanInboundTag))
 	if hysteriaChanged && hysteriaEnabled {
 		if _, ok := s.handler.(hysteriaHandlerAPI); !ok {
 			needsFullApply = true
@@ -2541,12 +2641,17 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 			needsFullApply = true
 		}
 	}
+	if trojanChanged && !trojanInboundChanged {
+		if _, ok := s.handler.(trojanHandlerAPI); !ok {
+			needsFullApply = true
+		}
+	}
 	replacer, canReplace := s.xrayRuntime.(inboundReplacer)
 	if (vlessRevoked || vmessInboundChanged) && !canReplace {
 		needsFullApply = true
 	}
 	fullApplied, vlessReplaced := false, false
-	vlessAdded, vlessRemoved, hysteriaAdded, hysteriaRemoved, vmessAdded, vmessRemoved, vmessReplaced, shadowsocksAdded, shadowsocksRemoved := false, false, false, false, false, false, false, false, false
+	vlessAdded, vlessRemoved, hysteriaAdded, hysteriaRemoved, vmessAdded, vmessRemoved, vmessReplaced, shadowsocksAdded, shadowsocksRemoved, trojanAdded, trojanRemoved := false, false, false, false, false, false, false, false, false, false, false
 	rollbackRuntime := func() {
 		if fullApplied {
 			if rollbackErr := s.xrayRuntime.Apply(r.Context(), activePath, operationID+"-rollback"); rollbackErr != nil {
@@ -2594,6 +2699,15 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 					_ = api.RemoveShadowsocksUser(r.Context(), client.Email)
 				} else {
 					_ = api.AddShadowsocksUser(r.Context(), client.Email, mustDecryptShadowsocksPassword(s.masterKey, client), configuredShadowsocksMethod())
+				}
+			}
+		}
+		if trojanAdded || trojanRemoved {
+			if api, ok := s.handler.(trojanHandlerAPI); ok {
+				if trojanAdded {
+					_ = api.RemoveTrojanUser(r.Context(), client.Email)
+				} else {
+					_ = api.AddTrojanUser(r.Context(), client.Email, mustDecryptTrojanPassword(s.masterKey, client))
 				}
 			}
 		}
@@ -2699,6 +2813,32 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 				shadowsocksRemoved = true
 			}
 		}
+		if trojanInboundChanged {
+			if err := replacer.ReplaceInbound(r.Context(), path, activePath, xray.TrojanInboundTag, operationID); err != nil {
+				failApply(err)
+				return
+			}
+		} else if trojanChanged {
+			api := s.handler.(trojanHandlerAPI)
+			password := mustDecryptTrojanPassword(s.masterKey, next)
+			if password == "" {
+				failApply(errors.New("Trojan password is unavailable"))
+				return
+			}
+			if next.TrojanCanConnect() {
+				if err := api.AddTrojanUser(r.Context(), client.Email, password); err != nil {
+					failApply(err)
+					return
+				}
+				trojanAdded = true
+			} else {
+				if err := api.RemoveTrojanUser(r.Context(), client.Email); err != nil {
+					failApply(err)
+					return
+				}
+				trojanRemoved = true
+			}
+		}
 	}
 	if err := s.store.SetClientProtocolStates(r.Context(), client.ID, states); err != nil {
 		failApply(err)
@@ -2717,7 +2857,7 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 func transitionClientAccesses(client domain.Client, action domain.ClientAction) (map[domain.ClientProtocol]domain.ClientState, domain.Client, error) {
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
 	next := client
-	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks} {
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks, domain.ProtocolTrojan} {
 		state, err := client.AccessState(protocol)
 		if err != nil {
 			continue
@@ -2742,15 +2882,17 @@ func transitionClientAccesses(client domain.Client, action domain.ClientAction) 
 			next.HysteriaEnabled, next.HysteriaRevoked = state.Enabled, state.Revoked
 		} else if protocol == domain.ProtocolVMess {
 			next.VMessEnabled, next.VMessRevoked = state.Enabled, state.Revoked
-		} else {
+		} else if protocol == domain.ProtocolShadowsocks {
 			next.ShadowsocksEnabled, next.ShadowsocksRevoked = state.Enabled, state.Revoked
+		} else {
+			next.TrojanEnabled, next.TrojanRevoked = state.Enabled, state.Revoked
 		}
 	}
 	if len(states) == 0 {
 		return nil, domain.Client{}, errors.New("profile has no supported protocol access")
 	}
-	next.Enabled = (next.HasVLESS() && next.VLESSEnabled && !next.VLESSRevoked) || (next.HasHysteria2() && next.HysteriaEnabled && !next.HysteriaRevoked) || (next.HasVMess() && next.VMessEnabled && !next.VMessRevoked) || (next.HasShadowsocks() && next.ShadowsocksEnabled && !next.ShadowsocksRevoked)
-	next.Revoked = (!next.HasVLESS() || next.VLESSRevoked) && (!next.HasHysteria2() || next.HysteriaRevoked) && (!next.HasVMess() || next.VMessRevoked) && (!next.HasShadowsocks() || next.ShadowsocksRevoked)
+	next.Enabled = (next.HasVLESS() && next.VLESSEnabled && !next.VLESSRevoked) || (next.HasHysteria2() && next.HysteriaEnabled && !next.HysteriaRevoked) || (next.HasVMess() && next.VMessEnabled && !next.VMessRevoked) || (next.HasShadowsocks() && next.ShadowsocksEnabled && !next.ShadowsocksRevoked) || (next.HasTrojan() && next.TrojanEnabled && !next.TrojanRevoked)
+	next.Revoked = (!next.HasVLESS() || next.VLESSRevoked) && (!next.HasHysteria2() || next.HysteriaRevoked) && (!next.HasVMess() || next.VMessRevoked) && (!next.HasShadowsocks() || next.ShadowsocksRevoked) && (!next.HasTrojan() || next.TrojanRevoked)
 	return states, next, nil
 }
 
@@ -2762,7 +2904,7 @@ func stateChanged(before, after domain.Client, protocol domain.ClientProtocol) b
 
 func previousAccessStates(client domain.Client) map[domain.ClientProtocol]domain.ClientState {
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
-	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks} {
+	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks, domain.ProtocolTrojan} {
 		if state, err := client.AccessState(protocol); err == nil {
 			states[protocol] = state
 		}
@@ -2810,6 +2952,10 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 		if client.HasShadowsocks() {
 			response.Protocols = append(response.Protocols, string(domain.ProtocolShadowsocks))
 			response.Shadowsocks = &clientAccessResponse{Enabled: client.ShadowsocksEnabled, Revoked: client.ShadowsocksRevoked}
+		}
+		if client.HasTrojan() {
+			response.Protocols = append(response.Protocols, string(domain.ProtocolTrojan))
+			response.Trojan = &clientAccessResponse{Enabled: client.TrojanEnabled, Revoked: client.TrojanRevoked}
 		}
 		result = append(result, response)
 	}
@@ -2885,6 +3031,7 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 	activeHysteria := make(map[string]domain.Client)
 	activeVMess := make(map[string]domain.Client)
 	activeShadowsocks := make(map[string]domain.Client)
+	activeTrojan := make(map[string]domain.Client)
 	for _, client := range clients {
 		if client.VLESSCanConnect() {
 			activeVLESS[client.Email] = client
@@ -2897,6 +3044,9 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 		}
 		if client.ShadowsocksCanConnect() {
 			activeShadowsocks[client.Email] = client
+		}
+		if client.TrojanCanConnect() {
+			activeTrojan[client.Email] = client
 		}
 	}
 	runningSet := make(map[string]struct{}, len(running))
@@ -3001,6 +3151,37 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 			}
 		}
 	}
+	if configuredTrojanEnabled() {
+		trojan, ok := s.handler.(trojanHandlerAPI)
+		if !ok {
+			return errors.New("Trojan HandlerService is unavailable")
+		}
+		users, err := trojan.UsersInInbound(ctx, xray.TrojanInboundTag)
+		if err != nil {
+			return err
+		}
+		runningTrojan := make(map[string]struct{}, len(users))
+		for _, email := range users {
+			runningTrojan[email] = struct{}{}
+			if _, ok := activeTrojan[email]; !ok {
+				if err := trojan.RemoveTrojanUser(ctx, email); err != nil {
+					return err
+				}
+			}
+		}
+		for email, client := range activeTrojan {
+			if _, ok := runningTrojan[email]; ok {
+				continue
+			}
+			password := mustDecryptTrojanPassword(s.masterKey, client)
+			if password == "" {
+				return errors.New("Trojan password is unavailable")
+			}
+			if err := trojan.AddTrojanUser(ctx, email, password); err != nil {
+				return err
+			}
+		}
+	}
 	if err := s.reconcilePersistedClientConfigLocked(ctx, clients); err != nil {
 		return fmt.Errorf("persist reconciled client state: %w", err)
 	}
@@ -3069,6 +3250,7 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 	wantHysteria := make(map[string]struct{})
 	wantVMess := make(map[string]struct{})
 	wantShadowsocks := make(map[string]struct{})
+	wantTrojan := make(map[string]struct{})
 	for _, client := range clients {
 		if client.VLESSCanConnect() && client.UUID != "" {
 			wantVLESS[client.Email+"\x00"+client.UUID] = struct{}{}
@@ -3082,10 +3264,14 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 		if client.ShadowsocksCanConnect() {
 			wantShadowsocks[client.Email] = struct{}{}
 		}
+		if client.TrojanCanConnect() {
+			wantTrojan[client.Email] = struct{}{}
+		}
 	}
 	var vless, hysteria, vmess []string
 	var shadowsocks []string
-	foundHysteria, foundVMess, foundShadowsocks := false, false, false
+	var trojan []string
+	foundHysteria, foundVMess, foundShadowsocks, foundTrojan := false, false, false, false
 	for _, inbound := range config.Inbounds {
 		if inbound.Tag == "vless-reality" {
 			for _, client := range inbound.Settings.Clients {
@@ -3110,6 +3296,12 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 				shadowsocks = append(shadowsocks, client.Email)
 			}
 		}
+		if inbound.Tag == xray.TrojanInboundTag {
+			foundTrojan = true
+			for _, client := range inbound.Settings.Clients {
+				trojan = append(trojan, client.Email)
+			}
+		}
 	}
 	if !stringSliceMatchesSet(vless, wantVLESS) {
 		return false
@@ -3124,6 +3316,11 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 	}
 	if configuredShadowsocksEnabled() {
 		if !foundShadowsocks || !stringSliceMatchesSet(shadowsocks, wantShadowsocks) {
+			return false
+		}
+	}
+	if configuredTrojanEnabled() {
+		if !foundTrojan || !stringSliceMatchesSet(trojan, wantTrojan) {
 			return false
 		}
 	}
@@ -3429,14 +3626,20 @@ func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, setting
 func rendererClientsWithSecrets(masterKey []byte, clients []domain.Client) ([]xray.Client, error) {
 	result := xray.ClientsFromDomain(clients)
 	for index := range clients {
-		if clients[index].ShadowsocksPasswordEnc == "" {
-			continue
+		if clients[index].ShadowsocksPasswordEnc != "" {
+			password, err := secret.Open(masterKey, clients[index].ShadowsocksPasswordEnc, "shadowsocks_password")
+			if err != nil {
+				return nil, fmt.Errorf("decrypt Shadowsocks password for client %s", clients[index].ID)
+			}
+			result[index].ShadowsocksPassword = password
 		}
-		password, err := secret.Open(masterKey, clients[index].ShadowsocksPasswordEnc, "shadowsocks_password")
-		if err != nil {
-			return nil, fmt.Errorf("decrypt Shadowsocks password for client %s", clients[index].ID)
+		if clients[index].TrojanPasswordEnc != "" {
+			password, err := secret.Open(masterKey, clients[index].TrojanPasswordEnc, "trojan_password")
+			if err != nil {
+				return nil, fmt.Errorf("decrypt Trojan password for client %s", clients[index].ID)
+			}
+			result[index].TrojanPassword = password
 		}
-		result[index].ShadowsocksPassword = password
 	}
 	return result, nil
 }
@@ -3446,6 +3649,17 @@ func mustDecryptShadowsocksPassword(masterKey []byte, client domain.Client) stri
 		return ""
 	}
 	value, err := secret.Open(masterKey, client.ShadowsocksPasswordEnc, "shadowsocks_password")
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
+func mustDecryptTrojanPassword(masterKey []byte, client domain.Client) string {
+	if client.TrojanPasswordEnc == "" {
+		return ""
+	}
+	value, err := secret.Open(masterKey, client.TrojanPasswordEnc, "trojan_password")
 	if err != nil {
 		return ""
 	}
@@ -3471,6 +3685,8 @@ func rendererSettingsWithHysteria(settings domain.Settings, privateKey string, h
 	result.VMessPublicPort, _ = configuredVMessPort()
 	shadowsocks, _ := configuredShadowsocksSettings()
 	xray.ApplyShadowsocksSettings(&result, shadowsocks)
+	result.TrojanEnabled = configuredTrojanEnabled()
+	result.TrojanPublicPort, _ = configuredTrojanPort()
 	return result
 }
 
@@ -3493,6 +3709,10 @@ func configuredShadowsocksEnabled() bool {
 
 func configuredShadowsocksMethod() string {
 	return envOr("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305)
+}
+
+func configuredTrojanEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(envOr("XRAY_TROJAN_ENABLED", "false")), "true")
 }
 
 func hysteria2Enabled() bool {
@@ -3606,6 +3826,7 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 	}
 	renderSettings := rendererSettingsWithHysteria(settings, "server-secret-not-exported", hysteriaSettings)
 	renderSettings.VMessPublicPort = s.vmessPort
+	renderSettings.TrojanPublicPort = s.trojanPort
 	if client.HasVMess() && !client.VMessRevoked && (hysteriaSettings.TLSMode == domain.HysteriaTLSSelfSigned || hysteriaSettings.TLSMode == domain.HysteriaTLSLegacy) {
 		serverName := hysteriaSettings.EffectiveTLSServerName(settings.PublicHost)
 		certificate, inspectErr := hysteria.Inspect(s.hysteriaTLSDir(), hysteriaSettings.CertificateID, serverName, hysteriaSettings.CertificateID == "")
@@ -3624,6 +3845,14 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		}
 		renderClient.ShadowsocksPassword = password
 	}
+	if client.TrojanPasswordEnc != "" {
+		password := mustDecryptTrojanPassword(s.masterKey, client)
+		if password == "" {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt Trojan password"})
+			return
+		}
+		renderClient.TrojanPassword = password
+	}
 	profile, err := xray.BuildProfile(renderSettings, renderClient)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
@@ -3637,6 +3866,8 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		jsonProfile := profile.JSON
 		if client.Protocol == domain.ProtocolShadowsocks {
 			jsonProfile = profile.ShadowsocksJSON
+		} else if client.Protocol == domain.ProtocolTrojan {
+			jsonProfile = profile.TrojanJSON
 		}
 		if len(jsonProfile) == 0 {
 			writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_format_unavailable", "error": "JSON profile is unavailable for this device"})
@@ -3693,6 +3924,18 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		}
 		w.Header().Set("Content-Type", "image/png")
 		_, _ = w.Write(png)
+	case "trojan-qr":
+		if profile.TrojanURI == "" {
+			writeJSON(w, http.StatusConflict, map[string]any{"error": "Trojan is not enabled"})
+			return
+		}
+		png, err := qrcode.Encode(profile.TrojanURI, qrcode.Medium, 512)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encode Trojan QR"})
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(png)
 	default:
 		response := map[string]any{"client_id": client.ID, "protocol": client.Protocol, "name": profile.Name}
 		if client.Protocol == domain.ProtocolLegacyDual || client.Protocol == "" {
@@ -3723,6 +3966,11 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 			response["ss_uri"] = profile.ShadowsocksURI
 			if len(profile.ShadowsocksJSON) > 0 {
 				response["json"] = json.RawMessage(profile.ShadowsocksJSON)
+			}
+		} else if client.Protocol == domain.ProtocolTrojan {
+			response["trojan_uri"] = profile.TrojanURI
+			if len(profile.TrojanJSON) > 0 {
+				response["json"] = json.RawMessage(profile.TrojanJSON)
 			}
 		}
 		writeJSON(w, http.StatusOK, response)
@@ -3790,10 +4038,12 @@ func publicSettings(settings domain.Settings, vmessPublicPort int) map[string]an
 	if err != nil {
 		shadowsocks = domain.ShadowsocksSettings{PublicPort: 8388, Method: domain.ShadowsocksMethodChaCha20Poly1305, Network: domain.ShadowsocksNetworkTCPUDP}
 	}
+	trojanPort, _ := configuredTrojanPort()
 	return map[string]any{
 		"public_host": settings.PublicHost, "public_port": settings.PublicPort, "vmess_public_port": vmessPublicPort,
 		"shadowsocks_enabled": shadowsocks.Enabled, "shadowsocks_public_port": shadowsocks.PublicPort,
 		"shadowsocks_method": shadowsocks.Method, "shadowsocks_network": shadowsocks.Network,
+		"trojan_enabled": configuredTrojanEnabled(), "trojan_public_port": trojanPort,
 		"reality_target": settings.RealityTarget, "reality_sni": settings.RealitySNI, "client_fingerprint": settings.ClientFingerprint,
 		"log_level": settings.LogLevel, "protocol": xray.Protocol, "network": xray.Network, "security": xray.Security, "flow": xray.Flow,
 	}

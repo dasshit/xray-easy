@@ -42,6 +42,8 @@ type XrayHandlerRuntime interface {
 	RemoveVMessUser(context.Context, string) error
 	AddShadowsocksUser(context.Context, string, string, string) error
 	RemoveShadowsocksUser(context.Context, string) error
+	AddTrojanUser(context.Context, string, string) error
+	RemoveTrojanUser(context.Context, string) error
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
@@ -98,7 +100,7 @@ func (s *Service) Health(ctx context.Context, _ *controllerv1.EmptyRequest) (*co
 
 func (s *Service) GetCapabilities(context.Context, *controllerv1.EmptyRequest) (*controllerv1.CapabilitiesResponse, error) {
 	return &controllerv1.CapabilitiesResponse{
-		Xray:      &controllerv1.ProtocolCapability{Configured: s != nil && s.xray != nil, Protocols: []string{"vless", "vmess", "hysteria2"}},
+		Xray:      &controllerv1.ProtocolCapability{Configured: s != nil && s.xray != nil, Protocols: []string{"vless", "vmess", "hysteria2", "shadowsocks", "trojan"}},
 		Amneziawg: &controllerv1.ProtocolCapability{Configured: s != nil && s.awg != nil, Protocols: []string{"amneziawg"}},
 	}, nil
 }
@@ -277,6 +279,8 @@ func (s *Service) AddDeviceUser(ctx context.Context, request *controllerv1.AddDe
 		mutationErr = handler.AddVMessUser(ctx, request.Email, request.Id)
 	case "shadowsocks":
 		mutationErr = handler.AddShadowsocksUser(ctx, request.Email, request.Id, request.Method)
+	case "trojan":
+		mutationErr = handler.AddTrojanUser(ctx, request.Email, request.Id)
 	}
 	if mutationErr != nil {
 		return nil, mutationErr
@@ -316,6 +320,8 @@ func (s *Service) RemoveDeviceUser(ctx context.Context, request *controllerv1.Re
 		mutationErr = handler.RemoveVMessUser(ctx, request.Email)
 	case "shadowsocks":
 		mutationErr = handler.RemoveShadowsocksUser(ctx, request.Email)
+	case "trojan":
+		mutationErr = handler.RemoveTrojanUser(ctx, request.Email)
 	}
 	if mutationErr != nil {
 		return nil, mutationErr
@@ -333,6 +339,8 @@ func deviceUsers(ctx context.Context, handler XrayHandlerRuntime, protocol strin
 		return handler.UsersInInbound(ctx, "vmess-tls")
 	case "shadowsocks":
 		return handler.UsersInInbound(ctx, "shadowsocks")
+	case "trojan":
+		return handler.UsersInInbound(ctx, "trojan-tls")
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported Xray protocol %q", protocol)
 	}
@@ -507,7 +515,7 @@ func (s *Service) xrayHandler() (XrayHandlerRuntime, error) {
 
 func supportedXrayProtocol(protocol string) bool {
 	switch protocol {
-	case "vless", "vmess", "hysteria2", "shadowsocks":
+	case "vless", "vmess", "hysteria2", "shadowsocks", "trojan":
 		return true
 	default:
 		return false

@@ -46,6 +46,7 @@ enum Protocol {
   PROTOCOL_VMESS = 2;
   PROTOCOL_HYSTERIA2 = 3;
   PROTOCOL_SHADOWSOCKS = 4;
+  PROTOCOL_TROJAN = 5;
 }
 
 enum RuntimeState {
