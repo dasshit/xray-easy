@@ -309,7 +309,7 @@ func runControlPlane(ctx context.Context, initialize func(context.Context) (*ser
 		<-reconcilerDone
 	}()
 	mux := newMux(s)
-	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: interaction.HTTPMiddleware(requestLimit(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second}
+	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: interaction.HTTPMiddleware(controlPlaneMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
 	fmt.Fprintf(os.Stderr, "xray-easy control plane listening on %s\n", serverHTTP.Addr)
 	if err := listen(serverHTTP); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
@@ -1150,15 +1150,19 @@ func (s *server) issueSession(w http.ResponseWriter, r *http.Request, admin stor
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not create session"})
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: int(sessionTTL / time.Second)})
+	s.setSessionCookie(w, r, token, int(sessionTTL/time.Second))
 	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username, "totp_enabled": admin.TOTPEnabled, "expires_in": int(sessionTTL / time.Second)})
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, nil)
+		return
+	}
 	if token := sessionToken(r); token != "" {
 		_ = s.store.DeleteSession(r.Context(), token)
 	}
-	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: "", Path: "/", HttpOnly: true, MaxAge: -1})
+	s.setSessionCookie(w, r, "", -1)
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
@@ -1177,7 +1181,7 @@ func (s *server) logoutAll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.AddAudit(r.Context(), admin.ID, "auth.logout_all", "admin", admin.ID, "all sessions revoked")
-	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	s.setSessionCookie(w, r, "", -1)
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
@@ -1210,7 +1214,7 @@ func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.AddAudit(r.Context(), admin.ID, "auth.password_change", "admin", admin.ID, "administrator password changed; all sessions revoked")
-	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	s.setSessionCookie(w, r, "", -1)
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
@@ -1489,7 +1493,7 @@ func (s *server) totpDisable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = s.store.AddAudit(r.Context(), admin.ID, "auth.totp_disable", "admin", admin.ID, "TOTP disabled")
-	http.SetCookie(w, &http.Cookie{Name: "xray_easy_session", Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: -1})
+	s.setSessionCookie(w, r, "", -1)
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
@@ -3993,6 +3997,18 @@ func sessionToken(r *http.Request) string {
 	return cookie.Value
 }
 
+func (s *server) setSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
+	http.SetCookie(w, &http.Cookie{
+		Name:     "xray_easy_session",
+		Value:    value,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   secureSessionCookie(r),
+		SameSite: http.SameSiteStrictMode,
+		MaxAge:   maxAge,
+	})
+}
+
 func decodeJSON(r *http.Request, target any) error {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -4005,12 +4021,6 @@ func decodeJSON(r *http.Request, target any) error {
 		return errors.New("invalid JSON body")
 	}
 	return nil
-}
-
-func requestLimit(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		next.ServeHTTP(w, r)
-	})
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {

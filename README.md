@@ -537,6 +537,15 @@ IPv6 connectivity from the Xray container, not public inbound reachability.
 - Interaction logs correlate backend, Controller and runtime calls with a
   random request ID. They include method, result and duration, not RPC payloads
   or profiles. Xray core connection logs do not include that request ID.
+- The control plane sets a restrictive CSP, frame/referrer policy, MIME
+  sniffing protection and private no-store caching for API responses. Browser
+  state-changing requests with an explicit Origin or Referer must be same
+  origin; the normal SSH tunnel and non-browser CLI calls need no extra token.
+- The default HTTP-over-SSH deployment keeps the session cookie usable over
+  localhost HTTP. For a deliberately configured HTTPS reverse proxy, set
+  `XRAY_EASY_SECURE_COOKIES=true` and `XRAY_EASY_TRUST_PROXY=true` in `.env` so
+  the cookie is marked Secure and `X-Forwarded-Proto` is trusted for origin
+  checks. Do not enable these variables unless the proxy is fully controlled.
 
 ## Development
 
