@@ -125,6 +125,42 @@ func TestSecureSessionCookieIsOptInForSSHAndEnabledForHTTPS(t *testing.T) {
 	}
 }
 
+func TestBrowserOriginParsingAndTrustedProxyScheme(t *testing.T) {
+	t.Setenv("XRAY_EASY_TRUST_PROXY", "true")
+	request := httptest.NewRequest(http.MethodPost, "http://[2001:db8::1]/api/clients", nil)
+	request.Host = "[2001:db8::1]"
+	request.Header.Set("X-Forwarded-Proto", "https, http")
+	if got := requestScheme(request); got != "https" {
+		t.Fatalf("trusted forwarded scheme = %q, want https", got)
+	}
+	if !sameOriginURL(request, "HTTPS://[2001:DB8::1]:443/dashboard", true) {
+		t.Fatal("matching IPv6 origin with default TLS port was rejected")
+	}
+	if sameOriginURL(request, "https://[2001:db8::1]:443/dashboard", false) {
+		t.Fatal("Origin header unexpectedly allowed a path")
+	}
+
+	for _, raw := range []string{
+		"not a URL", "//[2001:db8::1]", "https://user@[2001:db8::1]",
+		"https://[2001:db8::1]?query=1", "https://[2001:db8::1]#fragment",
+		"https://[2001:db8::1]:bad", "http://[2001:db8::1]",
+	} {
+		if sameOriginURL(request, raw, true) {
+			t.Errorf("sameOriginURL accepted %q", raw)
+		}
+	}
+
+	request.Header.Set("X-Forwarded-Proto", "http, https")
+	if got := requestScheme(request); got != "http" {
+		t.Fatalf("first forwarded scheme = %q, want http", got)
+	}
+	t.Setenv("XRAY_EASY_TRUST_PROXY", "false")
+	request.Header.Set("X-Forwarded-Proto", "https")
+	if got := requestScheme(request); got != "http" {
+		t.Fatalf("untrusted forwarded scheme = %q, want http", got)
+	}
+}
+
 func TestLogoutAcceptsPostOnly(t *testing.T) {
 	app := newTestApp(t, true)
 	if got := requestJSON(t, app, http.MethodGet, "/api/auth/logout", nil, true).Code; got != http.StatusMethodNotAllowed {

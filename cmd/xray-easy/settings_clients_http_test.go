@@ -15,6 +15,17 @@ import (
 	"xray-easy/internal/xray"
 )
 
+type logLevelXrayRuntime struct {
+	*fakeXrayRuntime
+	levels []string
+	err    error
+}
+
+func (runtime *logLevelXrayRuntime) SetLogLevel(_ context.Context, level string) error {
+	runtime.levels = append(runtime.levels, level)
+	return runtime.err
+}
+
 func seedTestClient(t *testing.T, app testApp, name string) domain.Client {
 	t.Helper()
 	clientID := randomTestID(t)
@@ -155,6 +166,31 @@ func TestSettingsLogLevelApplyRestartsXrayWithoutRevokingProfiles(t *testing.T) 
 	}
 	if entries, err := os.ReadDir(filepath.Join(app.server.dataDir, "backups")); (err == nil && len(entries) != 0) || (err != nil && !os.IsNotExist(err)) {
 		t.Fatalf("non-destructive log-level update created backups: %d, %v", len(entries), err)
+	}
+}
+
+func TestSettingsLogLevelUsesRuntimeControlPlaneWithoutApplyingFullConfig(t *testing.T) {
+	app := newTestApp(t, true)
+	if err := os.WriteFile(filepath.Join(app.server.configDir, "active.json"), []byte(`{"log":{"loglevel":"warning"},"inbounds":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime := &logLevelXrayRuntime{fakeXrayRuntime: app.sup}
+	app.server.xrayRuntime = runtime
+	level := "debug"
+	prepared := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{LogLevel: &level}, true)
+	change := decodeResponse[struct {
+		ChangeID string `json:"change_id"`
+	}](t, prepared)
+	response := requestJSON(t, app, http.MethodPost, "/api/settings/apply", settingsApplyRequest{ChangeID: change.ChangeID}, true)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"runtime_restarted":false`) {
+		t.Fatalf("dynamic log-level apply = %d %s", response.Code, response.Body.String())
+	}
+	if len(runtime.levels) != 1 || runtime.levels[0] != level || len(app.sup.applyCalls) != 0 {
+		t.Fatalf("runtime log-level calls=%v full applies=%v", runtime.levels, app.sup.applyCalls)
+	}
+	settings, err := app.server.store.GetSettings(t.Context())
+	if err != nil || settings.LogLevel != level {
+		t.Fatalf("persisted log level=%q err=%v", settings.LogLevel, err)
 	}
 }
 

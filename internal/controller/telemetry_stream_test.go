@@ -321,6 +321,8 @@ func TestRemoveProtocolClientsAndXrayProtocolMapping(t *testing.T) {
 		xrayruntimev1.Protocol_PROTOCOL_VLESS:       "vless",
 		xrayruntimev1.Protocol_PROTOCOL_VMESS:       "vmess",
 		xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2:   "hysteria2",
+		xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS: "shadowsocks",
+		xrayruntimev1.Protocol_PROTOCOL_TROJAN:      "trojan",
 		xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED: "",
 	} {
 		if got := xrayProtocolName(protocol); got != want {

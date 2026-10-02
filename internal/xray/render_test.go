@@ -3,6 +3,8 @@ package xray
 import (
 	"encoding/json"
 	"testing"
+
+	"xray-easy/internal/domain"
 )
 
 func TestRenderServerConfigKeepsRealityShortIDsInSyncWithActiveClients(t *testing.T) {
@@ -73,5 +75,31 @@ func TestRenderServerConfigUsesConfiguredLogLevel(t *testing.T) {
 	settings.LogLevel = "trace"
 	if _, err := RenderServerConfig(settings, nil); err == nil {
 		t.Fatal("unsupported Xray log level was accepted")
+	}
+}
+
+func TestClientAccessHelpersPreserveLegacyZeroProtocolBehavior(t *testing.T) {
+	client := Client{Enabled: true, Revoked: false}
+	if !client.VLESSCanConnect() || !client.Hysteria2CanConnect() || !client.VMessCanConnect() {
+		t.Fatal("zero-value protocol should retain legacy VLESS, Hysteria 2, and VMess access")
+	}
+	if client.ShadowsocksCanConnect() || client.TrojanCanConnect() {
+		t.Fatal("zero-value protocol must not grant Shadowsocks or Trojan access")
+	}
+	if !client.VMESSEnabled() || client.VLESSIsRevoked() || client.HysteriaIsRevoked() || client.VMessIsRevoked() || client.ShadowsocksIsRevoked() || client.TrojanIsRevoked() {
+		t.Fatal("legacy enabled/unrevoked flags were not interpreted consistently")
+	}
+
+	client.Revoked = true
+	if client.VLESSCanConnect() || client.Hysteria2CanConnect() || client.VMessCanConnect() || !client.VLESSIsRevoked() || !client.HysteriaIsRevoked() || !client.VMessIsRevoked() {
+		t.Fatal("legacy revoked state was not applied to the supported legacy protocols")
+	}
+	if client.ShadowsocksIsRevoked() || client.TrojanIsRevoked() {
+		t.Fatal("legacy revoked state must not fabricate protocol-specific revocation")
+	}
+
+	vmess := Client{Protocol: domain.ProtocolVMess, VMessEnabled: true, VMessRevoked: true}
+	if !vmess.VMESSEnabled() || !vmess.VMessIsRevoked() || vmess.VMessCanConnect() {
+		t.Fatal("explicit VMess lifecycle state was not preserved")
 	}
 }

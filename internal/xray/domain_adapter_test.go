@@ -56,3 +56,12 @@ func TestApplyHysteriaSettingsUsesValidatedVersionAndSafeLegacyPaths(t *testing.
 		}
 	}
 }
+
+func TestApplyShadowsocksSettingsCopiesNodeConfiguration(t *testing.T) {
+	settings := Settings{}
+	value := domain.ShadowsocksSettings{Enabled: true, PublicPort: 8388, Method: domain.ShadowsocksMethodAES128GCM, Network: domain.ShadowsocksNetworkTCPUDP}
+	ApplyShadowsocksSettings(&settings, value)
+	if !settings.ShadowsocksEnabled || settings.ShadowsocksPublicPort != value.PublicPort || settings.ShadowsocksMethod != value.Method || settings.ShadowsocksNetwork != value.Network {
+		t.Fatalf("Shadowsocks settings were not copied: %+v", settings)
+	}
+}

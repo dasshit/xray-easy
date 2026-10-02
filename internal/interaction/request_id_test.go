@@ -153,3 +153,25 @@ func TestHTTPMiddlewareAddsIDToContextAndResponse(t *testing.T) {
 		t.Fatalf("random failure status = %d", response.Code)
 	}
 }
+
+func TestHTTPMiddlewareReportsOperationIDGenerationFailure(t *testing.T) {
+	original := randomRead
+	t.Cleanup(func() { randomRead = original })
+	calls := 0
+	randomRead = func(value []byte) (int, error) {
+		calls++
+		if calls == 2 {
+			return 0, context.Canceled
+		}
+		for index := range value {
+			value[index] = byte(index + 1)
+		}
+		return len(value), nil
+	}
+	called := false
+	response := httptest.NewRecorder()
+	HTTPMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not create operation identifier") || called || calls != 2 {
+		t.Fatalf("operation ID failure response = %d %q, handler=%v, random reads=%d", response.Code, response.Body.String(), called, calls)
+	}
+}

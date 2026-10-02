@@ -36,6 +36,11 @@ type cliAWGBackup struct {
 	restoreErr error
 }
 
+type cliAWGBackupGateway struct {
+	*fakeAmneziaWGGateway
+	*cliAWGBackup
+}
+
 func (b *cliAWGBackup) ExportBackup(context.Context) ([]byte, error) {
 	if b.exportErr != nil {
 		return nil, b.exportErr
@@ -227,6 +232,29 @@ func TestRunBackupCLIAndApplyRestoredStateValidation(t *testing.T) {
 	missing := newTestApp(t, false)
 	if err := applyRestoredStateWithRuntime(context.Background(), missing.server.store, missing.server.masterKey, missing.server.configDir, 443, missing.sup); err == nil || !strings.Contains(err.Error(), "settings are not initialized") {
 		t.Fatalf("uninitialized restored state error = %v", err)
+	}
+}
+
+func TestRestoreCLIValidatesConfirmationAndMasterKeyBeforeOpeningDatabase(t *testing.T) {
+	t.Setenv("AWG_PUBLIC_HOST", "")
+	t.Setenv("XRAY_EASY_MASTER_KEY", "")
+	root := t.TempDir()
+	if err := runRestoreCLI(context.Background(), root, root, []string{"backup-name"}); err == nil || !strings.Contains(err.Error(), "RESTORE") {
+		t.Fatalf("restore without explicit confirmation = %v", err)
+	}
+	if err := runRestoreCLI(context.Background(), root, root, []string{"backup-name", "RESTORE"}); err == nil || !strings.Contains(err.Error(), "XRAY_EASY_MASTER_KEY is required") {
+		t.Fatalf("restore without master key = %v", err)
+	}
+}
+
+func TestBackupManagerIncludesOptionalAWGBackupService(t *testing.T) {
+	app := newTestApp(t, true)
+	app.server.awg = &cliAWGBackupGateway{
+		fakeAmneziaWGGateway: &fakeAmneziaWGGateway{},
+		cliAWGBackup:         &cliAWGBackup{state: []byte("awg snapshot")},
+	}
+	if manager := app.server.backupManager(); manager.AWG == nil {
+		t.Fatal("backup manager did not receive the configured AWG backup service")
 	}
 }
 

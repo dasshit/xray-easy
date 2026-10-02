@@ -14,6 +14,8 @@ func TestProfileRouteReportsUnavailableProtocolFormats(t *testing.T) {
 		{"json", "JSON profile is unavailable"},
 		{"qr", "VLESS is not available"},
 		{"vmess-qr", "VMess is not available"},
+		{"ss-qr", "Shadowsocks is not enabled"},
+		{"trojan-qr", "Trojan is not enabled"},
 	} {
 		response := requestJSON(t, app, http.MethodGet, "/api/clients/"+hysteria.ID+"/profile?format="+format.name, nil, true)
 		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), format.text) {
@@ -25,6 +27,8 @@ func TestProfileRouteReportsUnavailableProtocolFormats(t *testing.T) {
 	for _, format := range []struct{ name, text string }{
 		{"hysteria-qr", "Hysteria 2 is not enabled"},
 		{"vmess-qr", "VMess is not available"},
+		{"ss-qr", "Shadowsocks is not enabled"},
+		{"trojan-qr", "Trojan is not enabled"},
 	} {
 		response := requestJSON(t, app, http.MethodGet, "/api/clients/"+vless.ID+"/profile?format="+format.name, nil, true)
 		if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), format.text) {

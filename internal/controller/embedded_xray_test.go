@@ -41,6 +41,7 @@ type embeddedRuntimeStub struct {
 	seenAdd             *xrayruntimev1.AddUserRequest
 	seenRemove          *xrayruntimev1.RemoveUserRequest
 	seenListProtocol    xrayruntimev1.Protocol
+	seenLogLevel        string
 }
 
 func (s *embeddedRuntimeStub) fail(method string) error {
@@ -176,6 +177,14 @@ func (s *embeddedRuntimeStub) RemoveUser(_ context.Context, request *xrayruntime
 	return &xrayruntimev1.OperationResponse{OperationId: request.GetOperationId(), Revision: revision}, nil
 }
 
+func (s *embeddedRuntimeStub) SetLogLevel(_ context.Context, request *xrayruntimev1.SetLogLevelRequest) (*xrayruntimev1.OperationResponse, error) {
+	if err := s.fail("SetLogLevel"); err != nil {
+		return nil, err
+	}
+	s.seenLogLevel = request.GetLevel()
+	return &xrayruntimev1.OperationResponse{OperationId: request.GetOperationId()}, nil
+}
+
 func (s *embeddedRuntimeStub) ListUsers(_ context.Context, request *xrayruntimev1.ListUsersRequest) (*xrayruntimev1.ListUsersResponse, error) {
 	s.seenListProtocol = request.GetProtocol()
 	return &xrayruntimev1.ListUsersResponse{Emails: []string{"device-1@xray-easy"}}, nil
@@ -253,6 +262,10 @@ func TestEmbeddedXrayAdapterCoversControllerRuntimeInterfaces(t *testing.T) {
 	if err := client.Health(context.Background()); err != nil {
 		t.Fatalf("Health() = %v", err)
 	}
+	logCtx := interaction.WithOperationID(context.Background(), "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err := client.SetLogLevel(logCtx, "debug"); err != nil || stub.seenLogLevel != "debug" {
+		t.Fatalf("SetLogLevel() = %v, level=%q", err, stub.seenLogLevel)
+	}
 	statusValue, err := client.Status(context.Background())
 	if err != nil || statusValue.State != "running" || statusValue.Protocol != "embedded-core" || statusValue.XrayVersion != "Xray 26.7.28" || statusValue.ActiveRevision != 8 || !statusValue.StatsAvailable || strings.Join(statusValue.InboundTags, ",") != "vless-reality,vmess-tls" {
 		t.Fatalf("Status() = %+v, %v", statusValue, err)
@@ -298,6 +311,12 @@ func TestEmbeddedXrayAdapterCoversControllerRuntimeInterfaces(t *testing.T) {
 	if err := client.AddVMessUser(context.Background(), "vmess@xray-easy", "uuid"); err != nil {
 		t.Fatalf("AddVMessUser() = %v", err)
 	}
+	if err := client.AddShadowsocksUser(context.Background(), "ss@xray-easy", "password", "aes-128-gcm"); err != nil || stub.seenAdd.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS || stub.seenAdd.GetShadowsocksMethod() != "aes-128-gcm" {
+		t.Fatalf("AddShadowsocksUser() = %v, request=%+v", err, stub.seenAdd)
+	}
+	if err := client.AddTrojanUser(context.Background(), "trojan@xray-easy", "password"); err != nil || stub.seenAdd.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_TROJAN {
+		t.Fatalf("AddTrojanUser() = %v, request=%+v", err, stub.seenAdd)
+	}
 	if err := client.RemoveUser(context.Background(), "device@xray-easy"); err != nil {
 		t.Fatalf("RemoveUser() = %v", err)
 	}
@@ -309,6 +328,12 @@ func TestEmbeddedXrayAdapterCoversControllerRuntimeInterfaces(t *testing.T) {
 	}
 	if stub.seenRemove.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_VMESS {
 		t.Fatalf("RemoveVMess protocol = %v", stub.seenRemove.GetProtocol())
+	}
+	if err := client.RemoveShadowsocksUser(context.Background(), "ss@xray-easy"); err != nil || stub.seenRemove.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS {
+		t.Fatalf("RemoveShadowsocksUser() = %v, request=%+v", err, stub.seenRemove)
+	}
+	if err := client.RemoveTrojanUser(context.Background(), "trojan@xray-easy"); err != nil || stub.seenRemove.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_TROJAN {
+		t.Fatalf("RemoveTrojanUser() = %v, request=%+v", err, stub.seenRemove)
 	}
 	if users, err := client.Users(context.Background()); err != nil || len(users) != 1 || users[0] != "device-1@xray-easy" {
 		t.Fatalf("Users() = %v, %v", users, err)

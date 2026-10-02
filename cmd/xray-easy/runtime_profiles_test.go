@@ -484,6 +484,47 @@ func TestShadowsocksProfilesUseLiveUserLifecycleAndDelivery(t *testing.T) {
 	}
 }
 
+func TestShadowsocksStateMutationFailuresPreservePersistedAccess(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	t.Setenv("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305)
+	t.Setenv("XRAY_SHADOWSOCKS_NETWORK", domain.ShadowsocksNetworkTCPUDP)
+	app := newTestApp(t, true)
+	handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler}
+	app.server.handler = handler
+	createRuntimeShadowsocksClient(t, app, "first-phone")
+	client := createRuntimeShadowsocksClient(t, app, "second-phone")
+
+	handler.removeErr = errors.New("remove Shadowsocks peer rejected")
+	response := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/disable", nil, true)
+	stored, err := app.server.store.GetClient(t.Context(), client.ID)
+	if response.Code != http.StatusBadGateway || err != nil || !stored.ShadowsocksEnabled || stored.ShadowsocksRevoked {
+		t.Fatalf("failed Shadowsocks disable = %d, stored=%+v, err=%v", response.Code, stored, err)
+	}
+	handler.removeErr = nil
+	if response := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/disable", nil, true); response.Code != http.StatusOK {
+		t.Fatalf("disable Shadowsocks before add failure = %d %s", response.Code, response.Body.String())
+	}
+
+	handler.addErr = errors.New("add Shadowsocks peer rejected")
+	response = requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/enable", nil, true)
+	stored, err = app.server.store.GetClient(t.Context(), client.ID)
+	if response.Code != http.StatusBadGateway || err != nil || stored.ShadowsocksEnabled {
+		t.Fatalf("failed Shadowsocks enable = %d, stored=%+v, err=%v", response.Code, stored, err)
+	}
+	handler.addErr = nil
+	if response := requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/enable", nil, true); response.Code != http.StatusOK {
+		t.Fatalf("enable Shadowsocks before revoke failure = %d %s", response.Code, response.Body.String())
+	}
+
+	handler.removeErr = errors.New("revoke Shadowsocks peer rejected")
+	response = requestJSON(t, app, http.MethodPost, "/api/clients/"+client.ID+"/revoke", nil, true)
+	stored, err = app.server.store.GetClient(t.Context(), client.ID)
+	if response.Code != http.StatusBadGateway || err != nil || !stored.ShadowsocksEnabled || stored.ShadowsocksRevoked {
+		t.Fatalf("failed Shadowsocks revoke = %d, stored=%+v, err=%v", response.Code, stored, err)
+	}
+}
+
 func TestShadowsocksProfileRejectsUnavailableCredentialsAndDisabledTransport(t *testing.T) {
 	t.Run("transport disabled", func(t *testing.T) {
 		t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "false")

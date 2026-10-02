@@ -173,6 +173,42 @@ func TestShadowsocksConfigurationHelpersValidatePortsAndPublicSettings(t *testin
 	}
 }
 
+func TestConfiguredTrojanPortValidatesEveryPublicPortCollision(t *testing.T) {
+	for name, value := range map[string]string{
+		"XRAY_PUBLIC_PORT": "443", "XRAY_VMESS_PORT": "9443",
+		"XRAY_SHADOWSOCKS_PORT": "8388", "XRAY_EASY_UI_PORT": "8080",
+	} {
+		t.Setenv(name, value)
+	}
+	if got, err := configuredTrojanPort(); err != nil || got != 10443 {
+		t.Fatalf("default Trojan port = %d, %v", got, err)
+	}
+	for _, test := range []struct {
+		name string
+		port string
+		want string
+	}{
+		{"invalid value", "bad", "integer"},
+		{"outside range", "65536", "integer"},
+		{"public collision", "443", "XRAY_PUBLIC_PORT"},
+		{"VMess collision", "9443", "XRAY_VMESS_PORT"},
+		{"Shadowsocks collision", "8388", "XRAY_SHADOWSOCKS_PORT"},
+		{"UI collision", "8080", "XRAY_EASY_UI_PORT"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XRAY_TROJAN_PORT", test.port)
+			if _, err := configuredTrojanPort(); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("configuredTrojanPort() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+	t.Setenv("XRAY_TROJAN_PORT", "10443")
+	t.Setenv("XRAY_EASY_UI_PORT", "not-a-port")
+	if _, err := configuredTrojanPort(); err == nil || !strings.Contains(err.Error(), "XRAY_EASY_UI_PORT") {
+		t.Fatalf("invalid Web UI port was ignored: %v", err)
+	}
+}
+
 func TestClientStateChangeReportsPreparationAndRuntimeFailures(t *testing.T) {
 	t.Run("maintenance lock is busy", func(t *testing.T) {
 		app := newTestApp(t, true)

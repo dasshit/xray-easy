@@ -220,6 +220,43 @@ func TestInstallerConfigurationHelpersCoverDefaultsAndCollisions(t *testing.T) {
 	}
 }
 
+func TestInstallerValidatesTrojanAndShadowsocksPortsAndMethods(t *testing.T) {
+	base := configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080}
+	if err := validateTrojanConfiguration(base); err != nil {
+		t.Fatalf("default Trojan configuration rejected: %v", err)
+	}
+	if err := validateShadowsocksConfiguration(base); err != nil {
+		t.Fatalf("default Shadowsocks configuration rejected: %v", err)
+	}
+
+	for _, test := range []struct {
+		name string
+		cfg  configuration
+	}{
+		{"Trojan public-port collision", func() configuration { c := base; c.trojan = 443; return c }()},
+		{"Trojan VMess-port collision", func() configuration { c := base; c.trojan = 9443; return c }()},
+		{"Trojan Shadowsocks-port collision", func() configuration { c := base; c.trojan = 8388; return c }()},
+		{"Trojan UI-port collision", func() configuration { c := base; c.trojan = 8080; return c }()},
+		{"Trojan invalid port", func() configuration { c := base; c.trojan = 65536; return c }()},
+		{"Shadowsocks public-port collision", func() configuration { c := base; c.shadowsocks = 443; return c }()},
+		{"Shadowsocks UI-port collision", func() configuration { c := base; c.shadowsocks = 8080; return c }()},
+		{"Shadowsocks invalid method", func() configuration { c := base; c.shadowsocksMethod = "unsupported"; return c }()},
+		{"Shadowsocks invalid network", func() configuration { c := base; c.shadowsocksNetwork = "sctp"; return c }()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var err error
+			if strings.HasPrefix(test.name, "Trojan") {
+				err = validateTrojanConfiguration(test.cfg)
+			} else {
+				err = validateShadowsocksConfiguration(test.cfg)
+			}
+			if err == nil {
+				t.Fatal("invalid transport configuration accepted")
+			}
+		})
+	}
+}
+
 func TestPrintNextStepsIncludesEnabledTransportFirewallGuidance(t *testing.T) {
 	var output bytes.Buffer
 	printNextSteps(&output, configuration{

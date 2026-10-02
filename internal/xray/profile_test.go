@@ -491,6 +491,68 @@ func TestBuildProfileRejectsInvalidProtocolSpecificTransportSettings(t *testing.
 	}
 }
 
+func TestBuildProfileValidatesShadowsocksAndTrojanStateBeforeRendering(t *testing.T) {
+	base := validTestSettings()
+	shadowsocks := Client{ID: "ss", Name: "SS phone", Protocol: domain.ProtocolShadowsocks, ShadowsocksEnabled: true, ShadowsocksPassword: "secret"}
+	trojan := Client{ID: "trojan", Name: "Trojan phone", Protocol: domain.ProtocolTrojan, TrojanEnabled: true, TrojanPassword: "secret"}
+
+	for _, test := range []struct {
+		name     string
+		client   Client
+		settings Settings
+	}{
+		{"Shadowsocks disabled", shadowsocks, base},
+		{"Shadowsocks port", shadowsocks, func() Settings { s := base; s.ShadowsocksEnabled = true; return s }()},
+		{"Shadowsocks host", shadowsocks, func() Settings {
+			s := base
+			s.ShadowsocksEnabled = true
+			s.ShadowsocksPublicPort = 8388
+			s.PublicHost = "bad host"
+			return s
+		}()},
+		{"Shadowsocks method", shadowsocks, func() Settings {
+			s := base
+			s.ShadowsocksEnabled = true
+			s.ShadowsocksPublicPort = 8388
+			s.ShadowsocksMethod = "unsupported"
+			s.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
+			return s
+		}()},
+		{"Shadowsocks network", shadowsocks, func() Settings {
+			s := base
+			s.ShadowsocksEnabled = true
+			s.ShadowsocksPublicPort = 8388
+			s.ShadowsocksMethod = domain.ShadowsocksMethodChaCha20Poly1305
+			s.ShadowsocksNetwork = "sctp"
+			return s
+		}()},
+		{"Shadowsocks credentials", func() Client { c := shadowsocks; c.ShadowsocksPassword = ""; return c }(), func() Settings {
+			s := base
+			s.ShadowsocksEnabled = true
+			s.ShadowsocksPublicPort = 8388
+			s.ShadowsocksMethod = domain.ShadowsocksMethodChaCha20Poly1305
+			s.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
+			return s
+		}()},
+		{"Trojan disabled", trojan, base},
+		{"Trojan port", trojan, func() Settings { s := base; s.TrojanEnabled = true; return s }()},
+		{"Trojan host", trojan, func() Settings {
+			s := base
+			s.TrojanEnabled = true
+			s.TrojanPublicPort = 10443
+			s.PublicHost = "bad host"
+			return s
+		}()},
+		{"Trojan credentials", func() Client { c := trojan; c.TrojanPassword = ""; return c }(), func() Settings { s := base; s.TrojanEnabled = true; s.TrojanPublicPort = 10443; return s }()},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := BuildProfile(test.settings, test.client); err == nil {
+				t.Fatal("invalid protocol profile was accepted")
+			}
+		})
+	}
+}
+
 func TestRenderServerConfigPreservesDisabledAndReservedShortIDsWithoutActiveClients(t *testing.T) {
 	settings := validTestSettings()
 	settings.ReservedShortIDs = []string{"1111111111111111"}

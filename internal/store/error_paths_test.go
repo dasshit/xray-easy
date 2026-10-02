@@ -364,6 +364,78 @@ func TestRestoreFromHandlesProtocolSnapshotsWithMissingVMessStateColumns(t *test
 	}
 }
 
+func TestRestoreFromDefaultsMissingShadowsocksAndTrojanColumns(t *testing.T) {
+	ctx := context.Background()
+	destination, err := Open(ctx, filepath.Join(t.TempDir(), "destination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	initTestAdmin(t, destination, ctx)
+
+	source, err := Open(ctx, filepath.Join(t.TempDir(), "source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	shadowsocks, err := domain.NewShadowsocksClient("ss-device", "ss-phone")
+	if err != nil {
+		t.Fatal(err)
+	}
+	shadowsocks.Email = "ss@xray-easy"
+	shadowsocks.ShadowsocksPasswordEnc = "encrypted-ss"
+	shadowsocks.ShadowsocksEnabled = true
+	if err := source.CreateShadowsocksClient(ctx, shadowsocks); err != nil {
+		t.Fatal(err)
+	}
+	trojan, err := domain.NewProtocolClient("trojan-device", "trojan-phone", domain.ProtocolTrojan, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	trojan.Email = "trojan@xray-easy"
+	trojan.TrojanPasswordEnc = "encrypted-trojan"
+	trojan.TrojanEnabled = true
+	if err := source.CreateTrojanClient(ctx, trojan); err != nil {
+		t.Fatal(err)
+	}
+
+	fullSnapshot := filepath.Join(t.TempDir(), "full.db")
+	if err := source.BackupTo(fullSnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.RestoreFrom(fullSnapshot); err != nil {
+		t.Fatalf("restore current protocol columns: %v", err)
+	}
+	for id, password := range map[string]string{"ss-device": "encrypted-ss", "trojan-device": "encrypted-trojan"} {
+		client, err := destination.GetClient(ctx, id)
+		if err != nil || client.ShadowsocksPasswordEnc+client.TrojanPasswordEnc != password {
+			t.Fatalf("restored protocol credentials for %s = %+v, %v", id, client, err)
+		}
+	}
+
+	for _, column := range []string{
+		"shadowsocks_password_enc", "shadowsocks_enabled", "shadowsocks_revoked",
+		"trojan_password_enc", "trojan_enabled", "trojan_revoked",
+	} {
+		if _, err := source.db.Exec(`ALTER TABLE clients DROP COLUMN ` + column); err != nil {
+			t.Fatalf("drop legacy optional column %s: %v", column, err)
+		}
+	}
+	legacySnapshot := filepath.Join(t.TempDir(), "legacy.db")
+	if err := source.BackupTo(legacySnapshot); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.RestoreFrom(legacySnapshot); err != nil {
+		t.Fatalf("restore legacy protocol columns: %v", err)
+	}
+	for _, id := range []string{"ss-device", "trojan-device"} {
+		client, err := destination.GetClient(ctx, id)
+		if err != nil || client.ShadowsocksPasswordEnc != "" || client.ShadowsocksEnabled || client.ShadowsocksRevoked || client.TrojanPasswordEnc != "" || client.TrojanEnabled || client.TrojanRevoked {
+			t.Fatalf("legacy protocol defaults for %s = %+v, %v", id, client, err)
+		}
+	}
+}
+
 func TestRestoreFromRejectsMalformedClientAndSettingsSchemasAtomically(t *testing.T) {
 	ctx := context.Background()
 	for _, table := range []string{"clients", "settings"} {

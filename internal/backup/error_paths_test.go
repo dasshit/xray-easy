@@ -366,6 +366,49 @@ func TestRestoreStateRejectsUnavailableDependenciesAndUnsafeStagePaths(t *testin
 	})
 }
 
+func TestBackupDoesNotRecordAnEmptyHysteriaTLSDirectory(t *testing.T) {
+	manager, _ := newTestManager(t)
+	tlsDir := filepath.Join(manager.DataDir, "hysteria-tls")
+	if err := os.MkdirAll(tlsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	info, err := manager.Create("empty-tls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(info.Path, "hysteria-tls")); !os.IsNotExist(err) {
+		t.Fatalf("backup retained an empty Hysteria TLS directory: stat error = %v", err)
+	}
+	verified, err := manager.Verify(info.Name)
+	if err != nil || verified.Name != info.Name {
+		t.Fatalf("verify backup without TLS files = %+v, %v", verified, err)
+	}
+}
+
+func TestRestoreKeepsLiveDatabaseWhenBackupStateIsMissing(t *testing.T) {
+	manager, db := newTestManager(t)
+	info, err := manager.Create("missing-state")
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings, err := db.GetSettings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.PublicHost = "live.example.test"
+	if err := db.UpdateSettings(t.Context(), settings); err != nil {
+		t.Fatal(err)
+	}
+	info.StatePath = filepath.Join(t.TempDir(), "missing.db")
+	if err := manager.RestoreStateContext(t.Context(), info); err == nil {
+		t.Fatal("restore accepted a missing SQLite snapshot")
+	}
+	current, err := db.GetSettings(t.Context())
+	if err != nil || current.PublicHost != "live.example.test" {
+		t.Fatalf("failed restore changed live settings = %+v, %v", current, err)
+	}
+}
+
 func TestRestoreStateReportsTLSStagingAndSQLiteSnapshotFailures(t *testing.T) {
 	t.Run("unsafe TLS backup entry", func(t *testing.T) {
 		manager, _ := newTestManager(t)

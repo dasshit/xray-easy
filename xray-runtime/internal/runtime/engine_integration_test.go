@@ -298,6 +298,17 @@ func TestAccountFactoryRejectsUnsupportedProtocolAndInvalidUUID(t *testing.T) {
 	if _, err := accountFor(xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, "auth-secret", "flow"); err == nil {
 		t.Fatal("Hysteria flow was accepted")
 	}
+	if _, err := accountFor(xrayruntimev1.Protocol_PROTOCOL_TROJAN, "trojan-password", "flow"); err == nil {
+		t.Fatal("Trojan flow was accepted")
+	}
+	for _, credential := range []string{"", "   ", "password\nwith-newline"} {
+		if _, err := accountFor(xrayruntimev1.Protocol_PROTOCOL_TROJAN, credential, ""); err == nil {
+			t.Errorf("invalid Trojan credential %q was accepted", credential)
+		}
+	}
+	if _, err := accountFor(xrayruntimev1.Protocol_PROTOCOL_TROJAN, "trojan-password", ""); err != nil {
+		t.Fatalf("valid Trojan credential was rejected: %v", err)
+	}
 	for _, method := range []string{"AES-128-GCM", " aes-256-gcm ", "chacha20-poly1305"} {
 		if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, "secret-password", "", method); err != nil {
 			t.Fatalf("Shadowsocks method %q was rejected: %v", method, err)

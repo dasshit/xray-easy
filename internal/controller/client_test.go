@@ -73,6 +73,9 @@ func TestClientInvokesControllerAndForwardsRequestID(t *testing.T) {
 	if err := client.ProbeIPv6(ctx); err != nil {
 		t.Fatal(err)
 	}
+	if err := client.SetLogLevel(ctx, "debug"); err != nil {
+		t.Fatalf("SetLogLevel() = %v", err)
+	}
 	capabilities, err := client.Capabilities(ctx)
 	if err != nil || capabilities.Xray == nil || !capabilities.Xray.Configured {
 		t.Fatalf("Capabilities() = %+v, %v", capabilities, err)
@@ -99,7 +102,19 @@ func TestBackendControllerAndXrayAdapterShareMutationTrace(t *testing.T) {
 	if err := client.AddUser(ctx, "device-1-vless@xray-easy", "stable-uuid", "vision"); err != nil {
 		t.Fatal(err)
 	}
-	if handler.adds != 1 || len(handler.traces) != 2 || len(handler.requestIDs) != 2 {
+	if err := client.AddShadowsocksUser(ctx, "device-1-ss@xray-easy", "ss-password", "aes-128-gcm"); err != nil {
+		t.Fatalf("AddShadowsocksUser() = %v", err)
+	}
+	if err := client.RemoveShadowsocksUser(ctx, "device-1-ss@xray-easy"); err != nil {
+		t.Fatalf("RemoveShadowsocksUser() = %v", err)
+	}
+	if err := client.AddTrojanUser(ctx, "device-1-trojan@xray-easy", "trojan-password"); err != nil {
+		t.Fatalf("AddTrojanUser() = %v", err)
+	}
+	if err := client.RemoveTrojanUser(ctx, "device-1-trojan@xray-easy"); err != nil {
+		t.Fatalf("RemoveTrojanUser() = %v", err)
+	}
+	if handler.adds != 3 || len(handler.traces) != 2 || len(handler.requestIDs) != 2 {
 		t.Fatalf("runtime observed calls=%d traces=%+v IDs=%v", handler.adds, handler.traces, handler.requestIDs)
 	}
 	for index, trace := range handler.traces {

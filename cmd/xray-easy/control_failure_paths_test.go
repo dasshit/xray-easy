@@ -202,7 +202,7 @@ func TestStartReconcilerRetriesAndReportsBackgroundFailure(t *testing.T) {
 			t.Fatal("periodic reconciler did not record its retry failure")
 		}
 		for _, entry := range app.server.diagnosticBuffer.Snapshot(10) {
-			if strings.Contains(entry.Message, "Xray reconciliation skipped") {
+			if strings.HasPrefix(entry.Message, "Xray reconciliation skipped:") {
 				cancel()
 				return
 			}

@@ -22,8 +22,9 @@ import (
 )
 
 type telemetryTestDevice struct {
-	mu       sync.Mutex
-	snapshot string
+	mu          sync.Mutex
+	snapshot    string
+	snapshotErr error
 }
 
 type telemetryTestFactory struct{ device Device }
@@ -36,11 +37,17 @@ func (d *telemetryTestDevice) Close()           {}
 func (d *telemetryTestDevice) Snapshot() (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.snapshot, nil
+	return d.snapshot, d.snapshotErr
 }
 func (d *telemetryTestDevice) setSnapshot(value string) {
 	d.mu.Lock()
 	d.snapshot = value
+	d.snapshotErr = nil
+	d.mu.Unlock()
+}
+func (d *telemetryTestDevice) setSnapshotError(err error) {
+	d.mu.Lock()
+	d.snapshotErr = err
 	d.mu.Unlock()
 }
 
@@ -279,6 +286,92 @@ func TestRunConnectionMonitorLogsTransitionsWithoutTelemetryStream(t *testing.T)
 	}
 	if !strings.Contains(output, `"peer_name":"ios-device"`) || !strings.Contains(output, `"source_ip":"198.51.100.7"`) {
 		t.Fatalf("connection logs omitted peer identity/source: %s", output)
+	}
+}
+
+func TestRunConnectionMonitorRecoversFromSnapshotFailureAndIgnoresNilInputs(t *testing.T) {
+	logs := &lockedLogBuffer{}
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	var nilService *Service
+	nilService.RunConnectionMonitor(context.Background())
+	serviceWithoutManager := &Service{}
+	serviceWithoutManager.RunConnectionMonitor(context.Background())
+	serviceWithoutManager.runConnectionMonitor(context.Background(), time.Millisecond)
+	serviceWithoutManager.runConnectionMonitor(nil, time.Millisecond)
+	serviceWithoutManager.runConnectionMonitor(context.Background(), 0)
+
+	options := testOptions(t)
+	device := &telemetryTestDevice{}
+	manager, err := Open(options, telemetryTestFactory{device: device})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	service := NewService(manager, options)
+	canceled, cancelImmediately := context.WithCancel(context.Background())
+	cancelImmediately()
+	service.RunConnectionMonitor(canceled)
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddPeer("tablet", publicKey); err != nil {
+		t.Fatal(err)
+	}
+	device.setSnapshotError(errors.New("temporary kernel snapshot error"))
+	now := time.Now().UTC().Truncate(time.Second)
+	service.telemetryNow = func() time.Time { return now }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		service.runConnectionMonitor(ctx, 10*time.Millisecond)
+	}()
+	waitFor := func(predicate func(string) bool, label string) {
+		t.Helper()
+		deadline := time.After(time.Second)
+		for {
+			output := logs.String()
+			if predicate(output) {
+				return
+			}
+			select {
+			case <-deadline:
+				t.Fatalf("connection monitor did not log %s; logs=%s", label, output)
+			case <-time.After(time.Millisecond):
+			}
+		}
+	}
+	waitFor(func(output string) bool { return strings.Contains(output, `"event":"snapshot_failed"`) }, "snapshot failure")
+
+	decoded, err := base64.StdEncoding.DecodeString(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	device.setSnapshot(fmt.Sprintf("public_key=%s\nendpoint=198.51.100.9:12345\nlast_handshake_time_sec=%d\nlast_handshake_time_nsec=0\nrx_bytes=10\ntx_bytes=20\n", hex.EncodeToString(decoded), now.Unix()))
+	waitFor(func(output string) bool {
+		return strings.Contains(output, `"event":"snapshot_recovered"`) && strings.Contains(output, `"event":"peer_online"`)
+	}, "snapshot recovery and peer online transition")
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("connection monitor did not stop after context cancellation")
+	}
+	output := logs.String()
+	if got := strings.Count(output, `"event":"snapshot_failed"`); got != 1 {
+		t.Fatalf("snapshot failure log count = %d, want one; logs=%s", got, output)
+	}
+	if got := strings.Count(output, `"event":"snapshot_recovered"`); got != 1 {
+		t.Fatalf("snapshot recovery log count = %d, want one; logs=%s", got, output)
+	}
+	if !strings.Contains(output, `"source_ip":"198.51.100.9"`) {
+		t.Fatalf("online event omitted observed source IP: %s", output)
 	}
 }
 

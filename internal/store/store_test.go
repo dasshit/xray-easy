@@ -124,6 +124,9 @@ func TestProtocolSpecificCreateMethodsRejectIncompleteCredentials(t *testing.T) 
 		{"Shadowsocks missing encrypted password", func() error {
 			return db.CreateShadowsocksClient(ctx, domain.Client{ID: "s", Protocol: domain.ProtocolShadowsocks, Email: "s@example.test"})
 		}},
+		{"Trojan missing encrypted password", func() error {
+			return db.CreateTrojanClient(ctx, domain.Client{ID: "t", Protocol: domain.ProtocolTrojan, Email: "t@example.test"})
+		}},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
@@ -131,6 +134,37 @@ func TestProtocolSpecificCreateMethodsRejectIncompleteCredentials(t *testing.T) 
 				t.Fatal("incomplete protocol credentials were accepted")
 			}
 		})
+	}
+}
+
+func TestTrojanProfileStoresEncryptedCredentialAndTransitionsState(t *testing.T) {
+	db, ctx := openTestStore(t, "trojan-client.db")
+	client, err := domain.NewProtocolClient("trojan-device", "phone", domain.ProtocolTrojan, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.Email = "device-trojan@xray-easy"
+	client.TrojanPasswordEnc = "encrypted-envelope"
+	if err := db.CreateTrojanClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetClient(ctx, client.ID)
+	if err != nil || !got.HasTrojan() || !got.TrojanCanConnect() || got.TrojanPasswordEnc != "encrypted-envelope" || got.UUID != "" {
+		t.Fatalf("stored Trojan profile = %+v, %v", got, err)
+	}
+	if err := db.SetClientProtocolState(ctx, client.ID, domain.ProtocolTrojan, domain.ClientState{Enabled: false}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.GetClient(ctx, client.ID)
+	if err != nil || got.TrojanCanConnect() || got.TrojanRevoked {
+		t.Fatalf("disabled Trojan state = %+v, %v", got, err)
+	}
+	if err := db.SetClientProtocolState(ctx, client.ID, domain.ProtocolTrojan, domain.ClientState{Revoked: true}); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.GetClient(ctx, client.ID)
+	if err != nil || !got.TrojanRevoked || got.Enabled || !got.Revoked {
+		t.Fatalf("revoked Trojan state = %+v, %v", got, err)
 	}
 }
 

@@ -119,10 +119,30 @@ func TestNewProtocolClientCreatesOneInboundAccess(t *testing.T) {
 	if _, err := NewProtocolClient("dual-id", "phone", ProtocolLegacyDual, "", "secret"); err == nil {
 		t.Fatal("new dual-protocol profile was accepted")
 	}
+	trojan, err := NewProtocolClient("trojan-id", "phone", ProtocolTrojan, "", "")
+	if err != nil || trojan.Protocol != ProtocolTrojan || !trojan.HasTrojan() || !trojan.TrojanCanConnect() || trojan.HasVLESS() || trojan.HasVMess() {
+		t.Fatalf("Trojan-only profile = %+v, %v", trojan, err)
+	}
 	for _, auth := range []string{"", "bad\nsecret", strings.Repeat("x", 257)} {
 		if _, err := NewProtocolClient("h-id", "phone", ProtocolHysteria2, "", auth); err == nil {
 			t.Errorf("Hysteria auth %q was accepted", auth)
 		}
+	}
+}
+
+func TestTrojanConnectivityRequiresActiveCredentialProtocol(t *testing.T) {
+	client := Client{Protocol: ProtocolTrojan, TrojanEnabled: true}
+	if !client.HasTrojan() || !client.TrojanCanConnect() {
+		t.Fatalf("enabled Trojan profile should connect: %+v", client)
+	}
+	client.TrojanRevoked = true
+	if client.TrojanCanConnect() {
+		t.Fatal("revoked Trojan profile remained connectable")
+	}
+	client.Protocol = ProtocolVLESS
+	client.TrojanRevoked = false
+	if client.HasTrojan() || client.TrojanCanConnect() {
+		t.Fatal("Trojan access leaked into another protocol")
 	}
 }
 
@@ -208,5 +228,38 @@ func TestNewProtocolClientValidatesHysteriaCredentialsAndProtocolSpecificFields(
 		if _, err := NewProtocolClient("id", "phone", protocol, "", "password"); err == nil {
 			t.Errorf("unsupported new profile protocol %q was accepted", protocol)
 		}
+	}
+}
+
+func TestProtocolAccessStateAndShadowsocksConstructorValidation(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		client   Client
+		protocol ClientProtocol
+		want     ClientState
+	}{
+		{"VLESS", Client{Protocol: ProtocolVLESS, VLESSEnabled: true, VLESSRevoked: true}, ProtocolVLESS, ClientState{Enabled: true, Revoked: true}},
+		{"Hysteria 2", Client{Protocol: ProtocolHysteria2, HysteriaEnabled: true, HysteriaRevoked: true}, ProtocolHysteria2, ClientState{Enabled: true, Revoked: true}},
+		{"VMess", Client{Protocol: ProtocolVMess, Enabled: true, Revoked: true}, ProtocolVMess, ClientState{Enabled: true, Revoked: true}},
+		{"Shadowsocks", Client{Protocol: ProtocolShadowsocks, ShadowsocksEnabled: true, ShadowsocksRevoked: true}, ProtocolShadowsocks, ClientState{Enabled: true, Revoked: true}},
+		{"Trojan", Client{Protocol: ProtocolTrojan, TrojanEnabled: true, TrojanRevoked: true}, ProtocolTrojan, ClientState{Enabled: true, Revoked: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			got, err := test.client.AccessState(test.protocol)
+			if err != nil || got != test.want {
+				t.Fatalf("AccessState(%q) = %+v, %v; want %+v", test.protocol, got, err, test.want)
+			}
+		})
+	}
+	if _, err := (Client{Protocol: ProtocolHysteria2}).AccessState(ProtocolVLESS); err == nil {
+		t.Fatal("VLESS state was returned for a Hysteria-only profile")
+	}
+	for _, input := range []struct{ id, name string }{{"", "phone"}, {"id", "two words"}} {
+		if client, err := NewShadowsocksClient(input.id, input.name); err == nil || client.ID != "" {
+			t.Errorf("NewShadowsocksClient(%q, %q) = %+v, %v; want validation error", input.id, input.name, client, err)
+		}
+	}
+	if _, err := NewProtocolClient("id", "phone", ProtocolVLESS, "unsupported", ""); err == nil {
+		t.Fatal("unsupported VLESS fingerprint was accepted")
 	}
 }

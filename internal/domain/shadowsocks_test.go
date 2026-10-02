@@ -39,3 +39,10 @@ func TestSupportsShadowsocksMethodAndNetwork(t *testing.T) {
 		t.Fatal("unsupported Shadowsocks method or network accepted")
 	}
 }
+
+func TestShadowsocksSettingsString(t *testing.T) {
+	settings := ShadowsocksSettings{PublicPort: 8388, Method: ShadowsocksMethodAES256GCM, Network: ShadowsocksNetworkTCPUDP}
+	if got := settings.String(); got != "8388/aes-256-gcm/tcp,udp" {
+		t.Fatalf("Shadowsocks settings string = %q", got)
+	}
+}
