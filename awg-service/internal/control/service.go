@@ -20,6 +20,13 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+const (
+	// connectionMonitorInterval is the interval between background connection samples.
+	connectionMonitorInterval = time.Second
+	// peerOnlineWindow is the maximum time since observed activity for a peer to remain online.
+	peerOnlineWindow = 15 * time.Second
+)
+
 // Service maps the prototype's gRPC methods onto the AWG lifecycle manager.
 type Service struct {
 	awgapi.UnimplementedControlServer
@@ -29,7 +36,6 @@ type Service struct {
 	startedAt         time.Time
 	telemetrySequence uint64
 	telemetryNow      func() time.Time
-	peerOnline        map[string]bool
 }
 
 // servicePeerNamePattern is an internal package variable.
@@ -37,48 +43,9 @@ var servicePeerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 
 // NewService creates the RPC adapter for a configured lifecycle manager.
 func NewService(manager *Manager, options Options) *Service {
-	service := &Service{manager: manager, options: options, startedAt: time.Now().UTC(), peerOnline: make(map[string]bool)}
+	service := &Service{manager: manager, options: options, startedAt: time.Now().UTC()}
 	service.removeOrphanedOperationKeys()
 	return service
-}
-
-// recordPeerConnectionState logs one transition for a managed peer. The
-// state cache is shared by all telemetry watchers so reconnecting a stream
-// does not duplicate an event for the same observed state.
-func (s *Service) recordPeerConnectionState(name string, online bool, sourceIP, detail string) {
-	if strings.TrimSpace(name) == "" {
-		return
-	}
-	s.mu.Lock()
-	previous, known := s.peerOnline[name]
-	if known && previous == online {
-		s.mu.Unlock()
-		return
-	}
-	s.peerOnline[name] = online
-	s.mu.Unlock()
-	// An initial offline sample is the normal state for a newly created peer,
-	// not a client disconnect event.
-	if !known && !online {
-		return
-	}
-	event := "peer_offline"
-	if online {
-		event = "peer_online"
-	}
-	attrs := []any{"service", "amneziawg-service", "component", "connection", "event", event, "peer_name", name, "detail", detail}
-	if sourceIP != "" {
-		attrs = append(attrs, "source_ip", sourceIP)
-	}
-	slog.Info("AWG connection event", attrs...)
-}
-
-// forgetPeerConnectionState removes state for a peer absent from the live
-// snapshot without reporting a client disconnect caused by administration.
-func (s *Service) forgetPeerConnectionState(name string) {
-	s.mu.Lock()
-	delete(s.peerOnline, name)
-	s.mu.Unlock()
 }
 
 // removeOrphanedOperationKeys removes the supplied value.
@@ -202,12 +169,7 @@ func (s *Service) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream a
 			}
 			if !activity.IsZero() {
 				item.LastActivity = timestamppb.New(activity)
-				item.Online = now.Sub(activity) <= 15*time.Second
-			}
-			if item.Online {
-				s.recordPeerConnectionState(peer.Name, true, peer.SourceIP, "traffic observed within the online window")
-			} else {
-				s.recordPeerConnectionState(peer.Name, false, peer.SourceIP, "no traffic observed for the online window")
+				item.Online = now.Sub(activity) <= peerOnlineWindow
 			}
 			if !item.Online {
 				item.SourceIp = ""
@@ -218,7 +180,6 @@ func (s *Service) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream a
 			if _, exists := seenPeers[name]; !exists {
 				delete(previous, name)
 				delete(lastActivity, name)
-				s.forgetPeerConnectionState(name)
 			}
 		}
 		s.mu.Lock()
@@ -238,6 +199,94 @@ func (s *Service) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream a
 			if err := send(); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+// RunConnectionMonitor continuously samples peer telemetry and logs connection
+// state transitions independently of WatchPeerStats subscribers.
+func (s *Service) RunConnectionMonitor(ctx context.Context) {
+	s.runConnectionMonitor(ctx, connectionMonitorInterval)
+}
+
+// runConnectionMonitor samples peers until ctx is canceled.
+func (s *Service) runConnectionMonitor(ctx context.Context, interval time.Duration) {
+	if s == nil || s.manager == nil || ctx == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = connectionMonitorInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	previous := make(map[string][2]int64)
+	lastActivity := make(map[string]time.Time)
+	previousOnline := make(map[string]bool)
+	knownState := make(map[string]bool)
+	snapshotFailed := false
+	sample := func() {
+		peers, err := s.manager.PeerTelemetry()
+		if err != nil {
+			if !snapshotFailed {
+				slog.Warn("AWG connection monitor snapshot failed", "service", "amneziawg-service", "component", "connection", "event", "snapshot_failed")
+			}
+			snapshotFailed = true
+			return
+		}
+		if snapshotFailed {
+			slog.Info("AWG connection monitor snapshot recovered", "service", "amneziawg-service", "component", "connection", "event", "snapshot_recovered")
+			snapshotFailed = false
+		}
+		now := time.Now().UTC()
+		if s.telemetryNow != nil {
+			now = s.telemetryNow().UTC()
+		}
+		seenPeers := make(map[string]struct{}, len(peers))
+		for _, peer := range peers {
+			if peer.Name == "" {
+				continue
+			}
+			current := [2]int64{peer.UploadBytes, peer.DownloadBytes}
+			prior, sampled := previous[peer.Name]
+			if sampled && (current[0] > prior[0] || current[1] > prior[1]) {
+				lastActivity[peer.Name] = now
+			} else if !sampled && !peer.LastHandshake.IsZero() {
+				lastActivity[peer.Name] = peer.LastHandshake.UTC()
+			}
+			previous[peer.Name] = current
+			seenPeers[peer.Name] = struct{}{}
+			activity := lastActivity[peer.Name]
+			online := !activity.IsZero() && now.Sub(activity) <= peerOnlineWindow
+			if online != previousOnline[peer.Name] && (knownState[peer.Name] || online) {
+				event, detail := "peer_offline", "no traffic observed for the online window"
+				if online {
+					event, detail = "peer_online", "traffic observed within the online window"
+				}
+				attrs := []any{"service", "amneziawg-service", "component", "connection", "event", event, "peer_name", peer.Name, "detail", detail}
+				if peer.SourceIP != "" {
+					attrs = append(attrs, "source_ip", peer.SourceIP)
+				}
+				slog.Info("AWG connection event", attrs...)
+			}
+			previousOnline[peer.Name] = online
+			knownState[peer.Name] = true
+		}
+		for name := range previous {
+			if _, exists := seenPeers[name]; !exists {
+				delete(previous, name)
+				delete(lastActivity, name)
+				delete(previousOnline, name)
+				delete(knownState, name)
+			}
+		}
+	}
+	sample()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sample()
 		}
 	}
 }

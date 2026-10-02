@@ -1,34 +1,34 @@
 # AmneziaWG connection event logging plan
 
-## Current state
+## Current behavior
 
-- `awg-service` logs gRPC calls and peer lifecycle mutations (`peer_added` and
-  `peer_removed`).
-- `WatchPeerStats` polls the live UAPI snapshot while Controller has an open
-  telemetry stream. It derives `online` from counter growth and a 15-second
-  activity window, but does not log state transitions.
-- Consequently, a successful client handshake is visible only through the
-  telemetry response consumed by Controller, not in the `amneziawg-service`
-  container log. No connection transition can be observed when the telemetry
-  stream is not connected.
+`amneziawg-service` logs gRPC calls and peer lifecycle mutations such as
+`peer_added` and `peer_removed`. `WatchPeerStats` polls the live UAPI snapshot
+while Controller has an open telemetry stream and derives online status from
+counter growth and a 15-second activity window.
 
-## Implementation steps
+Connection logging is now independent of that stream: a cancellable background
+monitor starts with the gRPC service, samples peer telemetry once per second,
+and logs transitions. The Web UI telemetry stream continues to serve live
+status independently.
 
-1. Add a service-level peer state cache used by telemetry watchers to emit one
-   structured `slog` event per online/offline transition. Include the peer
-   name, transition, source address when available, and the reason. Do not log
-   keys, profiles, or byte counters.
-2. Keep the existing 15-second semantics and clear cached state when a peer is
-   removed from the live snapshot. Preserve the existing stream payload and
-   Controller behavior.
-3. Add unit coverage for online and offline transitions, duplicate suppression,
-   source address handling, and stream cancellation. Capture JSON logs in the
-   test instead of relying on container output.
-4. Run the AWG module tests, race tests, vet, and the repository test suite.
+## Implementation
 
-## Operational result
+1. Run a background telemetry monitor from the service lifecycle. Emit one
+   structured `slog` event per online/offline transition. Include peer name,
+   transition, source address when available, and reason. Never log keys,
+   profiles, or byte counters.
+2. Keep the existing 15-second online semantics. Clear cached state when a peer
+   disappears from the live snapshot, without reporting administrative removal
+   as a client disconnect. Preserve the telemetry stream payload and Controller
+   behavior.
+3. Test that transitions are logged without an open telemetry stream, repeated
+   polling does not duplicate events, and the monitor stops on cancellation.
+4. Run AWG module tests, race tests, vet, and the repository test suite.
 
-The service will emit structured records such as `AWG connection event` with
-`component=connection`, `event=peer_online` or `peer_offline`, and
-`peer_name=<name>`. These records appear only while `WatchPeerStats` is active;
-the stream is opened by Controller when the Web UI SSE pipeline is active.
+## Log fields
+
+Records use the message `AWG connection event`, `component=connection`,
+`event=peer_online` or `peer_offline`, and `peer_name=<name>`. `source_ip` is
+included when the peer endpoint is known. The background monitor remains
+active until the service shuts down.

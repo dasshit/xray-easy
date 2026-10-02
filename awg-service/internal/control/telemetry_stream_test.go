@@ -127,10 +127,6 @@ func TestWatchPeerStatsReportsCounterGrowthAndStopsWhenCanceled(t *testing.T) {
 }
 
 func TestWatchPeerStatsMarksPeerOfflineAfterTrafficTTL(t *testing.T) {
-	var logs bytes.Buffer
-	previousLogger := slog.Default()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
-	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 	options := testOptions(t)
 	device := &telemetryTestDevice{}
 	manager, err := Open(options, telemetryTestFactory{device: device})
@@ -186,15 +182,6 @@ func TestWatchPeerStatsMarksPeerOfflineAfterTrafficTTL(t *testing.T) {
 	if peer.GetOnline() || peer.GetSourceIp() != "" {
 		t.Fatalf("peer after traffic TTL = %+v, want offline without source IP", peer)
 	}
-	if got := strings.Count(logs.String(), `"event":"peer_online"`); got != 1 {
-		t.Fatalf("online event count = %d, want one; logs=%s", got, logs.String())
-	}
-	if got := strings.Count(logs.String(), `"event":"peer_offline"`); got != 1 {
-		t.Fatalf("offline event count = %d, want one; logs=%s", got, logs.String())
-	}
-	if !strings.Contains(logs.String(), `"peer_name":"ios-device"`) || !strings.Contains(logs.String(), `"source_ip":"198.51.100.7"`) {
-		t.Fatalf("connection logs omitted peer identity/source: %s", logs.String())
-	}
 	cancel()
 	select {
 	case err := <-done:
@@ -203,6 +190,95 @@ func TestWatchPeerStatsMarksPeerOfflineAfterTrafficTTL(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("AWG telemetry stream did not stop after cancellation")
+	}
+}
+
+type lockedLogBuffer struct {
+	mu sync.Mutex
+	bytes.Buffer
+}
+
+func (b *lockedLogBuffer) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.Write(value)
+}
+
+func (b *lockedLogBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.Buffer.String()
+}
+
+func TestRunConnectionMonitorLogsTransitionsWithoutTelemetryStream(t *testing.T) {
+	logs := &lockedLogBuffer{}
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+	options := testOptions(t)
+	device := &telemetryTestDevice{}
+	manager, err := Open(options, telemetryTestFactory{device: device})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddPeer("ios-device", publicKey); err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	publicHex := hex.EncodeToString(decoded)
+	activity := time.Now().UTC().Truncate(time.Second)
+	device.setSnapshot(fmt.Sprintf("public_key=%s\nendpoint=198.51.100.7:44500\nlast_handshake_time_sec=%d\nlast_handshake_time_nsec=%d\nrx_bytes=10\ntx_bytes=20\n", publicHex, activity.Unix(), activity.Nanosecond()))
+	service := NewService(manager, options)
+	sample := 0
+	service.telemetryNow = func() time.Time {
+		sample++
+		if sample == 1 {
+			return activity
+		}
+		return activity.Add(16 * time.Second)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		service.runConnectionMonitor(ctx, 10*time.Millisecond)
+	}()
+	deadline := time.After(time.Second)
+	for {
+		output := logs.String()
+		if strings.Contains(output, `"event":"peer_online"`) && strings.Contains(output, `"event":"peer_offline"`) {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("background monitor did not log both transitions; logs=%s", output)
+		case <-time.After(time.Millisecond):
+		}
+	}
+	time.Sleep(30 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("background connection monitor did not stop after cancellation")
+	}
+	output := logs.String()
+	if got := strings.Count(output, `"event":"peer_online"`); got != 1 {
+		t.Fatalf("online event count = %d, want one; logs=%s", got, output)
+	}
+	if got := strings.Count(output, `"event":"peer_offline"`); got != 1 {
+		t.Fatalf("offline event count = %d, want one; logs=%s", got, output)
+	}
+	if !strings.Contains(output, `"peer_name":"ios-device"`) || !strings.Contains(output, `"source_ip":"198.51.100.7"`) {
+		t.Fatalf("connection logs omitted peer identity/source: %s", output)
 	}
 }
 

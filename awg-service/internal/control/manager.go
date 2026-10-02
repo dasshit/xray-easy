@@ -571,7 +571,6 @@ func (m *Manager) PeerTelemetry() ([]PeerTelemetry, error) {
 	}
 	snapshot, err := m.device.Snapshot()
 	if err != nil {
-		slog.Error("AWG telemetry error", "service", "amneziawg-service", "component", "telemetry", "event", "snapshot_failed")
 		return nil, fmt.Errorf("read AWG peer telemetry: %w", err)
 	}
 	observed, err := ParsePeerTelemetry(snapshot)

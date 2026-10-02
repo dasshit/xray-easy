@@ -129,13 +129,24 @@ func serve() error {
 
 // serveControlService serves the requested endpoint.
 func serveControlService(manager *control.Manager, opts control.Options, token string, listener net.Listener, shutdown <-chan os.Signal) error {
+	service := control.NewService(manager, opts)
+	monitorContext, stopMonitor := context.WithCancel(context.Background())
+	monitorDone := make(chan struct{})
+	go func() {
+		defer close(monitorDone)
+		service.RunConnectionMonitor(monitorContext)
+	}()
+	defer func() {
+		stopMonitor()
+		<-monitorDone
+	}()
 	server := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(control.LoggingInterceptor(), control.AuthInterceptor(token)),
 		grpc.ChainStreamInterceptor(control.LoggingStreamInterceptor(), control.AuthStreamInterceptor(token)),
 		grpc.MaxRecvMsgSize(24<<20),
 		grpc.MaxSendMsgSize(24<<20),
 	)
-	control.Register(server, control.NewService(manager, opts))
+	control.Register(server, service)
 	return serveControlServer(server, listener, shutdown)
 }
 
