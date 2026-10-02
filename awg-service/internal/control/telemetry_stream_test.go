@@ -1,12 +1,14 @@
 package control
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"testing"
@@ -125,6 +127,10 @@ func TestWatchPeerStatsReportsCounterGrowthAndStopsWhenCanceled(t *testing.T) {
 }
 
 func TestWatchPeerStatsMarksPeerOfflineAfterTrafficTTL(t *testing.T) {
+	var logs bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
 	options := testOptions(t)
 	device := &telemetryTestDevice{}
 	manager, err := Open(options, telemetryTestFactory{device: device})
@@ -179,6 +185,15 @@ func TestWatchPeerStatsMarksPeerOfflineAfterTrafficTTL(t *testing.T) {
 	peer := offline.GetPeers()[0]
 	if peer.GetOnline() || peer.GetSourceIp() != "" {
 		t.Fatalf("peer after traffic TTL = %+v, want offline without source IP", peer)
+	}
+	if got := strings.Count(logs.String(), `"event":"peer_online"`); got != 1 {
+		t.Fatalf("online event count = %d, want one; logs=%s", got, logs.String())
+	}
+	if got := strings.Count(logs.String(), `"event":"peer_offline"`); got != 1 {
+		t.Fatalf("offline event count = %d, want one; logs=%s", got, logs.String())
+	}
+	if !strings.Contains(logs.String(), `"peer_name":"ios-device"`) || !strings.Contains(logs.String(), `"source_ip":"198.51.100.7"`) {
+		t.Fatalf("connection logs omitted peer identity/source: %s", logs.String())
 	}
 	cancel()
 	select {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -28,6 +29,7 @@ type Service struct {
 	startedAt         time.Time
 	telemetrySequence uint64
 	telemetryNow      func() time.Time
+	peerOnline        map[string]bool
 }
 
 // servicePeerNamePattern is an internal package variable.
@@ -35,9 +37,48 @@ var servicePeerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 
 // NewService creates the RPC adapter for a configured lifecycle manager.
 func NewService(manager *Manager, options Options) *Service {
-	service := &Service{manager: manager, options: options, startedAt: time.Now().UTC()}
+	service := &Service{manager: manager, options: options, startedAt: time.Now().UTC(), peerOnline: make(map[string]bool)}
 	service.removeOrphanedOperationKeys()
 	return service
+}
+
+// recordPeerConnectionState logs one transition for a managed peer. The
+// state cache is shared by all telemetry watchers so reconnecting a stream
+// does not duplicate an event for the same observed state.
+func (s *Service) recordPeerConnectionState(name string, online bool, sourceIP, detail string) {
+	if strings.TrimSpace(name) == "" {
+		return
+	}
+	s.mu.Lock()
+	previous, known := s.peerOnline[name]
+	if known && previous == online {
+		s.mu.Unlock()
+		return
+	}
+	s.peerOnline[name] = online
+	s.mu.Unlock()
+	// An initial offline sample is the normal state for a newly created peer,
+	// not a client disconnect event.
+	if !known && !online {
+		return
+	}
+	event := "peer_offline"
+	if online {
+		event = "peer_online"
+	}
+	attrs := []any{"service", "amneziawg-service", "component", "connection", "event", event, "peer_name", name, "detail", detail}
+	if sourceIP != "" {
+		attrs = append(attrs, "source_ip", sourceIP)
+	}
+	slog.Info("AWG connection event", attrs...)
+}
+
+// forgetPeerConnectionState removes state for a peer absent from the live
+// snapshot without reporting a client disconnect caused by administration.
+func (s *Service) forgetPeerConnectionState(name string) {
+	s.mu.Lock()
+	delete(s.peerOnline, name)
+	s.mu.Unlock()
 }
 
 // removeOrphanedOperationKeys removes the supplied value.
@@ -163,6 +204,11 @@ func (s *Service) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream a
 				item.LastActivity = timestamppb.New(activity)
 				item.Online = now.Sub(activity) <= 15*time.Second
 			}
+			if item.Online {
+				s.recordPeerConnectionState(peer.Name, true, peer.SourceIP, "traffic observed within the online window")
+			} else {
+				s.recordPeerConnectionState(peer.Name, false, peer.SourceIP, "no traffic observed for the online window")
+			}
 			if !item.Online {
 				item.SourceIp = ""
 			}
@@ -172,6 +218,7 @@ func (s *Service) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream a
 			if _, exists := seenPeers[name]; !exists {
 				delete(previous, name)
 				delete(lastActivity, name)
+				s.forgetPeerConnectionState(name)
 			}
 		}
 		s.mu.Lock()
