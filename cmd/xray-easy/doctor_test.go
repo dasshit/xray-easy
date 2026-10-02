@@ -81,6 +81,38 @@ func TestDoctorOmitsAmneziaWGChecksWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestDoctorRequiresEnabledTrojanInboundInActiveAndRuntimeState(t *testing.T) {
+	dataDir, configDir, key := prepareDoctorState(t, true)
+	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
+	t.Setenv("XRAY_TROJAN_ENABLED", "true")
+	t.Setenv("XRAY_TROJAN_PORT", "10443")
+	runtime := &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running"}}
+	checks := collectDoctorChecks(context.Background(), dataDir, configDir, runtime, &doctorHandlerStub{}, &doctorStatsStub{})
+	if !hasDoctorCheck(checks, "Trojan inbound", doctorFail) {
+		t.Fatalf("doctor accepted an enabled but missing Trojan inbound: %+v", checks)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "active.json"), []byte(`{"inbounds":[{"tag":"trojan-tls","protocol":"trojan"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runtime.status.InboundTags = []string{"trojan-tls"}
+	checks = collectDoctorChecks(context.Background(), dataDir, configDir, runtime, &doctorHandlerStub{}, &doctorStatsStub{})
+	if !hasDoctorCheck(checks, "Trojan inbound", doctorPass) {
+		t.Fatalf("doctor rejected the enabled Trojan inbound present in active and runtime state: %+v", checks)
+	}
+}
+
+func TestDoctorDefersTrojanInboundCheckUntilInitialSetup(t *testing.T) {
+	dataDir, configDir, key := prepareDoctorState(t, false)
+	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString(key))
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", writeControllerToken(t, 0o400))
+	t.Setenv("XRAY_TROJAN_ENABLED", "true")
+	checks := collectDoctorChecks(context.Background(), dataDir, configDir, &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "no-config"}}, &doctorHandlerStub{}, &doctorStatsStub{})
+	if !hasDoctorCheck(checks, "Trojan inbound", doctorWarn) {
+		t.Fatalf("doctor should defer Trojan validation until setup: %+v", checks)
+	}
+}
+
 func hasDoctorCheck(checks []doctorCheck, name string, level doctorLevel) bool {
 	return findDoctorCheck(checks, name) != nil && findDoctorCheck(checks, name).level == level
 }
@@ -367,7 +399,7 @@ func TestMatchEmbeddedInboundTags(t *testing.T) {
 		runtimeTags   []string
 		wantError     bool
 	}{
-		{name: "matching supported tags", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"},{"tag":"vmess","protocol":"vmess"},{"tag":"hysteria","protocol":"hysteria"},{"tag":"ignored","protocol":"dokodemo-door"}]}`, runtimeTags: []string{"hysteria", "vless", "vmess"}},
+		{name: "matching supported tags", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"},{"tag":"vmess","protocol":"vmess"},{"tag":"hysteria","protocol":"hysteria"},{"tag":"shadowsocks","protocol":"shadowsocks"},{"tag":"trojan-tls","protocol":"trojan"},{"tag":"ignored","protocol":"dokodemo-door"}]}`, runtimeTags: []string{"hysteria", "vless", "vmess", "shadowsocks", "trojan-tls"}},
 		{name: "different tags", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"}]}`, runtimeTags: []string{"wrong"}, wantError: true},
 		{name: "duplicate configured tag", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"},{"tag":"vless","protocol":"vmess"}]}`, runtimeTags: []string{"vless"}, wantError: true},
 		{name: "duplicate runtime tag", configuration: `{"inbounds":[{"tag":"vless","protocol":"vless"}]}`, runtimeTags: []string{"vless", "vless"}, wantError: true},
@@ -386,6 +418,26 @@ func TestMatchEmbeddedInboundTags(t *testing.T) {
 		})
 	}
 	if err := matchEmbeddedInboundTags(filepath.Join(t.TempDir(), "missing.json"), nil); err == nil {
+		t.Fatal("missing active config was accepted")
+	}
+}
+
+func TestActiveConfigHasInbound(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "active.json")
+	if err := os.WriteFile(path, []byte(`{"inbounds":[{"tag":"trojan-tls","protocol":"trojan"}]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		protocol string
+		tag      string
+		want     bool
+	}{{"trojan", "trojan-tls", true}, {"trojan", "wrong", false}, {"vless", "trojan-tls", false}} {
+		got, err := activeConfigHasInbound(path, test.protocol, test.tag)
+		if err != nil || got != test.want {
+			t.Errorf("activeConfigHasInbound(%q, %q) = %t, %v; want %t", test.protocol, test.tag, got, err, test.want)
+		}
+	}
+	if _, err := activeConfigHasInbound(filepath.Join(t.TempDir(), "missing.json"), "trojan", "trojan-tls"); err == nil {
 		t.Fatal("missing active config was accepted")
 	}
 }

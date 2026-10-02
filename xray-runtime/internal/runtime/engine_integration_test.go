@@ -130,9 +130,10 @@ func TestEmbeddedEngineStartsWithoutStatsService(t *testing.T) {
 func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) {
 	vlessPort := freeEngineTCPPort(t)
 	vmessPort := freeEngineTCPPort(t)
+	trojanPort := freeEngineTCPPort(t)
 	hysteriaPort := freeEngineUDPPort(t)
 	certificateFile, keyFile := writeEngineTestCertificate(t)
-	configuration := []byte(fmt.Sprintf(`{"log":{"loglevel":"none"},"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"vless","tag":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"tcp","security":"none"}},{"listen":"127.0.0.1","port":%d,"protocol":"vmess","tag":"vmess","settings":{"clients":[]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"certificates":[{"certificateFile":%q,"keyFile":%q}]}}},{"listen":"127.0.0.1","port":%d,"protocol":"hysteria","tag":"hysteria2","settings":{"version":2,"users":[]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"certificates":[{"certificateFile":%q,"keyFile":%q}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`, vlessPort, vmessPort, certificateFile, keyFile, hysteriaPort, certificateFile, keyFile))
+	configuration := []byte(fmt.Sprintf(`{"log":{"loglevel":"none"},"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"vless","tag":"vless","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"tcp","security":"none"}},{"listen":"127.0.0.1","port":%d,"protocol":"vmess","tag":"vmess","settings":{"clients":[]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"certificates":[{"certificateFile":%q,"keyFile":%q}]}}},{"listen":"127.0.0.1","port":%d,"protocol":"hysteria","tag":"hysteria2","settings":{"version":2,"users":[]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"certificates":[{"certificateFile":%q,"keyFile":%q}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}}},{"listen":"127.0.0.1","port":%d,"protocol":"trojan","tag":"trojan-tls","settings":{"clients":[]},"streamSettings":{"network":"tcp","security":"tls","tlsSettings":{"certificates":[{"certificateFile":%q,"keyFile":%q}]}}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`, vlessPort, vmessPort, certificateFile, keyFile, hysteriaPort, certificateFile, keyFile, trojanPort, certificateFile, keyFile))
 	engine, err := LoadEngine(configuration)
 	if err != nil {
 		t.Fatalf("load multi-protocol Xray config: %v", err)
@@ -155,6 +156,7 @@ func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) 
 		flow       string
 	}{
 		{xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, "hysteria2", "telemetry-hysteria", "hysteria-secret", ""},
+		{xrayruntimev1.Protocol_PROTOCOL_TROJAN, "trojan-tls", "telemetry-trojan", "trojan-secret", ""},
 		{xrayruntimev1.Protocol_PROTOCOL_VLESS, "vless", "telemetry-vless", "12345678-1234-4234-8234-123456789012", "xtls-rprx-vision"},
 		{xrayruntimev1.Protocol_PROTOCOL_VMESS, "vmess", "telemetry-vmess", "12345678-1234-4234-8234-123456789013", ""},
 	}
@@ -203,6 +205,18 @@ func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) 
 		if item.Email != user.email || item.UploadBytes != int64(100+i) || item.DownloadBytes != int64(200+i) || !item.Online || len(item.SourceIPs) != expectedIPs || item.SourceIPs[0].Address != fmt.Sprintf("192.0.2.%d", 40+i*40) {
 			t.Errorf("telemetry for %s = %+v", user.protocol, item)
 		}
+	}
+	trojanUser := users[1]
+	listedTrojanUsers, err := engine.ListUsers(ctx, trojanUser.tag)
+	if err != nil || len(listedTrojanUsers) != 1 || listedTrojanUsers[0] != trojanUser.email {
+		t.Fatalf("list embedded Trojan users=%v error=%v", listedTrojanUsers, err)
+	}
+	if alreadyAbsent, err := engine.RemoveUser(ctx, trojanUser.tag, trojanUser.email); err != nil || alreadyAbsent {
+		t.Fatalf("remove embedded Trojan user alreadyAbsent=%v error=%v", alreadyAbsent, err)
+	}
+	listedTrojanUsers, err = engine.ListUsers(ctx, trojanUser.tag)
+	if err != nil || len(listedTrojanUsers) != 0 {
+		t.Fatalf("Trojan users after removal=%v error=%v", listedTrojanUsers, err)
 	}
 	if _, err := engine.GetTelemetry(ctx, map[xrayruntimev1.Protocol]string{xrayruntimev1.Protocol_PROTOCOL_VLESS: "missing-inbound"}); err == nil {
 		t.Fatal("telemetry read accepted an unknown inbound")

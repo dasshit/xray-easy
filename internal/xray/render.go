@@ -794,8 +794,11 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 		if client.TrojanPassword == "" {
 			return Profile{}, errors.New("Trojan profile is unavailable")
 		}
-		profile.TrojanURI = BuildTrojanURI(settings, client)
 		var err error
+		profile.TrojanURI, err = BuildTrojanURI(settings, client)
+		if err != nil {
+			return Profile{}, err
+		}
 		profile.TrojanJSON, err = buildTrojanClientJSON(settings, client)
 		if err != nil {
 			return Profile{}, err
@@ -817,6 +820,14 @@ func validateTrojanProfileSettings(settings Settings) error {
 	}
 	if _, err := domain.NormalizePublicHost(settings.PublicHost); err != nil {
 		return fmt.Errorf("Trojan public host: %w", err)
+	}
+	if _, err := domain.NormalizePublicHost(vmessServerName(settings)); err != nil {
+		return fmt.Errorf("Trojan TLS server name: %w", err)
+	}
+	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
+		if _, err := normalizeTLSFingerprint(settings.HysteriaTLSFingerprint); err != nil {
+			return fmt.Errorf("Trojan TLS certificate fingerprint: %w", err)
+		}
 	}
 	return nil
 }
@@ -1078,28 +1089,40 @@ func BuildShadowsocksURI(settings Settings, client Client) string {
 }
 
 // BuildTrojanURI creates a Trojan TCP/TLS share link.
-func BuildTrojanURI(settings Settings, client Client) string {
+func BuildTrojanURI(settings Settings, client Client) (string, error) {
 	query := url.Values{"security": []string{"tls"}, "type": []string{"tcp"}}
 	serverName := vmessServerName(settings)
 	if serverName != "" {
 		query.Set("sni", serverName)
 	}
 	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
-		query.Set("allowInsecure", "1")
+		fingerprint, err := normalizeTLSFingerprint(settings.HysteriaTLSFingerprint)
+		if err != nil {
+			return "", fmt.Errorf("Trojan TLS certificate fingerprint: %w", err)
+		}
+		query.Set("pcs", fingerprint)
 	}
 	u := &url.URL{Scheme: "trojan", User: url.User(client.TrojanPassword), Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.TrojanPublicPort)), RawQuery: query.Encode(), Fragment: client.Name}
-	return u.String()
+	return u.String(), nil
 }
 
 // buildTrojanClientJSON performs the operation represented by its name.
 func buildTrojanClientJSON(settings Settings, client Client) ([]byte, error) {
+	tlsSettings := map[string]any{"serverName": vmessServerName(settings)}
+	if settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy {
+		fingerprint, err := normalizeTLSFingerprint(settings.HysteriaTLSFingerprint)
+		if err != nil {
+			return nil, fmt.Errorf("Trojan TLS certificate fingerprint: %w", err)
+		}
+		tlsSettings["pinnedPeerCertSha256"] = fingerprint
+	}
 	value := map[string]any{
 		"log":      map[string]any{"loglevel": "warning"},
 		"inbounds": []any{map[string]any{"listen": "127.0.0.1", "port": 10808, "protocol": "socks", "settings": map[string]any{"udp": true}}},
 		"outbounds": []any{map[string]any{
 			"protocol":       "trojan",
 			"settings":       map[string]any{"servers": []any{map[string]any{"address": settings.PublicHost, "port": settings.TrojanPublicPort, "password": client.TrojanPassword}}},
-			"streamSettings": map[string]any{"network": "tcp", "security": "tls", "tlsSettings": map[string]any{"serverName": vmessServerName(settings), "allowInsecure": settings.HysteriaTLSMode == HysteriaTLSSelfSigned || settings.HysteriaTLSMode == HysteriaTLSLegacy}},
+			"streamSettings": map[string]any{"network": "tcp", "security": "tls", "tlsSettings": tlsSettings},
 		}},
 	}
 	var out bytes.Buffer

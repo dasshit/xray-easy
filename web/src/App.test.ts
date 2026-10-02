@@ -44,7 +44,7 @@ function createGateway(callbacks: { events?: XrayEventCallbacks } = {}) {
     hysteria: { status: vi.fn().mockResolvedValue({ enabled: true, state: 'on', host: 'vpn.example.test', udpPort: 443, tlsMode: 'custom', tlsServerName: 'vpn.example.test', udpIdleTimeout: 60, masqueradeType: 'off', insecureUri: false, certificate: { subject: 'vpn.example.test', issuer: 'issuer', dnsNames: ['vpn.example.test'], ipAddresses: [], notBefore: '', notAfter: '', fingerprint: 'fingerprint' } }), uploadCertificate: vi.fn(), generateCertificate: vi.fn(), preview: vi.fn(), apply: vi.fn() },
     amneziawg: { status: vi.fn().mockResolvedValue({ enabled: false, available: false, running: false }) },
     backups: { create: vi.fn() },
-    diagnostics: { status: vi.fn().mockResolvedValue({ state: 'running', xrayVersion: '26.7.28' }), logs: vi.fn().mockResolvedValue([]) },
+    diagnostics: { status: vi.fn().mockResolvedValue({ state: 'running', xrayVersion: '26.7.28', inboundTags: ['trojan-tls'] }), logs: vi.fn().mockResolvedValue([]) },
     events: { connect: vi.fn((events: XrayEventCallbacks) => { callbacks.events = events; return { close: vi.fn() } }) },
   }
   return gateway as unknown as XrayEasyGateway
@@ -84,6 +84,7 @@ describe('App profile delivery actions', () => {
 
     await wrapper.get('[role="tab"][aria-selected="false"]').trigger('click')
     await flushPromises()
+    expect(wrapper.get('.settings-trojan-card .status-badge').text()).toBe('Running')
     await wrapper.get('[data-testid="hysteria-saved"]').trigger('click')
     await flushPromises()
     expect(wrapper.text()).toContain('Changes saved')
@@ -93,6 +94,24 @@ describe('App profile delivery actions', () => {
     await flushPromises()
     expect(gateway.clients.list).toHaveBeenCalledTimes(2)
     expect(gateway.diagnostics.status).toHaveBeenCalledTimes(2)
+    wrapper.unmount()
+  })
+
+  it('does not report Trojan as running when the runtime does not report its inbound', async () => {
+    const gateway = createGateway()
+    vi.mocked(gateway.diagnostics.status).mockResolvedValue({ state: 'running', inboundTags: ['vless-reality'] })
+    const wrapper = mount(App, {
+      global: {
+        provide: { [xrayEasyGatewayKey as symbol]: gateway },
+        stubs: { HysteriaSettingsPanel: { template: '<div />' } },
+      },
+    })
+    await flushPromises()
+    const settingsTab = wrapper.findAll('[role="tab"]')[1]
+    if (!settingsTab) throw new Error('Settings tab was not rendered')
+    await settingsTab.trigger('click')
+    await flushPromises()
+    expect(wrapper.get('.settings-trojan-card .status-badge').text()).toBe('Unavailable')
     wrapper.unmount()
   })
 })

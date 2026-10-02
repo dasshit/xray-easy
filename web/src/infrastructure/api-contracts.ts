@@ -231,6 +231,7 @@ export type SettingsChangeDto = z.infer<typeof SettingsChangeDtoSchema>
 export const NodeStatusDtoSchema = z.object({
   state: z.string(),
   xray_version: z.string().optional(),
+  inbound_tags: z.array(z.string()).optional(),
   configured_xray_version: z.string().optional(),
   xray_version_verified: z.boolean().optional(),
   last_error: z.string().optional(),

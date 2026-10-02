@@ -668,17 +668,58 @@ func (w *wizard) trojan(ctx context.Context, cfg configuration) (configuration, 
 			w.mu.Unlock()
 			return configuration{}, errCancelled
 		}
-		switch key.kind {
-		case keyUp, keyLeft, keyDown, keyRight, keyTab:
-			w.tlsSelection = 1 - w.tlsSelection
-		case keyCharacter:
-			if key.char == '1' || key.char == '2' {
-				w.tlsSelection = int(key.char - '1')
+		pageTransitioned := false
+		if w.configPage == "trojan-choice" {
+			switch key.kind {
+			case keyUp, keyLeft, keyDown, keyRight, keyTab:
+				w.tlsSelection = 1 - w.tlsSelection
+			case keyCharacter:
+				if key.char == '1' || key.char == '2' {
+					w.tlsSelection = int(key.char - '1')
+				}
+			case keyEnter:
+				if w.tlsSelection == 0 {
+					cfg.trojanEnabled = false
+					w.mu.Unlock()
+					return cfg, nil
+				}
+				cfg.trojanEnabled = true
+				w.configPage = "trojan-port"
+				w.hysteriaFields[0] = strconv.Itoa(cfg.trojan)
+				w.notice = ""
+				pageTransitioned = true
 			}
-		case keyEnter:
-			cfg.trojanEnabled = w.tlsSelection == 1
+		}
+		if pageTransitioned {
+			w.renderLocked()
 			w.mu.Unlock()
-			return cfg, nil
+			continue
+		}
+		if w.configPage == "trojan-port" {
+			switch key.kind {
+			case keyBackspace:
+				w.hysteriaFields[0] = strings.TrimSuffix(w.hysteriaFields[0], lastRune(w.hysteriaFields[0]))
+			case keyCharacter:
+				if key.char >= '0' && key.char <= '9' && len(w.hysteriaFields[0]) < 5 {
+					w.hysteriaFields[0] += string(key.char)
+				}
+			case keyEnter:
+				value := strings.TrimSpace(w.hysteriaFields[0])
+				if value == "" {
+					value = strconv.Itoa(defaultTrojanPort(cfg.public, cfg.vmess, cfg.shadowsocks, cfg.ui))
+				}
+				port, parseErr := parsePort(value)
+				candidate := cfg
+				candidate.trojan = port
+				if parseErr != nil {
+					w.notice = "Enter a TCP port between 1 and 65535."
+				} else if validationErr := validateTrojanConfiguration(candidate); validationErr != nil {
+					w.notice = validationErr.Error()
+				} else {
+					w.mu.Unlock()
+					return candidate, nil
+				}
+			}
 		}
 		w.renderLocked()
 		w.mu.Unlock()
@@ -947,8 +988,14 @@ func (w *wizard) renderLocked() {
 				put(9, panelLine("  Optional Trojan TCP/TLS inbound", panelWidth), "normal")
 				put(11, panelLine("  "+optionText("Off", w.tlsSelection == 0), panelWidth), fieldStyle(w.tlsSelection == 0))
 				put(12, panelLine("  "+optionText("Enable on TCP", w.tlsSelection == 1), panelWidth), fieldStyle(w.tlsSelection == 1))
-				put(14, panelLine(fmt.Sprintf("  Public port: %d · TLS certificate shared with VMess", w.config.trojan), panelWidth), "dim")
-				put(15, panelLine("  Allow TCP port in the VDS firewall.", panelWidth), "dim")
+				put(14, panelLine(fmt.Sprintf("  Current public port: %d · TLS certificate shared with VMess", w.config.trojan), panelWidth), "dim")
+				put(15, panelLine("  When enabled, choose the public TCP port on the next screen.", panelWidth), "dim")
+			case "trojan-port":
+				put(10, panelLine("  Trojan public TCP port", panelWidth), "normal")
+				put(11, panelLine("  "+fieldText(w.hysteriaFields[0], "10443", true), panelWidth), "selected")
+				put(12, panelLine("  Type digits · Backspace edits · Enter keeps the shown value.", panelWidth), "dim")
+				put(14, panelLine("  Must differ from Xray, VMess, Shadowsocks, and Web UI ports.", panelWidth), "dim")
+				put(15, panelLine("  Allow this TCP port in the VDS firewall/security group.", panelWidth), "dim")
 			default:
 				put(10, panelLine("  Public Xray TCP / UDP port", panelWidth), "normal")
 				put(11, panelLine("  "+fieldText(w.fields[0], "443", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))

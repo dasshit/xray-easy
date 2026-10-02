@@ -482,6 +482,28 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 			} else {
 				appendCheck(doctorPass, "Embedded inbound tags", "runtime reports the same supported inbound tags as active.json", "")
 			}
+			if configuredTrojanEnabled() {
+				if !settingsReady || runtimeStatus.State == "no-config" {
+					appendCheck(doctorWarn, "Trojan inbound", "enabled Trojan will be checked after initial Web UI setup", "Complete first-run setup, apply the Xray configuration, then rerun doctor.")
+				} else {
+					present, inboundErr := activeConfigHasInbound(filepath.Join(configDir, "active.json"), "trojan", xray.TrojanInboundTag)
+					runtimeHasInbound := false
+					for _, tag := range runtimeStatus.InboundTags {
+						if tag == xray.TrojanInboundTag {
+							runtimeHasInbound = true
+							break
+						}
+					}
+					switch {
+					case inboundErr != nil:
+						appendCheck(doctorFail, "Trojan inbound", "active configuration could not be inspected", "Check the xray_config volume and active.json, then rerun doctor.")
+					case !present || !runtimeHasInbound:
+						appendCheck(doctorFail, "Trojan inbound", "Trojan is enabled but its inbound is missing from the active or running configuration", "Apply the active configuration again and inspect Controller/Xray runtime logs.")
+					default:
+						appendCheck(doctorPass, "Trojan inbound", "enabled Trojan inbound is present in active.json and the running runtime", "")
+					}
+				}
+			}
 			if runtimeStatus.StatsAvailable {
 				appendCheck(doctorPass, "Embedded statistics capability", "runtime reports per-user statistics support", "")
 			} else {
@@ -619,7 +641,7 @@ func matchEmbeddedInboundTags(configPath string, runtimeTags []string) error {
 	}
 	expected := make([]string, 0, len(configuration.Inbounds))
 	for _, inbound := range configuration.Inbounds {
-		if inbound.Protocol != "vless" && inbound.Protocol != "vmess" && inbound.Protocol != "hysteria" {
+		if inbound.Protocol != "vless" && inbound.Protocol != "vmess" && inbound.Protocol != "hysteria" && inbound.Protocol != "shadowsocks" && inbound.Protocol != "trojan" {
 			continue
 		}
 		if strings.TrimSpace(inbound.Tag) == "" {
@@ -628,6 +650,29 @@ func matchEmbeddedInboundTags(configPath string, runtimeTags []string) error {
 		expected = append(expected, strings.TrimSpace(inbound.Tag))
 	}
 	return sameSortedStrings(expected, runtimeTags)
+}
+
+// activeConfigHasInbound reports whether the active configuration includes the expected protocol and tag.
+func activeConfigHasInbound(configPath, protocol, tag string) (bool, error) {
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		return false, err
+	}
+	var configuration struct {
+		Inbounds []struct {
+			Protocol string `json:"protocol"`
+			Tag      string `json:"tag"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &configuration); err != nil {
+		return false, err
+	}
+	for _, inbound := range configuration.Inbounds {
+		if inbound.Protocol == protocol && inbound.Tag == tag {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 // sameSortedStrings performs the operation represented by its name.

@@ -1433,11 +1433,16 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	status, err := s.xrayRuntime.Status(r.Context())
+	inboundTags := status.InboundTags
+	if inboundTags == nil {
+		inboundTags = []string{}
+	}
 	response := map[string]any{
 		"state":                   status.State,
 		"xray_version":            status.XrayVersion,
 		"configured_xray_version": envOr("XRAY_VERSION", "unknown"),
 		"xray_version_verified":   xrayVersionVerified(status.XrayVersion, envOr("XRAY_VERSION", "unknown")),
+		"inbound_tags":            inboundTags,
 		"started_at":              status.StartedAt,
 		"last_error":              diagnostics.Redact(status.LastError),
 		"stats_last_error":        "",
@@ -4097,11 +4102,11 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 	renderSettings := rendererSettingsWithHysteria(settings, "server-secret-not-exported", hysteriaSettings)
 	renderSettings.VMessPublicPort = s.vmessPort
 	renderSettings.TrojanPublicPort = s.trojanPort
-	if client.HasVMess() && !client.VMessRevoked && (hysteriaSettings.TLSMode == domain.HysteriaTLSSelfSigned || hysteriaSettings.TLSMode == domain.HysteriaTLSLegacy) {
+	if ((client.HasVMess() && !client.VMessRevoked) || (client.HasTrojan() && !client.TrojanRevoked)) && (hysteriaSettings.TLSMode == domain.HysteriaTLSSelfSigned || hysteriaSettings.TLSMode == domain.HysteriaTLSLegacy) {
 		serverName := hysteriaSettings.EffectiveTLSServerName(settings.PublicHost)
 		certificate, inspectErr := hysteria.Inspect(s.hysteriaTLSDir(), hysteriaSettings.CertificateID, serverName, hysteriaSettings.CertificateID == "")
 		if inspectErr != nil {
-			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "could not read the VMess TLS certificate fingerprint", "detail": inspectErr.Error()})
+			writeJSON(w, http.StatusConflict, map[string]any{"code": "certificate_not_ready", "error": "could not read the shared TLS certificate fingerprint", "detail": inspectErr.Error()})
 			return
 		}
 		renderSettings.HysteriaTLSFingerprint = certificate.Fingerprint

@@ -398,13 +398,15 @@ func TestClientCreateProfileStateTransitionsAndDiagnostics(t *testing.T) {
 	if all.Code != http.StatusOK || !strings.Contains(all.Body.String(), `"revoked":true`) {
 		t.Fatalf("client list response = %d %s", all.Code, all.Body.String())
 	}
+	app.sup.status.InboundTags = []string{"vless-reality", "trojan-tls"}
 	status := requestJSON(t, app, http.MethodGet, "/api/status", nil, true)
-	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"state":"running"`) {
+	if status.Code != http.StatusOK || !strings.Contains(status.Body.String(), `"state":"running"`) || !strings.Contains(status.Body.String(), `"inbound_tags":["vless-reality","trojan-tls"]`) {
 		t.Fatalf("status response = %d %s", status.Code, status.Body.String())
 	}
 	app.sup.statusErr = errors.New(`connection password="hidden"`)
+	app.sup.status.InboundTags = nil
 	status = requestJSON(t, app, http.MethodGet, "/api/status", nil, true)
-	if !strings.Contains(status.Body.String(), `"state":"unavailable"`) || strings.Contains(status.Body.String(), "hidden") {
+	if !strings.Contains(status.Body.String(), `"state":"unavailable"`) || !strings.Contains(status.Body.String(), `"inbound_tags":[]`) || strings.Contains(status.Body.String(), "hidden") {
 		t.Fatalf("runtime failure was not safely reported: %s", status.Body.String())
 	}
 	logs := requestJSON(t, app, http.MethodGet, "/api/logs?component=xray&limit=1", nil, true)

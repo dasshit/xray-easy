@@ -66,6 +66,10 @@ const vmessAvailable = computed(() => {
 })
 const shadowsocksAvailable = computed(() => settings.value?.shadowsocksEnabled === true)
 const trojanAvailable = computed(() => settings.value?.trojanEnabled === true && vmessAvailable.value)
+const trojanRuntimeReady = computed(() => settings.value?.trojanEnabled === true
+  && vmessAvailable.value
+  && nodeStatus.value?.state === 'running'
+  && nodeStatus.value.inboundTags?.includes('trojan-tls') === true)
 const amneziaWGAvailable = computed(() => amneziaWGStatus.value?.enabled === true && amneziaWGStatus.value.available && amneziaWGStatus.value.running)
 const amneziaWGClients = computed(() => clients.value.filter(client => client.protocol === 'amneziawg'))
 const onlineAmneziaWGClients = computed(() => amneziaWGClients.value.filter(client => client.online))
@@ -685,7 +689,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
 
           <article class="settings-card settings-trojan-card">
             <div class="card-heading"><div><h3>{{ t().trojanSettingsTitle }}</h3><p class="hint">{{ t().trojanSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
-            <p class="status-badge" :class="trojanAvailable ? 'positive' : 'muted'">{{ trojanAvailable ? t().running : t().trojanUnavailable }}</p>
+            <p class="status-badge" :class="trojanRuntimeReady ? 'positive' : 'muted'">{{ trojanRuntimeReady ? t().running : settings.trojanEnabled ? t().unavailable : t().trojanUnavailable }}</p>
             <dl class="vmess-settings-list">
               <div><dt>{{ t().host }}</dt><dd>{{ settings.publicHost }}</dd></div>
               <div><dt>{{ t().trojanPort }}</dt><dd>{{ settings.trojanPublicPort || '—' }}/TCP</dd></div>

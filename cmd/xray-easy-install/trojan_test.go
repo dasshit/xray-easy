@@ -23,6 +23,7 @@ func TestTrojanConfigurationRoundTrip(t *testing.T) {
 		t.Fatalf("default Trojan settings = %+v", loaded)
 	}
 	loaded.trojanEnabled = true
+	loaded.trojan = 11445
 	if err := updateTrojanConfiguration(root, loaded); err != nil {
 		t.Fatal(err)
 	}
@@ -30,14 +31,14 @@ func TestTrojanConfigurationRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !updated.trojanEnabled || updated.trojan != 10443 {
+	if !updated.trojanEnabled || updated.trojan != 11445 {
 		t.Fatalf("updated Trojan settings = %+v", updated)
 	}
 }
 
 func TestTrojanTUISelection(t *testing.T) {
 	var output bytes.Buffer
-	w := newWizard(strings.NewReader("\x1b[B\n"), &output)
+	w := newWizard(strings.NewReader("\x1b[B\n\n"), &output)
 	defer w.close()
 	w.step(2, "Configuration")
 	cfg, err := w.trojan(context.Background(), configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080})
@@ -46,6 +47,33 @@ func TestTrojanTUISelection(t *testing.T) {
 	}
 	if !strings.Contains(output.String(), "Trojan") || !strings.Contains(output.String(), "10443") {
 		t.Fatal("Trojan settings were not visible in the installer")
+	}
+}
+
+func TestTrojanTUIAllowsCustomPort(t *testing.T) {
+	var output bytes.Buffer
+	w := newWizard(strings.NewReader("\x1b[B\n\x7f\x7f\x7f\x7f\x7f10445\n"), &output)
+	defer w.close()
+	w.step(2, "Configuration")
+	cfg, err := w.trojan(context.Background(), configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080, trojan: 10443})
+	if err != nil || !cfg.trojanEnabled || cfg.trojan != 10445 {
+		t.Fatalf("custom Trojan port: cfg=%+v err=%v", cfg, err)
+	}
+}
+
+func TestTrojanTUIRejectsConflictingPortAndAcceptsReplacement(t *testing.T) {
+	var output bytes.Buffer
+	// Select Trojan, replace the current value with VMess's port (9443), then
+	// replace it again with a distinct valid port after the conflict warning.
+	w := newWizard(strings.NewReader("\x1b[B\n\x7f\x7f\x7f\x7f\x7f9443\n\x7f\x7f\x7f\x7f10445\n"), &output)
+	defer w.close()
+	w.step(2, "Configuration")
+	cfg, err := w.trojan(context.Background(), configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080, trojan: 10443})
+	if err != nil || !cfg.trojanEnabled || cfg.trojan != 10445 {
+		t.Fatalf("Trojan port after conflict: cfg=%+v err=%v", cfg, err)
+	}
+	if !strings.Contains(output.String(), "must differ") {
+		t.Fatal("installer did not explain the port conflict")
 	}
 }
 

@@ -229,11 +229,62 @@ func TestRenderAndBuildTrojanProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	parsed, err := url.Parse(profile.TrojanURI)
-	if err != nil || parsed.Scheme != "trojan" || parsed.Host != "vpn.example.com:10443" || parsed.User.Username() != client.TrojanPassword || parsed.Query().Get("security") != "tls" {
+	if err != nil || parsed.Scheme != "trojan" || parsed.Host != "vpn.example.com:10443" || parsed.User.Username() != client.TrojanPassword || parsed.Query().Get("security") != "tls" || parsed.Query().Has("allowInsecure") {
 		t.Fatalf("unexpected Trojan URI: %s (%v)", profile.TrojanURI, err)
 	}
 	if len(profile.TrojanJSON) == 0 || !strings.Contains(string(profile.TrojanJSON), client.TrojanPassword) {
 		t.Fatal("Trojan JSON profile missing password")
+	}
+}
+
+func TestTrojanSelfSignedProfilesPinTLSCertificate(t *testing.T) {
+	settings := validTestSettings()
+	settings.TrojanEnabled = true
+	settings.TrojanPublicPort = 10443
+	settings.HysteriaTLSMode = HysteriaTLSSelfSigned
+	settings.HysteriaTLSFingerprint = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	client := Client{ID: "trojan", Name: "phone", Protocol: domain.ProtocolTrojan, TrojanEnabled: true, TrojanPassword: "secret"}
+	profile, err := BuildProfile(settings, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(profile.TrojanURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := parsed.Query().Get("pcs"); got != strings.ToUpper(settings.HysteriaTLSFingerprint) {
+		t.Fatalf("Trojan URI certificate pin = %q", got)
+	}
+	if parsed.Query().Has("allowInsecure") {
+		t.Fatal("Trojan URI still disables certificate validation")
+	}
+	var config struct {
+		Outbounds []struct {
+			StreamSettings struct {
+				TLSSettings struct {
+					PinnedPeerCertSHA256 string `json:"pinnedPeerCertSha256"`
+					AllowInsecure        *bool  `json:"allowInsecure"`
+				} `json:"tlsSettings"`
+			} `json:"streamSettings"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(profile.TrojanJSON, &config); err != nil {
+		t.Fatal(err)
+	}
+	tls := config.Outbounds[0].StreamSettings.TLSSettings
+	if tls.PinnedPeerCertSHA256 != strings.ToUpper(settings.HysteriaTLSFingerprint) || tls.AllowInsecure != nil {
+		t.Fatalf("Trojan JSON TLS settings = %+v", tls)
+	}
+}
+
+func TestTrojanSelfSignedProfileRequiresValidFingerprint(t *testing.T) {
+	settings := validTestSettings()
+	settings.TrojanEnabled = true
+	settings.TrojanPublicPort = 10443
+	settings.HysteriaTLSMode = HysteriaTLSSelfSigned
+	client := Client{ID: "trojan", Name: "phone", Protocol: domain.ProtocolTrojan, TrojanEnabled: true, TrojanPassword: "secret"}
+	if _, err := BuildProfile(settings, client); err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("self-signed Trojan profile error = %v", err)
 	}
 }
 

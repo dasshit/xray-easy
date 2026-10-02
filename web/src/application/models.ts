@@ -191,6 +191,8 @@ export type NodeStatus = {
   state: string
   /** Exact Xray binary version reported by the running container. */
   xrayVersion?: string
+  /** Inbound tags currently reported by the embedded Xray runtime. */
+  inboundTags?: string[]
   /** Xray version selected for the local Compose build. */
   configuredXrayVersion?: string
   /** True only when configured and running Xray both match the verified version. */

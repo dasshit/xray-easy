@@ -332,8 +332,9 @@ with **XRAY_TROJAN_ENABLED=true** and select **XRAY_TROJAN_PORT** (10443 by
 default). The certificate and SNI are shared with VMess and configured in
 **Settings → Hysteria 2**. The panel generates a unique password per device,
 encrypted at rest, and exposes a `trojan://` link, QR code and JSON profile.
-For self-signed or legacy certificates the exported profile allows insecure
-TLS verification; trusted certificates keep normal verification. Users are
+For self-signed or legacy certificates the Trojan link uses the Xray-standard `pcs`
+SHA-256 certificate pin and JSON uses `pinnedPeerCertSha256`; trusted certificates
+keep normal TLS verification. `allowInsecure` is not exported. Users are
 added and removed through the live HandlerService when the inbound is already
 running, so routine profile changes do not restart Xray.
 

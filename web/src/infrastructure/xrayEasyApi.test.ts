@@ -29,7 +29,7 @@ describe('Xray-easy API adapter', () => {
       '/api/auth/totp/setup': {
         setup_token: 'setup-token', secret: 'secret', otpauth_uri: 'otpauth://totp/test', recovery_codes: [], expires_in: 300,
       },
-      '/api/status': { state: 'running' },
+      '/api/status': { state: 'running', inbound_tags: ['trojan-tls'] },
     })
     const api = createXrayEasyApi(send)
 
@@ -41,7 +41,7 @@ describe('Xray-easy API adapter', () => {
     await expect(api.auth.beginTOTPSetup()).resolves.toEqual({
       setupToken: 'setup-token', secret: 'secret', otpauthUri: 'otpauth://totp/test', recoveryCodes: [], expiresIn: 300,
     })
-    await expect(api.diagnostics.status()).resolves.toEqual({ state: 'running' })
+    await expect(api.diagnostics.status()).resolves.toEqual({ state: 'running', inboundTags: ['trojan-tls'] })
   })
 
   it('maps setup and administrator wire values and sends setup fields in API format', async () => {
@@ -326,7 +326,7 @@ describe('Xray-easy API adapter', () => {
   it('maps diagnostics and exposes backup and authentication requests', async () => {
     const { send, calls } = requester({
       '/api/status': {
-        state: 'running', last_error: 'xray failing',
+        state: 'running', inbound_tags: ['vless-reality', 'trojan-tls'], last_error: 'xray failing',
         stats_last_error: 'stats offline', xray_runtime_error: 'runtime warning',
       },
       '/api/logs?component=xray&limit=50': { entries: [{ at: '2026-09-28T12:00:00Z', component: 'xray', level: 'warn', message: 'warning' }] },
@@ -340,7 +340,7 @@ describe('Xray-easy API adapter', () => {
     const api = createXrayEasyApi(send)
 
     await expect(api.diagnostics.status()).resolves.toEqual({
-      state: 'running', lastError: 'xray failing',
+      state: 'running', inboundTags: ['vless-reality', 'trojan-tls'], lastError: 'xray failing',
       statsLastError: 'stats offline', xrayRuntimeError: 'runtime warning',
     })
     await expect(api.diagnostics.logs('xray', 50)).resolves.toEqual([{ at: '2026-09-28T12:00:00Z', component: 'xray', level: 'warn', message: 'warning' }])

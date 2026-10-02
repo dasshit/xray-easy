@@ -1,6 +1,7 @@
 # Trojan support and runtime observability plan
 
-Status: planned; implementation follows the commit boundaries below
+Status: implemented for the v1.4.0 scope. The follow-up checks and hardening
+from the end-to-end audit are tracked in `trojan-support-audit-plan.md`.
 
 ## Goals
 
@@ -32,9 +33,10 @@ acceptance remains a manual step after the tag is pushed.
 - Credentials: one cryptographically random password per profile, encrypted
   in SQLite with `XRAY_EASY_MASTER_KEY`; plaintext exists only while rendering
   or issuing the authenticated profile response.
-- Profiles: Trojan URI (`trojan://`), QR code, and JSON client config. The
-  JSON uses a SOCKS inbound and a Trojan TLS outbound with the certificate
-  server name and optional SHA-256 pin for self-signed/legacy certificates.
+- Profiles: Trojan URI (`trojan://`), QR code, and JSON client config. For
+  self-signed/legacy certificates, the URI uses Xray's `pcs` SHA-256 pin and
+  the JSON uses `pinnedPeerCertSha256`; trusted certificates use normal TLS
+  verification. The JSON uses a SOCKS inbound and Trojan TLS outbound.
 - Live lifecycle: use Xray `trojan.UserManager` through the embedded runtime;
   create, enable, disable, and revoke do not restart Xray while the inbound
   exists. The first enablement still uses the normal validated full apply.
@@ -260,4 +262,3 @@ new hubs and filters.
 5. `feat(trojan): add installer doctor web and documentation`
 6. `test: cover Trojan and observability paths`
 7. `release: v1.4.0`
-

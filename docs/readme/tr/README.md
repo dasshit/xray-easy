@@ -318,9 +318,9 @@ Trojan is an optional TCP/TLS inbound in the embedded Xray runtime. Enable it
 with **XRAY_TROJAN_ENABLED=true** and choose **XRAY_TROJAN_PORT** (10443 by
 default). It shares the certificate and SNI configured under **Settings →
 Hysteria 2**. Each device receives a unique encrypted password and the panel
-provides a `trojan://` link, QR code and JSON profile. Self-signed or legacy
-certificates use insecure TLS verification in exported profiles; trusted
-certificates keep normal verification. Users are added and removed through the
+provides a `trojan://` link, QR code and JSON profile. Self-signed or legacy certificates use the Xray-standard `pcs` SHA-256
+certificate pin in links and `pinnedPeerCertSha256` in JSON; trusted certificates
+keep normal TLS verification. `allowInsecure` is not exported. Users are added and removed through the
 live HandlerService when the inbound is already running.
 
 ### Xray status and troubleshooting
