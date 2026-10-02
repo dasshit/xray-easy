@@ -119,6 +119,30 @@ func TestStreamInterceptorsAuthenticateAndLogLifecycle(t *testing.T) {
 	}
 }
 
+func TestAuthInterceptorRejectsDuplicateOrMalformedAuthorization(t *testing.T) {
+	token := "unary-test-token"
+	info := &grpc.UnaryServerInfo{FullMethod: "/xrayeasy.awg.v1.Control/GetStatus"}
+	handler := func(context.Context, any) (any, error) { return "ok", nil }
+	for name, ctx := range map[string]context.Context{
+		"duplicate values": metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+			"authorization", "Bearer "+token, "authorization", "Bearer "+token,
+		)),
+		"wrong scheme": metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Basic "+token)),
+		"empty bearer": metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer ")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			called := false
+			response, err := AuthInterceptor(token)(ctx, nil, info, func(callContext context.Context, request any) (any, error) {
+				called = true
+				return handler(callContext, request)
+			})
+			if status.Code(err) != codes.Unauthenticated || called || response != nil {
+				t.Fatalf("interceptor accepted invalid authorization: response=%v error=%v called=%v", response, err, called)
+			}
+		})
+	}
+}
+
 func TestGRPCLifecycleRequiresTokenAndChangesPeerWithoutRestart(t *testing.T) {
 	opts := testOptions(t)
 	engine := &fakeDevice{}

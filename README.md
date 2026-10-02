@@ -546,6 +546,17 @@ IPv6 connectivity from the Xray container, not public inbound reachability.
   `XRAY_EASY_SECURE_COOKIES=true` and `XRAY_EASY_TRUST_PROXY=true` in `.env` so
   the cookie is marked Secure and `X-Forwarded-Proto` is trusted for origin
   checks. Do not enable these variables unless the proxy is fully controlled.
+- Long-running service containers use a read-only root filesystem, dropped
+  Linux capabilities and `no-new-privileges`; persistent writes go only to
+  their named volumes. The short-lived init jobs retain the privileges needed
+  to create those volumes and secret files.
+- Controller and AmneziaWG bearer tokens are generated from at least 32 random
+  bytes, stored in protected files, and rejected when malformed or exposed to
+  group/other users. Duplicate authorization metadata is rejected.
+- Pin `XRAY_EASY_IMAGE_TAG` to a tested release (for example `v1.4.1`) in
+  production instead of using the development-friendly `latest` default.
+- CI runs `go vet` in every Go module and audits production web dependencies
+  with `npm audit --omit=dev --audit-level=high`.
 
 ## Development
 

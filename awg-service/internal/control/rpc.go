@@ -56,10 +56,8 @@ func AuthInterceptor(token string) grpc.UnaryServerInterceptor {
 			return nil, status.Error(codes.Unauthenticated, "missing control token")
 		}
 		provided := ""
-		if entries := values.Get("authorization"); len(entries) > 0 {
-			if strings.HasPrefix(entries[0], "Bearer ") {
-				provided = strings.TrimPrefix(entries[0], "Bearer ")
-			}
+		if entries := values.Get("authorization"); len(entries) == 1 && strings.HasPrefix(entries[0], "Bearer ") {
+			provided = strings.TrimPrefix(entries[0], "Bearer ")
 		}
 		if len(provided) != len(token) || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
 			return nil, status.Error(codes.Unauthenticated, "invalid control token")

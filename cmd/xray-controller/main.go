@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -137,6 +138,13 @@ func readToken(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("token file path is empty")
 	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", errors.New("token file is accessible by group or other users")
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return "", err
@@ -144,6 +152,10 @@ func readToken(path string) (string, error) {
 	value := strings.TrimSpace(string(data))
 	if value == "" {
 		return "", errors.New("token file is empty")
+	}
+	decoded, err := base64.StdEncoding.DecodeString(value)
+	if err != nil || len(decoded) < 32 {
+		return "", errors.New("token must be base64 encoded and contain at least 32 bytes")
 	}
 	return value, nil
 }

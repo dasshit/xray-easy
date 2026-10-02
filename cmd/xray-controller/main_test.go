@@ -13,6 +13,8 @@ import (
 	"xray-easy/internal/controller"
 )
 
+const testControllerToken = "dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHR0dHQ="
+
 type fakeHealthClient struct{ err error }
 
 func (f *fakeHealthClient) Health(context.Context) error { return f.err }
@@ -74,11 +76,17 @@ func TestReadToken(t *testing.T) {
 	if _, err := readToken(path); err == nil {
 		t.Fatal("blank token accepted")
 	}
-	if err := os.WriteFile(path, []byte(" token \n"), 0o600); err != nil {
+	if err := os.WriteFile(path, []byte(" "+testControllerToken+" \n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if got, err := readToken(path); err != nil || got != "token" {
+	if got, err := readToken(path); err != nil || got != testControllerToken {
 		t.Fatalf("readToken() = %q, %v", got, err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readToken(path); err == nil {
+		t.Fatal("group-readable token accepted")
 	}
 }
 
@@ -96,7 +104,7 @@ func TestEnvOr(t *testing.T) {
 func TestServeValidationListenerAndShutdown(t *testing.T) {
 	dir := t.TempDir()
 	controllerToken := filepath.Join(dir, "controller-token")
-	if err := os.WriteFile(controllerToken, []byte("controller-secret"), 0o600); err != nil {
+	if err := os.WriteFile(controllerToken, []byte(testControllerToken), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
@@ -133,7 +141,7 @@ func TestServeValidationListenerAndShutdown(t *testing.T) {
 func TestServeRejectsInvalidRuntimeAddress(t *testing.T) {
 	dir := t.TempDir()
 	token := filepath.Join(dir, "controller-token")
-	if err := os.WriteFile(token, []byte("controller-secret"), 0o600); err != nil {
+	if err := os.WriteFile(token, []byte(testControllerToken), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", token)
@@ -156,7 +164,7 @@ func TestServeRejectsRuntimeAndAWGAdapterFailures(t *testing.T) {
 	dir := t.TempDir()
 	controllerToken := filepath.Join(dir, "controller-token")
 	runtimeToken := filepath.Join(dir, "runtime-token")
-	for path, value := range map[string]string{controllerToken: "controller-secret", runtimeToken: "runtime-secret"} {
+	for path, value := range map[string]string{controllerToken: testControllerToken, runtimeToken: "runtime-secret"} {
 		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -185,7 +193,7 @@ func TestServeClosesConfiguredAWGAdapterOnShutdown(t *testing.T) {
 	dir := t.TempDir()
 	controllerToken := filepath.Join(dir, "controller-token")
 	runtimeToken := filepath.Join(dir, "runtime-token")
-	for path, value := range map[string]string{controllerToken: "controller-secret", runtimeToken: "runtime-secret"} {
+	for path, value := range map[string]string{controllerToken: testControllerToken, runtimeToken: "runtime-secret"} {
 		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -218,7 +226,7 @@ func TestServeUsesEmbeddedXrayAdapterAndClosesItOnShutdown(t *testing.T) {
 	dir := t.TempDir()
 	controllerToken := filepath.Join(dir, "controller-token")
 	runtimeToken := filepath.Join(dir, "xray-runtime-token")
-	for path, value := range map[string]string{controllerToken: "controller-secret", runtimeToken: "runtime-secret"} {
+	for path, value := range map[string]string{controllerToken: testControllerToken, runtimeToken: "runtime-secret"} {
 		if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
 			t.Fatal(err)
 		}
