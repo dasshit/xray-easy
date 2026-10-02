@@ -9,6 +9,7 @@ import (
 	"strings"
 )
 
+// realityTargetPattern is an internal package variable.
 var realityTargetPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 
 // Settings is the persisted configuration for one Xray node. The encrypted

@@ -8,10 +8,12 @@ import (
 	"strings"
 )
 
+// trojanConfigurationChanged performs the operation represented by its name.
 func trojanConfigurationChanged(before, after configuration) bool {
 	return before.trojan != after.trojan || before.trojanEnabled != after.trojanEnabled
 }
 
+// updateTrojanConfiguration performs the operation represented by its name.
 func updateTrojanConfiguration(root string, cfg configuration) error {
 	path := filepath.Join(root, ".env")
 	data, err := os.ReadFile(path)

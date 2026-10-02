@@ -58,6 +58,7 @@ func ValidatePublicHost(host string) error {
 	return domain.ValidatePublicHost(host)
 }
 
+// base64RawURL performs the operation represented by its name.
 func base64RawURL(value []byte) string {
 	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
 	var out strings.Builder

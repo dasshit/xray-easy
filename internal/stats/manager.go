@@ -18,11 +18,18 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// defaultPollInterval is an internal package constant.
 const defaultPollInterval = 10 * time.Second
+
+// onlineWindow is an internal package constant.
 const onlineWindow = 15 * time.Second
+
+// telemetryCallTimeout is an internal package constant.
 const telemetryCallTimeout = 5 * time.Second
 
+// telemetryStreamOpener is an internal type used by the package.
 type telemetryStreamOpener interface {
+	// WatchTelemetry defines part of the interface contract.
 	WatchTelemetry(context.Context, time.Duration) (controllerv1.Controller_WatchTelemetryClient, error)
 }
 
@@ -77,6 +84,7 @@ type Manager struct {
 	checkpoints  map[string]streamCheckpoint
 }
 
+// streamCheckpoint is an internal type used by the package.
 type streamCheckpoint struct {
 	generation string
 	sequence   uint64
@@ -302,6 +310,7 @@ func (m *Manager) ApplyStreamUpdate(ctx context.Context, update *controllerv1.Te
 	return nil
 }
 
+// protobufTimestamp performs the operation represented by its name.
 func protobufTimestamp(value *timestamppb.Timestamp) time.Time {
 	if value == nil || value.CheckValid() != nil {
 		return time.Time{}
@@ -309,6 +318,7 @@ func protobufTimestamp(value *timestamppb.Timestamp) time.Time {
 	return value.AsTime().UTC()
 }
 
+// updateXray performs the operation represented by its name.
 func (m *Manager) updateXray(ctx context.Context, clients []domain.Client, previous map[string]store.TrafficSnapshot, observed []xrayapi.UserStats, previousLatest, next map[string]ClientStats, now time.Time) error {
 	byEmail := make(map[string]xrayapi.UserStats, len(observed))
 	for _, user := range observed {
@@ -362,6 +372,7 @@ func (m *Manager) updateXray(ctx context.Context, clients []domain.Client, previ
 	return nil
 }
 
+// updateAWG performs the operation represented by its name.
 func (m *Manager) updateAWG(ctx context.Context, previousLatest, next map[string]ClientStats, now time.Time) error {
 	if m.awg == nil {
 		return nil
@@ -391,6 +402,7 @@ func (m *Manager) updateAWG(ctx context.Context, previousLatest, next map[string
 	return m.updateAWGObserved(ctx, previousLatest, next, now, observed)
 }
 
+// updateAWGObserved performs the operation represented by its name.
 func (m *Manager) updateAWGObserved(ctx context.Context, previousLatest, next map[string]ClientStats, now time.Time, observed []domain.AmneziaWGPeerStats) error {
 	previous, err := m.store.ListAWGTrafficSnapshots(ctx)
 	if err != nil {
@@ -441,6 +453,7 @@ func (m *Manager) updateAWGObserved(ctx context.Context, previousLatest, next ma
 	return nil
 }
 
+// preserveAWGStats performs the operation represented by its name.
 func preserveAWGStats(next, previous map[string]ClientStats, now time.Time) {
 	for key, current := range previous {
 		if !strings.HasPrefix(key, "awg:") {
@@ -457,6 +470,7 @@ func preserveAWGStats(next, previous map[string]ClientStats, now time.Time) {
 	}
 }
 
+// applyStreamOnlineStatus performs the operation represented by its name.
 func applyStreamOnlineStatus(next map[string]ClientStats, managed []domain.Client, reported []*controllerv1.TelemetryClient, available map[string]bool) {
 	clientIDsByEmail := make(map[string]string, len(managed))
 	for _, client := range managed {
@@ -496,6 +510,7 @@ func applyStreamOnlineStatus(next map[string]ClientStats, managed []domain.Clien
 	}
 }
 
+// appendUnique performs the operation represented by its name.
 func appendUnique(values []string, value string) []string {
 	for _, existing := range values {
 		if existing == value {
@@ -505,6 +520,7 @@ func appendUnique(values []string, value string) []string {
 	return append(values, value)
 }
 
+// optionalTime performs the operation represented by its name.
 func optionalTime(value time.Time) *time.Time {
 	if value.IsZero() {
 		return nil
@@ -513,10 +529,12 @@ func optionalTime(value time.Time) *time.Time {
 	return &copy
 }
 
+// validRateWindow performs the operation represented by its name.
 func validRateWindow(elapsed, interval time.Duration) bool {
 	return elapsed > 0 && interval > 0 && elapsed <= 3*interval
 }
 
+// bytesPerSecond performs the operation represented by its name.
 func bytesPerSecond(delta int64, elapsed time.Duration) float64 {
 	if delta <= 0 || elapsed <= 0 {
 		return 0
@@ -573,6 +591,7 @@ func (m *Manager) Subscribe() (<-chan struct{}, func()) {
 	}
 }
 
+// consumeTelemetryStream performs the operation represented by its name.
 func (m *Manager) consumeTelemetryStream(ctx context.Context) {
 	backoff := time.Second
 	for ctx.Err() == nil {
@@ -611,6 +630,7 @@ func (m *Manager) consumeTelemetryStream(ctx context.Context) {
 	}
 }
 
+// markStreamError performs the operation represented by its name.
 func (m *Manager) markStreamError(err error) {
 	if err == nil {
 		return
@@ -637,12 +657,14 @@ func (m *Manager) markStreamError(err error) {
 	m.mu.Unlock()
 }
 
+// setError updates the requested value.
 func (m *Manager) setError(err error) {
 	m.mu.Lock()
 	m.lastError = err.Error()
 	m.mu.Unlock()
 }
 
+// counterDelta performs the operation represented by its name.
 func counterDelta(current, previous int64) int64 {
 	if current < 0 {
 		return 0
@@ -653,6 +675,7 @@ func counterDelta(current, previous int64) int64 {
 	return current - previous
 }
 
+// isOnline performs the operation represented by its name.
 func isOnline(lastSeen, now time.Time) bool {
 	return !lastSeen.IsZero() && !lastSeen.After(now.Add(time.Minute)) && now.Sub(lastSeen) <= onlineWindow
 }

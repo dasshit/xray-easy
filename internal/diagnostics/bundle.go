@@ -20,14 +20,21 @@ func CreateBundle(dataDir string, files map[string][]byte, now time.Time) (strin
 	}, os.Remove, os.Rename)
 }
 
+// bundleFile is an internal type used by the package.
 type bundleFile interface {
+	// Name defines part of the interface contract.
 	Name() string
+	// Chmod defines part of the interface contract.
 	Chmod(os.FileMode) error
+	// Write defines part of the interface contract.
 	Write([]byte) (int, error)
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// createBundleWith creates the requested value.
 func createBundleWith(dataDir string, files map[string][]byte, now time.Time, createTemp func(string, string) (bundleFile, error), remove func(string) error, rename func(string, string) error) (string, error) {
 	if len(files) == 0 {
 		return "", errors.New("doctor bundle is empty")
@@ -104,6 +111,7 @@ func createBundleWith(dataDir string, files map[string][]byte, now time.Time, cr
 	return path, nil
 }
 
+// safeArchiveName performs the operation represented by its name.
 func safeArchiveName(name string) bool {
 	if name == "" || strings.Contains(name, "\\") || filepath.IsAbs(name) {
 		return false

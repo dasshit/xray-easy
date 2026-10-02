@@ -13,7 +13,9 @@ import (
 )
 
 const (
+	// revisionStateVersion is an internal package constant.
 	revisionStateVersion = 1
+	// maxRevisionMutations is an internal package constant.
 	maxRevisionMutations = 64
 )
 
@@ -26,40 +28,65 @@ var (
 	ErrRevisionIO = errors.New("Xray revision journal I/O failure")
 )
 
+// revisionRecord is an internal type used by the package.
 type revisionRecord struct {
-	Version     int                         `json:"version"`
-	Revision    int64                       `json:"revision"`
-	OperationID string                      `json:"operation_id"`
-	Mutations   map[string]revisionMutation `json:"mutations"`
+	// Version stores the value associated with the enclosing object.
+	Version int `json:"version"`
+	// Revision stores the value associated with the enclosing object.
+	Revision int64 `json:"revision"`
+	// OperationID stores the value associated with the enclosing object.
+	OperationID string `json:"operation_id"`
+	// Mutations stores the value associated with the enclosing object.
+	Mutations map[string]revisionMutation `json:"mutations"`
 }
 
+// revisionMutation is an internal type used by the package.
 type revisionMutation struct {
+	// Fingerprint stores the value associated with the enclosing object.
 	Fingerprint string `json:"fingerprint"`
-	State       string `json:"state"`
+	// State stores the value associated with the enclosing object.
+	State string `json:"state"`
 }
 
+// revisionTempFile is an internal type used by the package.
 type revisionTempFile interface {
+	// Name defines part of the interface contract.
 	Name() string
+	// Chmod defines part of the interface contract.
 	Chmod(os.FileMode) error
+	// Write defines part of the interface contract.
 	Write([]byte) (int, error)
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// revisionDirectoryHandle is an internal type used by the package.
 type revisionDirectoryHandle interface {
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// revisionFileSystem is an internal type used by the package.
 type revisionFileSystem interface {
+	// ReadFile defines part of the interface contract.
 	ReadFile(string) ([]byte, error)
+	// MkdirAll defines part of the interface contract.
 	MkdirAll(string, os.FileMode) error
+	// CreateTemp defines part of the interface contract.
 	CreateTemp(string, string) (revisionTempFile, error)
+	// Remove defines part of the interface contract.
 	Remove(string) error
+	// Rename defines part of the interface contract.
 	Rename(string, string) error
+	// OpenDirectory defines part of the interface contract.
 	OpenDirectory(string) (revisionDirectoryHandle, error)
 }
 
+// osRevisionFileSystem is an internal type used by the package.
 type osRevisionFileSystem struct{}
 
 // ReadFile reads and returns the requested value.
@@ -212,6 +239,7 @@ func (f *RevisionFence) Commit(revision int64, operationID, key, fingerprint str
 	return nil
 }
 
+// persist performs the operation represented by its name.
 func (f *RevisionFence) persist(record revisionRecord) error {
 	if f.path == "" {
 		return nil
@@ -258,6 +286,7 @@ func (f *RevisionFence) persist(record revisionRecord) error {
 	return nil
 }
 
+// payloadFingerprint performs the operation represented by its name.
 func payloadFingerprint(parts ...string) string {
 	hash := sha256.New()
 	for _, part := range parts {

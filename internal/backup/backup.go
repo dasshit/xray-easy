@@ -22,8 +22,11 @@ import (
 )
 
 const (
-	formatVersion  = 1
-	retention      = 10
+	// formatVersion is an internal package constant.
+	formatVersion = 1
+	// retention is an internal package constant.
+	retention = 10
+	// maxAWGSnapshot is an internal package constant.
 	maxAWGSnapshot = 16 << 20
 )
 
@@ -62,23 +65,37 @@ type Info struct {
 	CreatedAt time.Time
 }
 
+// metadata is an internal type used by the package.
 type metadata struct {
-	FormatVersion          int       `json:"format_version"`
-	CreatedAt              time.Time `json:"created_at"`
-	ConfigPresent          bool      `json:"config_present"`
-	TLSCertificatesPresent bool      `json:"tls_certificates_present,omitempty"`
-	AWGStatePresent        bool      `json:"awg_state_present,omitempty"`
+	// FormatVersion stores the value associated with the enclosing object.
+	FormatVersion int `json:"format_version"`
+	// CreatedAt stores the value associated with the enclosing object.
+	CreatedAt time.Time `json:"created_at"`
+	// ConfigPresent stores the value associated with the enclosing object.
+	ConfigPresent bool `json:"config_present"`
+	// TLSCertificatesPresent stores the value associated with the enclosing object.
+	TLSCertificatesPresent bool `json:"tls_certificates_present,omitempty"`
+	// AWGStatePresent stores the value associated with the enclosing object.
+	AWGStatePresent bool `json:"awg_state_present,omitempty"`
 }
 
+// manifest is an internal type used by the package.
 type manifest struct {
-	FormatVersion int            `json:"format_version"`
-	Files         []manifestFile `json:"files"`
-	HMACSHA256    string         `json:"hmac_sha256"`
+	// FormatVersion stores the value associated with the enclosing object.
+	FormatVersion int `json:"format_version"`
+	// Files stores the value associated with the enclosing object.
+	Files []manifestFile `json:"files"`
+	// HMACSHA256 stores the value associated with the enclosing object.
+	HMACSHA256 string `json:"hmac_sha256"`
 }
 
+// manifestFile is an internal type used by the package.
 type manifestFile struct {
-	Path   string `json:"path"`
-	Size   int64  `json:"size"`
+	// Path stores the value associated with the enclosing object.
+	Path string `json:"path"`
+	// Size stores the value associated with the enclosing object.
+	Size int64 `json:"size"`
+	// SHA256 stores the value associated with the enclosing object.
 	SHA256 string `json:"sha256"`
 }
 
@@ -112,6 +129,7 @@ func (m *Manager) CreatePreservingContext(ctx context.Context, label, preserveNa
 	return m.create(ctx, label, map[string]struct{}{preserveName: {}})
 }
 
+// create creates the requested value.
 func (m *Manager) create(ctx context.Context, label string, preserve map[string]struct{}) (Info, error) {
 	if m.Store == nil || len(m.MasterKey) < 32 {
 		return Info{}, errors.New("backup manager is not initialized")
@@ -416,6 +434,7 @@ func (m *Manager) RestoreStateContext(ctx context.Context, info Info) error {
 	return nil
 }
 
+// inspect performs the operation represented by its name.
 func (m *Manager) inspect(name string) (Info, error) {
 	if name == "" || filepath.Base(name) != name || !strings.HasPrefix(name, "backup-") {
 		return Info{}, errors.New("invalid backup name")
@@ -441,6 +460,7 @@ func (m *Manager) inspect(name string) (Info, error) {
 	return Info{Name: name, Path: path, StatePath: filepath.Join(path, "state.db"), CreatedAt: meta.CreatedAt}, nil
 }
 
+// writeRedactedConfig writes the supplied value.
 func (m *Manager) writeRedactedConfig(path string) (bool, error) {
 	source := filepath.Join(m.ConfigDir, "active.json")
 	data, err := os.ReadFile(source)
@@ -463,6 +483,7 @@ func (m *Manager) writeRedactedConfig(path string) (bool, error) {
 	return true, writeFile(path, redacted, 0o600)
 }
 
+// redact performs the operation represented by its name.
 func redact(value any) {
 	switch item := value.(type) {
 	case map[string]any:
@@ -481,6 +502,7 @@ func redact(value any) {
 	}
 }
 
+// hashFiles performs the operation represented by its name.
 func hashFiles(root string, names []string) ([]manifestFile, error) {
 	result := make([]manifestFile, 0, len(names))
 	for _, name := range names {
@@ -503,6 +525,7 @@ func hashFiles(root string, names []string) ([]manifestFile, error) {
 	return result, nil
 }
 
+// verifyManifest performs the operation represented by its name.
 func verifyManifest(root string, key []byte) error {
 	data, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
@@ -538,11 +561,13 @@ func verifyManifest(root string, key []byte) error {
 	return nil
 }
 
+// validManifestPath performs the operation represented by its name.
 func validManifestPath(path string) bool {
 	clean := filepath.Clean(path)
 	return path != "" && clean == path && clean != "." && !filepath.IsAbs(clean) && clean != ".." && !strings.HasPrefix(clean, ".."+string(os.PathSeparator))
 }
 
+// copyTLSDirectory copies the requested value.
 func copyTLSDirectory(source, destination string) (bool, error) {
 	stat, err := os.Lstat(source)
 	if os.IsNotExist(err) {
@@ -613,6 +638,7 @@ func copyTLSDirectory(source, destination string) (bool, error) {
 	return fileCount > 0, nil
 }
 
+// listRelativeFiles performs the operation represented by its name.
 func listRelativeFiles(root, directory string) ([]string, error) {
 	result := []string{}
 	err := filepath.WalkDir(filepath.Join(root, directory), func(path string, entry os.DirEntry, walkErr error) error {
@@ -638,6 +664,7 @@ func listRelativeFiles(root, directory string) ([]string, error) {
 	return result, err
 }
 
+// prune performs the operation represented by its name.
 func (m *Manager) prune(preserve map[string]struct{}) error {
 	items, err := m.List()
 	if err != nil {
@@ -666,6 +693,7 @@ func (m *Manager) prune(preserve map[string]struct{}) error {
 	return nil
 }
 
+// randomSuffix performs the operation represented by its name.
 func randomSuffix() (string, error) {
 	raw := make([]byte, 4)
 	if _, err := rand.Read(raw); err != nil {
@@ -674,6 +702,7 @@ func randomSuffix() (string, error) {
 	return hex.EncodeToString(raw), nil
 }
 
+// sanitizeLabel performs the operation represented by its name.
 func sanitizeLabel(value string) string {
 	value = strings.Trim(value, "-_")
 	if value == "" {
@@ -691,26 +720,35 @@ func sanitizeLabel(value string) string {
 	return builder.String()
 }
 
+// hmacSHA256 performs the operation represented by its name.
 func hmacSHA256(key, data []byte) string {
 	hash := hmac.New(sha256.New, key)
 	_, _ = hash.Write(data)
 	return hex.EncodeToString(hash.Sum(nil))
 }
 
+// writeFile writes the supplied value.
 func writeFile(path string, data []byte, mode os.FileMode) error {
 	return writeFileWith(path, data, mode, func(dir, pattern string) (backupTempFile, error) {
 		return os.CreateTemp(dir, pattern)
 	}, os.Remove, os.Rename)
 }
 
+// backupTempFile is an internal type used by the package.
 type backupTempFile interface {
+	// Name defines part of the interface contract.
 	Name() string
+	// Chmod defines part of the interface contract.
 	Chmod(os.FileMode) error
+	// Write defines part of the interface contract.
 	Write([]byte) (int, error)
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// writeFileWith writes the supplied value.
 func writeFileWith(path string, data []byte, mode os.FileMode, createTemp func(string, string) (backupTempFile, error), remove func(string) error, rename func(string, string) error) error {
 	tmp, err := createTemp(filepath.Dir(path), ".tmp-")
 	if err != nil {
@@ -736,6 +774,7 @@ func writeFileWith(path string, data []byte, mode os.FileMode, createTemp func(s
 	return rename(tmpName, path)
 }
 
+// syncDir performs the operation represented by its name.
 func syncDir(path string) error {
 	dir, err := os.Open(path)
 	if err != nil {

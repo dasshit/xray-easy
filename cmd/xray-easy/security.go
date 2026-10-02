@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// maxHTTPRequestBody is an internal package constant.
 const maxHTTPRequestBody = 4 << 20
 
 // requestLimit is kept as a small reusable body-limit wrapper for callers that
@@ -41,6 +42,7 @@ func controlPlaneMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// setSecurityHeaders updates the requested value.
 func setSecurityHeaders(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Vary", "Origin, Referer, Sec-Fetch-Site, X-Forwarded-Proto")
 	w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'")
@@ -77,11 +79,13 @@ func validateBrowserOrigin(r *http.Request) error {
 	return nil
 }
 
+// errOriginRejected is an internal type used by the package.
 type errOriginRejected struct{}
 
 // Error returns the error description.
 func (errOriginRejected) Error() string { return "request origin is not allowed" }
 
+// sameOriginURL performs the operation represented by its name.
 func sameOriginURL(r *http.Request, raw string, allowPath bool) bool {
 	parsed, err := url.Parse(raw)
 	if err != nil || parsed.Scheme == "" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
@@ -94,6 +98,7 @@ func sameOriginURL(r *http.Request, raw string, allowPath bool) bool {
 	return strings.EqualFold(parsed.Scheme, scheme) && canonicalHostPort(parsed.Host, scheme) == canonicalHostPort(r.Host, scheme)
 }
 
+// canonicalHostPort performs the operation represented by its name.
 func canonicalHostPort(host, scheme string) string {
 	host = strings.TrimSpace(host)
 	parsed, err := url.Parse("//" + host)
@@ -111,6 +116,7 @@ func canonicalHostPort(host, scheme string) string {
 	return net.JoinHostPort(strings.ToLower(parsed.Hostname()), port)
 }
 
+// requestScheme performs the operation represented by its name.
 func requestScheme(r *http.Request) string {
 	if r.TLS != nil {
 		return "https"
@@ -127,6 +133,7 @@ func requestScheme(r *http.Request) string {
 	return "http"
 }
 
+// envBool performs the operation represented by its name.
 func envBool(name string) bool {
 	switch strings.ToLower(strings.TrimSpace(envOr(name, ""))) {
 	case "1", "true", "yes", "on":
@@ -136,6 +143,7 @@ func envBool(name string) bool {
 	}
 }
 
+// secureSessionCookie performs the operation represented by its name.
 func secureSessionCookie(r *http.Request) bool {
 	return requestScheme(r) == "https" || envBool("XRAY_EASY_SECURE_COOKIES")
 }

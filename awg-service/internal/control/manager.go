@@ -39,9 +39,13 @@ var (
 	ErrOperationCompleted = errors.New("operation was already completed and its result cannot be replayed")
 )
 
+// peerNamePattern is an internal package variable.
 var peerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
+
+// dnsLabelPattern is an internal package variable.
 var dnsLabelPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
+// stateVersion is an internal package constant.
 const stateVersion = 1
 
 // Peer is the non-secret, persisted identity and tunnel address of a client.
@@ -60,11 +64,16 @@ type Peer struct {
 	OperationID string `json:"operationId,omitempty"`
 }
 
+// persistedState is an internal type used by the package.
 type persistedState struct {
-	Version            int                         `json:"version"`
-	PrivateKeyEnvelope string                      `json:"privateKeyEnvelope"`
-	Peers              []Peer                      `json:"peers"`
-	Operations         map[string]OperationReceipt `json:"operations,omitempty"`
+	// Version stores the value associated with the enclosing object.
+	Version int `json:"version"`
+	// PrivateKeyEnvelope stores the value associated with the enclosing object.
+	PrivateKeyEnvelope string `json:"privateKeyEnvelope"`
+	// Peers stores the value associated with the enclosing object.
+	Peers []Peer `json:"peers"`
+	// Operations stores the value associated with the enclosing object.
+	Operations map[string]OperationReceipt `json:"operations,omitempty"`
 }
 
 // OperationReceipt makes create and revoke retries safe across service restarts.
@@ -187,6 +196,7 @@ func Open(opts Options, factory DeviceFactory) (*Manager, error) {
 	return manager, nil
 }
 
+// validate validates the supplied value.
 func (o Options) validate() error {
 	if strings.TrimSpace(o.DataDir) == "" {
 		return fmt.Errorf("AWG data directory is required: %w", ErrInvalid)
@@ -247,6 +257,7 @@ func (o Options) validate() error {
 	return nil
 }
 
+// allowedObfuscationKeys is an internal package variable.
 var allowedObfuscationKeys = map[string]bool{
 	"jc": true, "jmin": true, "jmax": true,
 	"s1": true, "s2": true, "s3": true, "s4": true,
@@ -371,6 +382,7 @@ func (m *Manager) AddPeerForOperation(name, publicKey, operationID string) (Peer
 	return peer, false, nil
 }
 
+// operationIDPattern is an internal package variable.
 var operationIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 // PeerForOperation returns a persisted peer created by an earlier operation.
@@ -504,6 +516,7 @@ func (m *Manager) RestorePersistedState(data []byte) error {
 	return nil
 }
 
+// restoreDeviceLocked performs the operation represented by its name.
 func (m *Manager) restoreDeviceLocked(next persistedState, nextPrivateKey string, previous persistedState, previousPrivateKey string) error {
 	removePeers := func(states ...persistedState) error {
 		seen := make(map[string]bool)
@@ -645,6 +658,7 @@ func (m *Manager) Close() {
 	}
 }
 
+// nextAddressesLocked performs the operation represented by its name.
 func (m *Manager) nextAddressesLocked() (netip.Addr, netip.Addr, error) {
 	used4 := make(map[netip.Addr]bool, len(m.state.Peers))
 	used6 := make(map[netip.Addr]bool, len(m.state.Peers))
@@ -671,6 +685,7 @@ func (m *Manager) nextAddressesLocked() (netip.Addr, netip.Addr, error) {
 	return netip.Addr{}, netip.Addr{}, fmt.Errorf("AWG client address pool is exhausted: %w", ErrInvalid)
 }
 
+// applyAllLocked performs the operation represented by its name.
 func (m *Manager) applyAllLocked() error {
 	private, err := decodeKey(m.serverPrivateKey)
 	if err != nil {
@@ -702,16 +717,19 @@ func (m *Manager) applyAllLocked() error {
 	return nil
 }
 
+// peerConfig performs the operation represented by its name.
 func peerConfig(peer Peer) string {
 	key, _ := decodeKey(peer.PublicKey)
 	return fmt.Sprintf("public_key=%s\nallowed_ip=%s/32\nallowed_ip=%s/128\n\n", hex.EncodeToString(key), peer.IPv4, peer.IPv6)
 }
 
+// removePeerConfig removes the supplied value.
 func removePeerConfig(peer Peer) string {
 	key, _ := decodeKey(peer.PublicKey)
 	return fmt.Sprintf("public_key=%s\nremove=true\n\n", hex.EncodeToString(key))
 }
 
+// readState reads the requested value.
 func readState(path string) (persistedState, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -737,20 +755,28 @@ func readState(path string) (persistedState, error) {
 	return state, nil
 }
 
+// writeState writes the supplied value.
 func writeState(path string, state persistedState) error {
 	return writeStateWith(path, state, func(dir, pattern string) (stateTempFile, error) {
 		return os.CreateTemp(dir, pattern)
 	})
 }
 
+// stateTempFile is an internal type used by the package.
 type stateTempFile interface {
+	// Name defines part of the interface contract.
 	Name() string
+	// Chmod defines part of the interface contract.
 	Chmod(os.FileMode) error
+	// Write defines part of the interface contract.
 	Write([]byte) (int, error)
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// writeStateWith writes the supplied value.
 func writeStateWith(path string, state persistedState, createTemp func(string, string) (stateTempFile, error)) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
@@ -789,6 +815,7 @@ func writeStateWith(path string, state persistedState, createTemp func(string, s
 	return nil
 }
 
+// validateState validates the supplied value.
 func validateState(state persistedState, opts Options) error {
 	if state.Version != stateVersion {
 		return fmt.Errorf("unsupported AWG state version %d", state.Version)
@@ -831,6 +858,7 @@ func validateState(state persistedState, opts Options) error {
 	return nil
 }
 
+// cloneState performs the operation represented by its name.
 func cloneState(state persistedState) persistedState {
 	state.Peers = append([]Peer(nil), state.Peers...)
 	operations := make(map[string]OperationReceipt, len(state.Operations))
@@ -841,6 +869,7 @@ func cloneState(state persistedState) persistedState {
 	return state
 }
 
+// decodeKey performs the operation represented by its name.
 func decodeKey(key string) ([]byte, error) {
 	data, err := base64.StdEncoding.DecodeString(key)
 	if err != nil || len(data) != 32 {
@@ -849,6 +878,7 @@ func decodeKey(key string) ([]byte, error) {
 	return data, nil
 }
 
+// sealPrivateKey performs the operation represented by its name.
 func sealPrivateKey(privateKey string, masterKey []byte) (string, error) {
 	key, err := decodeKey(privateKey)
 	if err != nil {
@@ -870,6 +900,7 @@ func sealPrivateKey(privateKey string, masterKey []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(sealed), nil
 }
 
+// openPrivateKey opens the requested resource.
 func openPrivateKey(envelope string, masterKey []byte) (string, error) {
 	sealed, err := base64.StdEncoding.DecodeString(envelope)
 	if err != nil {
@@ -897,11 +928,13 @@ func openPrivateKey(envelope string, masterKey []byte) (string, error) {
 	return base64.StdEncoding.EncodeToString(key), nil
 }
 
+// deriveEncryptionKey performs the operation represented by its name.
 func deriveEncryptionKey(masterKey []byte) []byte {
 	key := sha256.Sum256(masterKey)
 	return key[:]
 }
 
+// derivePublicKey performs the operation represented by its name.
 func derivePublicKey(privateKey string) ([]byte, string, error) {
 	private, err := decodeKey(privateKey)
 	if err != nil {
@@ -914,6 +947,7 @@ func derivePublicKey(privateKey string) ([]byte, string, error) {
 	return public, base64.StdEncoding.EncodeToString(public), nil
 }
 
+// sortedKeys performs the operation represented by its name.
 func sortedKeys(values map[string]string) []string {
 	keys := make([]string, 0, len(values))
 	for key := range values {
@@ -923,6 +957,7 @@ func sortedKeys(values map[string]string) []string {
 	return keys
 }
 
+// profileObfuscationName performs the operation represented by its name.
 func profileObfuscationName(key string) string {
 	var names = map[string]string{
 		"header_protection_key": "HeaderProtectionKey", "content_padding_addition": "ContentPaddingAddition",
@@ -941,6 +976,7 @@ func profileObfuscationName(key string) string {
 	return strings.Join(parts, "")
 }
 
+// profileObfuscationValue performs the operation represented by its name.
 func profileObfuscationValue(key, value string) string {
 	if key == "random_trailers" || key == "disable_cookies" {
 		if value == "on" || value == "true" {
@@ -951,6 +987,7 @@ func profileObfuscationValue(key, value string) string {
 	return value
 }
 
+// ipv4Broadcast performs the operation represented by its name.
 func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
 	addr := prefix.Masked().Addr().As4()
 	maskBits := prefix.Bits()
@@ -962,6 +999,7 @@ func ipv4Broadcast(prefix netip.Prefix) netip.Addr {
 	return netip.AddrFrom4(addr)
 }
 
+// validPublicHost performs the operation represented by its name.
 func validPublicHost(host string) bool {
 	if strings.ContainsAny(host, "\r\n\t /\\") {
 		return false

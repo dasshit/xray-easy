@@ -21,6 +21,7 @@ func VerifyRecoveryCode(code, encoded string) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(encoded)) == 1
 }
 
+// normalizeRecoveryCode performs the operation represented by its name.
 func normalizeRecoveryCode(code string) string {
 	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))
 }

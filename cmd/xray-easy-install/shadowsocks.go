@@ -11,10 +11,13 @@ import (
 )
 
 const (
-	defaultShadowsocksMethod  = domain.ShadowsocksMethodChaCha20Poly1305
+	// defaultShadowsocksMethod is an internal package constant.
+	defaultShadowsocksMethod = domain.ShadowsocksMethodChaCha20Poly1305
+	// defaultShadowsocksNetwork is an internal package constant.
 	defaultShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
 )
 
+// shadowsocksConfigurationChanged performs the operation represented by its name.
 func shadowsocksConfigurationChanged(before, after configuration) bool {
 	return before.shadowsocks != after.shadowsocks ||
 		before.shadowsocksEnabled != after.shadowsocksEnabled ||
@@ -22,6 +25,7 @@ func shadowsocksConfigurationChanged(before, after configuration) bool {
 		before.shadowsocksNetwork != after.shadowsocksNetwork
 }
 
+// updateShadowsocksConfiguration performs the operation represented by its name.
 func updateShadowsocksConfiguration(root string, cfg configuration) error {
 	path := filepath.Join(root, ".env")
 	data, err := os.ReadFile(path)

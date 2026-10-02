@@ -8,6 +8,7 @@ import (
 	"strings"
 )
 
+// defaultUIDir is an internal package constant.
 const defaultUIDir = "/usr/share/xray-easy/ui"
 
 // Handler serves the static UI shipped separately from the Go binary.

@@ -22,8 +22,11 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// rpcInvoker is an internal type used by the package.
 type rpcInvoker interface {
+	// Invoke defines part of the interface contract.
 	Invoke(context.Context, string, any, any, ...grpc.CallOption) error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
@@ -150,6 +153,7 @@ func (c *Client) ReplaceInbound(ctx context.Context, candidatePath, previousPath
 	return verifyOperationRevision(response, revision, "ReplaceInbound")
 }
 
+// verifyOperationRevision performs the operation represented by its name.
 func verifyOperationRevision(response proto.Message, revision int64, method string) error {
 	value, ok := response.(*controllerv1.OperationResponse)
 	if !ok || value.StateRevision != revision {
@@ -313,6 +317,7 @@ func (c *Client) WatchTelemetry(ctx context.Context, interval time.Duration) (co
 	return &loggedControllerTelemetryStream{Controller_WatchTelemetryClient: stream, logger: logger, requestID: requestID, started: started, trace: interaction.TraceFromContext(outgoing)}, nil
 }
 
+// loggedControllerTelemetryStream is an internal type used by the package.
 type loggedControllerTelemetryStream struct {
 	controllerv1.Controller_WatchTelemetryClient
 	logger    *slog.Logger
@@ -336,6 +341,7 @@ func (s *loggedControllerTelemetryStream) Recv() (*controllerv1.TelemetryUpdate,
 	return response, err
 }
 
+// call performs the operation represented by its name.
 func (c *Client) call(ctx context.Context, method string, request proto.Message) (proto.Message, error) {
 	if c == nil || c.connection == nil {
 		return nil, errors.New("Controller gRPC connection is not initialized")
@@ -362,6 +368,7 @@ func (c *Client) call(ctx context.Context, method string, request proto.Message)
 	return response, nil
 }
 
+// newRPCResponse performs the operation represented by its name.
 func newRPCResponse(method string) (proto.Message, error) {
 	switch method {
 	case "Health":
@@ -397,6 +404,7 @@ func newRPCResponse(method string) (proto.Message, error) {
 	}
 }
 
+// protocolForClientCall performs the operation represented by its name.
 func protocolForClientCall(method string, request proto.Message) string {
 	if strings.Contains(method, "AmneziaWG") {
 		return "amneziawg"
@@ -415,6 +423,7 @@ func protocolForClientCall(method string, request proto.Message) string {
 	return "xray"
 }
 
+// protobufTimeToTime performs the operation represented by its name.
 func protobufTimeToTime(field string, value *timestamppb.Timestamp) (time.Time, error) {
 	if value == nil {
 		return time.Time{}, nil
@@ -425,6 +434,7 @@ func protobufTimeToTime(field string, value *timestamppb.Timestamp) (time.Time, 
 	return value.AsTime().UTC(), nil
 }
 
+// metadataAppendAuth performs the operation represented by its name.
 func metadataAppendAuth(ctx context.Context, token string) context.Context {
 	return metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
 }

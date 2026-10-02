@@ -53,14 +53,20 @@ func (f KernelFactory) Open(name string, mtu int) (Device, error) {
 	return &kernelDevice{engine: engineInstance}, nil
 }
 
+// kernelDevice is an internal type used by the package.
 type kernelDevice struct {
 	engine kernelEngine
 }
 
+// kernelEngine is an internal type used by the package.
 type kernelEngine interface {
+	// IpcSetOperation defines part of the interface contract.
 	IpcSetOperation(io.Reader) error
+	// Up defines part of the interface contract.
 	Up() error
+	// IpcGetOperation defines part of the interface contract.
 	IpcGetOperation(io.Writer) error
+	// Close defines part of the interface contract.
 	Close()
 }
 
@@ -84,6 +90,7 @@ func (d *kernelDevice) Snapshot() (string, error) {
 // Close releases resources held by the value.
 func (d *kernelDevice) Close() { d.engine.Close() }
 
+// configureTunnel performs the operation represented by its name.
 func configureTunnel(name string, mtu int, opts Options) error {
 	commands := [][]string{
 		{"addr", "add", opts.IPv4Prefix.Addr().Next().String() + "/" + fmt.Sprint(opts.IPv4Prefix.Bits()), "dev", name},
@@ -98,6 +105,7 @@ func configureTunnel(name string, mtu int, opts Options) error {
 	return nil
 }
 
+// configureForwarding performs the operation represented by its name.
 func configureForwarding(name string, opts Options) error {
 	egress4, err := routeDeviceFor("-4", "1.1.1.1")
 	if err != nil {
@@ -128,6 +136,7 @@ func configureForwarding(name string, opts Options) error {
 	return nil
 }
 
+// routeDeviceFor performs the operation represented by its name.
 func routeDeviceFor(family, destination string) (string, error) {
 	args := []string{"-o", "route", "get", destination}
 	if family != "" {
@@ -140,6 +149,7 @@ func routeDeviceFor(family, destination string) (string, error) {
 	return routeDevice(string(route))
 }
 
+// ensureRule performs the operation represented by its name.
 func ensureRule(binary string, check, add []string) error {
 	if err := runRule(binary, check); err == nil {
 		return nil
@@ -147,8 +157,10 @@ func ensureRule(binary string, check, add []string) error {
 	return runRule(binary, add)
 }
 
+// runRule runs the requested operation.
 func runRule(binary string, args []string) error { return run(binary, args...) }
 
+// run runs the requested operation.
 func run(binary string, args ...string) error {
 	command := exec.Command(binary, args...)
 	if output, err := command.CombinedOutput(); err != nil {

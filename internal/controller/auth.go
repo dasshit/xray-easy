@@ -48,6 +48,7 @@ func LoggingInterceptor(service string) grpc.UnaryServerInterceptor {
 	}
 }
 
+// protocolForRPC performs the operation represented by its name.
 func protocolForRPC(method string, request any) string {
 	if strings.Contains(method, "AmneziaWG") {
 		return "amneziawg"
@@ -66,6 +67,7 @@ func protocolForRPC(method string, request any) string {
 	return "xray"
 }
 
+// safeProtocolName performs the operation represented by its name.
 func safeProtocolName(protocol string) string {
 	switch protocol {
 	case "vless", "vmess", "hysteria2", "amneziawg":

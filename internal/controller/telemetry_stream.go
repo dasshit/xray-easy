@@ -14,14 +14,19 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
+// xrayTelemetryStreamer is an internal type used by the package.
 type xrayTelemetryStreamer interface {
+	// WatchTelemetry defines part of the interface contract.
 	WatchTelemetry(context.Context, time.Duration) (xrayruntimev1.Runtime_WatchTelemetryClient, error)
 }
 
+// awgTelemetryStreamer is an internal type used by the package.
 type awgTelemetryStreamer interface {
+	// WatchPeerStats defines part of the interface contract.
 	WatchPeerStats(context.Context, time.Duration) (awgapi.Control_WatchPeerStatsClient, error)
 }
 
+// telemetrySourceEvent is an internal type used by the package.
 type telemetrySourceEvent struct {
 	protocol string
 	xray     *xrayruntimev1.TelemetryResponse
@@ -149,6 +154,7 @@ func (s *Service) WatchTelemetry(request *controllerv1.WatchTelemetryRequest, st
 	}
 }
 
+// pumpXrayTelemetry performs the operation represented by its name.
 func pumpXrayTelemetry(ctx context.Context, watcher xrayTelemetryStreamer, interval time.Duration, events chan telemetrySourceEvent) {
 	for backoff := time.Second; ctx.Err() == nil; {
 		stream, err := watcher.WatchTelemetry(ctx, interval)
@@ -176,6 +182,7 @@ func pumpXrayTelemetry(ctx context.Context, watcher xrayTelemetryStreamer, inter
 	}
 }
 
+// pumpAWGTelemetry performs the operation represented by its name.
 func pumpAWGTelemetry(ctx context.Context, watcher awgTelemetryStreamer, interval time.Duration, events chan telemetrySourceEvent) {
 	for backoff := time.Second; ctx.Err() == nil; {
 		stream, err := watcher.WatchPeerStats(ctx, interval)
@@ -203,6 +210,7 @@ func pumpAWGTelemetry(ctx context.Context, watcher awgTelemetryStreamer, interva
 	}
 }
 
+// offerTelemetryEvent performs the operation represented by its name.
 func offerTelemetryEvent(events chan telemetrySourceEvent, event telemetrySourceEvent) {
 	select {
 	case events <- event:
@@ -220,6 +228,7 @@ func offerTelemetryEvent(events chan telemetrySourceEvent, event telemetrySource
 	}
 }
 
+// waitTelemetryRetry performs the operation represented by its name.
 func waitTelemetryRetry(ctx context.Context, delay time.Duration) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
@@ -231,6 +240,7 @@ func waitTelemetryRetry(ctx context.Context, delay time.Duration) bool {
 	}
 }
 
+// removeProtocolClients removes the supplied value.
 func removeProtocolClients(clients map[string]*controllerv1.TelemetryClient, protocol string) {
 	for key, client := range clients {
 		clientProtocol := client.GetProtocol()
@@ -240,6 +250,7 @@ func removeProtocolClients(clients map[string]*controllerv1.TelemetryClient, pro
 	}
 }
 
+// xrayProtocolName performs the operation represented by its name.
 func xrayProtocolName(protocol xrayruntimev1.Protocol) string {
 	switch protocol {
 	case xrayruntimev1.Protocol_PROTOCOL_VLESS:

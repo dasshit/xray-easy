@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// nonceTTL is an internal package constant.
 const nonceTTL = 2 * time.Minute
 
 // Authorizer decides whether an authenticated service identity may call a method.
@@ -67,6 +68,7 @@ func (a *Authenticator) StreamServerInterceptor() grpc.StreamServerInterceptor {
 	}
 }
 
+// authenticatedServerStream is an internal type used by the package.
 type authenticatedServerStream struct {
 	grpc.ServerStream
 	auth       *Authenticator
@@ -124,6 +126,7 @@ func SignContext(ctx context.Context, token []byte, identity, method string, req
 		"x-xray-signature", hex.EncodeToString(mac)), nil
 }
 
+// authenticate performs the operation represented by its name.
 func (a *Authenticator) authenticate(ctx context.Context, request any, method string) (string, error) {
 	message, ok := request.(proto.Message)
 	if !ok || message == nil {
@@ -192,8 +195,10 @@ func IdentityFromContext(ctx context.Context) string {
 	return identity
 }
 
+// identityContextKey is an internal type used by the package.
 type identityContextKey struct{}
 
+// requestMAC performs the operation represented by its name.
 func requestMAC(token []byte, method, identity, nonce string, request []byte) []byte {
 	bodyHash := sha256.Sum256(request)
 	canonical := strings.Join([]string{method, identity, nonce, hex.EncodeToString(bodyHash[:])}, "\n")

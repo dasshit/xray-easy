@@ -22,6 +22,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// serviceName is an internal package constant.
 const serviceName = "/xrayeasy.awg.v1.Control/"
 
 // Gateway exposes only the AWG operations needed by the application layer.
@@ -38,8 +39,10 @@ type Gateway interface {
 	ClientConfig(context.Context, string) (string, error)
 }
 
+// connection is an internal type used by the package.
 type connection interface {
 	grpc.ClientConnInterface
+	// Close defines part of the interface contract.
 	Close() error
 }
 
@@ -179,6 +182,7 @@ func (c *Client) WatchPeerStats(ctx context.Context, interval time.Duration) (aw
 	return &loggedPeerStatsStream{Control_WatchPeerStatsClient: stream, requestID: requestID, started: started}, nil
 }
 
+// loggedPeerStatsStream is an internal type used by the package.
 type loggedPeerStatsStream struct {
 	awgapi.Control_WatchPeerStatsClient
 	requestID string
@@ -266,6 +270,7 @@ func (c *Client) RestoreBackup(ctx context.Context, data []byte) error {
 // Close releases the underlying HTTP/2 connection.
 func (c *Client) Close() error { return c.connection.Close() }
 
+// call performs the operation represented by its name.
 func (c *Client) call(ctx context.Context, method string, invoke func(context.Context) error) error {
 	ctx, requestID, err := interaction.OutgoingContext(ctx)
 	if err != nil {
@@ -282,6 +287,7 @@ func (c *Client) call(ctx context.Context, method string, invoke func(context.Co
 	return nil
 }
 
+// parsePeer parses the supplied value.
 func parsePeer(peer *awgapi.Peer) (domain.AmneziaWGPeer, error) {
 	if peer == nil || peer.GetName() == "" || peer.GetPublicKey() == "" || peer.GetIpv4() == "" || peer.GetIpv6() == "" {
 		return domain.AmneziaWGPeer{}, errors.New("AWG response contains an incomplete peer")

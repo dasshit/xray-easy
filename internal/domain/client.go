@@ -9,8 +9,10 @@ import (
 )
 
 var (
+	// deviceNamePattern is an internal package variable.
 	deviceNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,64}$`)
-	fingerprints      = map[string]struct{}{
+	// fingerprints is an internal package variable.
+	fingerprints = map[string]struct{}{
 		"chrome": {}, "firefox": {}, "safari": {}, "edge": {},
 		"ios": {}, "android": {}, "random": {},
 	}

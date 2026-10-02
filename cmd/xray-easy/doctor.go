@@ -26,14 +26,19 @@ import (
 	"xray-easy/internal/xrayapi"
 )
 
+// doctorLevel is an internal type used by the package.
 type doctorLevel string
 
 const (
+	// doctorPass is an internal package constant.
 	doctorPass doctorLevel = "PASS"
+	// doctorWarn is an internal package constant.
 	doctorWarn doctorLevel = "WARN"
+	// doctorFail is an internal package constant.
 	doctorFail doctorLevel = "FAIL"
 )
 
+// doctorCheck is an internal type used by the package.
 type doctorCheck struct {
 	level  doctorLevel
 	name   string
@@ -41,32 +46,50 @@ type doctorCheck struct {
 	hint   string
 }
 
+// doctorVersionPattern is an internal package variable.
 var doctorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$`)
+
+// xrayReleasePattern is an internal package variable.
 var xrayReleasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
+// doctorXrayRuntime is an internal type used by the package.
 type doctorXrayRuntime interface {
+	// Health defines part of the interface contract.
 	Health(context.Context) error
+	// Status defines part of the interface contract.
 	Status(context.Context) (domain.XrayRuntimeStatus, error)
+	// Validate defines part of the interface contract.
 	Validate(context.Context, string, string) error
+	// ProbeTarget defines part of the interface contract.
 	ProbeTarget(context.Context, string, string) error
+	// ProbeIPv6 defines part of the interface contract.
 	ProbeIPv6(context.Context) error
 }
 
+// doctorBundleRuntime is an internal type used by the package.
 type doctorBundleRuntime interface {
 	doctorXrayRuntime
+	// Logs defines part of the interface contract.
 	Logs(context.Context) ([]string, error)
 }
 
+// doctorHandler is an internal type used by the package.
 type doctorHandler interface {
+	// Users defines part of the interface contract.
 	Users(context.Context) ([]string, error)
 }
 
+// doctorStats is an internal type used by the package.
 type doctorStats interface {
+	// Poll defines part of the interface contract.
 	Poll(context.Context) ([]xrayapi.UserStats, error)
 }
 
+// doctorAWG is an internal type used by the package.
 type doctorAWG interface {
+	// Status defines part of the interface contract.
 	Status(context.Context) (domain.AmneziaWGStatus, error)
+	// ListPeers defines part of the interface contract.
 	ListPeers(context.Context) ([]domain.AmneziaWGPeer, error)
 }
 
@@ -103,10 +126,12 @@ func runDoctorCLI(ctx context.Context, args []string, dataDir, configDir string,
 	return runDoctorWithAWG(ctx, dataDir, configDir, out, runtime, handler, stats, awg, awgErr)
 }
 
+// runDoctor runs the requested operation.
 func runDoctor(ctx context.Context, dataDir, configDir string, out io.Writer, runtime doctorXrayRuntime, handler doctorHandler, stats doctorStats) error {
 	return runDoctorWithAWG(ctx, dataDir, configDir, out, runtime, handler, stats, nil, nil)
 }
 
+// runDoctorWithAWG runs the requested operation.
 func runDoctorWithAWG(ctx context.Context, dataDir, configDir string, out io.Writer, runtime doctorXrayRuntime, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) error {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
@@ -140,6 +165,7 @@ func runDoctorWithAWG(ctx context.Context, dataDir, configDir string, out io.Wri
 	return nil
 }
 
+// writeDoctorHeader writes the supplied value.
 func writeDoctorHeader(out io.Writer) {
 	fmt.Fprintln(out, "Xray-easy doctor report")
 	fmt.Fprintln(out, "Versions from active Compose environment:")
@@ -161,6 +187,7 @@ func writeDoctorHeader(out io.Writer) {
 	}
 }
 
+// safeRuntimeXrayVersion performs the operation represented by its name.
 func safeRuntimeXrayVersion(value string) string {
 	match := xrayReleasePattern.FindString(value)
 	if match == "" {
@@ -169,6 +196,7 @@ func safeRuntimeXrayVersion(value string) string {
 	return match
 }
 
+// safeDoctorVersion performs the operation represented by its name.
 func safeDoctorVersion(name, fallback string) string {
 	value := envOr(name, fallback)
 	if !doctorVersionPattern.MatchString(value) {
@@ -177,6 +205,7 @@ func safeDoctorVersion(name, fallback string) string {
 	return value
 }
 
+// safeDoctorPort performs the operation represented by its name.
 func safeDoctorPort(name, fallback string) string {
 	value := envOr(name, fallback)
 	port, err := strconv.Atoi(value)
@@ -186,6 +215,7 @@ func safeDoctorPort(name, fallback string) string {
 	return strconv.Itoa(port)
 }
 
+// doctorConfiguredPort performs the operation represented by its name.
 func doctorConfiguredPort(name, fallback string) (int, error) {
 	port, err := strconv.Atoi(envOr(name, fallback))
 	if err != nil || port < 1 || port > 65535 {
@@ -194,10 +224,12 @@ func doctorConfiguredPort(name, fallback string) (int, error) {
 	return port, nil
 }
 
+// runDoctorBundle runs the requested operation.
 func runDoctorBundle(ctx context.Context, dataDir, configDir string, out io.Writer, runtime doctorBundleRuntime, handler doctorHandler, stats doctorStats) error {
 	return runDoctorBundleWithAWG(ctx, dataDir, configDir, out, runtime, handler, stats, nil, nil)
 }
 
+// runDoctorBundleWithAWG runs the requested operation.
 func runDoctorBundleWithAWG(ctx context.Context, dataDir, configDir string, out io.Writer, runtime doctorBundleRuntime, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) error {
 	var report bytes.Buffer
 	doctorErr := runDoctorWithAWG(ctx, dataDir, configDir, &report, runtime, handler, stats, awg, awgErr)
@@ -275,10 +307,12 @@ func runDoctorBundleWithAWG(ctx context.Context, dataDir, configDir string, out 
 	return nil
 }
 
+// collectDoctorChecks performs the operation represented by its name.
 func collectDoctorChecks(ctx context.Context, dataDir, configDir string, runtime doctorXrayRuntime, handler doctorHandler, stats doctorStats) []doctorCheck {
 	return collectDoctorChecksWithAWG(ctx, dataDir, configDir, runtime, handler, stats, nil, nil)
 }
 
+// collectDoctorChecksWithAWG performs the operation represented by its name.
 func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, runtime doctorXrayRuntime, handler doctorHandler, stats doctorStats, awg doctorAWG, awgErr error) []doctorCheck {
 	checks := make([]doctorCheck, 0, 12)
 	appendCheck := func(level doctorLevel, name, detail, hint string) {
@@ -568,6 +602,7 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 	return checks
 }
 
+// matchEmbeddedInboundTags performs the operation represented by its name.
 func matchEmbeddedInboundTags(configPath string, runtimeTags []string) error {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -595,6 +630,7 @@ func matchEmbeddedInboundTags(configPath string, runtimeTags []string) error {
 	return sameSortedStrings(expected, runtimeTags)
 }
 
+// sameSortedStrings performs the operation represented by its name.
 func sameSortedStrings(left, right []string) error {
 	left = append([]string(nil), left...)
 	right = append([]string(nil), right...)
@@ -621,6 +657,7 @@ func sameSortedStrings(left, right []string) error {
 	return nil
 }
 
+// publicHostKind performs the operation represented by its name.
 func publicHostKind(host string) string {
 	address, err := netip.ParseAddr(strings.TrimSpace(host))
 	if err == nil {
@@ -632,6 +669,7 @@ func publicHostKind(host string) string {
 	return "DNS name"
 }
 
+// probeWritableDirectory performs the operation represented by its name.
 func probeWritableDirectory(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {

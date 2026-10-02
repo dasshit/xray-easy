@@ -21,45 +21,69 @@ import (
 )
 
 const (
-	defaultListenAddr      = "172.31.241.5:10088"
+	// defaultListenAddr is an internal package constant.
+	defaultListenAddr = "172.31.241.5:10088"
+	// defaultControllerToken is an internal package constant.
 	defaultControllerToken = "/run/controller-auth/controller.token"
-	defaultRuntimeAddr     = "172.31.241.2:10086"
-	defaultRuntimeToken    = "/run/runtime-auth/xray_runtime_token"
-	defaultConfigDir       = "/etc/xray"
+	// defaultRuntimeAddr is an internal package constant.
+	defaultRuntimeAddr = "172.31.241.2:10086"
+	// defaultRuntimeToken is an internal package constant.
+	defaultRuntimeToken = "/run/runtime-auth/xray_runtime_token"
+	// defaultConfigDir is an internal package constant.
+	defaultConfigDir = "/etc/xray"
 )
 
+// healthClient is an internal type used by the package.
 type healthClient interface {
+	// Health defines part of the interface contract.
 	Health(context.Context) error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// closeableAWGRuntime is an internal type used by the package.
 type closeableAWGRuntime interface {
 	controller.AmneziaWGRuntime
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// closeableXrayRuntime is an internal type used by the package.
 type closeableXrayRuntime interface {
 	controller.XrayRuntime
 	controller.XrayHandlerRuntime
 	controller.XrayStatsRuntime
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// dialHealthClient is an internal package variable.
 var dialHealthClient = func(address, tokenPath string) (healthClient, error) {
 	return controller.Dial(address, tokenPath)
 }
+
+// dialEmbeddedXray is an internal package variable.
 var dialEmbeddedXray = func(address, tokenPath, configDir string) (closeableXrayRuntime, error) {
 	return controller.DialEmbeddedXray(address, tokenPath, configDir)
 }
+
+// dialAWG is an internal package variable.
 var dialAWG = func(address, tokenPath string) (closeableAWGRuntime, error) {
 	return awgcontrol.Dial(address, tokenPath)
 }
+
+// listenController is an internal package variable.
 var listenController = net.Listen
+
+// serveController is an internal package variable.
 var serveController = func(server *grpc.Server, listener net.Listener) error { return server.Serve(listener) }
+
+// controllerSignalContext is an internal package variable.
 var controllerSignalContext = func() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
 
+// main starts the program.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := run(os.Args[1:]); err != nil {
@@ -68,8 +92,10 @@ func main() {
 	}
 }
 
+// exitProcess is an internal package variable.
 var exitProcess = os.Exit
 
+// run runs the requested operation.
 func run(args []string) error {
 	if len(args) == 1 && args[0] == "healthcheck" {
 		client, err := dialHealthClient(envOr("XRAY_CONTROLLER_ADDR", defaultListenAddr), envOr("XRAY_CONTROLLER_TOKEN_FILE", defaultControllerToken))
@@ -87,6 +113,7 @@ func run(args []string) error {
 	return serve()
 }
 
+// serve serves the requested endpoint.
 func serve() error {
 	token, err := readToken(envOr("XRAY_CONTROLLER_TOKEN_FILE", defaultControllerToken))
 	if err != nil {
@@ -135,6 +162,7 @@ func serve() error {
 	}
 }
 
+// readToken reads the requested value.
 func readToken(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("token file path is empty")
@@ -161,6 +189,7 @@ func readToken(path string) (string, error) {
 	return value, nil
 }
 
+// envOr performs the operation represented by its name.
 func envOr(name, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		return value

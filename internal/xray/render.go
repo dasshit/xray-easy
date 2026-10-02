@@ -203,173 +203,316 @@ type Profile struct {
 	ShortID string
 }
 
+// serverConfig is an internal type used by the package.
 type serverConfig struct {
-	Log       logConfig      `json:"log"`
-	API       apiConfig      `json:"api"`
-	Stats     map[string]any `json:"stats"`
-	Policy    policyConfig   `json:"policy"`
-	Inbounds  []any          `json:"inbounds"`
-	Outbounds []outbound     `json:"outbounds"`
+	// Log stores the value associated with the enclosing object.
+	Log logConfig `json:"log"`
+	// API stores the value associated with the enclosing object.
+	API apiConfig `json:"api"`
+	// Stats stores the value associated with the enclosing object.
+	Stats map[string]any `json:"stats"`
+	// Policy stores the value associated with the enclosing object.
+	Policy policyConfig `json:"policy"`
+	// Inbounds stores the value associated with the enclosing object.
+	Inbounds []any `json:"inbounds"`
+	// Outbounds stores the value associated with the enclosing object.
+	Outbounds []outbound `json:"outbounds"`
 }
 
+// logConfig is an internal type used by the package.
 type logConfig struct {
+	// LogLevel stores the value associated with the enclosing object.
 	LogLevel string `json:"loglevel"`
 }
+
+// apiConfig is an internal type used by the package.
 type apiConfig struct {
-	Tag      string   `json:"tag"`
-	Listen   string   `json:"listen"`
+	// Tag stores the value associated with the enclosing object.
+	Tag string `json:"tag"`
+	// Listen stores the value associated with the enclosing object.
+	Listen string `json:"listen"`
+	// Services stores the value associated with the enclosing object.
 	Services []string `json:"services"`
 }
+
+// policyConfig is an internal type used by the package.
 type policyConfig struct {
+	// Levels stores the value associated with the enclosing object.
 	Levels map[string]policyLevel `json:"levels"`
 }
+
+// policyLevel is an internal type used by the package.
 type policyLevel struct {
-	StatsUserUplink   bool `json:"statsUserUplink"`
+	// StatsUserUplink stores the value associated with the enclosing object.
+	StatsUserUplink bool `json:"statsUserUplink"`
+	// StatsUserDownlink stores the value associated with the enclosing object.
 	StatsUserDownlink bool `json:"statsUserDownlink"`
-	StatsUserOnline   bool `json:"statsUserOnline"`
+	// StatsUserOnline stores the value associated with the enclosing object.
+	StatsUserOnline bool `json:"statsUserOnline"`
 }
+
+// inbound is an internal type used by the package.
 type inbound struct {
-	Listen         string          `json:"listen"`
-	Port           int             `json:"port"`
-	Protocol       string          `json:"protocol"`
-	Tag            string          `json:"tag"`
-	Settings       inboundSettings `json:"settings"`
-	StreamSettings streamSettings  `json:"streamSettings"`
-	Sniffing       sniffing        `json:"sniffing"`
+	// Listen stores the value associated with the enclosing object.
+	Listen string `json:"listen"`
+	// Port stores the value associated with the enclosing object.
+	Port int `json:"port"`
+	// Protocol stores the value associated with the enclosing object.
+	Protocol string `json:"protocol"`
+	// Tag stores the value associated with the enclosing object.
+	Tag string `json:"tag"`
+	// Settings stores the value associated with the enclosing object.
+	Settings inboundSettings `json:"settings"`
+	// StreamSettings stores the value associated with the enclosing object.
+	StreamSettings streamSettings `json:"streamSettings"`
+	// Sniffing stores the value associated with the enclosing object.
+	Sniffing sniffing `json:"sniffing"`
 }
+
+// inboundSettings is an internal type used by the package.
 type inboundSettings struct {
-	Clients    []serverClient `json:"clients"`
-	Decryption string         `json:"decryption"`
+	// Clients stores the value associated with the enclosing object.
+	Clients []serverClient `json:"clients"`
+	// Decryption stores the value associated with the enclosing object.
+	Decryption string `json:"decryption"`
 }
+
+// serverClient is an internal type used by the package.
 type serverClient struct {
-	ID    string `json:"id"`
-	Flow  string `json:"flow,omitempty"`
+	// ID stores the value associated with the enclosing object.
+	ID string `json:"id"`
+	// Flow stores the value associated with the enclosing object.
+	Flow string `json:"flow,omitempty"`
+	// Email stores the value associated with the enclosing object.
 	Email string `json:"email"`
 }
+
+// streamSettings is an internal type used by the package.
 type streamSettings struct {
-	Network         string        `json:"network"`
-	Security        string        `json:"security"`
+	// Network stores the value associated with the enclosing object.
+	Network string `json:"network"`
+	// Security stores the value associated with the enclosing object.
+	Security string `json:"security"`
+	// RealitySettings stores the value associated with the enclosing object.
 	RealitySettings realityServer `json:"realitySettings"`
 }
+
+// realityServer is an internal type used by the package.
 type realityServer struct {
-	Show         bool     `json:"show"`
-	Target       string   `json:"target"`
-	XVer         int      `json:"xver"`
-	ServerNames  []string `json:"serverNames"`
-	PrivateKey   string   `json:"privateKey"`
-	MinClientVer string   `json:"minClientVer"`
-	ShortIDs     []string `json:"shortIds"`
+	// Show stores the value associated with the enclosing object.
+	Show bool `json:"show"`
+	// Target stores the value associated with the enclosing object.
+	Target string `json:"target"`
+	// XVer stores the value associated with the enclosing object.
+	XVer int `json:"xver"`
+	// ServerNames stores the value associated with the enclosing object.
+	ServerNames []string `json:"serverNames"`
+	// PrivateKey stores the value associated with the enclosing object.
+	PrivateKey string `json:"privateKey"`
+	// MinClientVer stores the value associated with the enclosing object.
+	MinClientVer string `json:"minClientVer"`
+	// ShortIDs stores the value associated with the enclosing object.
+	ShortIDs []string `json:"shortIds"`
 }
+
+// sniffing is an internal type used by the package.
 type sniffing struct {
-	Enabled      bool     `json:"enabled"`
+	// Enabled stores the value associated with the enclosing object.
+	Enabled bool `json:"enabled"`
+	// DestOverride stores the value associated with the enclosing object.
 	DestOverride []string `json:"destOverride"`
 }
+
+// outbound is an internal type used by the package.
 type outbound struct {
+	// Protocol stores the value associated with the enclosing object.
 	Protocol string `json:"protocol"`
-	Tag      string `json:"tag"`
+	// Tag stores the value associated with the enclosing object.
+	Tag string `json:"tag"`
 }
+
+// hysteriaInbound is an internal type used by the package.
 type hysteriaInbound struct {
-	Listen         string                  `json:"listen"`
-	Port           int                     `json:"port"`
-	Protocol       string                  `json:"protocol"`
-	Tag            string                  `json:"tag"`
-	Settings       hysteriaInboundSettings `json:"settings"`
-	StreamSettings hysteriaStreamSettings  `json:"streamSettings"`
+	// Listen stores the value associated with the enclosing object.
+	Listen string `json:"listen"`
+	// Port stores the value associated with the enclosing object.
+	Port int `json:"port"`
+	// Protocol stores the value associated with the enclosing object.
+	Protocol string `json:"protocol"`
+	// Tag stores the value associated with the enclosing object.
+	Tag string `json:"tag"`
+	// Settings stores the value associated with the enclosing object.
+	Settings hysteriaInboundSettings `json:"settings"`
+	// StreamSettings stores the value associated with the enclosing object.
+	StreamSettings hysteriaStreamSettings `json:"streamSettings"`
 }
+
+// hysteriaInboundSettings is an internal type used by the package.
 type hysteriaInboundSettings struct {
-	Version int            `json:"version"`
-	Users   []hysteriaUser `json:"users"`
+	// Version stores the value associated with the enclosing object.
+	Version int `json:"version"`
+	// Users stores the value associated with the enclosing object.
+	Users []hysteriaUser `json:"users"`
 }
+
+// hysteriaUser is an internal type used by the package.
 type hysteriaUser struct {
-	Auth  string `json:"auth"`
-	Level int    `json:"level"`
+	// Auth stores the value associated with the enclosing object.
+	Auth string `json:"auth"`
+	// Level stores the value associated with the enclosing object.
+	Level int `json:"level"`
+	// Email stores the value associated with the enclosing object.
 	Email string `json:"email"`
 }
+
+// hysteriaStreamSettings is an internal type used by the package.
 type hysteriaStreamSettings struct {
-	Network          string                    `json:"network"`
-	Security         string                    `json:"security"`
-	TLSSettings      hysteriaTLSSettings       `json:"tlsSettings"`
+	// Network stores the value associated with the enclosing object.
+	Network string `json:"network"`
+	// Security stores the value associated with the enclosing object.
+	Security string `json:"security"`
+	// TLSSettings stores the value associated with the enclosing object.
+	TLSSettings hysteriaTLSSettings `json:"tlsSettings"`
+	// HysteriaSettings stores the value associated with the enclosing object.
 	HysteriaSettings hysteriaTransportSettings `json:"hysteriaSettings"`
 }
+
+// hysteriaTLSSettings is an internal type used by the package.
 type hysteriaTLSSettings struct {
+	// Certificates stores the value associated with the enclosing object.
 	Certificates []hysteriaCertificate `json:"certificates"`
 }
+
+// hysteriaCertificate is an internal type used by the package.
 type hysteriaCertificate struct {
+	// CertificateFile stores the value associated with the enclosing object.
 	CertificateFile string `json:"certificateFile"`
-	KeyFile         string `json:"keyFile"`
+	// KeyFile stores the value associated with the enclosing object.
+	KeyFile string `json:"keyFile"`
 }
+
+// hysteriaTransportSettings is an internal type used by the package.
 type hysteriaTransportSettings struct {
-	Version        int                 `json:"version"`
-	UDPIdleTimeout int                 `json:"udpIdleTimeout,omitempty"`
-	Masquerade     *hysteriaMasquerade `json:"masquerade,omitempty"`
+	// Version stores the value associated with the enclosing object.
+	Version int `json:"version"`
+	// UDPIdleTimeout stores the value associated with the enclosing object.
+	UDPIdleTimeout int `json:"udpIdleTimeout,omitempty"`
+	// Masquerade stores the value associated with the enclosing object.
+	Masquerade *hysteriaMasquerade `json:"masquerade,omitempty"`
 }
 
+// hysteriaMasquerade is an internal type used by the package.
 type hysteriaMasquerade struct {
-	Type       string `json:"type"`
-	Content    string `json:"content,omitempty"`
-	StatusCode int    `json:"statusCode,omitempty"`
+	// Type stores the value associated with the enclosing object.
+	Type string `json:"type"`
+	// Content stores the value associated with the enclosing object.
+	Content string `json:"content,omitempty"`
+	// StatusCode stores the value associated with the enclosing object.
+	StatusCode int `json:"statusCode,omitempty"`
 }
 
+// vmessInbound is an internal type used by the package.
 type vmessInbound struct {
-	Listen         string               `json:"listen"`
-	Port           int                  `json:"port"`
-	Protocol       string               `json:"protocol"`
-	Tag            string               `json:"tag"`
-	Settings       vmessInboundSettings `json:"settings"`
-	StreamSettings vmessStreamSettings  `json:"streamSettings"`
+	// Listen stores the value associated with the enclosing object.
+	Listen string `json:"listen"`
+	// Port stores the value associated with the enclosing object.
+	Port int `json:"port"`
+	// Protocol stores the value associated with the enclosing object.
+	Protocol string `json:"protocol"`
+	// Tag stores the value associated with the enclosing object.
+	Tag string `json:"tag"`
+	// Settings stores the value associated with the enclosing object.
+	Settings vmessInboundSettings `json:"settings"`
+	// StreamSettings stores the value associated with the enclosing object.
+	StreamSettings vmessStreamSettings `json:"streamSettings"`
 }
 
+// vmessInboundSettings is an internal type used by the package.
 type vmessInboundSettings struct {
+	// Clients stores the value associated with the enclosing object.
 	Clients []vmessServerClient `json:"clients"`
 }
 
+// vmessServerClient is an internal type used by the package.
 type vmessServerClient struct {
-	ID      string `json:"id"`
-	AlterID int    `json:"alterId"`
-	Email   string `json:"email"`
+	// ID stores the value associated with the enclosing object.
+	ID string `json:"id"`
+	// AlterID stores the value associated with the enclosing object.
+	AlterID int `json:"alterId"`
+	// Email stores the value associated with the enclosing object.
+	Email string `json:"email"`
 }
 
+// vmessStreamSettings is an internal type used by the package.
 type vmessStreamSettings struct {
-	Network     string              `json:"network"`
-	Security    string              `json:"security"`
+	// Network stores the value associated with the enclosing object.
+	Network string `json:"network"`
+	// Security stores the value associated with the enclosing object.
+	Security string `json:"security"`
+	// TLSSettings stores the value associated with the enclosing object.
 	TLSSettings hysteriaTLSSettings `json:"tlsSettings"`
 }
 
+// shadowsocksInbound is an internal type used by the package.
 type shadowsocksInbound struct {
-	Listen   string                     `json:"listen"`
-	Port     int                        `json:"port"`
-	Protocol string                     `json:"protocol"`
-	Tag      string                     `json:"tag"`
+	// Listen stores the value associated with the enclosing object.
+	Listen string `json:"listen"`
+	// Port stores the value associated with the enclosing object.
+	Port int `json:"port"`
+	// Protocol stores the value associated with the enclosing object.
+	Protocol string `json:"protocol"`
+	// Tag stores the value associated with the enclosing object.
+	Tag string `json:"tag"`
+	// Settings stores the value associated with the enclosing object.
 	Settings shadowsocksInboundSettings `json:"settings"`
 }
 
+// shadowsocksInboundSettings is an internal type used by the package.
 type shadowsocksInboundSettings struct {
-	Network string                    `json:"network"`
+	// Network stores the value associated with the enclosing object.
+	Network string `json:"network"`
+	// Clients stores the value associated with the enclosing object.
 	Clients []shadowsocksServerClient `json:"clients"`
 }
 
+// shadowsocksServerClient is an internal type used by the package.
 type shadowsocksServerClient struct {
-	Method   string `json:"method"`
+	// Method stores the value associated with the enclosing object.
+	Method string `json:"method"`
+	// Password stores the value associated with the enclosing object.
 	Password string `json:"password"`
-	Email    string `json:"email"`
+	// Email stores the value associated with the enclosing object.
+	Email string `json:"email"`
 }
 
+// trojanInbound is an internal type used by the package.
 type trojanInbound struct {
-	Listen         string                `json:"listen"`
-	Port           int                   `json:"port"`
-	Protocol       string                `json:"protocol"`
-	Tag            string                `json:"tag"`
-	Settings       trojanInboundSettings `json:"settings"`
-	StreamSettings vmessStreamSettings   `json:"streamSettings"`
+	// Listen stores the value associated with the enclosing object.
+	Listen string `json:"listen"`
+	// Port stores the value associated with the enclosing object.
+	Port int `json:"port"`
+	// Protocol stores the value associated with the enclosing object.
+	Protocol string `json:"protocol"`
+	// Tag stores the value associated with the enclosing object.
+	Tag string `json:"tag"`
+	// Settings stores the value associated with the enclosing object.
+	Settings trojanInboundSettings `json:"settings"`
+	// StreamSettings stores the value associated with the enclosing object.
+	StreamSettings vmessStreamSettings `json:"streamSettings"`
 }
 
+// trojanInboundSettings is an internal type used by the package.
 type trojanInboundSettings struct {
+	// Clients stores the value associated with the enclosing object.
 	Clients []trojanServerClient `json:"clients"`
 }
 
+// trojanServerClient is an internal type used by the package.
 type trojanServerClient struct {
+	// Password stores the value associated with the enclosing object.
 	Password string `json:"password"`
-	Email    string `json:"email"`
+	// Email stores the value associated with the enclosing object.
+	Email string `json:"email"`
 }
 
 // RenderServerConfig renders the requested representation.
@@ -664,6 +807,7 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 	return profile, nil
 }
 
+// validateTrojanProfileSettings validates the supplied value.
 func validateTrojanProfileSettings(settings Settings) error {
 	if !settings.TrojanEnabled {
 		return errors.New("Trojan is not enabled")
@@ -677,6 +821,7 @@ func validateTrojanProfileSettings(settings Settings) error {
 	return nil
 }
 
+// validateShadowsocksProfileSettings validates the supplied value.
 func validateShadowsocksProfileSettings(settings Settings) error {
 	if !settings.ShadowsocksEnabled {
 		return errors.New("Shadowsocks is not enabled")
@@ -696,6 +841,7 @@ func validateShadowsocksProfileSettings(settings Settings) error {
 	return nil
 }
 
+// validateVMessProfileSettings validates the supplied value.
 func validateVMessProfileSettings(settings Settings) error {
 	if settings.VMessPublicPort < 1 || settings.VMessPublicPort > 65535 {
 		return errors.New("VMess public port is not configured")
@@ -714,6 +860,7 @@ func validateVMessProfileSettings(settings Settings) error {
 	return nil
 }
 
+// normalizeTLSFingerprint performs the operation represented by its name.
 func normalizeTLSFingerprint(value string) (string, error) {
 	value = strings.NewReplacer(":", "", " ", "").Replace(strings.TrimSpace(value))
 	if len(value) != 64 {
@@ -725,6 +872,7 @@ func normalizeTLSFingerprint(value string) (string, error) {
 	return strings.ToUpper(value), nil
 }
 
+// vmessServerName performs the operation represented by its name.
 func vmessServerName(settings Settings) string {
 	return domain.HysteriaSettings{
 		TLSMode:       settings.HysteriaTLSMode,
@@ -734,6 +882,7 @@ func vmessServerName(settings Settings) string {
 	}.EffectiveTLSServerName(settings.PublicHost)
 }
 
+// validateHysteriaProfileSettings validates the supplied value.
 func validateHysteriaProfileSettings(settings Settings) error {
 	if !settings.Hysteria2Enabled {
 		return errors.New("Hysteria 2 is not enabled")
@@ -757,6 +906,7 @@ func validateHysteriaProfileSettings(settings Settings) error {
 	return nil
 }
 
+// protocol performs the operation represented by its name.
 func (c Client) protocol() domain.ClientProtocol {
 	if c.Protocol == "" {
 		return domain.ProtocolLegacyDual
@@ -941,6 +1091,7 @@ func BuildTrojanURI(settings Settings, client Client) string {
 	return u.String()
 }
 
+// buildTrojanClientJSON performs the operation represented by its name.
 func buildTrojanClientJSON(settings Settings, client Client) ([]byte, error) {
 	value := map[string]any{
 		"log":      map[string]any{"loglevel": "warning"},
@@ -961,6 +1112,7 @@ func buildTrojanClientJSON(settings Settings, client Client) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// buildShadowsocksClientJSON performs the operation represented by its name.
 func buildShadowsocksClientJSON(settings Settings, client Client) ([]byte, error) {
 	value := map[string]any{
 		"log":      map[string]any{"loglevel": "warning"},
@@ -983,6 +1135,7 @@ func buildShadowsocksClientJSON(settings Settings, client Client) ([]byte, error
 	return out.Bytes(), nil
 }
 
+// buildVMessClientJSON performs the operation represented by its name.
 func buildVMessClientJSON(settings Settings, client Client) ([]byte, error) {
 	serverName := vmessServerName(settings)
 	tls := map[string]any{"serverName": serverName}
@@ -1027,6 +1180,7 @@ func BuildVLESSURI(settings Settings, client Client, fingerprint string) string 
 	return u.String()
 }
 
+// buildClientJSON performs the operation represented by its name.
 func buildClientJSON(settings Settings, client Client, fingerprint string) ([]byte, error) {
 	value := map[string]any{
 		"log":      map[string]any{"loglevel": "warning"},
@@ -1057,6 +1211,7 @@ func buildClientJSON(settings Settings, client Client, fingerprint string) ([]by
 	return out.Bytes(), nil
 }
 
+// validateSettings validates the supplied value.
 func validateSettings(settings Settings) error {
 	if settings.LogLevel != "" && !domain.SupportsXrayLogLevel(settings.LogLevel) {
 		return errors.New("unsupported Xray log level")

@@ -19,6 +19,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// inboundTag is an internal package constant.
 const inboundTag = "vless-reality"
 
 // HandlerClient wraps the generated Xray HandlerService API. The control
@@ -124,6 +125,7 @@ func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) (
 	return users, nil
 }
 
+// alter performs the operation represented by its name.
 func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation *serial.TypedMessage) error {
 	ctx, _, traceErr := interaction.OutgoingContext(ctx)
 	if traceErr != nil {
@@ -151,6 +153,7 @@ func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation 
 	return nil
 }
 
+// resolveInboundTag performs the operation represented by its name.
 func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercommand.HandlerServiceClient, preferredTag string) (string, error) {
 	rpcContext, requestID, traceErr := interaction.OutgoingContext(ctx)
 	if traceErr != nil {
@@ -184,6 +187,7 @@ func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercom
 	return "", fmt.Errorf("Xray inbound %q was not found", preferredTag)
 }
 
+// service performs the operation represented by its name.
 func (c *HandlerClient) service(ctx context.Context) (handlercommand.HandlerServiceClient, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -204,6 +208,7 @@ func (c *HandlerClient) service(ctx context.Context) (handlercommand.HandlerServ
 	return c.client, nil
 }
 
+// reset performs the operation represented by its name.
 func (c *HandlerClient) reset() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -225,6 +230,7 @@ func (c *HandlerClient) Close() error {
 	return err
 }
 
+// mustMarshal performs the operation represented by its name.
 func mustMarshal(message proto.Message) []byte {
 	value, err := proto.Marshal(message)
 	if err != nil {

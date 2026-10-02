@@ -7,6 +7,7 @@ import (
 	"strings"
 )
 
+// hysteriaCertificateIDPattern is an internal package variable.
 var hysteriaCertificateIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 const (

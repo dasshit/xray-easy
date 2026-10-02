@@ -69,11 +69,16 @@ func (b *Buffer) Snapshot(limit int) []Entry {
 }
 
 var (
-	secretFieldPattern       = regexp.MustCompile(`(?i)(private[_-]?key|password|token|secret|master[_-]?key|short[_-]?id)(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)`)
+	// secretFieldPattern is an internal package variable.
+	secretFieldPattern = regexp.MustCompile(`(?i)(private[_-]?key|password|token|secret|master[_-]?key|short[_-]?id)(\s*[=:]\s*)("[^"]*"|'[^']*'|[^\s,;}]+)`)
+	// quotedSecretFieldPattern is an internal package variable.
 	quotedSecretFieldPattern = regexp.MustCompile(`(?i)(["'])(private[_-]?key|password|token|secret|master[_-]?key|short[_-]?id)(["'])\s*:\s*("[^"]*"|'[^']*'|[^\s,;}]+)`)
-	uuidPattern              = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
-	vlessPattern             = regexp.MustCompile(`(?i)vless://[^\s"']+`)
-	bearerPattern            = regexp.MustCompile(`(?i)\bBearer\s+[^\s,;}]+`)
+	// uuidPattern is an internal package variable.
+	uuidPattern = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\b`)
+	// vlessPattern is an internal package variable.
+	vlessPattern = regexp.MustCompile(`(?i)vless://[^\s"']+`)
+	// bearerPattern is an internal package variable.
+	bearerPattern = regexp.MustCompile(`(?i)\bBearer\s+[^\s,;}]+`)
 )
 
 // Redact performs the operation represented by its name.
@@ -118,6 +123,7 @@ func RedactJSON(document []byte) ([]byte, error) {
 	return json.MarshalIndent(redacted, "", "  ")
 }
 
+// redactJSONValue performs the operation represented by its name.
 func redactJSONValue(value any) any {
 	switch typed := value.(type) {
 	case map[string]any:
@@ -141,6 +147,7 @@ func redactJSONValue(value any) any {
 	}
 }
 
+// sensitiveJSONKey performs the operation represented by its name.
 func sensitiveJSONKey(key string) bool {
 	key = strings.ToLower(strings.NewReplacer("_", "", "-", "").Replace(key))
 	switch key {

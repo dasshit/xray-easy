@@ -36,12 +36,14 @@ type RuntimeUserTelemetry struct {
 	SourceIPs []RuntimeIPObservation
 }
 
+// telemetryCapabilities is an internal type used by the package.
 type telemetryCapabilities struct {
 	trafficCounters bool
 	onlineStatus    bool
 	sourceIP        bool
 }
 
+// clampNonNegative performs the operation represented by its name.
 func clampNonNegative(value int64) int64 {
 	if value < 0 {
 		return 0
@@ -83,6 +85,7 @@ func telemetryCapabilitiesFor(configuration []byte, statsAvailable bool) telemet
 	}
 }
 
+// isJSONStatsObject performs the operation represented by its name.
 func isJSONStatsObject(raw json.RawMessage) bool {
 	if len(raw) == 0 || string(raw) == "null" {
 		return false

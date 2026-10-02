@@ -10,9 +10,13 @@ import (
 	"strings"
 )
 
+// tokenFile is an internal type used by the package.
 type tokenFile interface {
+	// WriteString defines part of the interface contract.
 	WriteString(string) (int, error)
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
@@ -23,6 +27,7 @@ func LoadOrCreateToken(path string) (string, error) {
 	}, os.Remove)
 }
 
+// loadOrCreateTokenWith performs the operation represented by its name.
 func loadOrCreateTokenWith(path string, readRandom func([]byte) (int, error), openFile func(string, int, os.FileMode) (tokenFile, error), removeFile func(string) error) (string, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {

@@ -115,6 +115,7 @@ func (c *AWGClient) RestoreBackup(ctx context.Context, data []byte) error {
 	return err
 }
 
+// fromProtoPeer performs the operation represented by its name.
 func fromProtoPeer(value *controllerv1.AmneziaWGPeer) (domain.AmneziaWGPeer, error) {
 	if value == nil || value.Name == "" || value.PublicKey == "" || value.Ipv4 == "" || value.Ipv6 == "" {
 		return domain.AmneziaWGPeer{}, fmt.Errorf("required peer field is empty")

@@ -19,13 +19,18 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// traceContextKey is an internal type used by the package.
 type traceContextKey string
 
 const (
-	requestIDKey   traceContextKey = "x-request-id"
+	// requestIDKey is an internal package constant.
+	requestIDKey traceContextKey = "x-request-id"
+	// operationIDKey is an internal package constant.
 	operationIDKey traceContextKey = "x-controller-operation-id"
-	attemptKey     traceContextKey = "x-controller-attempt"
-	revisionKey    traceContextKey = "x-controller-state-revision"
+	// attemptKey is an internal package constant.
+	attemptKey traceContextKey = "x-controller-attempt"
+	// revisionKey is an internal package constant.
+	revisionKey traceContextKey = "x-controller-state-revision"
 )
 
 // OperationID returns the Controller operation ID attached by the server interceptor.
@@ -133,6 +138,7 @@ func LoggingStreamInterceptor() grpc.StreamServerInterceptor {
 	}
 }
 
+// controlContextServerStream is an internal type used by the package.
 type controlContextServerStream struct {
 	grpc.ServerStream
 	ctx context.Context
@@ -141,6 +147,7 @@ type controlContextServerStream struct {
 // Context returns the context associated with the value.
 func (s *controlContextServerStream) Context() context.Context { return s.ctx }
 
+// ensureIncomingTrace performs the operation represented by its name.
 func ensureIncomingTrace(ctx context.Context) (context.Context, string, string, int, error) {
 	values, _ := metadata.FromIncomingContext(ctx)
 	readID := func(key string) string {
@@ -197,6 +204,7 @@ func ensureIncomingTrace(ctx context.Context) (context.Context, string, string, 
 	return ctx, requestID, operationID, attempt, nil
 }
 
+// mapError performs the operation represented by its name.
 func mapError(err error) error {
 	if err == nil {
 		return nil

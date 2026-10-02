@@ -21,6 +21,7 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+// maxAWGBackupSize is an internal package constant.
 const maxAWGBackupSize = 16 << 20
 
 // ExportBackup returns a gzip-compressed tar archive of AWG state and private
@@ -52,6 +53,7 @@ func (s *Service) RestoreBackup(_ context.Context, request *awgapi.RestoreBackup
 	return &awgapi.RestoreBackupResponse{Restored: true}, nil
 }
 
+// createAWGBackup creates the requested value.
 func createAWGBackup(dataDir string, manager *Manager) ([]byte, error) {
 	if manager == nil || strings.TrimSpace(dataDir) == "" {
 		return nil, errors.New("AmneziaWG service is not initialized")
@@ -152,6 +154,7 @@ func createAWGBackup(dataDir string, manager *Manager) ([]byte, error) {
 	return compressed.Bytes(), nil
 }
 
+// restoreAWGBackup performs the operation represented by its name.
 func restoreAWGBackup(dataDir string, manager *Manager, archive []byte) error {
 	if manager == nil || strings.TrimSpace(dataDir) == "" {
 		return errors.New("AmneziaWG service is not initialized")
@@ -215,6 +218,7 @@ func restoreAWGBackup(dataDir string, manager *Manager, archive []byte) error {
 	return nil
 }
 
+// extractAWGBackup performs the operation represented by its name.
 func extractAWGBackup(root string, archive []byte) ([]byte, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
@@ -290,6 +294,7 @@ func extractAWGBackup(root string, archive []byte) ([]byte, error) {
 	return state, nil
 }
 
+// readSnapshotState reads the requested value.
 func readSnapshotState(data []byte, opts Options) (persistedState, error) {
 	var state persistedState
 	if err := json.Unmarshal(data, &state); err != nil {
@@ -307,6 +312,7 @@ func readSnapshotState(data []byte, opts Options) (persistedState, error) {
 	return state, nil
 }
 
+// profileMatchesPeer performs the operation represented by its name.
 func profileMatchesPeer(name string, data []byte, peers []Peer) bool {
 	privateKey, err := privateKeyFromProfile(string(data))
 	if err != nil {

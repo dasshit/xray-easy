@@ -1,4 +1,4 @@
-// Command check-go-docs verifies that the handwritten Go API has Godoc comments.
+// Command check-go-docs verifies that handwritten Go production code has Go doc comments.
 package main
 
 import (
@@ -14,14 +14,17 @@ import (
 	"unicode"
 )
 
+// sourceFile is an internal type used by the package.
 type sourceFile struct {
 	path string
 	dir  string
 	file *ast.File
 }
 
+// main starts the program.
 func main() {
-	files, err := collectFiles()
+	fset := token.NewFileSet()
+	files, err := collectFiles(fset)
 	if err != nil {
 		fail(err.Error())
 	}
@@ -29,7 +32,6 @@ func main() {
 	var problems []string
 	packageDirs := make(map[string]bool)
 	packageDocs := make(map[string]bool)
-	fset := token.NewFileSet()
 	for _, source := range files {
 		packageDirs[source.dir] = true
 		if hasPackageDoc(source.file) {
@@ -51,13 +53,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "FAIL Go documentation check: %d problem(s)\n", len(problems))
 		os.Exit(1)
 	}
-	fmt.Printf("PASS Go documentation check: %d handwritten source file(s) have documented Godoc APIs\n", len(files))
+	fmt.Printf("PASS Go documentation check: %d handwritten source file(s) have documented production declarations\n", len(files))
 }
 
-func collectFiles() ([]sourceFile, error) {
-	roots := []string{"internal", "cmd", "awg-service", "xray-runtime"}
+// collectFiles performs the operation represented by its name.
+func collectFiles(fset *token.FileSet) ([]sourceFile, error) {
+	roots := []string{"internal", "cmd", "awg-service", "xray-runtime", "scripts"}
 	var files []sourceFile
-	fset := token.NewFileSet()
 	for _, root := range roots {
 		if _, err := os.Stat(root); err != nil {
 			return nil, fmt.Errorf("walk %s: %w", root, err)
@@ -84,6 +86,7 @@ func collectFiles() ([]sourceFile, error) {
 	return files, nil
 }
 
+// isHandwrittenGoFile performs the operation represented by its name.
 func isHandwrittenGoFile(path string) bool {
 	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") || strings.HasSuffix(path, ".pb.go") || strings.HasSuffix(path, "_grpc.pb.go") {
 		return false
@@ -91,27 +94,33 @@ func isHandwrittenGoFile(path string) bool {
 	return true
 }
 
+// hasPackageDoc performs the operation represented by its name.
 func hasPackageDoc(file *ast.File) bool {
 	if file.Doc == nil {
 		return false
 	}
 	text := strings.TrimSpace(file.Doc.Text())
-	return strings.HasPrefix(text, "Package "+file.Name.Name)
+	if strings.HasPrefix(text, "Package "+file.Name.Name) {
+		return true
+	}
+	// A command package may use the conventional "Command name ..." form.
+	return file.Name.Name == "main" && strings.HasPrefix(text, "Command ")
 }
 
+// checkFile performs the operation represented by its name.
 func checkFile(fset *token.FileSet, source sourceFile) []string {
 	var problems []string
 	for _, declaration := range source.file.Decls {
 		switch declaration := declaration.(type) {
 		case *ast.FuncDecl:
-			if isExported(declaration.Name.Name) && declaration.Doc == nil {
+			if declaration.Doc == nil {
 				problems = append(problems, missing(fset, source.path, declaration.Pos(), "function", declaration.Name.Name))
 			}
 		case *ast.GenDecl:
 			for _, spec := range declaration.Specs {
 				switch spec := spec.(type) {
 				case *ast.TypeSpec:
-					if isExported(spec.Name.Name) && declaration.Doc == nil && spec.Doc == nil {
+					if declaration.Doc == nil && spec.Doc == nil {
 						problems = append(problems, missing(fset, source.path, spec.Pos(), "type", spec.Name.Name))
 					}
 					problems = append(problems, checkType(fset, source.path, spec)...)
@@ -120,7 +129,7 @@ func checkFile(fset *token.FileSet, source sourceFile) []string {
 						continue
 					}
 					for _, name := range spec.Names {
-						if isExported(name.Name) {
+						if name.Name != "_" {
 							kind := declaration.Tok.String()
 							problems = append(problems, missing(fset, source.path, name.Pos(), kind, name.Name))
 						}
@@ -132,11 +141,9 @@ func checkFile(fset *token.FileSet, source sourceFile) []string {
 	return problems
 }
 
+// checkType performs the operation represented by its name.
 func checkType(fset *token.FileSet, path string, typeSpec *ast.TypeSpec) []string {
 	var problems []string
-	if !isExported(typeSpec.Name.Name) {
-		return problems
-	}
 	switch typeValue := typeSpec.Type.(type) {
 	case *ast.StructType:
 		for _, field := range typeValue.Fields.List {
@@ -155,7 +162,7 @@ func checkType(fset *token.FileSet, path string, typeSpec *ast.TypeSpec) []strin
 				continue
 			}
 			for _, name := range method.Names {
-				if isExported(name.Name) {
+				if name.Name != "_" {
 					problems = append(problems, missing(fset, path, name.Pos(), "interface method", name.Name))
 				}
 			}
@@ -164,15 +171,18 @@ func checkType(fset *token.FileSet, path string, typeSpec *ast.TypeSpec) []strin
 	return problems
 }
 
+// isExported performs the operation represented by its name.
 func isExported(name string) bool {
 	runes := []rune(name)
 	return len(runes) != 0 && unicode.IsUpper(runes[0])
 }
 
+// missing performs the operation represented by its name.
 func missing(fset *token.FileSet, path string, position token.Pos, kind, name string) string {
-	return fmt.Sprintf("%s:%d: exported %s %s is missing a Godoc comment", path, fset.Position(position).Line, kind, name)
+	return fmt.Sprintf("%s:%d: %s %s is missing a Go doc comment", path, fset.Position(position).Line, kind, name)
 }
 
+// fail performs the operation represented by its name.
 func fail(message string) {
 	fmt.Fprintln(os.Stderr, message)
 	os.Exit(1)

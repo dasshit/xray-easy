@@ -60,6 +60,7 @@ func LoggingStreamInterceptor(service string) grpc.StreamServerInterceptor {
 	}
 }
 
+// controllerContextServerStream is an internal type used by the package.
 type controllerContextServerStream struct {
 	grpc.ServerStream
 	ctx context.Context

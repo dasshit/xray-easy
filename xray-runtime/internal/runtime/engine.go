@@ -33,6 +33,7 @@ import (
 	_ "xray-easy/xray-runtime/internal/xrayregistration"
 )
 
+// capturedXrayLog is an internal type used by the package.
 type capturedXrayLog struct {
 	write func(level, component, message string)
 	allow func(level string) bool
@@ -64,16 +65,23 @@ func (h capturedXrayLog) Handle(message corelog.Message) {
 }
 
 var (
-	ipv4EndpointPattern  = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::[0-9]{1,5})?\b`)
+	// ipv4EndpointPattern is an internal package variable.
+	ipv4EndpointPattern = regexp.MustCompile(`\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?::[0-9]{1,5})?\b`)
+	// bracketedIPv6Pattern is an internal package variable.
 	bracketedIPv6Pattern = regexp.MustCompile(`\[[0-9a-fA-F:]+\](?::[0-9]{1,5})?`)
+	// canonicalUUIDPattern is an internal package variable.
 	canonicalUUIDPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
-	runtimeExecutable    = os.Executable
+	// runtimeExecutable is an internal package variable.
+	runtimeExecutable = os.Executable
 )
 
+// isolatedValidationTimeout is an internal package constant.
 const isolatedValidationTimeout = 20 * time.Second
 
+// maxTelemetrySourceIPs is an internal package constant.
 const maxTelemetrySourceIPs = 32
 
+// redactXrayLog performs the operation represented by its name.
 func redactXrayLog(message string) string {
 	message = ipv4EndpointPattern.ReplaceAllString(message, "[REDACTED-IP]")
 	message = bracketedIPv6Pattern.ReplaceAllString(message, "[REDACTED-IP]")
@@ -147,6 +155,7 @@ func ValidateConfigIsolatedContext(parent context.Context, configuration []byte)
 	return nil
 }
 
+// parseConfig parses the supplied value.
 func parseConfig(configuration []byte) (*core.Config, error) {
 	if len(configuration) == 0 {
 		return nil, errors.New("Xray configuration is empty")
@@ -314,6 +323,7 @@ func (e *Engine) AddUserWithMethod(ctx context.Context, protocolType xrayruntime
 	return false, nil
 }
 
+// sameAccount performs the operation represented by its name.
 func sameAccount(current, desired protocol.Account) bool {
 	if current == nil || desired == nil || !current.Equals(desired) {
 		return false
@@ -358,6 +368,7 @@ func (e *Engine) ListUsers(ctx context.Context, tag string) ([]string, error) {
 	return emails, nil
 }
 
+// userManager performs the operation represented by its name.
 func (e *Engine) userManager(ctx context.Context, tag string) (proxy.UserManager, error) {
 	if e == nil || e.instance == nil {
 		return nil, errors.New("Xray instance is not initialized")
@@ -381,10 +392,12 @@ func (e *Engine) userManager(ctx context.Context, tag string) (proxy.UserManager
 	return userManager, nil
 }
 
+// accountFor performs the operation represented by its name.
 func accountFor(protocolType xrayruntimev1.Protocol, credential, flow string) (protocol.Account, error) {
 	return accountForWithMethod(protocolType, credential, flow, "")
 }
 
+// accountForWithMethod performs the operation represented by its name.
 func accountForWithMethod(protocolType xrayruntimev1.Protocol, credential, flow, method string) (protocol.Account, error) {
 	var account protocol.Account
 	var err error
@@ -436,6 +449,7 @@ func accountForWithMethod(protocolType xrayruntimev1.Protocol, credential, flow,
 	return account, nil
 }
 
+// shadowsocksCipherType performs the operation represented by its name.
 func shadowsocksCipherType(method string) (shadowsocks.CipherType, bool) {
 	switch strings.ToLower(strings.TrimSpace(method)) {
 	case "aes-128-gcm":

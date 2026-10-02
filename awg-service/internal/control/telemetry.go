@@ -101,6 +101,7 @@ func ParsePeerTelemetry(snapshot string) ([]PeerTelemetry, error) {
 	return result, nil
 }
 
+// endpointIP performs the operation represented by its name.
 func endpointIP(endpoint string) string {
 	host, _, err := net.SplitHostPort(endpoint)
 	if err != nil {

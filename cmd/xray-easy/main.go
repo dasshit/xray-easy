@@ -42,8 +42,10 @@ import (
 	"xray-easy/internal/xray"
 )
 
+// usernamePattern is an internal package variable.
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
 
+// server is an internal type used by the package.
 type server struct {
 	store            *store.Store
 	masterKey        []byte
@@ -71,215 +73,372 @@ type server struct {
 	pendingTOTP      map[string]pendingTOTP
 }
 
+// xrayRuntimeAPI is an internal type used by the package.
 type xrayRuntimeAPI interface {
+	// Validate defines part of the interface contract.
 	Validate(context.Context, string, string) error
+	// Apply defines part of the interface contract.
 	Apply(context.Context, string, string) error
+	// ProbeTarget defines part of the interface contract.
 	ProbeTarget(context.Context, string, string) error
+	// Status defines part of the interface contract.
 	Status(context.Context) (domain.XrayRuntimeStatus, error)
+	// Logs defines part of the interface contract.
 	Logs(context.Context) ([]string, error)
 }
 
+// xrayLogLevelAPI is an internal type used by the package.
 type xrayLogLevelAPI interface {
+	// SetLogLevel defines part of the interface contract.
 	SetLogLevel(context.Context, string) error
 }
 
+// runtimeControl is an internal type used by the package.
 type runtimeControl interface {
 	xrayRuntimeAPI
+	// Health defines part of the interface contract.
 	Health(context.Context) error
+	// ProbeIPv6 defines part of the interface contract.
 	ProbeIPv6(context.Context) error
+	// ReplaceInbound defines part of the interface contract.
 	ReplaceInbound(context.Context, string, string, string, string) error
 }
 
+// xrayHandlerAPI is an internal type used by the package.
 type xrayHandlerAPI interface {
+	// AddUser defines part of the interface contract.
 	AddUser(context.Context, string, string, string) error
+	// RemoveUser defines part of the interface contract.
 	RemoveUser(context.Context, string) error
+	// Users defines part of the interface contract.
 	Users(context.Context) ([]string, error)
 }
 
+// hysteriaHandlerAPI is an internal type used by the package.
 type hysteriaHandlerAPI interface {
+	// AddHysteriaUser defines part of the interface contract.
 	AddHysteriaUser(context.Context, string, string) error
+	// RemoveHysteriaUser defines part of the interface contract.
 	RemoveHysteriaUser(context.Context, string) error
+	// UsersInInbound defines part of the interface contract.
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
+// vmessHandlerAPI is an internal type used by the package.
 type vmessHandlerAPI interface {
+	// AddVMessUser defines part of the interface contract.
 	AddVMessUser(context.Context, string, string) error
+	// RemoveVMessUser defines part of the interface contract.
 	RemoveVMessUser(context.Context, string) error
+	// UsersInInbound defines part of the interface contract.
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
+// shadowsocksHandlerAPI is an internal type used by the package.
 type shadowsocksHandlerAPI interface {
+	// AddShadowsocksUser defines part of the interface contract.
 	AddShadowsocksUser(context.Context, string, string, string) error
+	// RemoveShadowsocksUser defines part of the interface contract.
 	RemoveShadowsocksUser(context.Context, string) error
+	// UsersInInbound defines part of the interface contract.
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
+// trojanHandlerAPI is an internal type used by the package.
 type trojanHandlerAPI interface {
+	// AddTrojanUser defines part of the interface contract.
 	AddTrojanUser(context.Context, string, string) error
+	// RemoveTrojanUser defines part of the interface contract.
 	RemoveTrojanUser(context.Context, string) error
+	// UsersInInbound defines part of the interface contract.
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
+// inboundReplacer is an internal type used by the package.
 type inboundReplacer interface {
+	// ReplaceInbound defines part of the interface contract.
 	ReplaceInbound(context.Context, string, string, string, string) error
 }
 
+// initializeRequest is an internal type used by the package.
 type initializeRequest struct {
-	Username      string `json:"username"`
-	Password      string `json:"password"`
-	PublicHost    string `json:"public_host"`
-	PublicPort    int    `json:"public_port"`
+	// Username stores the value associated with the enclosing object.
+	Username string `json:"username"`
+	// Password stores the value associated with the enclosing object.
+	Password string `json:"password"`
+	// PublicHost stores the value associated with the enclosing object.
+	PublicHost string `json:"public_host"`
+	// PublicPort stores the value associated with the enclosing object.
+	PublicPort int `json:"public_port"`
+	// RealityTarget stores the value associated with the enclosing object.
 	RealityTarget string `json:"reality_target"`
-	RealitySNI    string `json:"reality_sni"`
+	// RealitySNI stores the value associated with the enclosing object.
+	RealitySNI string `json:"reality_sni"`
 }
 
+// loginRequest is an internal type used by the package.
 type loginRequest struct {
-	Username     string `json:"username"`
-	Password     string `json:"password"`
-	TOTPCode     string `json:"totp_code"`
+	// Username stores the value associated with the enclosing object.
+	Username string `json:"username"`
+	// Password stores the value associated with the enclosing object.
+	Password string `json:"password"`
+	// TOTPCode stores the value associated with the enclosing object.
+	TOTPCode string `json:"totp_code"`
+	// RecoveryCode stores the value associated with the enclosing object.
 	RecoveryCode string `json:"recovery_code"`
 }
 
+// totpSetupRequest is an internal type used by the package.
 type totpSetupRequest struct {
+	// SetupToken stores the value associated with the enclosing object.
 	SetupToken string `json:"setup_token"`
-	Code       string `json:"code"`
+	// Code stores the value associated with the enclosing object.
+	Code string `json:"code"`
 }
 
+// totpDisableRequest is an internal type used by the package.
 type totpDisableRequest struct {
+	// Password stores the value associated with the enclosing object.
 	Password string `json:"password"`
-	Code     string `json:"code"`
+	// Code stores the value associated with the enclosing object.
+	Code string `json:"code"`
 }
 
+// passwordChangeRequest is an internal type used by the package.
 type passwordChangeRequest struct {
+	// CurrentPassword stores the value associated with the enclosing object.
 	CurrentPassword string `json:"current_password"`
-	NewPassword     string `json:"new_password"`
+	// NewPassword stores the value associated with the enclosing object.
+	NewPassword string `json:"new_password"`
 }
 
+// pendingTOTP is an internal type used by the package.
 type pendingTOTP struct {
-	Token     string
-	Secret    string
-	Codes     []string
+	// Token stores the value associated with the enclosing object.
+	Token string
+	// Secret stores the value associated with the enclosing object.
+	Secret string
+	// Codes stores the value associated with the enclosing object.
+	Codes []string
+	// ExpiresAt stores the value associated with the enclosing object.
 	ExpiresAt time.Time
 }
 
+// clientRequest is an internal type used by the package.
 type clientRequest struct {
-	Protocol    string `json:"protocol"`
-	Name        string `json:"name"`
+	// Protocol stores the value associated with the enclosing object.
+	Protocol string `json:"protocol"`
+	// Name stores the value associated with the enclosing object.
+	Name string `json:"name"`
+	// Fingerprint stores the value associated with the enclosing object.
 	Fingerprint string `json:"fingerprint"`
-	Auth        string `json:"auth"`
+	// Auth stores the value associated with the enclosing object.
+	Auth string `json:"auth"`
 }
 
+// hysteriaSettingsRequest is an internal type used by the package.
 type hysteriaSettingsRequest struct {
-	Enabled          bool   `json:"enabled"`
-	Host             string `json:"host"`
-	TLSMode          string `json:"tls_mode"`
-	TLSCertIP        string `json:"tls_cert_ip"`
-	TLSServerName    string `json:"tls_server_name"`
-	CertificateID    string `json:"certificate_id"`
-	UDPIdleTimeout   int    `json:"udp_idle_timeout"`
-	MasqueradeType   string `json:"masquerade_type"`
+	// Enabled stores the value associated with the enclosing object.
+	Enabled bool `json:"enabled"`
+	// Host stores the value associated with the enclosing object.
+	Host string `json:"host"`
+	// TLSMode stores the value associated with the enclosing object.
+	TLSMode string `json:"tls_mode"`
+	// TLSCertIP stores the value associated with the enclosing object.
+	TLSCertIP string `json:"tls_cert_ip"`
+	// TLSServerName stores the value associated with the enclosing object.
+	TLSServerName string `json:"tls_server_name"`
+	// CertificateID stores the value associated with the enclosing object.
+	CertificateID string `json:"certificate_id"`
+	// UDPIdleTimeout stores the value associated with the enclosing object.
+	UDPIdleTimeout int `json:"udp_idle_timeout"`
+	// MasqueradeType stores the value associated with the enclosing object.
+	MasqueradeType string `json:"masquerade_type"`
+	// MasqueradeString stores the value associated with the enclosing object.
 	MasqueradeString string `json:"masquerade_string"`
 }
 
+// hysteriaApplyRequest is an internal type used by the package.
 type hysteriaApplyRequest struct {
-	ChangeID     string `json:"change_id"`
+	// ChangeID stores the value associated with the enclosing object.
+	ChangeID string `json:"change_id"`
+	// Confirmation stores the value associated with the enclosing object.
 	Confirmation string `json:"confirmation"`
 }
 
+// pendingHysteriaChange is an internal type used by the package.
 type pendingHysteriaChange struct {
-	ID                   string
-	AdminID              string
-	Base                 domain.HysteriaSettings
-	Candidate            domain.HysteriaSettings
+	// ID stores the value associated with the enclosing object.
+	ID string
+	// AdminID stores the value associated with the enclosing object.
+	AdminID string
+	// Base stores the value associated with the enclosing object.
+	Base domain.HysteriaSettings
+	// Candidate stores the value associated with the enclosing object.
+	Candidate domain.HysteriaSettings
+	// ExpectedConfirmation stores the value associated with the enclosing object.
 	ExpectedConfirmation string
-	Diff                 []settingsDiff
-	Consequences         []string
-	ExpiresAt            time.Time
-	Applying             bool
+	// Diff stores the value associated with the enclosing object.
+	Diff []settingsDiff
+	// Consequences stores the value associated with the enclosing object.
+	Consequences []string
+	// ExpiresAt stores the value associated with the enclosing object.
+	ExpiresAt time.Time
+	// Applying stores the value associated with the enclosing object.
+	Applying bool
 }
 
+// hysteriaSettingsResponse is an internal type used by the package.
 type hysteriaSettingsResponse struct {
-	Enabled          bool                      `json:"enabled"`
-	State            string                    `json:"state"`
-	Host             string                    `json:"host"`
-	UDPPort          int                       `json:"udp_port"`
-	TLSMode          string                    `json:"tls_mode"`
-	TLSServerName    string                    `json:"tls_server_name"`
-	TLSCertIP        string                    `json:"tls_cert_ip,omitempty"`
-	CertificateID    string                    `json:"certificate_id,omitempty"`
-	Certificate      *hysteria.CertificateInfo `json:"certificate,omitempty"`
-	CertificateError string                    `json:"certificate_error,omitempty"`
-	RuntimeError     string                    `json:"runtime_error,omitempty"`
-	UDPIdleTimeout   int                       `json:"udp_idle_timeout"`
-	MasqueradeType   string                    `json:"masquerade_type"`
-	MasqueradeString string                    `json:"masquerade_string,omitempty"`
-	InsecureURI      bool                      `json:"insecure_uri"`
+	// Enabled stores the value associated with the enclosing object.
+	Enabled bool `json:"enabled"`
+	// State stores the value associated with the enclosing object.
+	State string `json:"state"`
+	// Host stores the value associated with the enclosing object.
+	Host string `json:"host"`
+	// UDPPort stores the value associated with the enclosing object.
+	UDPPort int `json:"udp_port"`
+	// TLSMode stores the value associated with the enclosing object.
+	TLSMode string `json:"tls_mode"`
+	// TLSServerName stores the value associated with the enclosing object.
+	TLSServerName string `json:"tls_server_name"`
+	// TLSCertIP stores the value associated with the enclosing object.
+	TLSCertIP string `json:"tls_cert_ip,omitempty"`
+	// CertificateID stores the value associated with the enclosing object.
+	CertificateID string `json:"certificate_id,omitempty"`
+	// Certificate stores the value associated with the enclosing object.
+	Certificate *hysteria.CertificateInfo `json:"certificate,omitempty"`
+	// CertificateError stores the value associated with the enclosing object.
+	CertificateError string `json:"certificate_error,omitempty"`
+	// RuntimeError stores the value associated with the enclosing object.
+	RuntimeError string `json:"runtime_error,omitempty"`
+	// UDPIdleTimeout stores the value associated with the enclosing object.
+	UDPIdleTimeout int `json:"udp_idle_timeout"`
+	// MasqueradeType stores the value associated with the enclosing object.
+	MasqueradeType string `json:"masquerade_type"`
+	// MasqueradeString stores the value associated with the enclosing object.
+	MasqueradeString string `json:"masquerade_string,omitempty"`
+	// InsecureURI stores the value associated with the enclosing object.
+	InsecureURI bool `json:"insecure_uri"`
 }
 
+// settingsPatchRequest is an internal type used by the package.
 type settingsPatchRequest struct {
-	PublicHost        *string `json:"public_host"`
-	RealityTarget     *string `json:"reality_target"`
-	RealitySNI        *string `json:"reality_sni"`
+	// PublicHost stores the value associated with the enclosing object.
+	PublicHost *string `json:"public_host"`
+	// RealityTarget stores the value associated with the enclosing object.
+	RealityTarget *string `json:"reality_target"`
+	// RealitySNI stores the value associated with the enclosing object.
+	RealitySNI *string `json:"reality_sni"`
+	// ClientFingerprint stores the value associated with the enclosing object.
 	ClientFingerprint *string `json:"client_fingerprint"`
-	LogLevel          *string `json:"log_level"`
-	RotatePrivateKey  bool    `json:"rotate_private_key"`
+	// LogLevel stores the value associated with the enclosing object.
+	LogLevel *string `json:"log_level"`
+	// RotatePrivateKey stores the value associated with the enclosing object.
+	RotatePrivateKey bool `json:"rotate_private_key"`
 }
 
+// settingsApplyRequest is an internal type used by the package.
 type settingsApplyRequest struct {
-	ChangeID     string `json:"change_id"`
+	// ChangeID stores the value associated with the enclosing object.
+	ChangeID string `json:"change_id"`
+	// Confirmation stores the value associated with the enclosing object.
 	Confirmation string `json:"confirmation"`
 }
 
+// settingsDiff is an internal type used by the package.
 type settingsDiff struct {
+	// Field stores the value associated with the enclosing object.
 	Field string `json:"field"`
-	From  string `json:"from"`
-	To    string `json:"to"`
+	// From stores the value associated with the enclosing object.
+	From string `json:"from"`
+	// To stores the value associated with the enclosing object.
+	To string `json:"to"`
 }
 
+// pendingSettingsChange is an internal type used by the package.
 type pendingSettingsChange struct {
-	ID                   string
-	AdminID              string
-	BaseFingerprint      string
-	ClientsFingerprint   string
-	Settings             domain.Settings
+	// ID stores the value associated with the enclosing object.
+	ID string
+	// AdminID stores the value associated with the enclosing object.
+	AdminID string
+	// BaseFingerprint stores the value associated with the enclosing object.
+	BaseFingerprint string
+	// ClientsFingerprint stores the value associated with the enclosing object.
+	ClientsFingerprint string
+	// Settings stores the value associated with the enclosing object.
+	Settings domain.Settings
+	// ExpectedConfirmation stores the value associated with the enclosing object.
 	ExpectedConfirmation string
-	RequiresXrayApply    bool
-	Diff                 []settingsDiff
-	Consequences         []string
-	RevokedClients       int
-	ExpiresAt            time.Time
-	Applying             bool
+	// RequiresXrayApply stores the value associated with the enclosing object.
+	RequiresXrayApply bool
+	// Diff stores the value associated with the enclosing object.
+	Diff []settingsDiff
+	// Consequences stores the value associated with the enclosing object.
+	Consequences []string
+	// RevokedClients stores the value associated with the enclosing object.
+	RevokedClients int
+	// ExpiresAt stores the value associated with the enclosing object.
+	ExpiresAt time.Time
+	// Applying stores the value associated with the enclosing object.
+	Applying bool
 }
 
+// clientResponse is an internal type used by the package.
 type clientResponse struct {
-	Protocol          domain.ClientProtocol `json:"protocol"`
-	Protocols         []string              `json:"protocols"`
-	VLESS             *clientAccessResponse `json:"vless,omitempty"`
-	Hysteria2         *clientAccessResponse `json:"hysteria2,omitempty"`
-	VMess             *clientAccessResponse `json:"vmess,omitempty"`
-	Shadowsocks       *clientAccessResponse `json:"shadowsocks,omitempty"`
-	Trojan            *clientAccessResponse `json:"trojan,omitempty"`
-	ID                string                `json:"id"`
-	Name              string                `json:"name"`
-	ClientFingerprint string                `json:"fingerprint,omitempty"`
-	Enabled           bool                  `json:"enabled"`
-	Revoked           bool                  `json:"revoked"`
-	CreatedAt         time.Time             `json:"created_at"`
-	UpdatedAt         time.Time             `json:"updated_at"`
-	Online            bool                  `json:"online"`
-	LastSeen          *time.Time            `json:"last_seen,omitempty"`
-	UploadBytes       int64                 `json:"upload_bytes"`
-	DownloadBytes     int64                 `json:"download_bytes"`
-	SourceIPs         []string              `json:"source_ips,omitempty"`
-	UploadRate        float64               `json:"upload_bytes_per_second"`
-	DownloadRate      float64               `json:"download_bytes_per_second"`
+	// Protocol stores the value associated with the enclosing object.
+	Protocol domain.ClientProtocol `json:"protocol"`
+	// Protocols stores the value associated with the enclosing object.
+	Protocols []string `json:"protocols"`
+	// VLESS stores the value associated with the enclosing object.
+	VLESS *clientAccessResponse `json:"vless,omitempty"`
+	// Hysteria2 stores the value associated with the enclosing object.
+	Hysteria2 *clientAccessResponse `json:"hysteria2,omitempty"`
+	// VMess stores the value associated with the enclosing object.
+	VMess *clientAccessResponse `json:"vmess,omitempty"`
+	// Shadowsocks stores the value associated with the enclosing object.
+	Shadowsocks *clientAccessResponse `json:"shadowsocks,omitempty"`
+	// Trojan stores the value associated with the enclosing object.
+	Trojan *clientAccessResponse `json:"trojan,omitempty"`
+	// ID stores the value associated with the enclosing object.
+	ID string `json:"id"`
+	// Name stores the value associated with the enclosing object.
+	Name string `json:"name"`
+	// ClientFingerprint stores the value associated with the enclosing object.
+	ClientFingerprint string `json:"fingerprint,omitempty"`
+	// Enabled stores the value associated with the enclosing object.
+	Enabled bool `json:"enabled"`
+	// Revoked stores the value associated with the enclosing object.
+	Revoked bool `json:"revoked"`
+	// CreatedAt stores the value associated with the enclosing object.
+	CreatedAt time.Time `json:"created_at"`
+	// UpdatedAt stores the value associated with the enclosing object.
+	UpdatedAt time.Time `json:"updated_at"`
+	// Online stores the value associated with the enclosing object.
+	Online bool `json:"online"`
+	// LastSeen stores the value associated with the enclosing object.
+	LastSeen *time.Time `json:"last_seen,omitempty"`
+	// UploadBytes stores the value associated with the enclosing object.
+	UploadBytes int64 `json:"upload_bytes"`
+	// DownloadBytes stores the value associated with the enclosing object.
+	DownloadBytes int64 `json:"download_bytes"`
+	// SourceIPs stores the value associated with the enclosing object.
+	SourceIPs []string `json:"source_ips,omitempty"`
+	// UploadRate stores the value associated with the enclosing object.
+	UploadRate float64 `json:"upload_bytes_per_second"`
+	// DownloadRate stores the value associated with the enclosing object.
+	DownloadRate float64 `json:"download_bytes_per_second"`
 }
 
+// clientAccessResponse is an internal type used by the package.
 type clientAccessResponse struct {
+	// Enabled stores the value associated with the enclosing object.
 	Enabled bool `json:"enabled"`
+	// Revoked stores the value associated with the enclosing object.
 	Revoked bool `json:"revoked"`
 }
 
+// main starts the program.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if len(os.Args) > 1 {
@@ -295,6 +454,7 @@ func main() {
 	}
 }
 
+// runControlPlane runs the requested operation.
 func runControlPlane(ctx context.Context, initialize func(context.Context) (*server, func(), error), listen func(*http.Server) error) error {
 	s, cleanup, err := initialize(ctx)
 	if err != nil {
@@ -318,6 +478,7 @@ func runControlPlane(ctx context.Context, initialize func(context.Context) (*ser
 	return nil
 }
 
+// initializeControlPlane performs the operation represented by its name.
 func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 	dataDir := envOr("XRAY_EASY_DATA_DIR", "/data")
 	if err := os.MkdirAll(dataDir, 0o700); err != nil {
@@ -407,6 +568,7 @@ func initializeControlPlane(ctx context.Context) (*server, func(), error) {
 	return s, cleanup, nil
 }
 
+// dialRuntimeControl performs the operation represented by its name.
 func dialRuntimeControl() (runtimeControl, func() error, error) {
 	if address := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR")); address != "" {
 		client, err := controller.Dial(address, envOr("XRAY_CONTROLLER_TOKEN_FILE", "/run/controller-auth/controller.token"))
@@ -418,6 +580,7 @@ func dialRuntimeControl() (runtimeControl, func() error, error) {
 	return nil, nil, errors.New("XRAY_CONTROLLER_ADDR must be configured; direct runtime connections from the backend are disabled")
 }
 
+// newMux performs the operation represented by its name.
 func newMux(s *server) *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/healthz", s.healthz)
@@ -452,6 +615,7 @@ func newMux(s *server) *http.ServeMux {
 	return mux
 }
 
+// backupManager performs the operation represented by its name.
 func (s *server) backupManager() *backup.Manager {
 	manager := backup.NewManager(s.store, s.dataDir, s.configDir, s.masterKey)
 	if awgBackup, ok := s.awg.(backup.AWGBackup); ok {
@@ -460,6 +624,7 @@ func (s *server) backupManager() *backup.Manager {
 	return manager
 }
 
+// loadMasterKey performs the operation represented by its name.
 func loadMasterKey() ([]byte, error) {
 	encoded := strings.TrimSpace(os.Getenv("XRAY_EASY_MASTER_KEY"))
 	if encoded == "" {
@@ -472,6 +637,7 @@ func loadMasterKey() ([]byte, error) {
 	return key, nil
 }
 
+// runCLI runs the requested operation.
 func runCLI(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return cliUsageError()
@@ -492,6 +658,7 @@ func runCLI(ctx context.Context, args []string) error {
 	}
 }
 
+// runAdminCLI runs the requested operation.
 func runAdminCLI(ctx context.Context, dataDir string, args []string) error {
 	if len(args) != 1 {
 		return cliUsageError()
@@ -571,8 +738,10 @@ func runAdminCLI(ctx context.Context, dataDir string, args []string) error {
 	}
 }
 
+// readCLIPassword is an internal package variable.
 var readCLIPassword = readPasswordLineNoEcho
 
+// readNewPassword reads the requested value.
 func readNewPassword() ([]byte, error) {
 	fd := int(os.Stdin.Fd())
 	fmt.Fprint(os.Stderr, "New administrator password (at least 12 characters): ")
@@ -600,6 +769,7 @@ func readNewPassword() ([]byte, error) {
 	return password, nil
 }
 
+// runBackupCLI runs the requested operation.
 func runBackupCLI(ctx context.Context, dataDir, configDir string, args []string) error {
 	if len(args) != 1 || args[0] != "create" && args[0] != "list" {
 		return cliUsageError()
@@ -645,6 +815,7 @@ func runBackupCLI(ctx context.Context, dataDir, configDir string, args []string)
 	return nil
 }
 
+// runRestoreCLI runs the requested operation.
 func runRestoreCLI(ctx context.Context, dataDir, configDir string, args []string) error {
 	awgClient, err := dialConfiguredAWGBackup()
 	if err != nil {
@@ -656,10 +827,12 @@ func runRestoreCLI(ctx context.Context, dataDir, configDir string, args []string
 	return runRestoreCLIWithApplierAndAWG(ctx, dataDir, configDir, args, applyRestoredState, awgClient)
 }
 
+// runRestoreCLIWithApplier runs the requested operation.
 func runRestoreCLIWithApplier(ctx context.Context, dataDir, configDir string, args []string, applyState func(context.Context, *store.Store, []byte, string, int) error) error {
 	return runRestoreCLIWithApplierAndAWG(ctx, dataDir, configDir, args, applyState, nil)
 }
 
+// runRestoreCLIWithApplierAndAWG runs the requested operation.
 func runRestoreCLIWithApplierAndAWG(ctx context.Context, dataDir, configDir string, args []string, applyState func(context.Context, *store.Store, []byte, string, int) error, awgBackup backup.AWGBackup) error {
 	if len(args) != 2 || args[1] != "RESTORE" {
 		return errors.New("usage: xray-easy restore <backup-name> RESTORE")
@@ -718,11 +891,14 @@ func runRestoreCLIWithApplierAndAWG(ctx context.Context, dataDir, configDir stri
 	return nil
 }
 
+// awgBackupGateway is an internal type used by the package.
 type awgBackupGateway interface {
 	backup.AWGBackup
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// dialConfiguredAWGBackup performs the operation represented by its name.
 func dialConfiguredAWGBackup() (awgBackupGateway, error) {
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) == "" {
 		return nil, nil
@@ -737,6 +913,7 @@ func dialConfiguredAWGBackup() (awgBackupGateway, error) {
 	return nil, errors.New("XRAY_CONTROLLER_ADDR must be configured for AmneziaWG backup operations")
 }
 
+// verifyBackupMasterKey performs the operation represented by its name.
 func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
 	settings, err := store.ReadSettingsFromDatabase(info.StatePath)
 	if err != nil {
@@ -750,6 +927,7 @@ func verifyBackupMasterKey(info backup.Info, masterKey []byte) error {
 	return nil
 }
 
+// applyRestoredState performs the operation represented by its name.
 func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int) error {
 	runtime, closeRuntime, err := dialRuntimeControl()
 	if err != nil {
@@ -759,6 +937,7 @@ func applyRestoredState(ctx context.Context, db *store.Store, masterKey []byte, 
 	return applyRestoredStateWithRuntime(ctx, db, masterKey, configDir, publicPort, runtime)
 }
 
+// applyRestoredStateWithRuntime performs the operation represented by its name.
 func applyRestoredStateWithRuntime(ctx context.Context, db *store.Store, masterKey []byte, configDir string, publicPort int, runtime xrayRuntimeAPI) error {
 	settings, err := db.GetSettings(ctx)
 	if err != nil {
@@ -835,10 +1014,12 @@ func applyRestoredStateWithRuntime(ctx context.Context, db *store.Store, masterK
 	return nil
 }
 
+// cliUsageError performs the operation represented by its name.
 func cliUsageError() error {
 	return errors.New("usage: xray-easy doctor [bundle] | admin <logout-all|reset-password|reset-totp|recovery-codes> | backup <create|list> | restore <backup-name> RESTORE")
 }
 
+// configuredPublicPort performs the operation represented by its name.
 func configuredPublicPort() (int, error) {
 	value := envOr("XRAY_PUBLIC_PORT", "443")
 	port, err := strconv.Atoi(value)
@@ -848,6 +1029,7 @@ func configuredPublicPort() (int, error) {
 	return port, nil
 }
 
+// configuredVMessPort performs the operation represented by its name.
 func configuredVMessPort() (int, error) {
 	value := envOr("XRAY_VMESS_PORT", "9443")
 	port, err := strconv.Atoi(value)
@@ -871,6 +1053,7 @@ func configuredVMessPort() (int, error) {
 	return port, nil
 }
 
+// configuredShadowsocksPort performs the operation represented by its name.
 func configuredShadowsocksPort() (int, error) {
 	value := envOr("XRAY_SHADOWSOCKS_PORT", "8388")
 	port, err := strconv.Atoi(value)
@@ -901,6 +1084,7 @@ func configuredShadowsocksPort() (int, error) {
 	return port, nil
 }
 
+// configuredTrojanPort performs the operation represented by its name.
 func configuredTrojanPort() (int, error) {
 	value := envOr("XRAY_TROJAN_PORT", "10443")
 	port, err := strconv.Atoi(value)
@@ -936,6 +1120,7 @@ func configuredTrojanPort() (int, error) {
 	return port, nil
 }
 
+// healthz performs the operation represented by its name.
 func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.Ping(r.Context()); err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "error": "database unavailable"})
@@ -944,6 +1129,7 @@ func (s *server) healthz(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "master_key_loaded": len(s.masterKey) >= 32})
 }
 
+// setupStatus updates the requested value.
 func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
 	status, err := s.store.SetupStatus(r.Context())
 	if err != nil {
@@ -959,6 +1145,7 @@ func (s *server) setupStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// initialize performs the operation represented by its name.
 func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1048,6 +1235,7 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]any{"id": admin.ID, "username": admin.Username})
 }
 
+// login performs the operation represented by its name.
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1076,6 +1264,7 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	s.issueSession(w, r, admin)
 }
 
+// loginTOTP performs the operation represented by its name.
 func (s *server) loginTOTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1098,6 +1287,7 @@ func (s *server) loginTOTP(w http.ResponseWriter, r *http.Request) {
 	s.issueSession(w, r, admin)
 }
 
+// loginRecovery performs the operation represented by its name.
 func (s *server) loginRecovery(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1125,6 +1315,7 @@ func (s *server) loginRecovery(w http.ResponseWriter, r *http.Request) {
 	s.issueSession(w, r, admin)
 }
 
+// passwordAdmin performs the operation represented by its name.
 func (s *server) passwordAdmin(ctx context.Context, username, password string) (store.Admin, error) {
 	admin, err := s.store.FindAdmin(ctx, username)
 	if err != nil || !auth.VerifyPassword(password, admin.PasswordHash) {
@@ -1133,6 +1324,7 @@ func (s *server) passwordAdmin(ctx context.Context, username, password string) (
 	return admin, nil
 }
 
+// verifyTOTP performs the operation represented by its name.
 func (s *server) verifyTOTP(admin store.Admin, code string) error {
 	if !admin.TOTPEnabled || admin.TOTPSecretEnc == "" {
 		return errors.New("TOTP is not enabled")
@@ -1144,6 +1336,7 @@ func (s *server) verifyTOTP(admin store.Admin, code string) error {
 	return nil
 }
 
+// issueSession performs the operation represented by its name.
 func (s *server) issueSession(w http.ResponseWriter, r *http.Request, admin store.Admin) {
 	const sessionTTL = 3 * time.Hour
 	token, err := s.store.CreateSession(r.Context(), admin.ID, sessionTTL)
@@ -1155,6 +1348,7 @@ func (s *server) issueSession(w http.ResponseWriter, r *http.Request, admin stor
 	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username, "totp_enabled": admin.TOTPEnabled, "expires_in": int(sessionTTL / time.Second)})
 }
 
+// logout performs the operation represented by its name.
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1167,6 +1361,7 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
+// logoutAll performs the operation represented by its name.
 func (s *server) logoutAll(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1186,6 +1381,7 @@ func (s *server) logoutAll(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
+// changePassword performs the operation represented by its name.
 func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1219,6 +1415,7 @@ func (s *server) changePassword(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
+// me performs the operation represented by its name.
 func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -1229,6 +1426,7 @@ func (s *server) me(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"username": admin.Username, "totp_enabled": admin.TOTPEnabled, "recovery_codes_remaining": count})
 }
 
+// status performs the operation represented by its name.
 func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.authenticated(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
@@ -1254,10 +1452,12 @@ func (s *server) status(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// xrayVersionVerified performs the operation represented by its name.
 func xrayVersionVerified(runtimeVersion, configuredVersion string) bool {
 	return safeRuntimeXrayVersion(runtimeVersion) == xray.VerifiedCoreVersion && safeRuntimeXrayVersion(configuredVersion) == xray.VerifiedCoreVersion
 }
 
+// logs performs the operation represented by its name.
 func (s *server) logs(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.authenticated(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
@@ -1304,6 +1504,7 @@ func (s *server) logs(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"component": component, "entries": entries, "next_cursor": ""})
 }
 
+// diagnosticLevel performs the operation represented by its name.
 func diagnosticLevel(line string) string {
 	lower := strings.ToLower(line)
 	if strings.Contains(lower, "error") || strings.Contains(lower, "fail") || strings.Contains(lower, "fatal") || strings.Contains(lower, "panic") || strings.Contains(lower, "exited") {
@@ -1315,6 +1516,7 @@ func diagnosticLevel(line string) string {
 	return "info"
 }
 
+// recordDiagnostic performs the operation represented by its name.
 func (s *server) recordDiagnostic(level, message string) {
 	if s.diagnosticBuffer != nil {
 		s.diagnosticBuffer.Add("app", level, message)
@@ -1322,6 +1524,7 @@ func (s *server) recordDiagnostic(level, message string) {
 	s.notifyEvents()
 }
 
+// subscribeEvents performs the operation represented by its name.
 func (s *server) subscribeEvents() (<-chan struct{}, func()) {
 	channel := make(chan struct{}, 1)
 	s.eventsMu.Lock()
@@ -1337,6 +1540,7 @@ func (s *server) subscribeEvents() (<-chan struct{}, func()) {
 	}
 }
 
+// notifyEvents performs the operation represented by its name.
 func (s *server) notifyEvents() {
 	s.eventsMu.Lock()
 	defer s.eventsMu.Unlock()
@@ -1348,6 +1552,7 @@ func (s *server) notifyEvents() {
 	}
 }
 
+// totpStatus performs the operation represented by its name.
 func (s *server) totpStatus(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -1362,6 +1567,7 @@ func (s *server) totpStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": admin.TOTPEnabled, "recovery_codes_remaining": count})
 }
 
+// totpSetup performs the operation represented by its name.
 func (s *server) totpSetup(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1413,6 +1619,7 @@ func (s *server) totpSetup(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// totpEnable performs the operation represented by its name.
 func (s *server) totpEnable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1462,6 +1669,7 @@ func (s *server) totpEnable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "recovery_codes_remaining": len(hashes)})
 }
 
+// totpDisable performs the operation represented by its name.
 func (s *server) totpDisable(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1498,6 +1706,7 @@ func (s *server) totpDisable(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNoContent, nil)
 }
 
+// events performs the operation represented by its name.
 func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.authenticated(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
@@ -1594,6 +1803,7 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// settings updates the requested value.
 func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.authenticated(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
@@ -1616,6 +1826,7 @@ func (s *server) settings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusMethodNotAllowed, nil)
 }
 
+// prepareSettingsChange performs the operation represented by its name.
 func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -1787,6 +1998,7 @@ func (s *server) prepareSettingsChange(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// settingsApply updates the requested value.
 func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -1979,6 +2191,7 @@ func (s *server) settingsApply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, response)
 }
 
+// finishSettingsChange performs the operation represented by its name.
 func (s *server) finishSettingsChange(id string, success bool) {
 	s.settingsMu.Lock()
 	defer s.settingsMu.Unlock()
@@ -1992,6 +2205,7 @@ func (s *server) finishSettingsChange(id string, success bool) {
 	}
 }
 
+// clientProtocolStates performs the operation represented by its name.
 func clientProtocolStates(clients []domain.Client) map[string]map[domain.ClientProtocol]domain.ClientState {
 	states := make(map[string]map[domain.ClientProtocol]domain.ClientState, len(clients))
 	for _, client := range clients {
@@ -2009,12 +2223,14 @@ func clientProtocolStates(clients []domain.Client) map[string]map[domain.ClientP
 	return states
 }
 
+// settingsFingerprint updates the requested value.
 func settingsFingerprint(settings domain.Settings) string {
 	value := strings.Join([]string{settings.PublicHost, strconv.Itoa(settings.PublicPort), settings.XrayAPIListen, strconv.Itoa(settings.InternalInboundPort), settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel}, "\x00")
 	hash := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(hash[:])
 }
 
+// updateActiveLogLevel performs the operation represented by its name.
 func updateActiveLogLevel(path, level string) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -2054,6 +2270,7 @@ func updateActiveLogLevel(path, level string) error {
 	return os.Rename(temporaryPath, path)
 }
 
+// clientsFingerprint performs the operation represented by its name.
 func clientsFingerprint(clients []domain.Client) string {
 	ordered := append([]domain.Client(nil), clients...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
@@ -2070,6 +2287,7 @@ func clientsFingerprint(clients []domain.Client) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// backups performs the operation represented by its name.
 func (s *server) backups(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -2109,6 +2327,7 @@ func (s *server) backups(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// clients performs the operation represented by its name.
 func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -2240,6 +2459,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, s.withStats([]domain.Client{client})[0])
 }
 
+// clientRoute performs the operation represented by its name.
 func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 	admin, err := s.authenticated(r)
 	if err != nil {
@@ -2284,6 +2504,7 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
 }
 
+// createProtocolClient creates the requested value.
 func (s *server) createProtocolClient(ctx context.Context, settings domain.Settings, protocol domain.ClientProtocol, name, fingerprint, authValue, actorID string) (domain.Client, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
@@ -2551,6 +2772,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	return s.store.GetClient(ctx, clientID)
 }
 
+// newHysteriaAuth performs the operation represented by its name.
 func newHysteriaAuth() (string, error) {
 	value := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, value); err != nil {
@@ -2559,6 +2781,7 @@ func newHysteriaAuth() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
+// newShadowsocksPassword performs the operation represented by its name.
 func newShadowsocksPassword() (string, error) {
 	value := make([]byte, 32)
 	if _, err := io.ReadFull(rand.Reader, value); err != nil {
@@ -2567,8 +2790,10 @@ func newShadowsocksPassword() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(value), nil
 }
 
+// newTrojanPassword performs the operation represented by its name.
 func newTrojanPassword() (string, error) { return newShadowsocksPassword() }
 
+// changeClientState performs the operation represented by its name.
 func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client domain.Client, action domain.ClientAction, actorID string) {
 	states, next, err := transitionClientAccesses(client, action)
 	if err != nil {
@@ -2859,6 +3084,7 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 	writeJSON(w, http.StatusOK, s.withStats([]domain.Client{updated})[0])
 }
 
+// transitionClientAccesses performs the operation represented by its name.
 func transitionClientAccesses(client domain.Client, action domain.ClientAction) (map[domain.ClientProtocol]domain.ClientState, domain.Client, error) {
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
 	next := client
@@ -2901,12 +3127,14 @@ func transitionClientAccesses(client domain.Client, action domain.ClientAction) 
 	return states, next, nil
 }
 
+// stateChanged performs the operation represented by its name.
 func stateChanged(before, after domain.Client, protocol domain.ClientProtocol) bool {
 	oldState, oldErr := before.AccessState(protocol)
 	newState, newErr := after.AccessState(protocol)
 	return oldErr == nil && newErr == nil && oldState != newState
 }
 
+// previousAccessStates performs the operation represented by its name.
 func previousAccessStates(client domain.Client) map[domain.ClientProtocol]domain.ClientState {
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
 	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks, domain.ProtocolTrojan} {
@@ -2917,6 +3145,7 @@ func previousAccessStates(client domain.Client) map[domain.ClientProtocol]domain
 	return states
 }
 
+// protocolStateNames performs the operation represented by its name.
 func protocolStateNames(states map[domain.ClientProtocol]domain.ClientState) []string {
 	names := make([]string, 0, len(states))
 	for protocol := range states {
@@ -2926,6 +3155,7 @@ func protocolStateNames(states map[domain.ClientProtocol]domain.ClientState) []s
 	return names
 }
 
+// withStats performs the operation represented by its name.
 func (s *server) withStats(clients []domain.Client) []clientResponse {
 	snapshot := map[string]stats.ClientStats{}
 	if s.stats != nil {
@@ -2967,10 +3197,12 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 	return result
 }
 
+// startReconciler performs the operation represented by its name.
 func (s *server) startReconciler(ctx context.Context) <-chan struct{} {
 	return s.startReconcilerWithInterval(ctx, 30*time.Second)
 }
 
+// startReconcilerWithInterval performs the operation represented by its name.
 func (s *server) startReconcilerWithInterval(ctx context.Context, interval time.Duration) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -3000,6 +3232,7 @@ func (s *server) startReconcilerWithInterval(ctx context.Context, interval time.
 	return done
 }
 
+// reconcileRunning performs the operation represented by its name.
 func (s *server) reconcileRunning(ctx context.Context) error {
 	if s.handler == nil {
 		return nil
@@ -3193,6 +3426,7 @@ func (s *server) reconcileRunning(ctx context.Context) error {
 	return nil
 }
 
+// reconcilePersistedClientConfigLocked performs the operation represented by its name.
 func (s *server) reconcilePersistedClientConfigLocked(ctx context.Context, clients []domain.Client) error {
 	activePath := filepath.Join(s.configDir, "active.json")
 	if activeConfigUsersMatch(activePath, clients, s.hysteriaEnabled(ctx)) {
@@ -3227,6 +3461,7 @@ func (s *server) reconcilePersistedClientConfigLocked(ctx context.Context, clien
 	return nil
 }
 
+// activeConfigUsersMatch performs the operation represented by its name.
 func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteria bool) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -3332,6 +3567,7 @@ func activeConfigUsersMatch(path string, clients []domain.Client, includeHysteri
 	return true
 }
 
+// vmessInboundExpected performs the operation represented by its name.
 func vmessInboundExpected(clients []domain.Client) bool {
 	for _, client := range clients {
 		if client.HasVMess() && !client.VMessRevoked {
@@ -3341,10 +3577,12 @@ func vmessInboundExpected(clients []domain.Client) bool {
 	return false
 }
 
+// shadowsocksInboundExpected performs the operation represented by its name.
 func shadowsocksInboundExpected(clients []domain.Client) bool {
 	return configuredShadowsocksEnabled()
 }
 
+// stringSliceMatchesSet performs the operation represented by its name.
 func stringSliceMatchesSet(values []string, expected map[string]struct{}) bool {
 	if len(values) != len(expected) {
 		return false
@@ -3362,6 +3600,7 @@ func stringSliceMatchesSet(values []string, expected map[string]struct{}) bool {
 	return true
 }
 
+// reconcileRealityShortIDsLocked performs the operation represented by its name.
 func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []domain.Client) error {
 	if err := s.store.SeedReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
 		return fmt.Errorf("ensure REALITY short-ID reserve: %w", err)
@@ -3470,6 +3709,7 @@ func (s *server) reconcileRealityShortIDsLocked(ctx context.Context, clients []d
 	return nil
 }
 
+// activeRealityShortIDs performs the operation represented by its name.
 func activeRealityShortIDs(path string) ([]string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -3496,6 +3736,7 @@ func activeRealityShortIDs(path string) ([]string, error) {
 	return nil, nil
 }
 
+// sameStringSet performs the operation represented by its name.
 func sameStringSet(left, right map[string]struct{}) bool {
 	if len(left) != len(right) {
 		return false
@@ -3508,6 +3749,7 @@ func sameStringSet(left, right map[string]struct{}) bool {
 	return true
 }
 
+// applyClientsLocked performs the operation represented by its name.
 func (s *server) applyClientsLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, actorID, action, entityID string) error {
 	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
 	if err != nil {
@@ -3534,6 +3776,7 @@ func (s *server) applyClientsLocked(ctx context.Context, settings domain.Setting
 	return nil
 }
 
+// applyClientsLiveLocked performs the operation represented by its name.
 func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, actorID, action, entityID string, persist, rollbackPersist func() error) error {
 	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
 	if err != nil {
@@ -3576,6 +3819,7 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Set
 	return nil
 }
 
+// prepareCandidateLocked performs the operation represented by its name.
 func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client) (string, string, error) {
 	if err := s.store.SeedReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
 		return "", "", err
@@ -3587,6 +3831,7 @@ func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Set
 	return s.prepareCandidateWithReservedLocked(ctx, settings, privateKey, clients, reserved)
 }
 
+// prepareCandidateWithReservedLocked performs the operation represented by its name.
 func (s *server) prepareCandidateWithReservedLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, reserved []string) (string, string, error) {
 	hysteriaSettings, err := loadHysteriaSettings(ctx, s.store)
 	if err != nil {
@@ -3595,6 +3840,7 @@ func (s *server) prepareCandidateWithReservedLocked(ctx context.Context, setting
 	return s.prepareCandidateWithHysteriaLocked(ctx, settings, privateKey, clients, reserved, hysteriaSettings)
 }
 
+// prepareCandidateWithHysteriaLocked performs the operation represented by its name.
 func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client, reserved []string, hysteriaSettings domain.HysteriaSettings) (string, string, error) {
 	xrayClients, err := rendererClientsWithSecrets(s.masterKey, clients)
 	if err != nil {
@@ -3628,6 +3874,7 @@ func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, setting
 	return path, operationID, nil
 }
 
+// rendererClientsWithSecrets performs the operation represented by its name.
 func rendererClientsWithSecrets(masterKey []byte, clients []domain.Client) ([]xray.Client, error) {
 	result := xray.ClientsFromDomain(clients)
 	for index := range clients {
@@ -3649,6 +3896,7 @@ func rendererClientsWithSecrets(masterKey []byte, clients []domain.Client) ([]xr
 	return result, nil
 }
 
+// mustDecryptShadowsocksPassword performs the operation represented by its name.
 func mustDecryptShadowsocksPassword(masterKey []byte, client domain.Client) string {
 	if client.ShadowsocksPasswordEnc == "" {
 		return ""
@@ -3660,6 +3908,7 @@ func mustDecryptShadowsocksPassword(masterKey []byte, client domain.Client) stri
 	return value
 }
 
+// mustDecryptTrojanPassword performs the operation represented by its name.
 func mustDecryptTrojanPassword(masterKey []byte, client domain.Client) string {
 	if client.TrojanPasswordEnc == "" {
 		return ""
@@ -3671,6 +3920,7 @@ func mustDecryptTrojanPassword(masterKey []byte, client domain.Client) string {
 	return value
 }
 
+// traceApplyOperation performs the operation represented by its name.
 func (s *server) traceApplyOperation(ctx context.Context, operationID string) context.Context {
 	ctx = interaction.WithOperationID(ctx, operationID)
 	operation, err := s.store.GetApplyOperation(ctx, operationID)
@@ -3680,10 +3930,12 @@ func (s *server) traceApplyOperation(ctx context.Context, operationID string) co
 	return interaction.WithStateRevision(ctx, operation.Revision)
 }
 
+// rendererSettings performs the operation represented by its name.
 func rendererSettings(settings domain.Settings, privateKey string) xray.Settings {
 	return rendererSettingsWithHysteria(settings, privateKey, hysteriaSettingsFromEnvironment())
 }
 
+// rendererSettingsWithHysteria performs the operation represented by its name.
 func rendererSettingsWithHysteria(settings domain.Settings, privateKey string, hysteriaSettings domain.HysteriaSettings) xray.Settings {
 	result := xray.SettingsFromDomain(settings, privateKey)
 	xray.ApplyHysteriaSettings(&result, hysteriaSettings)
@@ -3695,6 +3947,7 @@ func rendererSettingsWithHysteria(settings domain.Settings, privateKey string, h
 	return result
 }
 
+// configuredShadowsocksSettings performs the operation represented by its name.
 func configuredShadowsocksSettings() (domain.ShadowsocksSettings, error) {
 	port, err := configuredShadowsocksPort()
 	if err != nil {
@@ -3708,22 +3961,27 @@ func configuredShadowsocksSettings() (domain.ShadowsocksSettings, error) {
 	}, nil
 }
 
+// configuredShadowsocksEnabled performs the operation represented by its name.
 func configuredShadowsocksEnabled() bool {
 	return strings.EqualFold(strings.TrimSpace(envOr("XRAY_SHADOWSOCKS_ENABLED", "false")), "true")
 }
 
+// configuredShadowsocksMethod performs the operation represented by its name.
 func configuredShadowsocksMethod() string {
 	return envOr("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305)
 }
 
+// configuredTrojanEnabled performs the operation represented by its name.
 func configuredTrojanEnabled() bool {
 	return strings.EqualFold(strings.TrimSpace(envOr("XRAY_TROJAN_ENABLED", "false")), "true")
 }
 
+// hysteria2Enabled performs the operation represented by its name.
 func hysteria2Enabled() bool {
 	return strings.EqualFold(strings.TrimSpace(envOr("XRAY_HYSTERIA2_ENABLED", "false")), "true")
 }
 
+// hysteriaSettingsFromEnvironment performs the operation represented by its name.
 func hysteriaSettingsFromEnvironment() domain.HysteriaSettings {
 	return domain.HysteriaSettings{
 		Enabled:        hysteria2Enabled(),
@@ -3735,6 +3993,7 @@ func hysteriaSettingsFromEnvironment() domain.HysteriaSettings {
 	}
 }
 
+// loadHysteriaSettings performs the operation represented by its name.
 func loadHysteriaSettings(ctx context.Context, db *store.Store) (domain.HysteriaSettings, error) {
 	settings, err := db.GetHysteriaSettings(ctx)
 	if err == nil {
@@ -3750,6 +4009,7 @@ func loadHysteriaSettings(ctx context.Context, db *store.Store) (domain.Hysteria
 	return db.GetHysteriaSettings(ctx)
 }
 
+// hysteriaEnabled performs the operation represented by its name.
 func (s *server) hysteriaEnabled(ctx context.Context) bool {
 	settings, err := loadHysteriaSettings(ctx, s.store)
 	if err != nil {
@@ -3758,6 +4018,7 @@ func (s *server) hysteriaEnabled(ctx context.Context) bool {
 	return settings.Enabled
 }
 
+// validateHysteriaHost validates the supplied value.
 func (s *server) validateHysteriaHost(ctx context.Context, host string) error {
 	settings, err := loadHysteriaSettings(ctx, s.store)
 	if err != nil {
@@ -3769,6 +4030,7 @@ func (s *server) validateHysteriaHost(ctx context.Context, host string) error {
 	return nil
 }
 
+// validateHysteriaPublicHost validates the supplied value.
 func validateHysteriaPublicHost(host string) error {
 	settings := hysteriaSettingsFromEnvironment()
 	if settings.Enabled && settings.TLSMode == domain.HysteriaTLSSelfSigned && host != settings.TLSCertIP {
@@ -3777,6 +4039,7 @@ func validateHysteriaPublicHost(host string) error {
 	return nil
 }
 
+// hasInboundTag performs the operation represented by its name.
 func hasInboundTag(path, tag string) bool {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -3798,6 +4061,7 @@ func hasInboundTag(path, tag string) bool {
 	return false
 }
 
+// promoteCandidateLocked performs the operation represented by its name.
 func (s *server) promoteCandidateLocked(ctx context.Context, path, operationID, actorID, action, entityID string) error {
 	if err := os.Rename(path, filepath.Join(s.configDir, "active.json")); err != nil {
 		_ = s.store.UpdateApplyOperation(ctx, operationID, "failed", err.Error())
@@ -3808,6 +4072,7 @@ func (s *server) promoteCandidateLocked(ctx context.Context, path, operationID, 
 	return nil
 }
 
+// profile performs the operation represented by its name.
 func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.Client) {
 	settings, err := s.store.GetSettings(r.Context())
 	if err != nil {
@@ -3982,6 +4247,7 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 	}
 }
 
+// authenticated performs the operation represented by its name.
 func (s *server) authenticated(r *http.Request) (store.Admin, error) {
 	token := sessionToken(r)
 	if token == "" {
@@ -3990,6 +4256,7 @@ func (s *server) authenticated(r *http.Request) (store.Admin, error) {
 	return s.store.SessionAdmin(r.Context(), token)
 }
 
+// sessionToken performs the operation represented by its name.
 func sessionToken(r *http.Request) string {
 	cookie, err := r.Cookie("xray_easy_session")
 	if err != nil {
@@ -3998,6 +4265,7 @@ func sessionToken(r *http.Request) string {
 	return cookie.Value
 }
 
+// setSessionCookie updates the requested value.
 func (s *server) setSessionCookie(w http.ResponseWriter, r *http.Request, value string, maxAge int) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     "xray_easy_session",
@@ -4010,6 +4278,7 @@ func (s *server) setSessionCookie(w http.ResponseWriter, r *http.Request, value 
 	})
 }
 
+// decodeJSON performs the operation represented by its name.
 func decodeJSON(r *http.Request, target any) error {
 	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
 	if err != nil {
@@ -4024,6 +4293,7 @@ func decodeJSON(r *http.Request, target any) error {
 	return nil
 }
 
+// writeJSON writes the supplied value.
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
@@ -4032,6 +4302,7 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	}
 }
 
+// envOr performs the operation represented by its name.
 func envOr(name, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		return value
@@ -4039,11 +4310,13 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
+// fatal performs the operation represented by its name.
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, err)
 	os.Exit(1)
 }
 
+// publicSettings performs the operation represented by its name.
 func publicSettings(settings domain.Settings, vmessPublicPort int) map[string]any {
 	shadowsocks, err := configuredShadowsocksSettings()
 	if err != nil {
@@ -4060,6 +4333,7 @@ func publicSettings(settings domain.Settings, vmessPublicPort int) map[string]an
 	}
 }
 
+// randomID performs the operation represented by its name.
 func randomID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := io.ReadFull(rand.Reader, b); err != nil {
@@ -4068,6 +4342,7 @@ func randomID() (string, error) {
 	return hex.EncodeToString(b), nil
 }
 
+// writeAtomic writes the supplied value.
 func writeAtomic(path string, data []byte) error {
 	return writeAtomicWith(path, data,
 		func(directory, pattern string) (atomicCandidateFile, error) { return os.CreateTemp(directory, pattern) },
@@ -4075,14 +4350,21 @@ func writeAtomic(path string, data []byte) error {
 	)
 }
 
+// atomicCandidateFile is an internal type used by the package.
 type atomicCandidateFile interface {
+	// Name defines part of the interface contract.
 	Name() string
+	// Chmod defines part of the interface contract.
 	Chmod(os.FileMode) error
+	// Write defines part of the interface contract.
 	Write([]byte) (int, error)
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// writeAtomicWith writes the supplied value.
 func writeAtomicWith(path string, data []byte, createTemp func(string, string) (atomicCandidateFile, error), rename func(string, string) error) error {
 	tmp, err := createTemp(filepath.Dir(path), ".candidate-*")
 	if err != nil {

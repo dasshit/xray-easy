@@ -21,10 +21,13 @@ import (
 	"xray-easy/internal/domain"
 )
 
+// errCancelled is an internal package variable.
 var errCancelled = errors.New("installation cancelled")
 
+// maxInstallerLogLine is an internal package constant.
 const maxInstallerLogLine = 4096
 
+// nonPublicIPv4Prefixes is an internal package variable.
 var nonPublicIPv4Prefixes = [...]netip.Prefix{
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("192.0.0.0/24"),
@@ -34,6 +37,7 @@ var nonPublicIPv4Prefixes = [...]netip.Prefix{
 	netip.MustParsePrefix("203.0.113.0/24"),
 }
 
+// installerContext performs the operation represented by its name.
 func installerContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 }
@@ -68,25 +72,37 @@ func enterTerminal(input, output *os.File) (func(), error) {
 	return restore, nil
 }
 
+// keyKind is an internal type used by the package.
 type keyKind uint8
 
 const (
+	// keyCharacter is an internal package constant.
 	keyCharacter keyKind = iota
+	// keyEnter is an internal package constant.
 	keyEnter
+	// keyBackspace is an internal package constant.
 	keyBackspace
+	// keyUp is an internal package constant.
 	keyUp
+	// keyDown is an internal package constant.
 	keyDown
+	// keyLeft is an internal package constant.
 	keyLeft
+	// keyRight is an internal package constant.
 	keyRight
+	// keyTab is an internal package constant.
 	keyTab
+	// keyEscape is an internal package constant.
 	keyEscape
 )
 
+// keyPress is an internal type used by the package.
 type keyPress struct {
 	kind keyKind
 	char byte
 }
 
+// wizard is an internal type used by the package.
 type wizard struct {
 	out                 io.Writer
 	inputFile           *os.File
@@ -114,6 +130,7 @@ type wizard struct {
 	noColor             bool
 }
 
+// newWizard performs the operation represented by its name.
 func newWizard(input io.Reader, output io.Writer) *wizard {
 	w := &wizard{
 		out:                 output,
@@ -137,6 +154,7 @@ func newWizard(input io.Reader, output io.Writer) *wizard {
 	return w
 }
 
+// close releases resources held by the value.
 func (w *wizard) close() {
 	close(w.done)
 	if w.resize != nil {
@@ -145,6 +163,7 @@ func (w *wizard) close() {
 	}
 }
 
+// terminalSize performs the operation represented by its name.
 func terminalSize(input *os.File) (int, int) {
 	cmd := exec.Command("stty", "size")
 	cmd.Stdin = input
@@ -191,6 +210,7 @@ func suggestPublicIPv4() string {
 	return uniquePublicIPv4(addresses)
 }
 
+// uniquePublicIPv4 performs the operation represented by its name.
 func uniquePublicIPv4(addresses []netip.Addr) string {
 	var result netip.Addr
 	for _, address := range addresses {
@@ -218,6 +238,7 @@ func uniquePublicIPv4(addresses []netip.Addr) string {
 	return result.String()
 }
 
+// watchResize performs the operation represented by its name.
 func (w *wizard) watchResize() {
 	defer close(w.resizeDone)
 	for {
@@ -234,6 +255,7 @@ func (w *wizard) watchResize() {
 	}
 }
 
+// readBytes reads the requested value.
 func (w *wizard) readBytes(input io.Reader) {
 	defer close(w.bytes)
 	buffer := make([]byte, 1)
@@ -249,6 +271,7 @@ func (w *wizard) readBytes(input io.Reader) {
 	}
 }
 
+// nextByte performs the operation represented by its name.
 func (w *wizard) nextByte(ctx context.Context) (byte, error) {
 	if err := ctx.Err(); err != nil {
 		return 0, err
@@ -264,6 +287,7 @@ func (w *wizard) nextByte(ctx context.Context) (byte, error) {
 	}
 }
 
+// key performs the operation represented by its name.
 func (w *wizard) key(ctx context.Context) (keyPress, error) {
 	b, err := w.nextByte(ctx)
 	if err != nil {
@@ -309,6 +333,7 @@ func (w *wizard) key(ctx context.Context) (keyPress, error) {
 	}
 }
 
+// step performs the operation represented by its name.
 func (w *wizard) step(number int, title string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -316,6 +341,7 @@ func (w *wizard) step(number int, title string) {
 	w.renderLocked()
 }
 
+// message performs the operation represented by its name.
 func (w *wizard) message(message string) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -323,6 +349,7 @@ func (w *wizard) message(message string) {
 	w.renderLocked()
 }
 
+// review performs the operation represented by its name.
 func (w *wizard) review(cfg configuration) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -331,6 +358,7 @@ func (w *wizard) review(cfg configuration) {
 	w.renderLocked()
 }
 
+// hysteria performs the operation represented by its name.
 func (w *wizard) hysteria(ctx context.Context, root string, cfg configuration) (configuration, error) {
 	w.mu.Lock()
 	w.configPage = "hysteria-choice"
@@ -475,6 +503,7 @@ func (w *wizard) hysteria(ctx context.Context, root string, cfg configuration) (
 	}
 }
 
+// amneziaWG performs the operation represented by its name.
 func (w *wizard) amneziaWG(ctx context.Context, cfg configuration) (configuration, error) {
 	w.mu.Lock()
 	w.configPage = "awg-choice"
@@ -553,6 +582,7 @@ func (w *wizard) amneziaWG(ctx context.Context, cfg configuration) (configuratio
 	}
 }
 
+// shadowsocks performs the operation represented by its name.
 func (w *wizard) shadowsocks(ctx context.Context, cfg configuration) (configuration, error) {
 	w.mu.Lock()
 	w.configPage = "shadowsocks-choice"
@@ -605,6 +635,7 @@ func (w *wizard) shadowsocks(ctx context.Context, cfg configuration) (configurat
 	}
 }
 
+// trojan performs the operation represented by its name.
 func (w *wizard) trojan(ctx context.Context, cfg configuration) (configuration, error) {
 	w.mu.Lock()
 	w.configPage = "trojan-choice"
@@ -654,6 +685,7 @@ func (w *wizard) trojan(ctx context.Context, cfg configuration) (configuration, 
 	}
 }
 
+// ports performs the operation represented by its name.
 func (w *wizard) ports(ctx context.Context, publicDefault, uiDefault int) (int, int, error) {
 	defaults := [2]int{publicDefault, uiDefault}
 	for {
@@ -723,6 +755,7 @@ func (w *wizard) ports(ctx context.Context, publicDefault, uiDefault int) (int, 
 	}
 }
 
+// lastRune performs the operation represented by its name.
 func lastRune(value string) string {
 	if value == "" {
 		return ""
@@ -731,6 +764,7 @@ func lastRune(value string) string {
 	return value[len(value)-size:]
 }
 
+// confirm performs the operation represented by its name.
 func (w *wizard) confirm(ctx context.Context) (bool, error) {
 	for {
 		key, err := w.key(ctx)
@@ -807,6 +841,7 @@ func (w *wizard) Write(data []byte) (int, error) {
 	return len(data), nil
 }
 
+// logTail performs the operation represented by its name.
 func (w *wizard) logTail(n int) string {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -823,11 +858,13 @@ func (w *wizard) logTail(n int) string {
 	return "\nRecent Docker output:\n  " + strings.Join(lines, "\n  ")
 }
 
+// screenLine is an internal type used by the package.
 type screenLine struct {
 	text  string
 	style string
 }
 
+// renderLocked performs the operation represented by its name.
 func (w *wizard) renderLocked() {
 	width, height := w.width, w.height
 	if width < 1 || height < 1 {
@@ -989,12 +1026,14 @@ func (w *wizard) renderLocked() {
 	_, _ = io.WriteString(w.out, frame.String())
 }
 
+// panelLine performs the operation represented by its name.
 func panelLine(value string, width int) string {
 	inside := max(0, width-2)
 	value = clipRunes(value, inside)
 	return "  │" + value + strings.Repeat(" ", inside-utf8.RuneCountInString(value)) + "│"
 }
 
+// fieldText performs the operation represented by its name.
 func fieldText(value, placeholder string, focused bool) string {
 	if value == "" {
 		value = placeholder
@@ -1006,6 +1045,7 @@ func fieldText(value, placeholder string, focused bool) string {
 	return marker + "[ " + value + " ]"
 }
 
+// fieldStyle performs the operation represented by its name.
 func fieldStyle(focused bool) string {
 	if focused {
 		return "selected"
@@ -1013,6 +1053,7 @@ func fieldStyle(focused bool) string {
 	return "normal"
 }
 
+// optionText performs the operation represented by its name.
 func optionText(label string, selected bool) string {
 	if selected {
 		return "› [ " + label + " ]"
@@ -1020,6 +1061,7 @@ func optionText(label string, selected bool) string {
 	return "  [ " + label + " ]"
 }
 
+// clipRunes performs the operation represented by its name.
 func clipRunes(value string, width int) string {
 	runes := []rune(value)
 	if len(runes) > width {
@@ -1028,6 +1070,7 @@ func clipRunes(value string, width int) string {
 	return value
 }
 
+// color performs the operation represented by its name.
 func (w *wizard) color(style string) string {
 	if w.noColor {
 		return ""

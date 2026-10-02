@@ -16,20 +16,33 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// amneziaWGStatusResponse is an internal type used by the package.
 type amneziaWGStatusResponse struct {
-	Enabled        bool   `json:"enabled"`
-	Available      bool   `json:"available"`
-	Running        bool   `json:"running"`
-	PublicKey      string `json:"public_key,omitempty"`
-	ListenPort     int    `json:"listen_port,omitempty"`
-	PublicHost     string `json:"public_host,omitempty"`
-	PublicPort     int    `json:"public_port,omitempty"`
-	PeerCount      int    `json:"peer_count,omitempty"`
-	IPv4Network    string `json:"ipv4_network,omitempty"`
-	IPv6Network    string `json:"ipv6_network,omitempty"`
+	// Enabled stores the value associated with the enclosing object.
+	Enabled bool `json:"enabled"`
+	// Available stores the value associated with the enclosing object.
+	Available bool `json:"available"`
+	// Running stores the value associated with the enclosing object.
+	Running bool `json:"running"`
+	// PublicKey stores the value associated with the enclosing object.
+	PublicKey string `json:"public_key,omitempty"`
+	// ListenPort stores the value associated with the enclosing object.
+	ListenPort int `json:"listen_port,omitempty"`
+	// PublicHost stores the value associated with the enclosing object.
+	PublicHost string `json:"public_host,omitempty"`
+	// PublicPort stores the value associated with the enclosing object.
+	PublicPort int `json:"public_port,omitempty"`
+	// PeerCount stores the value associated with the enclosing object.
+	PeerCount int `json:"peer_count,omitempty"`
+	// IPv4Network stores the value associated with the enclosing object.
+	IPv4Network string `json:"ipv4_network,omitempty"`
+	// IPv6Network stores the value associated with the enclosing object.
+	IPv6Network string `json:"ipv6_network,omitempty"`
+	// ServiceVersion stores the value associated with the enclosing object.
 	ServiceVersion string `json:"service_version,omitempty"`
 }
 
+// amneziaWGStatus performs the operation represented by its name.
 func (s *server) amneziaWGStatus(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path != "/api/transports/amneziawg" {
 		http.NotFound(w, r)
@@ -62,6 +75,7 @@ func (s *server) amneziaWGStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// createAWGClient creates the requested value.
 func (s *server) createAWGClient(w http.ResponseWriter, r *http.Request, admin store.Admin, name, fingerprint, authValue string) {
 	if fingerprint != "" || authValue != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "fingerprint and auth are not valid for AmneziaWG profiles"})
@@ -101,6 +115,7 @@ func (s *server) createAWGClient(w http.ResponseWriter, r *http.Request, admin s
 	writeJSON(w, http.StatusCreated, s.withAWGStats([]domain.AmneziaWGPeer{peer})[0])
 }
 
+// withAWGStats performs the operation represented by its name.
 func (s *server) withAWGStats(peers []domain.AmneziaWGPeer) []clientResponse {
 	snapshot := map[string]stats.ClientStats{}
 	if s.stats != nil {
@@ -188,6 +203,7 @@ func (s *server) amneziaWGClientRoute(w http.ResponseWriter, r *http.Request, ad
 	_, _ = w.Write(image)
 }
 
+// revokeAmneziaWGPeer performs the operation represented by its name.
 func (s *server) revokeAmneziaWGPeer(w http.ResponseWriter, r *http.Request, admin store.Admin, name string) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
@@ -227,10 +243,12 @@ func (s *server) revokeAmneziaWGPeer(w http.ResponseWriter, r *http.Request, adm
 	writeJSON(w, http.StatusOK, map[string]any{"removed": true, "name": name, "backup_name": backupInfo.Name})
 }
 
+// writeAWGUnavailable writes the supplied value.
 func writeAWGUnavailable(w http.ResponseWriter) {
 	writeJSON(w, http.StatusServiceUnavailable, map[string]any{"code": "service_unavailable", "error": "AmneziaWG service is not configured; start the awg Compose profile"})
 }
 
+// writeAWGError writes the supplied value.
 func writeAWGError(w http.ResponseWriter, err error) {
 	switch status.Code(err) {
 	case codes.InvalidArgument:

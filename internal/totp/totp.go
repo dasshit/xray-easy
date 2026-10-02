@@ -15,9 +15,12 @@ import (
 )
 
 const (
+	// secretBytes is an internal package constant.
 	secretBytes = 20
-	period      = 30
-	digits      = 6
+	// period is an internal package constant.
+	period = 30
+	// digits is an internal package constant.
+	digits = 6
 )
 
 // NewSecret constructs and returns the requested value.

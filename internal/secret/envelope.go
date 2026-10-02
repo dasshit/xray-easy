@@ -15,6 +15,7 @@ import (
 	"golang.org/x/crypto/hkdf"
 )
 
+// envelopeVersion is an internal package constant.
 const envelopeVersion = "enc-v1"
 
 // Seal encrypts a value with a key-encryption key. The output contains no
@@ -93,6 +94,7 @@ func Open(masterKey []byte, encoded, purpose string) (string, error) {
 	return string(plaintext), nil
 }
 
+// derive performs the operation represented by its name.
 func derive(masterKey, salt []byte, purpose string) ([]byte, error) {
 	reader := hkdf.New(sha256.New, masterKey, salt, []byte("xray-easy/"+purpose))
 	key := make([]byte, 32)

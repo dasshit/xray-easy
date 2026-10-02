@@ -14,14 +14,20 @@ import (
 )
 
 const (
-	metadataKey          = "x-request-id"
+	// metadataKey is an internal package constant.
+	metadataKey = "x-request-id"
+	// operationMetadataKey is an internal package constant.
 	operationMetadataKey = "x-controller-operation-id"
-	attemptMetadataKey   = "x-controller-attempt"
-	revisionMetadataKey  = "x-controller-state-revision"
+	// attemptMetadataKey is an internal package constant.
+	attemptMetadataKey = "x-controller-attempt"
+	// revisionMetadataKey is an internal package constant.
+	revisionMetadataKey = "x-controller-state-revision"
 )
 
+// randomRead is an internal package variable.
 var randomRead = rand.Read
 
+// contextKey is an internal type used by the package.
 type contextKey struct{ name string }
 
 // NewRequestID returns a random 128-bit hexadecimal correlation identifier.
@@ -268,6 +274,7 @@ func IncomingStateRevision(ctx context.Context) int64 {
 	return value
 }
 
+// incomingID performs the operation represented by its name.
 func incomingID(ctx context.Context, key string) string {
 	values, ok := metadata.FromIncomingContext(ctx)
 	if !ok {
@@ -280,6 +287,7 @@ func incomingID(ctx context.Context, key string) string {
 	return strings.ToLower(items[0])
 }
 
+// validRequestID performs the operation represented by its name.
 func validRequestID(value string) bool {
 	if len(value) != 32 {
 		return false

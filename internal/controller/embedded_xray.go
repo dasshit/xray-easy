@@ -30,8 +30,11 @@ import (
 )
 
 const (
-	embeddedControlIdentity  = "control-plane"
-	embeddedHealthIdentity   = "healthcheck"
+	// embeddedControlIdentity is an internal package constant.
+	embeddedControlIdentity = "control-plane"
+	// embeddedHealthIdentity is an internal package constant.
+	embeddedHealthIdentity = "healthcheck"
+	// maxRuntimeConfigSnapshot is an internal package constant.
 	maxRuntimeConfigSnapshot = 16 << 20
 )
 
@@ -83,6 +86,7 @@ func NewEmbeddedXrayClientWithConn(connection grpc.ClientConnInterface, tokenFil
 	return newEmbeddedXrayClient(connection, nil, tokenFile, configDir)
 }
 
+// newEmbeddedXrayClient performs the operation represented by its name.
 func newEmbeddedXrayClient(connection grpc.ClientConnInterface, closeConn func() error, tokenFile, configDir string) *EmbeddedXrayClient {
 	return &EmbeddedXrayClient{
 		TokenFile: tokenFile, ConfigDir: configDir, conn: connection, closeConn: closeConn,
@@ -337,10 +341,12 @@ func (c *EmbeddedXrayClient) RemoveTrojanUser(ctx context.Context, email string)
 	return c.mutateUser(ctx, xrayruntimev1.Protocol_PROTOCOL_TROJAN, email, "", "", false)
 }
 
+// mutateUser performs the operation represented by its name.
 func (c *EmbeddedXrayClient) mutateUser(ctx context.Context, protocol xrayruntimev1.Protocol, email, credential, flow string, add bool) error {
 	return c.mutateUserWithMethod(ctx, protocol, email, credential, flow, "", add)
 }
 
+// mutateUserWithMethod performs the operation represented by its name.
 func (c *EmbeddedXrayClient) mutateUserWithMethod(ctx context.Context, protocol xrayruntimev1.Protocol, email, credential, flow, method string, add bool) error {
 	ctx, _, err := interaction.OutgoingContext(ctx)
 	if err != nil {
@@ -387,6 +393,7 @@ func (c *EmbeddedXrayClient) UsersInInbound(ctx context.Context, inbound string)
 	return c.listUsers(ctx, protocol)
 }
 
+// listUsers performs the operation represented by its name.
 func (c *EmbeddedXrayClient) listUsers(ctx context.Context, protocol xrayruntimev1.Protocol) ([]string, error) {
 	response, err := c.call(ctx, embeddedControlIdentity, xrayruntimev1.Runtime_ListUsers_FullMethodName, &xrayruntimev1.ListUsersRequest{Protocol: protocol}, func(ctx context.Context, request proto.Message) (proto.Message, error) {
 		return c.rpc.ListUsers(ctx, request.(*xrayruntimev1.ListUsersRequest))
@@ -471,6 +478,7 @@ func (c *EmbeddedXrayClient) WatchTelemetry(ctx context.Context, interval time.D
 	return &loggedRuntimeTelemetryStream{Runtime_WatchTelemetryClient: stream, logger: c.logger, requestID: requestID, started: started}, nil
 }
 
+// loggedRuntimeTelemetryStream is an internal type used by the package.
 type loggedRuntimeTelemetryStream struct {
 	xrayruntimev1.Runtime_WatchTelemetryClient
 	logger    *slog.Logger
@@ -493,6 +501,7 @@ func (s *loggedRuntimeTelemetryStream) Recv() (*xrayruntimev1.TelemetryResponse,
 	return response, err
 }
 
+// call performs the operation represented by its name.
 func (c *EmbeddedXrayClient) call(ctx context.Context, identity, method string, request proto.Message, invoke func(context.Context, proto.Message) (proto.Message, error)) (proto.Message, error) {
 	if c == nil || c.conn == nil || c.rpc == nil {
 		return nil, errors.New("embedded Xray gRPC connection is not initialized")
@@ -521,6 +530,7 @@ func (c *EmbeddedXrayClient) call(ctx context.Context, identity, method string, 
 	return response, nil
 }
 
+// readToken reads the requested value.
 func (c *EmbeddedXrayClient) readToken() ([]byte, error) {
 	if c == nil || strings.TrimSpace(c.TokenFile) == "" {
 		return nil, errors.New("embedded Xray token file path is empty")
@@ -536,6 +546,7 @@ func (c *EmbeddedXrayClient) readToken() ([]byte, error) {
 	return token, nil
 }
 
+// readSnapshot reads the requested value.
 func (c *EmbeddedXrayClient) readSnapshot(path string) ([]byte, error) {
 	if c == nil || strings.TrimSpace(c.ConfigDir) == "" || strings.TrimSpace(path) == "" {
 		return nil, errors.New("embedded Xray config directory and snapshot path are required")
@@ -566,11 +577,13 @@ func (c *EmbeddedXrayClient) readSnapshot(path string) ([]byte, error) {
 	return data, nil
 }
 
+// snapshotDigest performs the operation represented by its name.
 func snapshotDigest(snapshot []byte) string {
 	digest := sha256.Sum256(snapshot)
 	return hex.EncodeToString(digest[:])
 }
 
+// verifyEmbeddedOperation performs the operation represented by its name.
 func verifyEmbeddedOperation(response *xrayruntimev1.OperationResponse, operationID string, revision int64) error {
 	if response == nil || response.GetOperationId() != operationID || response.GetRevision() != revision {
 		return errors.New("embedded Xray operation returned a different identity or revision")
@@ -578,6 +591,7 @@ func verifyEmbeddedOperation(response *xrayruntimev1.OperationResponse, operatio
 	return nil
 }
 
+// embeddedRuntimeState performs the operation represented by its name.
 func embeddedRuntimeState(state xrayruntimev1.RuntimeState) (string, bool) {
 	switch state {
 	case xrayruntimev1.RuntimeState_RUNTIME_STATE_STARTING:
@@ -595,6 +609,7 @@ func embeddedRuntimeState(state xrayruntimev1.RuntimeState) (string, bool) {
 	}
 }
 
+// embeddedTimestamp performs the operation represented by its name.
 func embeddedTimestamp(field string, value *timestamppb.Timestamp) (time.Time, error) {
 	if value == nil {
 		return time.Time{}, nil

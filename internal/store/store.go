@@ -192,6 +192,7 @@ func ReadSettingsFromDatabase(path string) (domain.Settings, error) {
 	return settings, err
 }
 
+// hasSettingsLogLevel performs the operation represented by its name.
 func hasSettingsLogLevel(db *sql.DB) bool {
 	rows, err := db.Query(`PRAGMA table_info(settings)`)
 	if err != nil {
@@ -209,6 +210,7 @@ func hasSettingsLogLevel(db *sql.DB) bool {
 	return false
 }
 
+// restoreSettings performs the operation represented by its name.
 func restoreSettings(tx *sql.Tx) error {
 	hasLogLevel := false
 	rows, err := tx.Query(`PRAGMA restore_source.table_info(settings)`)
@@ -250,6 +252,7 @@ func restoreSettings(tx *sql.Tx) error {
 	return err
 }
 
+// restoreClients performs the operation represented by its name.
 func restoreClients(tx *sql.Tx) error {
 	hasProtocol := false
 	hasVMessEnabled, hasVMessRevoked := false, false
@@ -434,6 +437,7 @@ func (s *Store) RestoreFrom(path string) error {
 	return nil
 }
 
+// databaseTables is an internal package variable.
 var databaseTables = []string{
 	"schema_migrations",
 	"settings",
@@ -449,6 +453,7 @@ var databaseTables = []string{
 	"hysteria_settings",
 }
 
+// migrate performs the operation represented by its name.
 func (s *Store) migrate(ctx context.Context) error {
 	const schema = `
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -760,6 +765,7 @@ func (s *Store) migrateClientProtocols(ctx context.Context) error {
 	return nil
 }
 
+// createProtocolMigrationSnapshot creates the requested value.
 func (s *Store) createProtocolMigrationSnapshot(ctx context.Context, backupPath string) error {
 	tempDir, err := os.MkdirTemp(filepath.Dir(backupPath), ".protocol-migration-")
 	if err != nil {
@@ -779,10 +785,12 @@ func (s *Store) createProtocolMigrationSnapshot(ctx context.Context, backupPath 
 	return os.Rename(tempSnapshot, backupPath)
 }
 
+// markClientProtocolMigration performs the operation represented by its name.
 func (s *Store) markClientProtocolMigration(ctx context.Context) error {
 	return insertClientProtocolMigrationMarker(ctx, s.db)
 }
 
+// insertClientProtocolMigrationMarker performs the operation represented by its name.
 func insertClientProtocolMigrationMarker(ctx context.Context, exec interface {
 	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }) error {
@@ -1271,6 +1279,7 @@ func (s *Store) CreateTrojanClient(ctx context.Context, client domain.Client) er
 	return err
 }
 
+// nullableCredential performs the operation represented by its name.
 func nullableCredential(value string) any {
 	if value == "" {
 		return nil
@@ -1278,6 +1287,7 @@ func nullableCredential(value string) any {
 	return value
 }
 
+// clientProtocolStorage performs the operation represented by its name.
 func clientProtocolStorage(client domain.Client, uuid string) (string, string, int, int, int, int, int, int, string, int, int, string, int, int) {
 	protocol := client.Protocol
 	if protocol == "" {
@@ -1458,17 +1468,20 @@ func (s *Store) CreateClientWithReservedShortID(ctx context.Context, client doma
 	return shortID, exhausted, nil
 }
 
+// ensureShortIDHistory performs the operation represented by its name.
 func ensureShortIDHistory(ctx context.Context, tx *sql.Tx) error {
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO reality_short_ids(short_id, assigned_client_id, created_at) SELECT short_id, id, created_at FROM clients WHERE short_id IS NOT NULL AND short_id != ''`)
 	return err
 }
 
+// markShortIDPoolInitialized performs the operation represented by its name.
 func markShortIDPoolInitialized(ctx context.Context, tx *sql.Tx) error {
 	now := time.Now().UTC().Format(time.RFC3339Nano)
 	_, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES(3, ?)`, now)
 	return err
 }
 
+// replenishShortIDPool performs the operation represented by its name.
 func replenishShortIDPool(ctx context.Context, tx *sql.Tx, target int, generate func() (string, error)) error {
 	var available int
 	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM reality_short_ids WHERE assigned_client_id IS NULL`).Scan(&available); err != nil {
@@ -1488,6 +1501,7 @@ func replenishShortIDPool(ctx context.Context, tx *sql.Tx, target int, generate 
 	return nil
 }
 
+// generateUnusedShortID performs the operation represented by its name.
 func generateUnusedShortID(ctx context.Context, tx *sql.Tx, generate func() (string, error)) (string, error) {
 	for range 32 {
 		shortID, err := generate()
@@ -1794,13 +1808,19 @@ func (s *Store) AddAudit(ctx context.Context, actorID, action, entity, entityID,
 	return err
 }
 
-type scanner interface{ Scan(...any) error }
+// scanner abstracts the row-scanning operation used by the store helpers.
+type scanner interface {
+	// Scan populates the supplied destinations from the current row.
+	Scan(...any) error
+}
 
+// clientSelectColumns is an internal package constant.
 const clientSelectColumns = `id, name, uuid, email, short_id, client_fingerprint, enabled, revoked,
 	protocol, hysteria_auth, vless_enabled, vless_revoked, hysteria_enabled, hysteria_revoked, vmess_enabled, vmess_revoked,
 	shadowsocks_password_enc, shadowsocks_enabled, shadowsocks_revoked, trojan_password_enc, trojan_enabled, trojan_revoked,
 	created_at, updated_at`
 
+// scanClient performs the operation represented by its name.
 func scanClient(row scanner) (domain.Client, error) {
 	var client domain.Client
 	var uuid, shortID sql.NullString
@@ -1838,6 +1858,7 @@ func scanClient(row scanner) (domain.Client, error) {
 	return client, nil
 }
 
+// boolInt performs the operation represented by its name.
 func boolInt(value bool) int {
 	if value {
 		return 1
@@ -1845,6 +1866,7 @@ func boolInt(value bool) int {
 	return 0
 }
 
+// randomID performs the operation represented by its name.
 func randomID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {

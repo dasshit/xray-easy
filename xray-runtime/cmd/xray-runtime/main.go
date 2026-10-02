@@ -24,17 +24,27 @@ import (
 	runtime "xray-easy/xray-runtime/internal/runtime"
 )
 
+// runtimeVersion is an internal package variable.
 var runtimeVersion = "dev"
+
+// exitProcess is an internal package variable.
 var exitProcess = os.Exit
+
+// gracefulStopTimeout is an internal package variable.
 var gracefulStopTimeout = 10 * time.Second
 
 const (
-	defaultListen    = "0.0.0.0:10086"
+	// defaultListen is an internal package constant.
+	defaultListen = "0.0.0.0:10086"
+	// defaultTokenFile is an internal package constant.
 	defaultTokenFile = "/run/secrets/xray_runtime_token"
-	defaultConfig    = "/etc/xray/active.json"
-	defaultRevision  = "/etc/xray/revision-state.json"
+	// defaultConfig is an internal package constant.
+	defaultConfig = "/etc/xray/active.json"
+	// defaultRevision is an internal package constant.
+	defaultRevision = "/etc/xray/revision-state.json"
 )
 
+// newHealthConnection is an internal package variable.
 var newHealthConnection = func(address string) (*grpc.ClientConn, error) {
 	return grpc.NewClient(address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
@@ -42,6 +52,7 @@ var newHealthConnection = func(address string) (*grpc.ClientConn, error) {
 	)
 }
 
+// main starts the program.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := run(os.Args[1:]); err != nil {
@@ -50,6 +61,7 @@ func main() {
 	}
 }
 
+// run runs the requested operation.
 func run(args []string) error {
 	if len(args) >= 1 && args[0] == "validate-candidate" {
 		if len(args) > 2 {
@@ -78,12 +90,14 @@ func run(args []string) error {
 	return serve(*listen, *configPath, *tokenPath, *revisionPath)
 }
 
+// serve serves the requested endpoint.
 func serve(listenAddress, configPath, tokenPath, revisionPath string) error {
 	shutdown, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	return serveContext(shutdown, listenAddress, configPath, tokenPath, revisionPath)
 }
 
+// serveContext serves the requested endpoint.
 func serveContext(shutdown context.Context, listenAddress, configPath, tokenPath, revisionPath string) error {
 	token, err := readToken(tokenPath)
 	if err != nil {
@@ -117,6 +131,7 @@ func serveContext(shutdown context.Context, listenAddress, configPath, tokenPath
 	return waitForServe(shutdown, server, serveErr, service.Fatal())
 }
 
+// runtimeStreamLoggingInterceptor runs the requested operation.
 func runtimeStreamLoggingInterceptor(server any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 	ctx, requestID, err := interaction.EnsureIncoming(stream.Context())
 	if err != nil {
@@ -129,6 +144,7 @@ func runtimeStreamLoggingInterceptor(server any, stream grpc.ServerStream, info 
 	return err
 }
 
+// runtimeContextServerStream is an internal type used by the package.
 type runtimeContextServerStream struct {
 	grpc.ServerStream
 	ctx context.Context
@@ -137,6 +153,7 @@ type runtimeContextServerStream struct {
 // Context returns the context associated with the value.
 func (s *runtimeContextServerStream) Context() context.Context { return s.ctx }
 
+// waitForServe performs the operation represented by its name.
 func waitForServe(shutdown context.Context, server *grpc.Server, serveErr <-chan error, fatal <-chan error) error {
 	select {
 	case <-shutdown.Done():
@@ -160,6 +177,7 @@ func waitForServe(shutdown context.Context, server *grpc.Server, serveErr <-chan
 	}
 }
 
+// validateCandidate validates the supplied value.
 func validateCandidate(path string) error {
 	var configuration []byte
 	var err error
@@ -181,6 +199,7 @@ func validateCandidate(path string) error {
 	return nil
 }
 
+// runtimeLoggingInterceptor runs the requested operation.
 func runtimeLoggingInterceptor(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	ctx, requestID, traceErr := interaction.EnsureIncoming(ctx)
 	if traceErr != nil {
@@ -192,6 +211,7 @@ func runtimeLoggingInterceptor(ctx context.Context, request any, info *grpc.Unar
 	return response, err
 }
 
+// healthcheck performs the operation represented by its name.
 func healthcheck(address, tokenPath string) error {
 	token, err := readToken(tokenPath)
 	if err != nil {
@@ -219,6 +239,7 @@ func healthcheck(address, tokenPath string) error {
 	return nil
 }
 
+// readToken reads the requested value.
 func readToken(path string) ([]byte, error) {
 	if strings.TrimSpace(path) == "" {
 		return nil, errors.New("runtime token path is empty")
@@ -234,6 +255,7 @@ func readToken(path string) ([]byte, error) {
 	return token, nil
 }
 
+// readOptionalConfig reads the requested value.
 func readOptionalConfig(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -242,6 +264,7 @@ func readOptionalConfig(path string) ([]byte, error) {
 	return data, err
 }
 
+// allowedRuntimeCall performs the operation represented by its name.
 func allowedRuntimeCall(method, identity string) bool {
 	if identity == "healthcheck" {
 		return method == xrayruntimev1.Runtime_Health_FullMethodName
@@ -252,6 +275,7 @@ func allowedRuntimeCall(method, identity string) bool {
 	return strings.HasPrefix(method, "/xrayeasy.xray.v1.Runtime/")
 }
 
+// envOr performs the operation represented by its name.
 func envOr(name, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(name)); value != "" {
 		return value

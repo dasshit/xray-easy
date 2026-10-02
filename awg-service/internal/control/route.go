@@ -5,6 +5,7 @@ import (
 	"strings"
 )
 
+// routeDevice performs the operation represented by its name.
 func routeDevice(route string) (string, error) {
 	parts := strings.Fields(route)
 	for i := 0; i+1 < len(parts); i++ {

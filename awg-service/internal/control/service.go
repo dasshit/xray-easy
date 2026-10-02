@@ -30,6 +30,7 @@ type Service struct {
 	telemetryNow      func() time.Time
 }
 
+// servicePeerNamePattern is an internal package variable.
 var servicePeerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 
 // NewService creates the RPC adapter for a configured lifecycle manager.
@@ -39,6 +40,7 @@ func NewService(manager *Manager, options Options) *Service {
 	return service
 }
 
+// removeOrphanedOperationKeys removes the supplied value.
 func (s *Service) removeOrphanedOperationKeys() {
 	if s == nil || s.manager == nil || strings.TrimSpace(s.options.DataDir) == "" {
 		return
@@ -271,6 +273,7 @@ func (s *Service) CreatePeer(ctx context.Context, request *awgapi.CreatePeerRequ
 	return peerMessage(peer), nil
 }
 
+// persistPeerProfile performs the operation represented by its name.
 func (s *Service) persistPeerProfile(peer Peer, privateKey, operationID string) error {
 	config, err := s.manager.RenderClientConfig(peer.Name, privateKey)
 	if err != nil {
@@ -373,6 +376,7 @@ func (s *Service) RenderClientConfig(_ context.Context, request *awgapi.RenderCl
 	return &awgapi.ClientConfigResponse{Config: config}, nil
 }
 
+// peerMessage performs the operation represented by its name.
 func peerMessage(peer Peer) *awgapi.Peer {
 	var createdAt *timestamppb.Timestamp
 	if !peer.CreatedAt.IsZero() {
@@ -383,6 +387,7 @@ func peerMessage(peer Peer) *awgapi.Peer {
 
 var _ API = (*Service)(nil)
 
+// clientProfilePath performs the operation represented by its name.
 func clientProfilePath(dataDir, name string) (string, error) {
 	if !servicePeerNamePattern.MatchString(name) {
 		return "", ErrInvalid
@@ -393,6 +398,7 @@ func clientProfilePath(dataDir, name string) (string, error) {
 	return filepath.Join(dataDir, "profiles", name+".conf"), nil
 }
 
+// writeClientProfile writes the supplied value.
 func writeClientProfile(dataDir, name, config string) error {
 	path, err := clientProfilePath(dataDir, name)
 	if err != nil {
@@ -410,6 +416,7 @@ func writeClientProfile(dataDir, name, config string) error {
 	})
 }
 
+// pendingOperationKeyPath performs the operation represented by its name.
 func pendingOperationKeyPath(dataDir, operationID string) (string, error) {
 	if !operationIDPattern.MatchString(operationID) || strings.TrimSpace(dataDir) == "" {
 		return "", ErrInvalid
@@ -417,6 +424,7 @@ func pendingOperationKeyPath(dataDir, operationID string) (string, error) {
 	return filepath.Join(dataDir, "operations", operationID+".key"), nil
 }
 
+// writePendingOperationKey writes the supplied value.
 func writePendingOperationKey(dataDir, operationID, privateKey string) error {
 	path, err := pendingOperationKeyPath(dataDir, operationID)
 	if err != nil {
@@ -451,6 +459,7 @@ func writePendingOperationKey(dataDir, operationID, privateKey string) error {
 	return file.Close()
 }
 
+// readPendingOperationKey reads the requested value.
 func readPendingOperationKey(dataDir, operationID string) (string, error) {
 	path, err := pendingOperationKeyPath(dataDir, operationID)
 	if err != nil {
@@ -474,6 +483,7 @@ func readPendingOperationKey(dataDir, operationID string) (string, error) {
 	return key, nil
 }
 
+// removePendingOperationKey removes the supplied value.
 func removePendingOperationKey(dataDir, operationID string) error {
 	path, err := pendingOperationKeyPath(dataDir, operationID)
 	if err != nil {
@@ -485,14 +495,21 @@ func removePendingOperationKey(dataDir, operationID string) error {
 	return nil
 }
 
+// savedProfileFile is an internal type used by the package.
 type savedProfileFile interface {
+	// Name defines part of the interface contract.
 	Name() string
+	// Chmod defines part of the interface contract.
 	Chmod(os.FileMode) error
+	// WriteString defines part of the interface contract.
 	WriteString(string) (int, error)
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// writeClientProfileWithPath writes the supplied value.
 func writeClientProfileWithPath(path, directory, config string, createTemp func(string, string) (savedProfileFile, error)) error {
 	file, err := createTemp(directory, ".profile-*")
 	if err != nil {
@@ -521,6 +538,7 @@ func writeClientProfileWithPath(path, directory, config string, createTemp func(
 	return nil
 }
 
+// readClientProfile reads the requested value.
 func readClientProfile(dataDir, name string) (string, error) {
 	path, err := clientProfilePath(dataDir, name)
 	if err != nil {
@@ -543,6 +561,7 @@ func readClientProfile(dataDir, name string) (string, error) {
 	return string(data), nil
 }
 
+// privateKeyFromProfile performs the operation represented by its name.
 func privateKeyFromProfile(config string) (string, error) {
 	section := ""
 	privateKey := ""
@@ -567,6 +586,7 @@ func privateKeyFromProfile(config string) (string, error) {
 	return privateKey, nil
 }
 
+// removeClientProfile removes the supplied value.
 func removeClientProfile(dataDir, name string) error {
 	path, err := clientProfilePath(dataDir, name)
 	if err != nil {
@@ -578,6 +598,7 @@ func removeClientProfile(dataDir, name string) error {
 	return nil
 }
 
+// statusError performs the operation represented by its name.
 func statusError(operation string, _ error) error {
 	return status.Error(codes.Internal, operation+" failed")
 }

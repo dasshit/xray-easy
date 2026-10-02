@@ -11,14 +11,17 @@ import (
 	"xray-easy/internal/domain"
 )
 
+// defaultAWGPort is an internal package constant.
 const defaultAWGPort = 1234
 
+// awgConfigurationChanged performs the operation represented by its name.
 func awgConfigurationChanged(before, after configuration) bool {
 	return before.awgEnabled != after.awgEnabled ||
 		before.awgPublicHost != after.awgPublicHost ||
 		before.awgPublicPort != after.awgPublicPort
 }
 
+// validateAWGConfiguration validates the supplied value.
 func validateAWGConfiguration(cfg configuration) error {
 	port := cfg.awgPublicPort
 	if port == 0 {
@@ -38,6 +41,7 @@ func validateAWGConfiguration(cfg configuration) error {
 	return nil
 }
 
+// updateAWGConfiguration performs the operation represented by its name.
 func updateAWGConfiguration(root string, cfg configuration) error {
 	path := filepath.Join(root, ".env")
 	data, err := os.ReadFile(path)

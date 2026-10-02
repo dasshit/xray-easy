@@ -14,11 +14,16 @@ import (
 )
 
 const (
-	argonMemory  = 64 * 1024
-	argonTime    = 3
+	// argonMemory is an internal package constant.
+	argonMemory = 64 * 1024
+	// argonTime is an internal package constant.
+	argonTime = 3
+	// argonThreads is an internal package constant.
 	argonThreads = 1
-	saltBytes    = 16
-	keyBytes     = 32
+	// saltBytes is an internal package constant.
+	saltBytes = 16
+	// keyBytes is an internal package constant.
+	keyBytes = 32
 )
 
 // HashPassword reports whether the value contains the requested capability.

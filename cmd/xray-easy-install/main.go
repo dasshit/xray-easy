@@ -19,9 +19,13 @@ import (
 )
 
 const (
-	defaultVersion          = "26.7.28"
-	defaultProject          = "xray-easy"
-	legacyProject           = "xray-easy-stage1"
+	// defaultVersion is an internal package constant.
+	defaultVersion = "26.7.28"
+	// defaultProject is an internal package constant.
+	defaultProject = "xray-easy"
+	// legacyProject is an internal package constant.
+	legacyProject = "xray-easy-stage1"
+	// startupRecoveryCommands is an internal package constant.
 	startupRecoveryCommands = `Useful commands from the repository directory:
   docker compose -f compose.yaml ps --all
   docker compose -f compose.yaml logs --tail=100 --timestamps
@@ -32,6 +36,7 @@ If xray-easy is stopped, create a report with a one-off container:
   docker compose -f compose.yaml run --rm --no-deps control-plane doctor bundle`
 )
 
+// configuration is an internal type used by the package.
 type configuration struct {
 	project            string
 	version            string
@@ -55,13 +60,18 @@ type configuration struct {
 	awgPublicPort      int
 }
 
+// commandRunner is an internal type used by the package.
 type commandRunner interface {
+	// run defines part of the interface contract.
 	run(context.Context, string, bool, ...string) error
+	// capture defines part of the interface contract.
 	capture(context.Context, string, ...string) (string, error)
 }
 
+// dockerRunner is an internal type used by the package.
 type dockerRunner struct{ output io.Writer }
 
+// run runs the requested operation.
 func (r dockerRunner) run(ctx context.Context, dir string, visible bool, args ...string) error {
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = dir
@@ -83,6 +93,7 @@ func (r dockerRunner) run(ctx context.Context, dir string, visible bool, args ..
 	return nil
 }
 
+// capture performs the operation represented by its name.
 func (r dockerRunner) capture(ctx context.Context, dir string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "docker", args...)
 	cmd.Dir = dir
@@ -133,10 +144,12 @@ func composeEnvironment() []string {
 	return env
 }
 
+// main starts the program.
 func main() {
 	os.Exit(runMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
 
+// runMain runs the requested operation.
 func runMain(args []string, input, output *os.File, errorsOut io.Writer) int {
 	if len(args) != 1 {
 		fmt.Fprintln(errorsOut, "usage: xray-easy-install <repository-directory>")
@@ -163,16 +176,19 @@ func runMain(args []string, input, output *os.File, errorsOut io.Writer) int {
 	return 0
 }
 
+// run runs the requested operation.
 func run(ctx context.Context, root string, input io.Reader, output io.Writer, runner commandRunner) error {
 	_, err := runInstall(ctx, root, input, output, runner)
 	return err
 }
 
+// installResult is an internal type used by the package.
 type installResult struct {
 	config  configuration
 	started bool
 }
 
+// runInstall runs the requested operation.
 func runInstall(ctx context.Context, root string, input io.Reader, output io.Writer, runner commandRunner) (installResult, error) {
 	ui := newWizard(input, output)
 	defer ui.close()
@@ -385,6 +401,7 @@ func collectStartupDiagnostics(ctx context.Context, root string, runner commandR
 	}
 }
 
+// printNextSteps performs the operation represented by its name.
 func printNextSteps(output io.Writer, cfg configuration) {
 	fmt.Fprintf(output, "Xray-easy is running.\n\nOn your computer:\n  ssh -N -L %d:127.0.0.1:%d user@your-vds\n\nOpen http://127.0.0.1:%d to create the admin and first device.\nAllow inbound TCP %d (VLESS) and TCP %d (VMess, if used) through the VDS firewall.\n", cfg.ui, cfg.ui, cfg.ui, cfg.public, cfg.vmess)
 	if cfg.shadowsocksEnabled {
@@ -401,6 +418,7 @@ func printNextSteps(output io.Writer, cfg configuration) {
 	}
 }
 
+// parsePort parses the supplied value.
 func parsePort(value string) (int, error) {
 	port, err := strconv.Atoi(value)
 	if err != nil || port < 1 || port > 65535 {
@@ -409,6 +427,7 @@ func parsePort(value string) (int, error) {
 	return port, nil
 }
 
+// defaultVMessPort performs the operation represented by its name.
 func defaultVMessPort(publicPort, uiPort int) int {
 	for port := 9443; port <= 65535; port++ {
 		if port != publicPort && port != uiPort {
@@ -423,6 +442,7 @@ func defaultVMessPort(publicPort, uiPort int) int {
 	return 0
 }
 
+// versionAtLeast performs the operation represented by its name.
 func versionAtLeast(version, minimum string) bool {
 	parse := func(value string) ([3]int, bool) {
 		var result [3]int
@@ -464,6 +484,7 @@ func versionAtLeast(version, minimum string) bool {
 	return true
 }
 
+// createConfiguration creates the requested value.
 func createConfiguration(root string, cfg configuration) error {
 	if cfg.vmess == 0 {
 		cfg.vmess = defaultVMessPort(cfg.public, cfg.ui)
@@ -496,6 +517,7 @@ func createConfiguration(root string, cfg configuration) error {
 	return nil
 }
 
+// randomBase64 performs the operation represented by its name.
 func randomBase64(size int) (string, error) {
 	data := make([]byte, size)
 	if _, err := rand.Read(data); err != nil {
@@ -504,6 +526,7 @@ func randomBase64(size int) (string, error) {
 	return base64.StdEncoding.EncodeToString(data), nil
 }
 
+// writeNewPrivateFile writes the supplied value.
 func writeNewPrivateFile(path, content string) error {
 	file, err := os.CreateTemp(filepath.Dir(path), ".xray-easy-*")
 	if err != nil {
@@ -530,6 +553,7 @@ func writeNewPrivateFile(path, content string) error {
 	return os.Link(file.Name(), path)
 }
 
+// loadConfiguration performs the operation represented by its name.
 func loadConfiguration(root string) (configuration, error) {
 	values, err := readEnvironmentFile(filepath.Join(root, ".env"))
 	if err != nil {
@@ -621,6 +645,7 @@ func loadConfiguration(root string) (configuration, error) {
 	return cfg, nil
 }
 
+// defaultShadowsocksPort performs the operation represented by its name.
 func defaultShadowsocksPort(publicPort, vmessPort, uiPort int) int {
 	for port := 8388; port <= 65535; port++ {
 		if port != publicPort && port != vmessPort && port != uiPort {
@@ -630,6 +655,7 @@ func defaultShadowsocksPort(publicPort, vmessPort, uiPort int) int {
 	return 0
 }
 
+// validateShadowsocksConfiguration validates the supplied value.
 func validateShadowsocksConfiguration(cfg configuration) error {
 	port := cfg.shadowsocks
 	if port == 0 {
@@ -652,6 +678,7 @@ func validateShadowsocksConfiguration(cfg configuration) error {
 	return nil
 }
 
+// defaultTrojanPort performs the operation represented by its name.
 func defaultTrojanPort(publicPort, vmessPort, shadowsocksPort, uiPort int) int {
 	for port := 10443; port <= 65535; port++ {
 		if port != publicPort && port != vmessPort && port != shadowsocksPort && port != uiPort {
@@ -661,6 +688,7 @@ func defaultTrojanPort(publicPort, vmessPort, shadowsocksPort, uiPort int) int {
 	return 0
 }
 
+// validateTrojanConfiguration validates the supplied value.
 func validateTrojanConfiguration(cfg configuration) error {
 	port := cfg.trojan
 	if port == 0 {
@@ -675,6 +703,7 @@ func validateTrojanConfiguration(cfg configuration) error {
 	return nil
 }
 
+// composeProfileEnabled performs the operation represented by its name.
 func composeProfileEnabled(value, profile string) bool {
 	for _, current := range strings.Split(value, ",") {
 		if strings.TrimSpace(current) == profile {
@@ -684,6 +713,7 @@ func composeProfileEnabled(value, profile string) bool {
 	return false
 }
 
+// readEnvironmentFile reads the requested value.
 func readEnvironmentFile(path string) (map[string]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
@@ -710,6 +740,7 @@ func readEnvironmentFile(path string) (map[string]string, error) {
 	return values, scanner.Err()
 }
 
+// valueOr performs the operation represented by its name.
 func valueOr(value, fallback string) string {
 	if value == "" {
 		return fallback

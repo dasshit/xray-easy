@@ -236,6 +236,7 @@ func (s *Service) ReplaceInbound(ctx context.Context, request *controllerv1.Repl
 	return &controllerv1.OperationResponse{Ok: true, OperationId: request.OperationId, StateRevision: request.StateRevision}, nil
 }
 
+// configOperationContext performs the operation represented by its name.
 func configOperationContext(ctx context.Context, operationID string, revision int64) (context.Context, error) {
 	if revision < 1 {
 		return nil, status.Error(codes.InvalidArgument, "state_revision must be positive")
@@ -366,6 +367,7 @@ func (s *Service) RemoveDeviceUser(ctx context.Context, request *controllerv1.Re
 	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
+// deviceUsers performs the operation represented by its name.
 func deviceUsers(ctx context.Context, handler XrayHandlerRuntime, protocol string) ([]string, error) {
 	switch protocol {
 	case "vless":
@@ -383,6 +385,7 @@ func deviceUsers(ctx context.Context, handler XrayHandlerRuntime, protocol strin
 	}
 }
 
+// containsUser performs the operation represented by its name.
 func containsUser(users []string, email string) bool {
 	for _, current := range users {
 		if current == email {
@@ -553,6 +556,7 @@ func (s *Service) RestoreAmneziaWGBackup(ctx context.Context, request *controlle
 	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
+// xrayHandler performs the operation represented by its name.
 func (s *Service) xrayHandler() (XrayHandlerRuntime, error) {
 	if s == nil || s.handler == nil {
 		return nil, status.Error(codes.Unavailable, "Xray Handler adapter is unavailable")
@@ -560,6 +564,7 @@ func (s *Service) xrayHandler() (XrayHandlerRuntime, error) {
 	return s.handler, nil
 }
 
+// supportedXrayProtocol performs the operation represented by its name.
 func supportedXrayProtocol(protocol string) bool {
 	switch protocol {
 	case "vless", "vmess", "hysteria2", "shadowsocks", "trojan":
@@ -569,6 +574,7 @@ func supportedXrayProtocol(protocol string) bool {
 	}
 }
 
+// awgRuntime performs the operation represented by its name.
 func (s *Service) awgRuntime() (AmneziaWGRuntime, error) {
 	if s == nil || s.awg == nil {
 		return nil, status.Error(codes.Unavailable, "AmneziaWG adapter is unavailable")
@@ -576,6 +582,7 @@ func (s *Service) awgRuntime() (AmneziaWGRuntime, error) {
 	return s.awg, nil
 }
 
+// protobufTime performs the operation represented by its name.
 func protobufTime(value time.Time) *timestamppb.Timestamp {
 	if value.IsZero() {
 		return nil
@@ -583,10 +590,12 @@ func protobufTime(value time.Time) *timestamppb.Timestamp {
 	return timestamppb.New(value.UTC())
 }
 
+// toProtoPeer performs the operation represented by its name.
 func toProtoPeer(peer domain.AmneziaWGPeer) *controllerv1.AmneziaWGPeer {
 	return &controllerv1.AmneziaWGPeer{Name: peer.Name, PublicKey: peer.PublicKey, Ipv4: peer.IPv4, Ipv6: peer.IPv6, CreatedAt: protobufTime(peer.CreatedAt)}
 }
 
+// runtime runs the requested operation.
 func (s *Service) runtime() (XrayRuntime, error) {
 	if s == nil || s.xray == nil {
 		return nil, status.Error(codes.Unavailable, "Xray adapter is unavailable")

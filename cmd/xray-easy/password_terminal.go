@@ -8,10 +8,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// readPasswordLineNoEcho reads the requested value.
 func readPasswordLineNoEcho(fd int) (password []byte, resultErr error) {
 	return readPasswordLineNoEchoWith(fd, getTerminalMode, setTerminalMode, readTerminalLine)
 }
 
+// readPasswordLineNoEchoWith reads the requested value.
 func readPasswordLineNoEchoWith(fd int, getMode func(int) (*unix.Termios, error), setMode func(int, *unix.Termios) error, readLine func() ([]byte, error)) (password []byte, resultErr error) {
 	original, err := getMode(fd)
 	if err != nil {
@@ -32,10 +34,12 @@ func readPasswordLineNoEchoWith(fd int, getMode func(int) (*unix.Termios, error)
 	return readLine()
 }
 
+// readTerminalLine reads the requested value.
 func readTerminalLine() ([]byte, error) {
 	return readTerminalLineFrom(os.Stdin)
 }
 
+// readTerminalLineFrom reads the requested value.
 func readTerminalLineFrom(input io.Reader) ([]byte, error) {
 	password := make([]byte, 0, 64)
 	var next [1]byte

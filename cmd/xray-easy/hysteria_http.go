@@ -20,8 +20,10 @@ import (
 	"xray-easy/internal/xray"
 )
 
+// hysteriaCertificateMaxBytes is an internal package constant.
 const hysteriaCertificateMaxBytes = 2 << 20
 
+// hysteriaSettingsRoute performs the operation represented by its name.
 func (s *server) hysteriaSettingsRoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -45,6 +47,7 @@ func (s *server) hysteriaSettingsRoute(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, status)
 }
 
+// hysteriaCertificateUpload performs the operation represented by its name.
 func (s *server) hysteriaCertificateUpload(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -94,6 +97,7 @@ func (s *server) hysteriaCertificateUpload(w http.ResponseWriter, r *http.Reques
 	writeJSON(w, http.StatusCreated, map[string]any{"certificate_id": id, "certificate": certificate})
 }
 
+// readMultipartFile reads the requested value.
 func readMultipartFile(form *multipart.Form, field string) ([]byte, error) {
 	files := form.File[field]
 	if len(files) != 1 || files[0].Size > hysteriaCertificateMaxBytes {
@@ -111,6 +115,7 @@ func readMultipartFile(form *multipart.Form, field string) ([]byte, error) {
 	return data, nil
 }
 
+// hysteriaCertificateGenerate performs the operation represented by its name.
 func (s *server) hysteriaCertificateGenerate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -150,6 +155,7 @@ func (s *server) hysteriaCertificateGenerate(w http.ResponseWriter, r *http.Requ
 	writeJSON(w, http.StatusCreated, map[string]any{"certificate_id": id, "certificate": certificate})
 }
 
+// hysteriaSettingsStatus performs the operation represented by its name.
 func (s *server) hysteriaSettingsStatus(ctx context.Context) (hysteriaSettingsResponse, error) {
 	settings, err := loadHysteriaSettings(ctx, s.store)
 	if err != nil {
@@ -199,6 +205,7 @@ func (s *server) hysteriaSettingsStatus(ctx context.Context) (hysteriaSettingsRe
 	return response, nil
 }
 
+// hysteriaSettingsPreview performs the operation represented by its name.
 func (s *server) hysteriaSettingsPreview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -307,10 +314,12 @@ func (s *server) hysteriaSettingsPreview(w http.ResponseWriter, r *http.Request)
 	writeJSON(w, http.StatusOK, response)
 }
 
+// vmessCertificateChanged performs the operation represented by its name.
 func vmessCertificateChanged(base, candidate domain.HysteriaSettings) bool {
 	return base.CertificateID != candidate.CertificateID
 }
 
+// hysteriaSettingsDiff performs the operation represented by its name.
 func hysteriaSettingsDiff(base, candidate domain.HysteriaSettings, node domain.Settings) []settingsDiff {
 	values := []settingsDiff{}
 	add := func(field, from, to string) {
@@ -336,6 +345,7 @@ func hysteriaSettingsDiff(base, candidate domain.HysteriaSettings, node domain.S
 	return values
 }
 
+// hysteriaSettingsApply performs the operation represented by its name.
 func (s *server) hysteriaSettingsApply(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, nil)
@@ -501,6 +511,7 @@ func (s *server) hysteriaSettingsApply(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"applied": true, "settings": status, "backup": backupInfo.Name})
 }
 
+// finishHysteriaChange performs the operation represented by its name.
 func (s *server) finishHysteriaChange(id string, applied bool) {
 	s.hysteriaMu.Lock()
 	defer s.hysteriaMu.Unlock()
@@ -514,6 +525,7 @@ func (s *server) finishHysteriaChange(id string, applied bool) {
 	}
 }
 
+// hysteriaPublicSettings performs the operation represented by its name.
 func (s *server) hysteriaPublicSettings(settings domain.HysteriaSettings, node domain.Settings, certificate *hysteria.CertificateInfo) hysteriaSettingsResponse {
 	host := settings.Host
 	if host == "" {
@@ -529,10 +541,12 @@ func (s *server) hysteriaPublicSettings(settings domain.HysteriaSettings, node d
 	}
 }
 
+// hysteriaTLSDir performs the operation represented by its name.
 func (s *server) hysteriaTLSDir() string {
 	return filepath.Join(s.dataDir, "hysteria-tls")
 }
 
+// lockHysteriaStorage performs the operation represented by its name.
 func (s *server) lockHysteriaStorage(ctx context.Context) (func(), error) {
 	s.applyMu.Lock()
 	lock, err := maintenance.Acquire(ctx, s.maintenancePath)

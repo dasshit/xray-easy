@@ -51,6 +51,7 @@ func ApplyShadowsocksSettings(settings *Settings, value domain.ShadowsocksSettin
 	settings.ShadowsocksNetwork = value.Network
 }
 
+// validCertificateID performs the operation represented by its name.
 func validCertificateID(value string) bool {
 	if len(value) != 32 || strings.ToLower(value) != value {
 		return false

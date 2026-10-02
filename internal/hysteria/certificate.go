@@ -44,6 +44,7 @@ func Import(root string, certPEM, keyPEM []byte, serverName string) (string, Cer
 	return importWithVerifier(root, certPEM, keyPEM, serverName, verifyTrusted)
 }
 
+// importWithVerifier performs the operation represented by its name.
 func importWithVerifier(root string, certPEM, keyPEM []byte, serverName string, verify func([]byte, *x509.Certificate, string) error) (string, CertificateInfo, error) {
 	parsed, info, err := validatePair(certPEM, keyPEM, serverName)
 	if err != nil {
@@ -135,6 +136,7 @@ func Inspect(root, id, serverName string, allowLegacyRoot bool) (CertificateInfo
 	return info, err
 }
 
+// versionDirectory performs the operation represented by its name.
 func versionDirectory(root, id string, allowLegacyRoot bool) (string, error) {
 	if id == "" && allowLegacyRoot {
 		return root, nil
@@ -148,6 +150,7 @@ func versionDirectory(root, id string, allowLegacyRoot bool) (string, error) {
 	return filepath.Join(root, id), nil
 }
 
+// validatePair validates the supplied value.
 func validatePair(certPEM, keyPEM []byte, serverName string) (*x509.Certificate, CertificateInfo, error) {
 	block, _ := pem.Decode(certPEM)
 	if block == nil || block.Type != "CERTIFICATE" {
@@ -194,6 +197,7 @@ func validatePair(certPEM, keyPEM []byte, serverName string) (*x509.Certificate,
 	return cert, certificateInfo(cert), nil
 }
 
+// verifyTrusted performs the operation represented by its name.
 func verifyTrusted(chainPEM []byte, cert *x509.Certificate, serverName string) error {
 	roots, err := x509.SystemCertPool()
 	if err != nil || roots == nil {
@@ -202,6 +206,7 @@ func verifyTrusted(chainPEM []byte, cert *x509.Certificate, serverName string) e
 	return verifyTrustedWithRoots(chainPEM, cert, serverName, roots)
 }
 
+// verifyTrustedWithRoots performs the operation represented by its name.
 func verifyTrustedWithRoots(chainPEM []byte, cert *x509.Certificate, serverName string, roots *x509.CertPool) error {
 	if roots == nil {
 		return errors.New("system certificate roots are unavailable")
@@ -232,6 +237,7 @@ func verifyTrustedWithRoots(chainPEM []byte, cert *x509.Certificate, serverName 
 	return nil
 }
 
+// certificateInfo performs the operation represented by its name.
 func certificateInfo(cert *x509.Certificate) CertificateInfo {
 	addresses := make([]string, 0, len(cert.IPAddresses))
 	for _, address := range cert.IPAddresses {
@@ -241,6 +247,7 @@ func certificateInfo(cert *x509.Certificate) CertificateInfo {
 	return CertificateInfo{Subject: cert.Subject.String(), Issuer: cert.Issuer.String(), DNSNames: append([]string{}, cert.DNSNames...), IPAddresses: addresses, NotBefore: cert.NotBefore.UTC(), NotAfter: cert.NotAfter.UTC(), Fingerprint: strings.ToUpper(hex.EncodeToString(fingerprint[:]))}
 }
 
+// writeVersion writes the supplied value.
 func writeVersion(root, id string, cert, key []byte) error {
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return err
@@ -262,6 +269,7 @@ func writeVersion(root, id string, cert, key []byte) error {
 	return nil
 }
 
+// writePrivate writes the supplied value.
 func writePrivate(path string, data []byte, mode os.FileMode) error {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
@@ -278,10 +286,12 @@ func writePrivate(path string, data []byte, mode os.FileMode) error {
 	return file.Close()
 }
 
+// newID performs the operation represented by its name.
 func newID() (string, error) {
 	return newIDFrom(rand.Reader)
 }
 
+// newIDFrom performs the operation represented by its name.
 func newIDFrom(source io.Reader) (string, error) {
 	value := make([]byte, 16)
 	if _, err := io.ReadFull(source, value); err != nil {

@@ -14,6 +14,7 @@ import (
 	"xray-easy/internal/domain"
 )
 
+// hysteriaConfigurationChanged performs the operation represented by its name.
 func hysteriaConfigurationChanged(before, after configuration) bool {
 	return before.hysteriaEnabled != after.hysteriaEnabled ||
 		before.hysteriaMode != after.hysteriaMode ||
@@ -21,6 +22,7 @@ func hysteriaConfigurationChanged(before, after configuration) bool {
 		before.hysteriaServerName != after.hysteriaServerName
 }
 
+// validateHysteriaConfiguration validates the supplied value.
 func validateHysteriaConfiguration(cfg configuration) error {
 	if !cfg.hysteriaEnabled {
 		return nil
@@ -51,10 +53,12 @@ func validateHysteriaConfiguration(cfg configuration) error {
 	return nil
 }
 
+// hysteriaEnvironment performs the operation represented by its name.
 func hysteriaEnvironment(cfg configuration) string {
 	return fmt.Sprintf("XRAY_HYSTERIA2_ENABLED=%t\nXRAY_HYSTERIA2_TLS_MODE=%s\nXRAY_HYSTERIA2_CERT_IP=%s\nXRAY_HYSTERIA2_TLS_SERVER_NAME=%s\n", cfg.hysteriaEnabled, cfg.hysteriaMode, cfg.hysteriaCertIP, cfg.hysteriaServerName)
 }
 
+// resolveHysteriaSource performs the operation represented by its name.
 func resolveHysteriaSource(root, input, defaultName string) string {
 	if input == "" {
 		return filepath.Join(root, "secrets", "hysteria", defaultName)
@@ -70,6 +74,7 @@ func resolveHysteriaSource(root, input, defaultName string) string {
 	return filepath.Join(root, input)
 }
 
+// updateHysteriaConfiguration performs the operation represented by its name.
 func updateHysteriaConfiguration(root string, cfg configuration) error {
 	path := filepath.Join(root, ".env")
 	data, err := os.ReadFile(path)
@@ -126,6 +131,7 @@ func updateHysteriaConfiguration(root string, cfg configuration) error {
 	return os.Rename(file.Name(), path)
 }
 
+// importHysteriaCertificate performs the operation represented by its name.
 func importHysteriaCertificate(root string, cfg configuration) (bool, error) {
 	certPath := cfg.hysteriaCertSource
 	keyPath := cfg.hysteriaKeySource
@@ -177,6 +183,7 @@ func importHysteriaCertificate(root string, cfg configuration) (bool, error) {
 	return true, nil
 }
 
+// writeImportedFile writes the supplied value.
 func writeImportedFile(path string, content []byte, mode os.FileMode) error {
 	file, err := os.CreateTemp(filepath.Dir(path), ".hysteria-import-*")
 	if err != nil {

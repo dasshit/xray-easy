@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+// amneziaWGPeerNamePattern is an internal package variable.
 var amneziaWGPeerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 
 // AmneziaWGStatus describes the configured server endpoint without exposing

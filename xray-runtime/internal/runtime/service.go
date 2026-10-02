@@ -25,12 +25,19 @@ import (
 )
 
 const (
+	// maxConfigurationBytes is an internal package constant.
 	maxConfigurationBytes = 16 << 20
-	maxOperationIDBytes   = 128
-	maxInboundTagBytes    = 128
-	maxUserEmailBytes     = 320
-	maxCredentialBytes    = 512
-	maxUserFlowBytes      = 64
+	// maxOperationIDBytes is an internal package constant.
+	maxOperationIDBytes = 128
+	// maxInboundTagBytes is an internal package constant.
+	maxInboundTagBytes = 128
+	// maxUserEmailBytes is an internal package constant.
+	maxUserEmailBytes = 320
+	// maxCredentialBytes is an internal package constant.
+	maxCredentialBytes = 512
+	// maxUserFlowBytes is an internal package constant.
+	maxUserFlowBytes = 64
+	// telemetryOnlineWindow is an internal package constant.
 	telemetryOnlineWindow = 15 * time.Second
 )
 
@@ -67,6 +74,7 @@ type EngineHandle interface {
 	ListUsers(context.Context, string) ([]string, error)
 }
 
+// coreLoader is an internal type used by the package.
 type coreLoader struct {
 	writeLog func(level, component, message string)
 	allowLog func(level string) bool
@@ -120,6 +128,7 @@ type Service struct {
 	onlineState       map[string]bool
 }
 
+// logRecord is an internal type used by the package.
 type logRecord struct {
 	at        time.Time
 	level     string
@@ -216,6 +225,7 @@ func (s *Service) Close() error {
 // stop the process so Docker can reconstruct the runtime from active.json.
 func (s *Service) Fatal() <-chan error { return s.fatal }
 
+// markFatal performs the operation represented by its name.
 func (s *Service) markFatal(err error) {
 	s.mu.Lock()
 	s.state = xrayruntimev1.RuntimeState_RUNTIME_STATE_FAILED
@@ -228,6 +238,7 @@ func (s *Service) markFatal(err error) {
 	}
 }
 
+// addLog adds the supplied value.
 func (s *Service) addLog(level, component, message string) {
 	if component == "xray" && !s.allowXrayLog(level) {
 		return
@@ -246,6 +257,7 @@ func (s *Service) addLog(level, component, message string) {
 	slog.Log(context.Background(), runtimeLogLevel(level), "runtime event", "service", "xray-runtime", "component", component, "message", entry.message)
 }
 
+// allowXrayLog performs the operation represented by its name.
 func (s *Service) allowXrayLog(level string) bool {
 	s.mu.RLock()
 	configured := s.logLevel
@@ -265,6 +277,7 @@ func (s *Service) allowXrayLog(level string) bool {
 	return current <= limit
 }
 
+// emitEvent performs the operation represented by its name.
 func (s *Service) emitEvent(severity, component, name string, protocol xrayruntimev1.Protocol, email, sourceIP, detail string) {
 	s.eventMu.Lock()
 	s.eventSequence++
@@ -278,6 +291,7 @@ func (s *Service) emitEvent(severity, component, name string, protocol xrayrunti
 	s.eventMu.Unlock()
 }
 
+// firstSourceIP performs the operation represented by its name.
 func firstSourceIP(observations []*xrayruntimev1.IPObservation) string {
 	for _, observation := range observations {
 		if observation != nil && strings.TrimSpace(observation.GetAddress()) != "" {
@@ -287,6 +301,7 @@ func firstSourceIP(observations []*xrayruntimev1.IPObservation) string {
 	return ""
 }
 
+// runtimeLogLevel runs the requested operation.
 func runtimeLogLevel(level string) slog.Level {
 	switch level {
 	case "error":
@@ -298,6 +313,7 @@ func runtimeLogLevel(level string) slog.Level {
 	}
 }
 
+// configuredLogLevel performs the operation represented by its name.
 func configuredLogLevel(configuration []byte) string {
 	var document struct {
 		Log struct {
@@ -333,6 +349,7 @@ func (s *Service) SetLogLevel(ctx context.Context, request *xrayruntimev1.SetLog
 	return operationResponse(request.GetOperationId(), 0, previous == s.logLevel), nil
 }
 
+// supportedLogLevel performs the operation represented by its name.
 func supportedLogLevel(level string) bool {
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug", "info", "warning", "error", "none":
@@ -934,6 +951,7 @@ func (s *Service) ProbeIPv6Egress(ctx context.Context, _ *xrayruntimev1.EmptyReq
 	return &xrayruntimev1.ProbeResponse{Ok: true, CheckedAt: timestamppb.New(time.Now().UTC())}, nil
 }
 
+// protocolFromName performs the operation represented by its name.
 func protocolFromName(name string) (xrayruntimev1.Protocol, bool) {
 	switch name {
 	case "vless":
@@ -951,6 +969,7 @@ func protocolFromName(name string) (xrayruntimev1.Protocol, bool) {
 	}
 }
 
+// supportedProtocol performs the operation represented by its name.
 func supportedProtocol(protocol xrayruntimev1.Protocol) bool {
 	switch protocol {
 	case xrayruntimev1.Protocol_PROTOCOL_VLESS, xrayruntimev1.Protocol_PROTOCOL_VMESS, xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, xrayruntimev1.Protocol_PROTOCOL_TROJAN:
@@ -994,6 +1013,7 @@ func ConfiguredInboundTags(configuration []byte) (map[xrayruntimev1.Protocol]str
 	return tags, nil
 }
 
+// mutationIdentity performs the operation represented by its name.
 func mutationIdentity(operationID, key, fingerprint string) (string, string) {
 	if strings.HasSuffix(operationID, "-rollback") {
 		key = "rollback:" + key
@@ -1001,10 +1021,12 @@ func mutationIdentity(operationID, key, fingerprint string) (string, string) {
 	return key, fingerprint
 }
 
+// userMutationKey performs the operation represented by its name.
 func userMutationKey(action string, protocol xrayruntimev1.Protocol, email string) string {
 	return action + ":" + protocol.String() + ":" + payloadFingerprint(email)
 }
 
+// revisionStatus performs the operation represented by its name.
 func revisionStatus(err error) error {
 	if errors.Is(err, ErrRevisionIO) {
 		return status.Error(codes.Unavailable, "Xray revision journal is unavailable")
@@ -1015,10 +1037,12 @@ func revisionStatus(err error) error {
 	return status.Error(codes.FailedPrecondition, err.Error())
 }
 
+// operationResponse performs the operation represented by its name.
 func operationResponse(operationID string, revision int64, alreadyApplied bool) *xrayruntimev1.OperationResponse {
 	return &xrayruntimev1.OperationResponse{OperationId: operationID, Revision: revision, AlreadyApplied: alreadyApplied}
 }
 
+// contextFailure performs the operation represented by its name.
 func contextFailure(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return status.FromContextError(err).Err()
@@ -1026,6 +1050,7 @@ func contextFailure(ctx context.Context) error {
 	return nil
 }
 
+// protocolEngine performs the operation represented by its name.
 func (s *Service) protocolEngine(protocol xrayruntimev1.Protocol) (string, EngineHandle, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -1036,6 +1061,7 @@ func (s *Service) protocolEngine(protocol xrayruntimev1.Protocol) (string, Engin
 	return tag, s.engine, nil
 }
 
+// commit performs the operation represented by its name.
 func (s *Service) commit(revision int64, operationID, key, fingerprint string) error {
 	if err := s.fence.Commit(revision, operationID, key, fingerprint); err != nil {
 		return err

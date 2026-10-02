@@ -26,27 +26,45 @@ import (
 )
 
 const (
-	defaultDataDir     = "/data"
-	defaultPublicPort  = 1234
-	defaultListenPort  = 51820
+	// defaultDataDir is an internal package constant.
+	defaultDataDir = "/data"
+	// defaultPublicPort is an internal package constant.
+	defaultPublicPort = 1234
+	// defaultListenPort is an internal package constant.
+	defaultListenPort = 51820
+	// defaultControlAddr is an internal package constant.
 	defaultControlAddr = "172.31.241.4:10087"
-	defaultTokenPath   = "/data/control.token"
-	defaultIPv4Pool    = "10.88.0.0/24"
-	defaultIPv6Pool    = "fd88:88:88::/64"
-	defaultInterface   = "awg0"
+	// defaultTokenPath is an internal package constant.
+	defaultTokenPath = "/data/control.token"
+	// defaultIPv4Pool is an internal package constant.
+	defaultIPv4Pool = "10.88.0.0/24"
+	// defaultIPv6Pool is an internal package constant.
+	defaultIPv6Pool = "fd88:88:88::/64"
+	// defaultInterface is an internal package constant.
+	defaultInterface = "awg0"
 )
 
+// peerNamePattern is an internal package variable.
 var peerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 
+// controlRPC is an internal type used by the package.
 type controlRPC interface {
+	// Invoke defines part of the interface contract.
 	Invoke(context.Context, string, map[string]any) (map[string]any, error)
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// dialControlRPC is an internal package variable.
 var dialControlRPC = func() (controlRPC, error) { return dialControl() }
+
+// openControlManager is an internal package variable.
 var openControlManager = control.Open
+
+// listenControl is an internal package variable.
 var listenControl = net.Listen
 
+// main starts the program.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
@@ -55,6 +73,7 @@ func main() {
 	}
 }
 
+// run runs the requested operation.
 func run(args []string, stdout, stderr io.Writer) error {
 	if len(args) == 0 || args[0] == "serve" {
 		return serve()
@@ -83,6 +102,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 }
 
+// serve serves the requested endpoint.
 func serve() error {
 	opts, err := optionsFromEnvironment()
 	if err != nil {
@@ -107,6 +127,7 @@ func serve() error {
 	return serveControlService(manager, opts, token, listener, shutdown)
 }
 
+// serveControlService serves the requested endpoint.
 func serveControlService(manager *control.Manager, opts control.Options, token string, listener net.Listener, shutdown <-chan os.Signal) error {
 	server := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(control.LoggingInterceptor(), control.AuthInterceptor(token)),
@@ -118,6 +139,7 @@ func serveControlService(manager *control.Manager, opts control.Options, token s
 	return serveControlServer(server, listener, shutdown)
 }
 
+// serveControlServer serves the requested endpoint.
 func serveControlServer(server *grpc.Server, listener net.Listener, shutdown <-chan os.Signal) error {
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- server.Serve(listener) }()
@@ -133,6 +155,7 @@ func serveControlServer(server *grpc.Server, listener net.Listener, shutdown <-c
 	}
 }
 
+// optionsFromEnvironment performs the operation represented by its name.
 func optionsFromEnvironment() (control.Options, error) {
 	masterKey, err := base64.StdEncoding.DecodeString(strings.TrimSpace(os.Getenv("AWG_MASTER_KEY")))
 	if err != nil || len(masterKey) < 32 {
@@ -178,6 +201,7 @@ func optionsFromEnvironment() (control.Options, error) {
 	}, nil
 }
 
+// obfuscationFromEnvironment performs the operation represented by its name.
 func obfuscationFromEnvironment() map[string]string {
 	variables := map[string]string{
 		"jc": "AWG_JC", "jmin": "AWG_JMIN", "jmax": "AWG_JMAX",
@@ -199,6 +223,7 @@ func obfuscationFromEnvironment() map[string]string {
 	return values
 }
 
+// addPeer adds the supplied value.
 func addPeer(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("peer-add", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -245,6 +270,7 @@ func addPeer(args []string, stdout, stderr io.Writer) error {
 	})
 }
 
+// removePeer removes the supplied value.
 func removePeer(args []string, stdout io.Writer) error {
 	flags := flag.NewFlagSet("peer-remove", flag.ContinueOnError)
 	name := flags.String("name", "", "peer name")
@@ -271,6 +297,7 @@ func removePeer(args []string, stdout io.Writer) error {
 	return json.NewEncoder(stdout).Encode(result)
 }
 
+// removeSavedProfile removes the supplied value.
 func removeSavedProfile(dataDir, name string) error {
 	if !peerNamePattern.MatchString(name) {
 		return errors.New("peer name must contain 1-32 letters, digits or hyphens")
@@ -282,6 +309,7 @@ func removeSavedProfile(dataDir, name string) error {
 	return nil
 }
 
+// refreshProfile performs the operation represented by its name.
 func refreshProfile(args []string, stdout, stderr io.Writer) error {
 	flags := flag.NewFlagSet("profile", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -326,6 +354,7 @@ func refreshProfile(args []string, stdout, stderr io.Writer) error {
 	})
 }
 
+// privateKeyFromProfile performs the operation represented by its name.
 func privateKeyFromProfile(config string) (string, error) {
 	section := ""
 	privateKey := ""
@@ -350,6 +379,7 @@ func privateKeyFromProfile(config string) (string, error) {
 	return privateKey, nil
 }
 
+// writePrivateProfileAtomic writes the supplied value.
 func writePrivateProfileAtomic(path, contents string) error {
 	return writePrivateProfileAtomicWith(path, contents, profileFileOperations{
 		createTemp: func(dir, pattern string) (profileFile, error) { return os.CreateTemp(dir, pattern) },
@@ -358,14 +388,21 @@ func writePrivateProfileAtomic(path, contents string) error {
 	})
 }
 
+// profileFile is an internal type used by the package.
 type profileFile interface {
+	// Name defines part of the interface contract.
 	Name() string
+	// Chmod defines part of the interface contract.
 	Chmod(os.FileMode) error
+	// Write defines part of the interface contract.
 	Write([]byte) (int, error)
+	// Sync defines part of the interface contract.
 	Sync() error
+	// Close defines part of the interface contract.
 	Close() error
 }
 
+// profileFileOperations is an internal type used by the package.
 type profileFileOperations struct {
 	openExclusive func(string) (profileFile, error)
 	createTemp    func(string, string) (profileFile, error)
@@ -373,6 +410,7 @@ type profileFileOperations struct {
 	remove        func(string) error
 }
 
+// writePrivateProfileAtomicWith writes the supplied value.
 func writePrivateProfileAtomicWith(path, contents string, files profileFileOperations) error {
 	tmp, err := files.createTemp(filepath.Dir(path), ".profile-*.tmp")
 	if err != nil {
@@ -406,6 +444,7 @@ func writePrivateProfileAtomicWith(path, contents string, files profileFileOpera
 	return nil
 }
 
+// printRPC performs the operation represented by its name.
 func printRPC(method string, fields map[string]any, stdout io.Writer) error {
 	client, err := dialControlRPC()
 	if err != nil {
@@ -421,6 +460,7 @@ func printRPC(method string, fields map[string]any, stdout io.Writer) error {
 	return json.NewEncoder(stdout).Encode(result)
 }
 
+// checkHealth performs the operation represented by its name.
 func checkHealth() error {
 	client, err := dialControlRPC()
 	if err != nil {
@@ -433,18 +473,21 @@ func checkHealth() error {
 	return err
 }
 
+// dialControl performs the operation represented by its name.
 func dialControl() (*control.Client, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	return control.DialClient(ctx, envOr("AWG_CONTROL_ADDR", defaultControlAddr), envOr("AWG_CONTROL_TOKEN_FILE", defaultTokenPath))
 }
 
+// rollbackPeer performs the operation represented by its name.
 func rollbackPeer(client controlRPC, name string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_, _ = client.Invoke(ctx, "RemovePeer", map[string]any{"name": name})
 }
 
+// writePrivateProfile writes the supplied value.
 func writePrivateProfile(path, contents string) error {
 	return writePrivateProfileWith(path, contents, profileFileOperations{
 		openExclusive: func(path string) (profileFile, error) {
@@ -454,6 +497,7 @@ func writePrivateProfile(path, contents string) error {
 	})
 }
 
+// writePrivateProfileWith writes the supplied value.
 func writePrivateProfileWith(path, contents string, files profileFileOperations) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return fmt.Errorf("create profile directory: %w", err)
@@ -479,6 +523,7 @@ func writePrivateProfileWith(path, contents string, files profileFileOperations)
 	return nil
 }
 
+// envPort performs the operation represented by its name.
 func envPort(key string, fallback int) (uint16, error) {
 	value := strings.TrimSpace(os.Getenv(key))
 	if value == "" {
@@ -491,6 +536,7 @@ func envPort(key string, fallback int) (uint16, error) {
 	return uint16(port), nil
 }
 
+// envOr performs the operation represented by its name.
 func envOr(key, fallback string) string {
 	if value := strings.TrimSpace(os.Getenv(key)); value != "" {
 		return value
@@ -498,6 +544,7 @@ func envOr(key, fallback string) string {
 	return fallback
 }
 
+// splitNonEmpty performs the operation represented by its name.
 func splitNonEmpty(value string) []string {
 	var items []string
 	for _, item := range strings.Split(value, ",") {
@@ -508,6 +555,7 @@ func splitNonEmpty(value string) []string {
 	return items
 }
 
+// signalNotify performs the operation represented by its name.
 func signalNotify(channel chan<- os.Signal) {
 	signal.Notify(channel, syscall.SIGINT, syscall.SIGTERM)
 }
