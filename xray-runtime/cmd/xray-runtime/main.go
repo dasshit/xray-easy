@@ -1,3 +1,4 @@
+// Package main runs the embedded Xray runtime gRPC service.
 package main
 
 import (
@@ -133,6 +134,7 @@ type runtimeContextServerStream struct {
 	ctx context.Context
 }
 
+// Context returns the context associated with the value.
 func (s *runtimeContextServerStream) Context() context.Context { return s.ctx }
 
 func waitForServe(shutdown context.Context, server *grpc.Server, serveErr <-chan error, fatal <-chan error) error {

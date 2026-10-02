@@ -138,6 +138,7 @@ type controlContextServerStream struct {
 	ctx context.Context
 }
 
+// Context returns the context associated with the value.
 func (s *controlContextServerStream) Context() context.Context { return s.ctx }
 
 func ensureIncomingTrace(ctx context.Context) (context.Context, string, string, int, error) {

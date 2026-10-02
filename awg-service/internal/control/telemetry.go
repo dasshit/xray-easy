@@ -13,11 +13,17 @@ import (
 
 // PeerTelemetry is a non-secret runtime view of one AmneziaWG peer.
 type PeerTelemetry struct {
-	Name          string
-	PublicKey     string
-	SourceIP      string
+	// Name is the human-readable name of the object.
+	Name string
+	// PublicKey is the public key associated with the object.
+	PublicKey string
+	// SourceIP is the source IP address observed for the client.
+	SourceIP string
+	// LastHandshake is the last observed WireGuard handshake time.
 	LastHandshake time.Time
-	UploadBytes   int64
+	// UploadBytes is the observed upload byte count.
+	UploadBytes int64
+	// DownloadBytes is the observed download byte count.
 	DownloadBytes int64
 }
 

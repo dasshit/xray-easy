@@ -75,6 +75,7 @@ type authenticatedServerStream struct {
 	authorized bool
 }
 
+// Context returns the context associated with the value.
 func (s *authenticatedServerStream) Context() context.Context {
 	if s.ctx != nil {
 		return s.ctx
@@ -82,6 +83,7 @@ func (s *authenticatedServerStream) Context() context.Context {
 	return s.ServerStream.Context()
 }
 
+// RecvMsg receives the next value from the stream.
 func (s *authenticatedServerStream) RecvMsg(message any) error {
 	if err := s.ServerStream.RecvMsg(message); err != nil {
 		return err

@@ -1,3 +1,4 @@
+// Package store persists administrator state, node settings, profiles, counters, and audit records in SQLite.
 package store
 
 import (
@@ -18,6 +19,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+// Store provides transactional access to the Xray-easy SQLite database.
 type Store struct {
 	db     *sql.DB
 	dbPath string
@@ -27,22 +29,34 @@ type Store struct {
 // been saved yet.
 var ErrSettingsNotInitialized = errors.New("settings are not initialized")
 
+// Admin is the persisted administrator account and its authentication state.
 type Admin struct {
-	ID            string
-	Username      string
-	PasswordHash  string
+	// ID is the unique identifier for the object.
+	ID string
+	// Username is the canonical administrator username.
+	Username string
+	// PasswordHash is the Argon2 password hash.
+	PasswordHash string
+	// TOTPSecretEnc is the encrypted TOTP secret.
 	TOTPSecretEnc string
-	TOTPEnabled   bool
+	// TOTPEnabled is whether TOTP is enabled for the administrator.
+	TOTPEnabled bool
 }
 
+// SetupStatus reports whether the initial administrator and node settings exist.
 type SetupStatus struct {
+	// Initialized is whether first-run initialization has completed.
 	Initialized bool `json:"initialized"`
 }
 
 // Deprecated: domain entities live in internal/domain. These aliases keep the
 // persistence package source-compatible for callers that only need storage.
 type Settings = domain.Settings
+
+// Client is the persistence alias for the domain device profile.
 type Client = domain.Client
+
+// ClientState is the persistence alias for a protocol access state.
 type ClientState = domain.ClientState
 
 // TrafficSnapshot is the durable checkpoint for counters returned by the
@@ -50,36 +64,59 @@ type ClientState = domain.ClientState
 // a restart, so total_* are accumulated by the control plane while raw_* keep
 // the last observed values for reset detection.
 type TrafficSnapshot struct {
-	ClientID      string
-	RawUpload     int64
-	RawDownload   int64
-	TotalUpload   int64
+	// ClientID is the device profile identifier.
+	ClientID string
+	// RawUpload is the latest raw upload byte counter.
+	RawUpload int64
+	// RawDownload is the latest raw download byte counter.
+	RawDownload int64
+	// TotalUpload is the accumulated upload byte counter.
+	TotalUpload int64
+	// TotalDownload is the accumulated download byte counter.
 	TotalDownload int64
-	LastSeenAt    time.Time
-	LastPolledAt  time.Time
+	// LastSeenAt is the last time traffic was observed.
+	LastSeenAt time.Time
+	// LastPolledAt is the last time telemetry was sampled.
+	LastPolledAt time.Time
 }
 
 // AWGTrafficSnapshot checkpoints process-local AmneziaWG counters by peer name.
 type AWGTrafficSnapshot struct {
-	PeerName      string
-	RawUpload     int64
-	RawDownload   int64
-	TotalUpload   int64
+	// PeerName is the AmneziaWG peer name.
+	PeerName string
+	// RawUpload is the latest raw upload byte counter.
+	RawUpload int64
+	// RawDownload is the latest raw download byte counter.
+	RawDownload int64
+	// TotalUpload is the accumulated upload byte counter.
+	TotalUpload int64
+	// TotalDownload is the accumulated download byte counter.
 	TotalDownload int64
-	SourceIP      string
-	LastSeenAt    time.Time
-	LastPolledAt  time.Time
+	// SourceIP is the source IP address observed for the client.
+	SourceIP string
+	// LastSeenAt is the last time traffic was observed.
+	LastSeenAt time.Time
+	// LastPolledAt is the last time telemetry was sampled.
+	LastPolledAt time.Time
 }
 
+// ApplyOperation records a configuration apply attempt and its durable revision.
 type ApplyOperation struct {
-	ID        string
-	Revision  int64
-	State     string
-	Error     string
+	// ID is the unique identifier for the object.
+	ID string
+	// Revision is the configuration revision associated with the operation.
+	Revision int64
+	// State is the current operation state.
+	State string
+	// Error is the operation error description, if any.
+	Error string
+	// CreatedAt is the time the object was created.
 	CreatedAt time.Time
+	// UpdatedAt is the time the object was last updated.
 	UpdatedAt time.Time
 }
 
+// Open opens the requested resource.
 func Open(ctx context.Context, path string) (*Store, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)&_pragma=foreign_keys(ON)")
 	if err != nil {
@@ -93,8 +130,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return store, nil
 }
 
+// Close releases resources held by the value.
 func (s *Store) Close() error { return s.db.Close() }
 
+// Ping performs the operation represented by its name.
 func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
 
 // BackupTo creates a transactionally consistent SQLite snapshot. VACUUM INTO
@@ -111,6 +150,7 @@ func (s *Store) BackupTo(path string) error {
 	return os.Chmod(path, 0o600)
 }
 
+// ValidateDatabase validates the supplied value.
 func ValidateDatabase(path string) error {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
 	if err != nil {
@@ -132,6 +172,7 @@ func ValidateDatabase(path string) error {
 	return nil
 }
 
+// ReadSettingsFromDatabase reads and returns the requested value.
 func ReadSettingsFromDatabase(path string) (domain.Settings, error) {
 	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
 	if err != nil {
@@ -312,6 +353,7 @@ func restoreClients(tx *sql.Tx) error {
 	return err
 }
 
+// RestoreFrom restores the requested state.
 func (s *Store) RestoreFrom(path string) error {
 	if err := ValidateDatabase(path); err != nil {
 		return err
@@ -749,6 +791,7 @@ func insertClientProtocolMigrationMarker(ctx context.Context, exec interface {
 	return err
 }
 
+// SetupStatus updates the requested value.
 func (s *Store) SetupStatus(ctx context.Context) (SetupStatus, error) {
 	var status SetupStatus
 	var marker int
@@ -763,6 +806,7 @@ func (s *Store) SetupStatus(ctx context.Context) (SetupStatus, error) {
 	return status, nil
 }
 
+// Initialize initializes the requested resource.
 func (s *Store) Initialize(ctx context.Context, username, passwordHash, publicHost string, publicPort int) (Admin, error) {
 	username = strings.ToLower(strings.TrimSpace(username))
 	if username == "" || passwordHash == "" {
@@ -797,6 +841,7 @@ func (s *Store) Initialize(ctx context.Context, username, passwordHash, publicHo
 	return Admin{ID: id, Username: username, PasswordHash: passwordHash}, nil
 }
 
+// FindAdmin looks up and returns the requested value.
 func (s *Store) FindAdmin(ctx context.Context, username string) (Admin, error) {
 	var admin Admin
 	var enabled int
@@ -808,6 +853,7 @@ func (s *Store) FindAdmin(ctx context.Context, username string) (Admin, error) {
 	return admin, err
 }
 
+// CreateSession creates the requested value.
 func (s *Store) CreateSession(ctx context.Context, adminID string, ttl time.Duration) (string, error) {
 	raw := make([]byte, 32)
 	if _, err := rand.Read(raw); err != nil {
@@ -822,6 +868,7 @@ func (s *Store) CreateSession(ctx context.Context, adminID string, ttl time.Dura
 	return token, nil
 }
 
+// SessionAdmin performs the operation represented by its name.
 func (s *Store) SessionAdmin(ctx context.Context, token string) (Admin, error) {
 	hash := sha256.Sum256([]byte(token))
 	var admin Admin
@@ -841,12 +888,14 @@ func (s *Store) SessionAdmin(ctx context.Context, token string) (Admin, error) {
 	return admin, nil
 }
 
+// DeleteSession deletes the requested value.
 func (s *Store) DeleteSession(ctx context.Context, token string) error {
 	hash := sha256.Sum256([]byte(token))
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE token_hash=?`, hash[:])
 	return err
 }
 
+// DeleteAllSessions deletes the requested value.
 func (s *Store) DeleteAllSessions(ctx context.Context, adminID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM sessions WHERE admin_user_id=?`, adminID)
 	return err
@@ -906,6 +955,7 @@ func (s *Store) SetTOTP(ctx context.Context, adminID, secretEnc string, recovery
 	return tx.Commit()
 }
 
+// DisableTOTP performs the operation represented by its name.
 func (s *Store) DisableTOTP(ctx context.Context, adminID string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -922,6 +972,7 @@ func (s *Store) DisableTOTP(ctx context.Context, adminID string) error {
 	return tx.Commit()
 }
 
+// ConsumeRecoveryCode consumes the requested value.
 func (s *Store) ConsumeRecoveryCode(ctx context.Context, adminID, codeHash string) (bool, error) {
 	result, err := s.db.ExecContext(ctx, `UPDATE totp_recovery_codes SET used_at=? WHERE admin_user_id=? AND code_hash=? AND used_at IS NULL`, time.Now().UTC().Format(time.RFC3339Nano), adminID, codeHash)
 	if err != nil {
@@ -931,12 +982,14 @@ func (s *Store) ConsumeRecoveryCode(ctx context.Context, adminID, codeHash strin
 	return count == 1, err
 }
 
+// RecoveryCodeCount performs the operation represented by its name.
 func (s *Store) RecoveryCodeCount(ctx context.Context, adminID string) (int, error) {
 	var count int
 	err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM totp_recovery_codes WHERE admin_user_id=? AND used_at IS NULL`, adminID).Scan(&count)
 	return count, err
 }
 
+// FirstAdmin performs the operation represented by its name.
 func (s *Store) FirstAdmin(ctx context.Context) (Admin, error) {
 	var admin Admin
 	var enabled int
@@ -948,6 +1001,7 @@ func (s *Store) FirstAdmin(ctx context.Context) (Admin, error) {
 	return admin, err
 }
 
+// ReplaceRecoveryCodes replaces the requested value.
 func (s *Store) ReplaceRecoveryCodes(ctx context.Context, adminID string, recoveryHashes []string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -970,6 +1024,7 @@ func (s *Store) ReplaceRecoveryCodes(ctx context.Context, adminID string, recove
 	return tx.Commit()
 }
 
+// GetSettings returns the requested value.
 func (s *Store) GetSettings(ctx context.Context) (domain.Settings, error) {
 	var settings domain.Settings
 	err := s.db.QueryRowContext(ctx, `SELECT public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint, log_level FROM settings WHERE id=1`).Scan(&settings.PublicHost, &settings.PublicPort, &settings.XrayAPIListen, &settings.InternalInboundPort, &settings.RealityTarget, &settings.RealitySNI, &settings.RealityPrivateKeyEnc, &settings.RealityPublicKey, &settings.ClientFingerprint, &settings.LogLevel)
@@ -979,6 +1034,7 @@ func (s *Store) GetSettings(ctx context.Context) (domain.Settings, error) {
 	return settings, err
 }
 
+// UpdateSettings updates the requested value.
 func (s *Store) UpdateSettings(ctx context.Context, settings domain.Settings) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE settings SET public_host=?, public_port=?, xray_api_listen=?, internal_inbound_port=?, reality_target=?, reality_sni=?, reality_private_key_enc=?, reality_public_key=?, client_fingerprint=?, log_level=?, updated_at=? WHERE id=1`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel, time.Now().UTC().Format(time.RFC3339Nano))
 	return err
@@ -1117,6 +1173,7 @@ func (s *Store) UpdateSettingsAndClientProtocolStates(ctx context.Context, setti
 	return tx.Commit()
 }
 
+// CreateClient creates the requested value.
 func (s *Store) CreateClient(ctx context.Context, client domain.Client, uuid, email, shortID string) error {
 	if client.ID == "" {
 		return errors.New("client id is required")
@@ -1451,6 +1508,7 @@ func generateUnusedShortID(ctx context.Context, tx *sql.Tx, generate func() (str
 	return "", errors.New("could not generate a unique REALITY short ID")
 }
 
+// ListClients returns the requested collection.
 func (s *Store) ListClients(ctx context.Context) ([]domain.Client, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+clientSelectColumns+` FROM clients ORDER BY created_at, id`)
 	if err != nil {
@@ -1468,11 +1526,13 @@ func (s *Store) ListClients(ctx context.Context) ([]domain.Client, error) {
 	return clients, rows.Err()
 }
 
+// GetClient returns the requested value.
 func (s *Store) GetClient(ctx context.Context, id string) (domain.Client, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT `+clientSelectColumns+` FROM clients WHERE id=?`, id)
 	return scanClient(row)
 }
 
+// SetClientState updates the requested value.
 func (s *Store) SetClientState(ctx context.Context, id string, enabled, revoked bool) error {
 	result, err := s.db.ExecContext(ctx, `UPDATE clients SET enabled=?, revoked=?, vless_enabled=?, vless_revoked=?, hysteria_enabled=?, hysteria_revoked=?, vmess_enabled=?, vmess_revoked=?, shadowsocks_enabled=?, shadowsocks_revoked=?, trojan_enabled=?, trojan_revoked=?, updated_at=? WHERE id=?`, boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), boolInt(enabled), boolInt(revoked), time.Now().UTC().Format(time.RFC3339Nano), id)
 	if err != nil {
@@ -1568,11 +1628,13 @@ func (s *Store) SetClientProtocolStates(ctx context.Context, id string, states m
 	return tx.Commit()
 }
 
+// DeleteClient deletes the requested value.
 func (s *Store) DeleteClient(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM clients WHERE id=?`, id)
 	return err
 }
 
+// ListTrafficSnapshots returns the requested collection.
 func (s *Store) ListTrafficSnapshots(ctx context.Context) (map[string]TrafficSnapshot, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT client_id, raw_upload, raw_download, total_upload, total_download, last_seen_at, last_polled_at FROM traffic_snapshots`)
 	if err != nil {
@@ -1595,6 +1657,7 @@ func (s *Store) ListTrafficSnapshots(ctx context.Context) (map[string]TrafficSna
 	return result, rows.Err()
 }
 
+// UpsertTrafficSnapshot performs the operation represented by its name.
 func (s *Store) UpsertTrafficSnapshot(ctx context.Context, snapshot TrafficSnapshot) error {
 	if snapshot.ClientID == "" {
 		return errors.New("client id is required")
@@ -1659,6 +1722,7 @@ func (s *Store) DeleteAWGTrafficSnapshot(ctx context.Context, name string) error
 	return err
 }
 
+// CreateApplyOperation creates the requested value.
 func (s *Store) CreateApplyOperation(ctx context.Context, operation ApplyOperation) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO apply_operations(id, revision, state, error, created_at, updated_at) VALUES(?,?,?,?,?,?)`, operation.ID, operation.Revision, operation.State, operation.Error, operation.CreatedAt.Format(time.RFC3339Nano), operation.UpdatedAt.Format(time.RFC3339Nano))
 	return err
@@ -1692,6 +1756,7 @@ SET revision = MAX(revision, (SELECT COALESCE(MAX(revision), 0) FROM apply_opera
 	return revision, nil
 }
 
+// UpdateApplyOperation updates the requested value.
 func (s *Store) UpdateApplyOperation(ctx context.Context, id, state, operationError string) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE apply_operations SET state=?, error=?, updated_at=? WHERE id=?`, state, operationError, time.Now().UTC().Format(time.RFC3339Nano), id)
 	return err
@@ -1719,6 +1784,7 @@ func (s *Store) GetApplyOperation(ctx context.Context, id string) (ApplyOperatio
 	return operation, nil
 }
 
+// AddAudit adds the supplied value.
 func (s *Store) AddAudit(ctx context.Context, actorID, action, entity, entityID, diff string) error {
 	id, err := randomID()
 	if err != nil {

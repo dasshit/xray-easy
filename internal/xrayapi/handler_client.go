@@ -1,3 +1,4 @@
+// Package xrayapi wraps the Xray Handler API used for live user management.
 package xrayapi
 
 import (
@@ -32,10 +33,12 @@ type HandlerClient struct {
 	client handlercommand.HandlerServiceClient
 }
 
+// NewHandlerClient constructs and returns the requested value.
 func NewHandlerClient(address string) *HandlerClient {
 	return &HandlerClient{address: address}
 }
 
+// AddUser adds the supplied value.
 func (c *HandlerClient) AddUser(ctx context.Context, email, uuid, flow string) error {
 	account := make([]byte, 0, len(uuid)+len(flow)+4)
 	account = protowire.AppendTag(account, 1, protowire.BytesType)
@@ -56,6 +59,7 @@ func (c *HandlerClient) AddHysteriaUser(ctx context.Context, email, auth string)
 	return c.alter(ctx, "hysteria2", &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
 }
 
+// RemoveUser removes the requested value.
 func (c *HandlerClient) RemoveUser(ctx context.Context, email string) error {
 	operation := &handlercommand.RemoveUserOperation{Email: email}
 	return c.alter(ctx, inboundTag, &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
@@ -81,6 +85,7 @@ func (c *HandlerClient) RemoveVMessUser(ctx context.Context, email string) error
 	return c.alter(ctx, "vmess-tls", &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
 }
 
+// Users performs the operation represented by its name.
 func (c *HandlerClient) Users(ctx context.Context) ([]string, error) {
 	return c.UsersInInbound(ctx, inboundTag)
 }
@@ -208,6 +213,7 @@ func (c *HandlerClient) reset() {
 	c.conn, c.client = nil, nil
 }
 
+// Close releases resources held by the value.
 func (c *HandlerClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

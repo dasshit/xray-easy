@@ -322,6 +322,7 @@ type loggedControllerTelemetryStream struct {
 	logged    bool
 }
 
+// Recv receives the next value from the stream.
 func (s *loggedControllerTelemetryStream) Recv() (*controllerv1.TelemetryUpdate, error) {
 	response, err := s.Controller_WatchTelemetryClient.Recv()
 	if err != nil && !s.logged {

@@ -1,3 +1,4 @@
+// Package totp generates and verifies administrator TOTP codes and recovery material.
 package totp
 
 import (
@@ -19,6 +20,7 @@ const (
 	digits      = 6
 )
 
+// NewSecret constructs and returns the requested value.
 func NewSecret() (string, error) {
 	raw := make([]byte, secretBytes)
 	if _, err := rand.Read(raw); err != nil {
@@ -27,6 +29,7 @@ func NewSecret() (string, error) {
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw), nil
 }
 
+// Code returns a code for the supplied value.
 func Code(secret string, at time.Time) (string, error) {
 	secret = strings.ToUpper(strings.TrimSpace(secret))
 	key, err := base32.StdEncoding.WithPadding(base32.NoPadding).DecodeString(secret)
@@ -44,6 +47,7 @@ func Code(secret string, at time.Time) (string, error) {
 	return fmt.Sprintf("%06d", value%1000000), nil
 }
 
+// Validate validates the supplied value.
 func Validate(secret, code string, at time.Time) bool {
 	code = strings.TrimSpace(code)
 	if len(code) != digits {
@@ -58,6 +62,7 @@ func Validate(secret, code string, at time.Time) bool {
 	return false
 }
 
+// OTPAuthURI performs the operation represented by its name.
 func OTPAuthURI(secret, issuer, account string) string {
 	label := url.PathEscape(issuer + ":" + account)
 	values := url.Values{}
@@ -69,6 +74,7 @@ func OTPAuthURI(secret, issuer, account string) string {
 	return "otpauth://totp/" + label + "?" + values.Encode()
 }
 
+// NewRecoveryCode constructs and returns the requested value.
 func NewRecoveryCode() (string, error) {
 	raw := make([]byte, 16)
 	if _, err := rand.Read(raw); err != nil {

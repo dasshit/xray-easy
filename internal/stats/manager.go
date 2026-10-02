@@ -1,3 +1,4 @@
+// Package stats polls runtime telemetry, computes deltas and rates, and persists counters.
 package stats
 
 import (
@@ -29,25 +30,35 @@ type telemetryStreamOpener interface {
 // Manager accumulates deltas in SQLite rather than exposing process-local
 // counters directly.
 type ClientStats struct {
-	Online                 bool       `json:"online"`
-	LastSeen               *time.Time `json:"last_seen,omitempty"`
-	SourceIPs              []string   `json:"source_ips,omitempty"`
-	UploadBytes            int64      `json:"upload_bytes"`
-	DownloadBytes          int64      `json:"download_bytes"`
-	UploadBytesPerSecond   float64    `json:"upload_bytes_per_second"`
-	DownloadBytesPerSecond float64    `json:"download_bytes_per_second"`
+	// Online is whether the client is currently online.
+	Online bool `json:"online"`
+	// LastSeen is the last time the runtime observed traffic.
+	LastSeen *time.Time `json:"last_seen,omitempty"`
+	// SourceIPs is the source IP observations associated with the client.
+	SourceIPs []string `json:"source_ips,omitempty"`
+	// UploadBytes is the observed upload byte count.
+	UploadBytes int64 `json:"upload_bytes"`
+	// DownloadBytes is the observed download byte count.
+	DownloadBytes int64 `json:"download_bytes"`
+	// UploadBytesPerSecond contains the UploadBytesPerSecond value for this object.
+	UploadBytesPerSecond float64 `json:"upload_bytes_per_second"`
+	// DownloadBytesPerSecond contains the DownloadBytesPerSecond value for this object.
+	DownloadBytesPerSecond float64 `json:"download_bytes_per_second"`
 }
 
 // StatsAPI is the small Xray boundary needed by the polling manager.
 type StatsAPI interface {
+	// Poll polls the telemetry source.
 	Poll(context.Context) ([]xrayapi.UserStats, error)
 }
 
 // AWGStatsAPI reads runtime counters for the optional AmneziaWG transport.
 type AWGStatsAPI interface {
+	// PeerStats defines part of the interface contract.
 	PeerStats(context.Context) ([]domain.AmneziaWGPeerStats, error)
 }
 
+// Manager coordinates telemetry polling and the live statistics stream.
 type Manager struct {
 	store *store.Store
 	api   StatsAPI
@@ -71,6 +82,7 @@ type streamCheckpoint struct {
 	sequence   uint64
 }
 
+// NewManager constructs and returns the requested value.
 func NewManager(db *store.Store, api StatsAPI, awg ...AWGStatsAPI) *Manager {
 	manager := &Manager{store: db, api: api, latest: make(map[string]ClientStats), subs: make(map[chan struct{}]struct{}), interval: defaultPollInterval, now: time.Now, checkpoints: make(map[string]streamCheckpoint)}
 	manager.stream, _ = api.(telemetryStreamOpener)
@@ -80,6 +92,7 @@ func NewManager(db *store.Store, api StatsAPI, awg ...AWGStatsAPI) *Manager {
 	return manager
 }
 
+// Start starts the requested operation.
 func (m *Manager) Start(ctx context.Context) <-chan struct{} {
 	m.mu.Lock()
 	m.rootContext = ctx
@@ -102,6 +115,7 @@ func (m *Manager) Start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
+// Poll polls the requested source.
 func (m *Manager) Poll(ctx context.Context) error {
 	m.applyMu.Lock()
 	defer m.applyMu.Unlock()
@@ -510,6 +524,7 @@ func bytesPerSecond(delta int64, elapsed time.Duration) float64 {
 	return float64(delta) / elapsed.Seconds()
 }
 
+// Snapshot returns a snapshot of the current state.
 func (m *Manager) Snapshot() map[string]ClientStats {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
@@ -520,6 +535,7 @@ func (m *Manager) Snapshot() map[string]ClientStats {
 	return copy
 }
 
+// LastError performs the operation represented by its name.
 func (m *Manager) LastError() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()

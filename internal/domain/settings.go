@@ -16,16 +16,26 @@ var realityTargetPattern = regexp.MustCompile(`^[A-Za-z0-9._:-]+$`)
 // infrastructure, while the public key and connection parameters are domain
 // configuration.
 type Settings struct {
-	PublicHost           string
-	PublicPort           int
-	XrayAPIListen        string
-	InternalInboundPort  int
-	RealityTarget        string
-	RealitySNI           string
+	// PublicHost is the public DNS name or IP address advertised to clients.
+	PublicHost string
+	// PublicPort is the public listener port advertised to clients.
+	PublicPort int
+	// XrayAPIListen is the private Xray API listen address.
+	XrayAPIListen string
+	// InternalInboundPort is the internal VLESS inbound port.
+	InternalInboundPort int
+	// RealityTarget is the REALITY target host and port.
+	RealityTarget string
+	// RealitySNI is the REALITY server name indication.
+	RealitySNI string
+	// RealityPrivateKeyEnc is the encrypted X25519 REALITY private key.
 	RealityPrivateKeyEnc string
-	RealityPublicKey     string
-	ClientFingerprint    string
-	LogLevel             string
+	// RealityPublicKey is the X25519 REALITY public key.
+	RealityPublicKey string
+	// ClientFingerprint is the TLS client fingerprint used in generated profiles.
+	ClientFingerprint string
+	// LogLevel is the active Xray log level.
+	LogLevel string
 }
 
 // SupportsXrayLogLevel reports whether level is accepted by Xray.
@@ -38,6 +48,7 @@ func SupportsXrayLogLevel(level string) bool {
 	}
 }
 
+// ValidateRealityTarget validates the supplied value.
 func ValidateRealityTarget(target, sni string) error {
 	target = strings.TrimSpace(target)
 	sni = strings.TrimSpace(sni)
@@ -101,6 +112,7 @@ func ValidatePublicHost(host string) error {
 	return err
 }
 
+// ValidateConnection validates the supplied value.
 func (s Settings) ValidateConnection() error {
 	if err := ValidatePublicHost(s.PublicHost); err != nil {
 		return err

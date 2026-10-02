@@ -1,3 +1,4 @@
+// Package diagnostics provides the diagnostics functionality used by Xray-easy.
 package diagnostics
 
 import (

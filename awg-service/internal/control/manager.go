@@ -27,10 +27,15 @@ import (
 )
 
 var (
-	ErrInvalid            = errors.New("invalid peer")
-	ErrNotFound           = errors.New("peer not found")
-	ErrAlreadyExists      = errors.New("peer already exists")
-	ErrOperationConflict  = errors.New("operation ID was already used for a different peer")
+	// ErrInvalid indicates malformed peer or service input.
+	ErrInvalid = errors.New("invalid peer")
+	// ErrNotFound indicates that the requested peer does not exist.
+	ErrNotFound = errors.New("peer not found")
+	// ErrAlreadyExists indicates that a peer with the same name already exists.
+	ErrAlreadyExists = errors.New("peer already exists")
+	// ErrOperationConflict indicates reuse of an idempotency key for another operation.
+	ErrOperationConflict = errors.New("operation ID was already used for a different peer")
+	// ErrOperationCompleted indicates that a completed operation cannot be replayed.
 	ErrOperationCompleted = errors.New("operation was already completed and its result cannot be replayed")
 )
 
@@ -41,12 +46,18 @@ const stateVersion = 1
 
 // Peer is the non-secret, persisted identity and tunnel address of a client.
 type Peer struct {
-	Name        string    `json:"name"`
-	PublicKey   string    `json:"publicKey"`
-	IPv4        string    `json:"ipv4"`
-	IPv6        string    `json:"ipv6"`
-	CreatedAt   time.Time `json:"createdAt"`
-	OperationID string    `json:"operationId,omitempty"`
+	// Name is the human-readable name of the object.
+	Name string `json:"name"`
+	// PublicKey is the public key associated with the object.
+	PublicKey string `json:"publicKey"`
+	// IPv4 is the assigned IPv4 address.
+	IPv4 string `json:"ipv4"`
+	// IPv6 is the assigned IPv6 address.
+	IPv6 string `json:"ipv6"`
+	// CreatedAt is the time the object was created.
+	CreatedAt time.Time `json:"createdAt"`
+	// OperationID is the idempotency key for the operation.
+	OperationID string `json:"operationId,omitempty"`
 }
 
 type persistedState struct {
@@ -58,36 +69,55 @@ type persistedState struct {
 
 // OperationReceipt makes create and revoke retries safe across service restarts.
 type OperationReceipt struct {
-	Action  string `json:"action"`
-	Name    string `json:"name"`
-	Peer    Peer   `json:"peer,omitempty"`
-	Removed bool   `json:"removed,omitempty"`
+	// Action is the operation action.
+	Action string `json:"action"`
+	// Name is the human-readable name of the object.
+	Name string `json:"name"`
+	// Peer is the peer affected by the operation.
+	Peer Peer `json:"peer,omitempty"`
+	// Removed is whether the peer was removed.
+	Removed bool `json:"removed,omitempty"`
 }
 
 // Options are the non-secret deployment settings of the prototype service.
 type Options struct {
-	DataDir       string
-	MasterKey     []byte
-	PublicHost    string
-	PublicPort    uint16
-	ListenPort    uint16
-	IPv4Prefix    netip.Prefix
-	IPv6Prefix    netip.Prefix
-	DNS           []string
-	Obfuscation   map[string]string
+	// DataDir is the persistent data directory.
+	DataDir string
+	// MasterKey is the master key used to encrypt persisted secrets.
+	MasterKey []byte
+	// PublicHost is the public DNS name or IP address advertised to clients.
+	PublicHost string
+	// PublicPort is the public listener port advertised to clients.
+	PublicPort uint16
+	// ListenPort is the AmneziaWG listen port.
+	ListenPort uint16
+	// IPv4Prefix is the IPv4 client network.
+	IPv4Prefix netip.Prefix
+	// IPv6Prefix is the IPv6 client network.
+	IPv6Prefix netip.Prefix
+	// DNS is the DNS servers advertised to clients.
+	DNS []string
+	// Obfuscation is the AmneziaWG obfuscation parameters.
+	Obfuscation map[string]string
+	// InterfaceName is the Linux tunnel interface name.
 	InterfaceName string
 }
 
 // Device exposes the small part of amneziawg-go's device lifecycle used by the manager.
 type Device interface {
+	// Set updates the requested setting.
 	Set(string) error
+	// Up defines part of the interface contract.
 	Up() error
+	// Snapshot returns the requested state.
 	Snapshot() (string, error)
+	// Close releases implementation resources.
 	Close()
 }
 
 // DeviceFactory creates the TUN-backed AmneziaWG device.
 type DeviceFactory interface {
+	// Open defines part of the interface contract.
 	Open(interfaceName string, mtu int) (Device, error)
 }
 

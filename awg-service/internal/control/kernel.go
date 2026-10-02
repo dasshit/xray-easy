@@ -16,6 +16,7 @@ import (
 
 // KernelFactory creates a userspace AmneziaWG engine on Linux.
 type KernelFactory struct {
+	// Options contains the Options value for this object.
 	Options   Options
 	createTUN func(string, int) (tun.Device, error)
 	newEngine func(tun.Device) kernelEngine
@@ -63,12 +64,15 @@ type kernelEngine interface {
 	Close()
 }
 
+// Set updates the requested value.
 func (d *kernelDevice) Set(config string) error {
 	return d.engine.IpcSetOperation(strings.NewReader(config))
 }
 
+// Up performs the operation represented by its name.
 func (d *kernelDevice) Up() error { return d.engine.Up() }
 
+// Snapshot returns a snapshot of the current state.
 func (d *kernelDevice) Snapshot() (string, error) {
 	var output bytes.Buffer
 	if err := d.engine.IpcGetOperation(&output); err != nil {
@@ -77,6 +81,7 @@ func (d *kernelDevice) Snapshot() (string, error) {
 	return output.String(), nil
 }
 
+// Close releases resources held by the value.
 func (d *kernelDevice) Close() { d.engine.Close() }
 
 func configureTunnel(name string, mtu int, opts Options) error {

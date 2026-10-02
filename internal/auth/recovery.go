@@ -15,6 +15,7 @@ func HashRecoveryCode(code string) string {
 	return hex.EncodeToString(hash[:])
 }
 
+// VerifyRecoveryCode verifies the supplied value.
 func VerifyRecoveryCode(code, encoded string) bool {
 	got := HashRecoveryCode(code)
 	return subtle.ConstantTimeCompare([]byte(got), []byte(encoded)) == 1
@@ -24,6 +25,7 @@ func normalizeRecoveryCode(code string) string {
 	return strings.ToUpper(strings.ReplaceAll(strings.TrimSpace(code), "-", ""))
 }
 
+// ValidateRecoveryCode validates the supplied value.
 func ValidateRecoveryCode(code string) error {
 	if len(normalizeRecoveryCode(code)) < 20 {
 		return errors.New("recovery code is invalid")

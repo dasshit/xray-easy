@@ -10,6 +10,7 @@ import (
 	"xray-easy/internal/domain"
 )
 
+// NewUUID constructs and returns the requested value.
 func NewUUID() (string, error) {
 	b := make([]byte, 16)
 	if _, err := rand.Read(b); err != nil {
@@ -20,6 +21,7 @@ func NewUUID() (string, error) {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", hex.EncodeToString(b[0:4]), hex.EncodeToString(b[4:6]), hex.EncodeToString(b[6:8]), hex.EncodeToString(b[8:10]), hex.EncodeToString(b[10:16])), nil
 }
 
+// NewRealityKeyPair constructs and returns the requested value.
 func NewRealityKeyPair() (privateKey, publicKey string, err error) {
 	key, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
@@ -31,6 +33,7 @@ func NewRealityKeyPair() (privateKey, publicKey string, err error) {
 	return encode(key.Bytes()), encode(key.PublicKey().Bytes()), nil
 }
 
+// NewShortID constructs and returns the requested value.
 func NewShortID() (string, error) {
 	for {
 		b := make([]byte, 8)
@@ -44,6 +47,7 @@ func NewShortID() (string, error) {
 	}
 }
 
+// ValidateTarget validates the supplied value.
 func ValidateTarget(target, sni string) error {
 	return domain.ValidateRealityTarget(target, sni)
 }

@@ -1,3 +1,4 @@
+// Package secret encrypts sensitive values with the configured Xray-easy master key.
 package secret
 
 import (
@@ -51,6 +52,7 @@ func Seal(masterKey []byte, value string, purpose string) (string, error) {
 	return strings.Join([]string{envelopeVersion, encode(salt), encode(nonce), encode(ciphertext)}, ":"), nil
 }
 
+// Open opens the requested resource.
 func Open(masterKey []byte, encoded, purpose string) (string, error) {
 	if len(masterKey) < 32 {
 		return "", errors.New("master key must contain at least 32 bytes")

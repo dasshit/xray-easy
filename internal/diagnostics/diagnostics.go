@@ -11,19 +11,26 @@ import (
 	"time"
 )
 
+// Entry is one diagnostic result with a severity, message, and optional remediation.
 type Entry struct {
-	At        time.Time `json:"at"`
-	Component string    `json:"component"`
-	Level     string    `json:"level"`
-	Message   string    `json:"message"`
+	// At contains the At value for this object.
+	At time.Time `json:"at"`
+	// Component contains the Component value for this object.
+	Component string `json:"component"`
+	// Level contains the Level value for this object.
+	Level string `json:"level"`
+	// Message contains the Message value for this object.
+	Message string `json:"message"`
 }
 
+// Buffer collects bounded diagnostic entries for a single report.
 type Buffer struct {
 	mu      sync.Mutex
 	entries []Entry
 	limit   int
 }
 
+// NewBuffer constructs and returns the requested value.
 func NewBuffer(limit int) *Buffer {
 	if limit < 1 {
 		limit = 100
@@ -31,6 +38,7 @@ func NewBuffer(limit int) *Buffer {
 	return &Buffer{limit: limit}
 }
 
+// Add adds the supplied value.
 func (b *Buffer) Add(component, level, message string) {
 	if b == nil {
 		return
@@ -45,6 +53,7 @@ func (b *Buffer) Add(component, level, message string) {
 	b.entries = append(b.entries, entry)
 }
 
+// Snapshot returns a snapshot of the current state.
 func (b *Buffer) Snapshot(limit int) []Entry {
 	if b == nil {
 		return []Entry{}
@@ -67,6 +76,7 @@ var (
 	bearerPattern            = regexp.MustCompile(`(?i)\bBearer\s+[^\s,;}]+`)
 )
 
+// Redact performs the operation represented by its name.
 func Redact(value string) string {
 	value = vlessPattern.ReplaceAllString(value, "vless://[REDACTED]")
 	value = bearerPattern.ReplaceAllString(value, "Bearer [REDACTED]")

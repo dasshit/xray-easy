@@ -1,3 +1,4 @@
+// Package main runs the protocol controller service used by Xray-easy.
 package main
 
 import (

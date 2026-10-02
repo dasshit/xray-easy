@@ -38,7 +38,9 @@ const (
 // EmbeddedXrayClient adapts the embedded runtime's gRPC API to the Controller
 // protocol interfaces.
 type EmbeddedXrayClient struct {
+	// TokenFile contains the TokenFile value for this object.
 	TokenFile string
+	// ConfigDir contains the ConfigDir value for this object.
 	ConfigDir string
 
 	conn      grpc.ClientConnInterface
@@ -477,6 +479,7 @@ type loggedRuntimeTelemetryStream struct {
 	logged    bool
 }
 
+// Recv receives the next value from the stream.
 func (s *loggedRuntimeTelemetryStream) Recv() (*xrayruntimev1.TelemetryResponse, error) {
 	response, err := s.Runtime_WatchTelemetryClient.Recv()
 	if err != nil && !s.logged {

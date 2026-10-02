@@ -21,38 +21,61 @@ import (
 // XrayRuntime is the current Xray adapter contract. It intentionally excludes
 // HTTP/UI and persistence concerns owned by the backend.
 type XrayRuntime interface {
+	// Health reports the health of the implementation.
 	Health(context.Context) error
+	// Status returns the requested state.
 	Status(context.Context) (domain.XrayRuntimeStatus, error)
+	// Logs returns the requested state.
 	Logs(context.Context) ([]string, error)
+	// Validate validates the supplied value.
 	Validate(context.Context, string, string) error
+	// Apply applies the supplied configuration.
 	Apply(context.Context, string, string) error
+	// ReplaceInbound replaces the requested value.
 	ReplaceInbound(context.Context, string, string, string, string) error
+	// ProbeTarget probes the requested endpoint.
 	ProbeTarget(context.Context, string, string) error
+	// ProbeIPv6 probes the requested endpoint.
 	ProbeIPv6(context.Context) error
 }
 
 // XrayHandlerRuntime provides the live per-user operations supported by Xray.
 type XrayHandlerRuntime interface {
+	// AddUser adds the supplied value.
 	AddUser(context.Context, string, string, string) error
+	// RemoveUser removes the supplied value.
 	RemoveUser(context.Context, string) error
+	// Users returns the requested state.
 	Users(context.Context) ([]string, error)
+	// AddHysteriaUser adds the supplied value.
 	AddHysteriaUser(context.Context, string, string) error
+	// RemoveHysteriaUser removes the supplied value.
 	RemoveHysteriaUser(context.Context, string) error
+	// AddVMessUser adds the supplied value.
 	AddVMessUser(context.Context, string, string) error
+	// RemoveVMessUser removes the supplied value.
 	RemoveVMessUser(context.Context, string) error
+	// AddShadowsocksUser adds the supplied value.
 	AddShadowsocksUser(context.Context, string, string, string) error
+	// RemoveShadowsocksUser removes the supplied value.
 	RemoveShadowsocksUser(context.Context, string) error
+	// AddTrojanUser adds the supplied value.
 	AddTrojanUser(context.Context, string, string) error
+	// RemoveTrojanUser removes the supplied value.
 	RemoveTrojanUser(context.Context, string) error
+	// UsersInInbound defines part of the interface contract.
 	UsersInInbound(context.Context, string) ([]string, error)
 }
 
 // XrayStatsRuntime exposes upstream stats in a protocol-neutral backend DTO.
 type XrayStatsRuntime interface {
+	// Poll polls the telemetry source.
 	Poll(context.Context) ([]xrayapi.UserStats, error)
 }
 
+// XrayLogRuntime controls the embedded Xray logger through the Controller boundary.
 type XrayLogRuntime interface {
+	// SetLogLevel updates the requested setting.
 	SetLogLevel(context.Context, string) error
 }
 
@@ -61,8 +84,11 @@ type XrayLogRuntime interface {
 // backup calls and never logs it.
 type AmneziaWGRuntime interface {
 	awgcontrol.Gateway
+	// PeerStats defines part of the interface contract.
 	PeerStats(context.Context) ([]domain.AmneziaWGPeerStats, error)
+	// ExportBackup defines part of the interface contract.
 	ExportBackup(context.Context) ([]byte, error)
+	// RestoreBackup defines part of the interface contract.
 	RestoreBackup(context.Context, []byte) error
 }
 
@@ -87,6 +113,7 @@ func NewServiceWithAdapters(xray XrayRuntime, handler XrayHandlerRuntime, stats 
 	return &Service{xray: xray, handler: handler, stats: stats, awg: awg, now: time.Now}
 }
 
+// Health performs the operation represented by its name.
 func (s *Service) Health(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.HealthResponse, error) {
 	xray, err := s.runtime()
 	if err != nil {
@@ -98,6 +125,7 @@ func (s *Service) Health(ctx context.Context, _ *controllerv1.EmptyRequest) (*co
 	return &controllerv1.HealthResponse{Ok: true, ControllerVersion: "v1"}, nil
 }
 
+// GetCapabilities returns the requested value.
 func (s *Service) GetCapabilities(context.Context, *controllerv1.EmptyRequest) (*controllerv1.CapabilitiesResponse, error) {
 	return &controllerv1.CapabilitiesResponse{
 		Xray:      &controllerv1.ProtocolCapability{Configured: s != nil && s.xray != nil, Protocols: []string{"vless", "vmess", "hysteria2", "shadowsocks", "trojan"}},
@@ -105,6 +133,7 @@ func (s *Service) GetCapabilities(context.Context, *controllerv1.EmptyRequest) (
 	}, nil
 }
 
+// GetStatus returns the requested value.
 func (s *Service) GetStatus(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.StatusResponse, error) {
 	xray, err := s.runtime()
 	if err != nil {
@@ -121,6 +150,7 @@ func (s *Service) GetStatus(ctx context.Context, _ *controllerv1.EmptyRequest) (
 	}, nil
 }
 
+// GetLogs returns the requested value.
 func (s *Service) GetLogs(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.LogsResponse, error) {
 	xray, err := s.runtime()
 	if err != nil {
@@ -149,6 +179,7 @@ func (s *Service) SetXrayLogLevel(ctx context.Context, request *controllerv1.Set
 	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
+// ValidateConfig validates the supplied value.
 func (s *Service) ValidateConfig(ctx context.Context, request *controllerv1.ValidateConfigRequest) (*controllerv1.OperationResponse, error) {
 	if request == nil || request.Path == "" || request.OperationId == "" {
 		return nil, status.Error(codes.InvalidArgument, "path and operation_id are required")
@@ -167,6 +198,7 @@ func (s *Service) ValidateConfig(ctx context.Context, request *controllerv1.Vali
 	return &controllerv1.OperationResponse{Ok: true, OperationId: request.OperationId, StateRevision: request.StateRevision}, nil
 }
 
+// ApplyConfig applies the supplied configuration.
 func (s *Service) ApplyConfig(ctx context.Context, request *controllerv1.ApplyConfigRequest) (*controllerv1.OperationResponse, error) {
 	if request == nil || request.Path == "" || request.OperationId == "" {
 		return nil, status.Error(codes.InvalidArgument, "path and operation_id are required")
@@ -185,6 +217,7 @@ func (s *Service) ApplyConfig(ctx context.Context, request *controllerv1.ApplyCo
 	return &controllerv1.OperationResponse{Ok: true, OperationId: request.OperationId, StateRevision: request.StateRevision}, nil
 }
 
+// ReplaceInbound replaces the requested value.
 func (s *Service) ReplaceInbound(ctx context.Context, request *controllerv1.ReplaceInboundRequest) (*controllerv1.OperationResponse, error) {
 	if request == nil || request.CandidatePath == "" || request.PreviousPath == "" || request.Tag == "" || request.OperationId == "" {
 		return nil, status.Error(codes.InvalidArgument, "candidate_path, previous_path, tag, and operation_id are required")
@@ -222,6 +255,7 @@ func configOperationContext(ctx context.Context, operationID string, revision in
 	return interaction.WithStateRevision(ctx, revision), nil
 }
 
+// ProbeTarget probes the requested endpoint.
 func (s *Service) ProbeTarget(ctx context.Context, request *controllerv1.ProbeTargetRequest) (*controllerv1.OperationResponse, error) {
 	if request == nil || request.Target == "" {
 		return nil, status.Error(codes.InvalidArgument, "target is required")
@@ -236,6 +270,7 @@ func (s *Service) ProbeTarget(ctx context.Context, request *controllerv1.ProbeTa
 	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
+// ProbeIPv6 probes the requested endpoint.
 func (s *Service) ProbeIPv6(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.ProbeIPv6Response, error) {
 	xray, err := s.runtime()
 	if err != nil {
@@ -247,6 +282,7 @@ func (s *Service) ProbeIPv6(ctx context.Context, _ *controllerv1.EmptyRequest) (
 	return &controllerv1.ProbeIPv6Response{Ok: true, CheckedAt: protobufTime(s.now().UTC())}, nil
 }
 
+// AddDeviceUser adds the supplied value.
 func (s *Service) AddDeviceUser(ctx context.Context, request *controllerv1.AddDeviceUserRequest) (*controllerv1.OperationResponse, error) {
 	if request == nil || request.Protocol == "" || request.Email == "" || request.Id == "" {
 		return nil, status.Error(codes.InvalidArgument, "protocol, email, and id are required")
@@ -288,6 +324,7 @@ func (s *Service) AddDeviceUser(ctx context.Context, request *controllerv1.AddDe
 	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
+// RemoveDeviceUser removes the requested value.
 func (s *Service) RemoveDeviceUser(ctx context.Context, request *controllerv1.RemoveDeviceUserRequest) (*controllerv1.OperationResponse, error) {
 	if request == nil || request.Protocol == "" || request.Email == "" {
 		return nil, status.Error(codes.InvalidArgument, "protocol and email are required")
@@ -355,6 +392,7 @@ func containsUser(users []string, email string) bool {
 	return false
 }
 
+// ListDeviceUsers returns the requested collection.
 func (s *Service) ListDeviceUsers(ctx context.Context, request *controllerv1.ListDeviceUsersRequest) (*controllerv1.ListDeviceUsersResponse, error) {
 	if request == nil || request.Protocol == "" {
 		return nil, status.Error(codes.InvalidArgument, "protocol is required")
@@ -373,6 +411,7 @@ func (s *Service) ListDeviceUsers(ctx context.Context, request *controllerv1.Lis
 	return &controllerv1.ListDeviceUsersResponse{Users: append([]string{}, users...)}, nil
 }
 
+// GetXrayTelemetry returns the requested value.
 func (s *Service) GetXrayTelemetry(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.XrayTelemetryResponse, error) {
 	if s == nil || s.stats == nil {
 		return nil, status.Error(codes.Unavailable, "Xray statistics adapter is unavailable")
@@ -392,6 +431,7 @@ func (s *Service) GetXrayTelemetry(ctx context.Context, _ *controllerv1.EmptyReq
 	return response, nil
 }
 
+// GetAmneziaWGStatus returns the requested value.
 func (s *Service) GetAmneziaWGStatus(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.AmneziaWGStatusResponse, error) {
 	awg, err := s.awgRuntime()
 	if err != nil {
@@ -404,6 +444,7 @@ func (s *Service) GetAmneziaWGStatus(ctx context.Context, _ *controllerv1.EmptyR
 	return &controllerv1.AmneziaWGStatusResponse{Running: value.Running, PublicKey: value.PublicKey, ListenPort: int32(value.ListenPort), PublicHost: value.PublicHost, PublicPort: int32(value.PublicPort), PeerCount: int32(value.PeerCount), Ipv4Network: value.IPv4Network, Ipv6Network: value.IPv6Network, ServiceVersion: value.ServiceVersion}, nil
 }
 
+// ListAmneziaWGPeers returns the requested collection.
 func (s *Service) ListAmneziaWGPeers(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.ListAmneziaWGPeersResponse, error) {
 	awg, err := s.awgRuntime()
 	if err != nil {
@@ -420,6 +461,7 @@ func (s *Service) ListAmneziaWGPeers(ctx context.Context, _ *controllerv1.EmptyR
 	return response, nil
 }
 
+// CreateAmneziaWGPeer creates the requested value.
 func (s *Service) CreateAmneziaWGPeer(ctx context.Context, request *controllerv1.CreateAmneziaWGPeerRequest) (*controllerv1.AmneziaWGPeer, error) {
 	if request == nil || request.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
@@ -435,6 +477,7 @@ func (s *Service) CreateAmneziaWGPeer(ctx context.Context, request *controllerv1
 	return toProtoPeer(peer), nil
 }
 
+// RemoveAmneziaWGPeer removes the requested value.
 func (s *Service) RemoveAmneziaWGPeer(ctx context.Context, request *controllerv1.RemoveAmneziaWGPeerRequest) (*controllerv1.OperationResponse, error) {
 	if request == nil || request.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
@@ -449,6 +492,7 @@ func (s *Service) RemoveAmneziaWGPeer(ctx context.Context, request *controllerv1
 	return &controllerv1.OperationResponse{Ok: true}, nil
 }
 
+// GetAmneziaWGPeerStats returns the requested value.
 func (s *Service) GetAmneziaWGPeerStats(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.AmneziaWGPeerStatsResponse, error) {
 	awg, err := s.awgRuntime()
 	if err != nil {
@@ -465,6 +509,7 @@ func (s *Service) GetAmneziaWGPeerStats(ctx context.Context, _ *controllerv1.Emp
 	return response, nil
 }
 
+// GetAmneziaWGClientConfig returns the requested value.
 func (s *Service) GetAmneziaWGClientConfig(ctx context.Context, request *controllerv1.GetAmneziaWGClientConfigRequest) (*controllerv1.AmneziaWGClientConfigResponse, error) {
 	if request == nil || request.Name == "" {
 		return nil, status.Error(codes.InvalidArgument, "name is required")
@@ -480,6 +525,7 @@ func (s *Service) GetAmneziaWGClientConfig(ctx context.Context, request *control
 	return &controllerv1.AmneziaWGClientConfigResponse{Config: config}, nil
 }
 
+// ExportAmneziaWGBackup exports the requested state.
 func (s *Service) ExportAmneziaWGBackup(ctx context.Context, _ *controllerv1.EmptyRequest) (*controllerv1.AmneziaWGBackupResponse, error) {
 	awg, err := s.awgRuntime()
 	if err != nil {
@@ -492,6 +538,7 @@ func (s *Service) ExportAmneziaWGBackup(ctx context.Context, _ *controllerv1.Emp
 	return &controllerv1.AmneziaWGBackupResponse{Data: data}, nil
 }
 
+// RestoreAmneziaWGBackup restores the requested state.
 func (s *Service) RestoreAmneziaWGBackup(ctx context.Context, request *controllerv1.RestoreAmneziaWGBackupRequest) (*controllerv1.OperationResponse, error) {
 	if request == nil || len(request.Data) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "backup data is required")

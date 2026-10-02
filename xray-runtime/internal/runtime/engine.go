@@ -1,3 +1,4 @@
+// Package runtime embeds Xray core and exposes its managed runtime operations.
 package runtime
 
 import (
@@ -37,6 +38,7 @@ type capturedXrayLog struct {
 	allow func(level string) bool
 }
 
+// Handle handles the supplied event.
 func (h capturedXrayLog) Handle(message corelog.Message) {
 	general, ok := message.(*corelog.GeneralMessage)
 	if !ok || h.write == nil {

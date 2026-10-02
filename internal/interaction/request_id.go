@@ -97,8 +97,11 @@ func StateRevision(ctx context.Context) int64 {
 
 // Trace contains safe correlation fields shared by gRPC layers.
 type Trace struct {
-	OperationID   string
-	Attempt       int
+	// OperationID is the idempotency key for the operation.
+	OperationID string
+	// Attempt contains the Attempt value for this object.
+	Attempt int
+	// StateRevision contains the StateRevision value for this object.
 	StateRevision int64
 }
 

@@ -17,6 +17,7 @@ import (
 	"xray-easy/internal/interaction"
 )
 
+// RPCServiceName identifies a supported package value.
 const RPCServiceName = "xrayeasy.controller.v1.Controller"
 
 // RPCServer is the generated transport-level Controller API.
@@ -64,4 +65,5 @@ type controllerContextServerStream struct {
 	ctx context.Context
 }
 
+// Context returns the context associated with the value.
 func (s *controllerContextServerStream) Context() context.Context { return s.ctx }

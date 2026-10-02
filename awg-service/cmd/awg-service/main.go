@@ -1,3 +1,4 @@
+// Package main starts the AmneziaWG service process and its authenticated gRPC endpoint.
 package main
 
 import (

@@ -1,3 +1,4 @@
+// Package main runs the Xray-easy control plane and HTTP API.
 package main
 
 import (

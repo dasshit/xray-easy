@@ -1,3 +1,4 @@
+// Package maintenance provides process-wide locks for destructive and configuration operations.
 package maintenance
 
 import (
@@ -17,6 +18,7 @@ type Lock struct {
 	file *os.File
 }
 
+// Acquire performs the operation represented by its name.
 func Acquire(ctx context.Context, path string) (*Lock, error) {
 	if path == "" {
 		return &Lock{}, nil
@@ -46,6 +48,7 @@ func Acquire(ctx context.Context, path string) (*Lock, error) {
 	}
 }
 
+// Close releases resources held by the value.
 func (l *Lock) Close() error {
 	if l == nil || l.file == nil {
 		return nil

@@ -1,3 +1,4 @@
+// Package xray adapts domain profiles and settings to Xray configuration and connection artifacts.
 package xray
 
 import (
@@ -58,6 +59,7 @@ func validCertificateID(value string) bool {
 	return err == nil
 }
 
+// ClientFromDomain performs the operation represented by its name.
 func ClientFromDomain(value domain.Client) Client {
 	return Client{
 		ID: value.ID, Name: value.Name, Protocol: value.Protocol, UUID: value.UUID, Email: value.Email,
@@ -71,6 +73,7 @@ func ClientFromDomain(value domain.Client) Client {
 	}
 }
 
+// ClientsFromDomain performs the operation represented by its name.
 func ClientsFromDomain(values []domain.Client) []Client {
 	result := make([]Client, 0, len(values))
 	for _, value := range values {

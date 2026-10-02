@@ -10,24 +10,38 @@ import (
 var hysteriaCertificateIDPattern = regexp.MustCompile(`^[a-f0-9]{32}$`)
 
 const (
-	HysteriaTLSCustom      = "custom"
-	HysteriaTLSSelfSigned  = "self-signed"
-	HysteriaTLSLegacy      = "legacy"
-	HysteriaMasqueradeOff  = "off"
+	// HysteriaTLSCustom identifies a supported package value.
+	HysteriaTLSCustom = "custom"
+	// HysteriaTLSSelfSigned identifies a supported package value.
+	HysteriaTLSSelfSigned = "self-signed"
+	// HysteriaTLSLegacy identifies a supported package value.
+	HysteriaTLSLegacy = "legacy"
+	// HysteriaMasqueradeOff identifies a supported package value.
+	HysteriaMasqueradeOff = "off"
+	// HysteriaMasqueradeText identifies a supported package value.
 	HysteriaMasqueradeText = "string"
 )
 
 // HysteriaSettings is the persisted, node-wide Hysteria 2 inbound setup.
 // Certificate bytes are held in a dedicated volume, not in SQLite.
 type HysteriaSettings struct {
-	Enabled          bool
-	Host             string
-	TLSMode          string
-	TLSCertIP        string
-	TLSServerName    string
-	CertificateID    string
-	UDPIdleTimeout   int
-	MasqueradeType   string
+	// Enabled is whether the object is enabled.
+	Enabled bool
+	// Host contains the Host value for this object.
+	Host string
+	// TLSMode contains the TLSMode value for this object.
+	TLSMode string
+	// TLSCertIP contains the TLSCertIP value for this object.
+	TLSCertIP string
+	// TLSServerName contains the TLSServerName value for this object.
+	TLSServerName string
+	// CertificateID contains the CertificateID value for this object.
+	CertificateID string
+	// UDPIdleTimeout contains the UDPIdleTimeout value for this object.
+	UDPIdleTimeout int
+	// MasqueradeType contains the MasqueradeType value for this object.
+	MasqueradeType string
+	// MasqueradeString contains the MasqueradeString value for this object.
 	MasqueradeString string
 }
 

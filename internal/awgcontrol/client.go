@@ -26,10 +26,15 @@ const serviceName = "/xrayeasy.awg.v1.Control/"
 
 // Gateway exposes only the AWG operations needed by the application layer.
 type Gateway interface {
+	// Status returns the requested state.
 	Status(context.Context) (domain.AmneziaWGStatus, error)
+	// ListPeers returns the requested collection.
 	ListPeers(context.Context) ([]domain.AmneziaWGPeer, error)
+	// CreatePeer creates the requested value.
 	CreatePeer(context.Context, string) (domain.AmneziaWGPeer, error)
+	// RemovePeer removes the supplied value.
 	RemovePeer(context.Context, string) error
+	// ClientConfig returns the requested state.
 	ClientConfig(context.Context, string) (string, error)
 }
 
@@ -181,6 +186,7 @@ type loggedPeerStatsStream struct {
 	logged    bool
 }
 
+// Recv receives the next value from the stream.
 func (s *loggedPeerStatsStream) Recv() (*awgapi.PeerStatsUpdate, error) {
 	response, err := s.Control_WatchPeerStatsClient.Recv()
 	if err != nil && !s.logged {

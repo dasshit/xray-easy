@@ -18,9 +18,12 @@ const (
 )
 
 var (
-	ErrStaleRevision    = errors.New("stale Xray configuration revision")
+	// ErrStaleRevision indicates that a request targets an older configuration revision.
+	ErrStaleRevision = errors.New("stale Xray configuration revision")
+	// ErrRevisionConflict indicates that an operation key was reused with different data.
 	ErrRevisionConflict = errors.New("Xray revision operation conflict")
-	ErrRevisionIO       = errors.New("Xray revision journal I/O failure")
+	// ErrRevisionIO indicates an error while reading or persisting revision state.
+	ErrRevisionIO = errors.New("Xray revision journal I/O failure")
 )
 
 type revisionRecord struct {
@@ -59,17 +62,28 @@ type revisionFileSystem interface {
 
 type osRevisionFileSystem struct{}
 
+// ReadFile reads and returns the requested value.
 func (osRevisionFileSystem) ReadFile(path string) ([]byte, error) { return os.ReadFile(path) }
+
+// MkdirAll performs the operation represented by its name.
 func (osRevisionFileSystem) MkdirAll(path string, mode os.FileMode) error {
 	return os.MkdirAll(path, mode)
 }
+
+// CreateTemp creates the requested value.
 func (osRevisionFileSystem) CreateTemp(directory, pattern string) (revisionTempFile, error) {
 	return os.CreateTemp(directory, pattern)
 }
+
+// Remove removes the requested value.
 func (osRevisionFileSystem) Remove(path string) error { return os.Remove(path) }
+
+// Rename performs the operation represented by its name.
 func (osRevisionFileSystem) Rename(oldPath, newPath string) error {
 	return os.Rename(oldPath, newPath)
 }
+
+// OpenDirectory opens the requested resource.
 func (osRevisionFileSystem) OpenDirectory(path string) (revisionDirectoryHandle, error) {
 	return os.Open(path)
 }

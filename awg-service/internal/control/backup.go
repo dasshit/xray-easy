@@ -1,3 +1,4 @@
+// Package control implements the AmneziaWG control service and its authenticated gRPC API.
 package control
 
 import (

@@ -1,3 +1,4 @@
+// Package hysteria manages the TLS certificate material used by the Hysteria 2 inbound.
 package hysteria
 
 import (
@@ -21,13 +22,20 @@ import (
 
 // CertificateInfo exposes non-secret certificate metadata to the Web UI.
 type CertificateInfo struct {
-	Subject     string    `json:"subject"`
-	Issuer      string    `json:"issuer"`
-	DNSNames    []string  `json:"dns_names"`
-	IPAddresses []string  `json:"ip_addresses"`
-	NotBefore   time.Time `json:"not_before"`
-	NotAfter    time.Time `json:"not_after"`
-	Fingerprint string    `json:"fingerprint"`
+	// Subject contains the Subject value for this object.
+	Subject string `json:"subject"`
+	// Issuer contains the Issuer value for this object.
+	Issuer string `json:"issuer"`
+	// DNSNames contains the DNSNames value for this object.
+	DNSNames []string `json:"dns_names"`
+	// IPAddresses contains the IPAddresses value for this object.
+	IPAddresses []string `json:"ip_addresses"`
+	// NotBefore contains the NotBefore value for this object.
+	NotBefore time.Time `json:"not_before"`
+	// NotAfter contains the NotAfter value for this object.
+	NotAfter time.Time `json:"not_after"`
+	// Fingerprint contains the Fingerprint value for this object.
+	Fingerprint string `json:"fingerprint"`
 }
 
 // Import validates and writes a certificate and matching private key into a

@@ -1,3 +1,4 @@
+// Package main provides the interactive Xray-easy installation wizard.
 package main
 
 import (

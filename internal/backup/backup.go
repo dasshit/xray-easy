@@ -1,3 +1,4 @@
+// Package backup creates, lists, verifies, and restores plaintext data-directory backups.
 package backup
 
 import (
@@ -26,25 +27,38 @@ const (
 	maxAWGSnapshot = 16 << 20
 )
 
+// Manager coordinates backup retention and database snapshot operations.
 type Manager struct {
-	Store     *store.Store
-	DataDir   string
+	// Store contains the Store value for this object.
+	Store *store.Store
+	// DataDir is the persistent data directory.
+	DataDir string
+	// ConfigDir contains the ConfigDir value for this object.
 	ConfigDir string
+	// MasterKey is the master key used to encrypt persisted secrets.
 	MasterKey []byte
-	AWG       AWGBackup
+	// AWG contains the AWG value for this object.
+	AWG AWGBackup
 }
 
 // AWGBackup exports and restores the optional AmneziaWG service state,
 // including client private-key profiles.
 type AWGBackup interface {
+	// ExportBackup defines part of the interface contract.
 	ExportBackup(context.Context) ([]byte, error)
+	// RestoreBackup defines part of the interface contract.
 	RestoreBackup(context.Context, []byte) error
 }
 
+// Info describes one backup archive and its verification metadata.
 type Info struct {
-	Name      string
-	Path      string
+	// Name is the human-readable name of the object.
+	Name string
+	// Path contains the Path value for this object.
+	Path string
+	// StatePath contains the StatePath value for this object.
 	StatePath string
+	// CreatedAt is the time the object was created.
 	CreatedAt time.Time
 }
 
@@ -68,12 +82,15 @@ type manifestFile struct {
 	SHA256 string `json:"sha256"`
 }
 
+// NewManager constructs and returns the requested value.
 func NewManager(db *store.Store, dataDir, configDir string, masterKey []byte) *Manager {
 	return &Manager{Store: db, DataDir: dataDir, ConfigDir: configDir, MasterKey: masterKey}
 }
 
+// BackupDir performs the operation represented by its name.
 func (m *Manager) BackupDir() string { return filepath.Join(m.DataDir, "backups") }
 
+// Create creates the requested value.
 func (m *Manager) Create(label string) (Info, error) {
 	return m.CreateContext(context.Background(), label)
 }
@@ -84,6 +101,7 @@ func (m *Manager) CreateContext(ctx context.Context, label string) (Info, error)
 	return m.create(ctx, label, nil)
 }
 
+// CreatePreserving creates the requested value.
 func (m *Manager) CreatePreserving(label, preserveName string) (Info, error) {
 	return m.CreatePreservingContext(context.Background(), label, preserveName)
 }
@@ -201,6 +219,7 @@ func (m *Manager) create(ctx context.Context, label string, preserve map[string]
 	return Info{Name: name, Path: finalPath, StatePath: filepath.Join(finalPath, "state.db"), CreatedAt: createdAt}, nil
 }
 
+// List returns the requested collection.
 func (m *Manager) List() ([]Info, error) {
 	entries, err := os.ReadDir(m.BackupDir())
 	if os.IsNotExist(err) {
@@ -224,6 +243,7 @@ func (m *Manager) List() ([]Info, error) {
 	return result, nil
 }
 
+// Verify verifies the supplied value.
 func (m *Manager) Verify(name string) (Info, error) {
 	info, err := m.inspect(name)
 	if err != nil {
@@ -238,6 +258,7 @@ func (m *Manager) Verify(name string) (Info, error) {
 	return info, nil
 }
 
+// RestoreState restores the requested state.
 func (m *Manager) RestoreState(info Info) error {
 	return m.RestoreStateContext(context.Background(), info)
 }

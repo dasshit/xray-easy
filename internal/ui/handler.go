@@ -1,3 +1,4 @@
+// Package ui serves the embedded web application and its security boundary.
 package ui
 
 import (
@@ -18,6 +19,7 @@ func Handler() http.Handler {
 	return HandlerFromFS(os.DirFS(uiDir))
 }
 
+// HandlerFromFS handles the supplied event.
 func HandlerFromFS(root fs.FS) http.Handler {
 	files := http.FileServer(http.FS(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

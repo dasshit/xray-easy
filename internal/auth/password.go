@@ -1,3 +1,4 @@
+// Package auth implements administrator password and recovery-code verification.
 package auth
 
 import (
@@ -20,6 +21,7 @@ const (
 	keyBytes     = 32
 )
 
+// HashPassword reports whether the value contains the requested capability.
 func HashPassword(password string) (string, error) {
 	if len(password) < 12 {
 		return "", errors.New("password must contain at least 12 characters")
@@ -33,6 +35,7 @@ func HashPassword(password string) (string, error) {
 	return fmt.Sprintf("$argon2id$v=19$m=%d,t=%d,p=%d$%s$%s", argonMemory, argonTime, argonThreads, encode(salt), encode(key)), nil
 }
 
+// VerifyPassword verifies the supplied value.
 func VerifyPassword(password, encoded string) bool {
 	parts := strings.Split(encoded, "$")
 	if len(parts) != 6 || parts[1] != "argon2id" || parts[2] != "v=19" {

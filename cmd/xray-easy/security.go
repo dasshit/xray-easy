@@ -79,6 +79,7 @@ func validateBrowserOrigin(r *http.Request) error {
 
 type errOriginRejected struct{}
 
+// Error returns the error description.
 func (errOriginRejected) Error() string { return "request origin is not allowed" }
 
 func sameOriginURL(r *http.Request, raw string, allowPath bool) bool {

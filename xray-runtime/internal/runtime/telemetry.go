@@ -11,20 +11,29 @@ import (
 // online map drops the address when its last connection closes, so callers
 // must not treat this as historical source-IP data.
 type RuntimeIPObservation struct {
-	Address  string
+	// Address is the endpoint address observed by the runtime.
+	Address string
+	// LastSeen is the last time the runtime observed traffic.
 	LastSeen time.Time
 }
 
 // RuntimeUserTelemetry combines a configured-user roster entry with whatever
 // live counters and online observations Xray currently exposes for it.
 type RuntimeUserTelemetry struct {
-	Email         string
-	Protocol      xrayruntimev1.Protocol
-	UploadBytes   int64
+	// Email is the Xray statistics identity for the profile.
+	Email string
+	// Protocol is the protocol associated with the object.
+	Protocol xrayruntimev1.Protocol
+	// UploadBytes is the observed upload byte count.
+	UploadBytes int64
+	// DownloadBytes is the observed download byte count.
 	DownloadBytes int64
-	Online        bool
-	LastSeen      time.Time
-	SourceIPs     []RuntimeIPObservation
+	// Online is whether the client is currently online.
+	Online bool
+	// LastSeen is the last time the runtime observed traffic.
+	LastSeen time.Time
+	// SourceIPs is the source IP observations associated with the client.
+	SourceIPs []RuntimeIPObservation
 }
 
 type telemetryCapabilities struct {

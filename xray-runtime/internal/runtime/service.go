@@ -37,21 +37,33 @@ const (
 // Loader keeps active-instance construction and side-effect-free validation
 // replaceable in unit tests.
 type Loader interface {
+	// Load loads the requested resource.
 	Load([]byte) (EngineHandle, error)
+	// Validate validates the supplied value.
 	Validate(context.Context, []byte) error
 }
 
 // EngineHandle represents the one configured Xray instance.
 type EngineHandle interface {
+	// Start starts the implementation.
 	Start() error
+	// Close releases implementation resources.
 	Close() error
+	// Version returns the requested state.
 	Version() string
+	// StatsAvailable reports whether statistics are available.
 	StatsAvailable() bool
+	// GetTelemetry returns the requested state.
 	GetTelemetry(context.Context, map[xrayruntimev1.Protocol]string) ([]RuntimeUserTelemetry, error)
+	// ReplaceInbound replaces the requested value.
 	ReplaceInbound(context.Context, string, []byte) (bool, error)
+	// AddUser adds the supplied value.
 	AddUser(context.Context, xrayruntimev1.Protocol, string, string, string, string) (bool, error)
+	// AddUserWithMethod adds the supplied value.
 	AddUserWithMethod(context.Context, xrayruntimev1.Protocol, string, string, string, string, string) (bool, error)
+	// RemoveUser removes the supplied value.
 	RemoveUser(context.Context, string, string) (bool, error)
+	// ListUsers returns the requested collection.
 	ListUsers(context.Context, string) ([]string, error)
 }
 
@@ -60,6 +72,7 @@ type coreLoader struct {
 	allowLog func(level string) bool
 }
 
+// Load loads the requested resource.
 func (l coreLoader) Load(data []byte) (EngineHandle, error) {
 	if l.writeLog != nil {
 		_ = appLog.RegisterHandlerCreator(appLog.LogType_Console, func(appLog.LogType, appLog.HandlerCreatorOptions) (corelog.Handler, error) {
@@ -69,6 +82,7 @@ func (l coreLoader) Load(data []byte) (EngineHandle, error) {
 	return LoadEngine(data)
 }
 
+// Validate validates the supplied value.
 func (coreLoader) Validate(ctx context.Context, data []byte) error {
 	return ValidateConfigIsolatedContext(ctx, data)
 }
@@ -720,6 +734,7 @@ func (s *Service) ListUsers(ctx context.Context, request *xrayruntimev1.ListUser
 	return &xrayruntimev1.ListUsersResponse{Emails: users}, nil
 }
 
+// GetTelemetry returns the requested value.
 func (s *Service) GetTelemetry(ctx context.Context, _ *xrayruntimev1.EmptyRequest) (*xrayruntimev1.TelemetryResponse, error) {
 	s.opMu.Lock()
 	defer s.opMu.Unlock()
@@ -877,6 +892,7 @@ func (s *Service) WatchTelemetry(request *xrayruntimev1.WatchTelemetryRequest, s
 	}
 }
 
+// ProbeRealityTarget probes the requested endpoint.
 func (s *Service) ProbeRealityTarget(ctx context.Context, request *xrayruntimev1.ProbeRealityTargetRequest) (*xrayruntimev1.ProbeResponse, error) {
 	if request == nil || strings.TrimSpace(request.GetTarget()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "REALITY target is required")
@@ -900,6 +916,7 @@ func (s *Service) ProbeRealityTarget(ctx context.Context, request *xrayruntimev1
 	return &xrayruntimev1.ProbeResponse{Ok: true, CheckedAt: timestamppb.New(time.Now().UTC())}, nil
 }
 
+// ProbeIPv6Egress probes the requested endpoint.
 func (s *Service) ProbeIPv6Egress(ctx context.Context, _ *xrayruntimev1.EmptyRequest) (*xrayruntimev1.ProbeResponse, error) {
 	probe := s.probeIPv6
 	if probe == nil {

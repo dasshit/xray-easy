@@ -18,10 +18,14 @@ import (
 )
 
 const (
+	// Protocol is the VLESS protocol name used in rendered Xray settings.
 	Protocol = "vless"
-	Network  = "tcp"
+	// Network is the TCP transport used by the VLESS inbound.
+	Network = "tcp"
+	// Security is the REALITY transport security name.
 	Security = "reality"
-	Flow     = "xtls-rprx-vision"
+	// Flow is the XTLS Vision flow used by VLESS clients.
+	Flow = "xtls-rprx-vision"
 	// Xray 26.7.11 and newer apply an implicit minClientVer of 26.3.27
 	// when the field is omitted. Third-party clients such as V2RAGE may
 	// report an older REALITY client version, so keep the compatibility
@@ -30,93 +34,173 @@ const (
 	// Xray requires at least one REALITY short ID even when there are no
 	// enabled clients. This reserved value has no matching UUID and therefore
 	// cannot authenticate a device.
-	emptyShortID            = "0000000000000000"
-	ReservedShortIDCount    = 5
-	VerifiedCoreVersion     = "26.7.28"
-	HysteriaInboundTag      = "hysteria2"
-	VMessInboundTag         = "vmess-tls"
-	ShadowsocksInboundTag   = "shadowsocks"
-	TrojanInboundTag        = "trojan-tls"
-	VMessInternalPort       = 8444
+	emptyShortID = "0000000000000000"
+	// ReservedShortIDCount is the number of short IDs kept for live user additions.
+	ReservedShortIDCount = 5
+	// VerifiedCoreVersion is the Xray version validated by the runtime compatibility checks.
+	VerifiedCoreVersion = "26.7.28"
+	// HysteriaInboundTag is the stable Xray tag for the Hysteria 2 inbound.
+	HysteriaInboundTag = "hysteria2"
+	// VMessInboundTag is the stable Xray tag for the VMess inbound.
+	VMessInboundTag = "vmess-tls"
+	// ShadowsocksInboundTag is the stable Xray tag for the Shadowsocks inbound.
+	ShadowsocksInboundTag = "shadowsocks"
+	// TrojanInboundTag is the stable Xray tag for the Trojan inbound.
+	TrojanInboundTag = "trojan-tls"
+	// VMessInternalPort is the VMess listener port inside the Xray container.
+	VMessInternalPort = 8444
+	// ShadowsocksInternalPort is the Shadowsocks listener port inside the Xray container.
 	ShadowsocksInternalPort = 8388
-	TrojanInternalPort      = 8445
-	HysteriaTLSCertPath     = "/etc/xray/hysteria-tls/fullchain.pem"
-	HysteriaTLSKeyPath      = "/etc/xray/hysteria-tls/privkey.pem"
-	HysteriaTLSSelfSigned   = "self-signed"
-	HysteriaTLSCustom       = "custom"
-	HysteriaTLSLegacy       = "legacy"
+	// TrojanInternalPort is the Trojan listener port inside the Xray container.
+	TrojanInternalPort = 8445
+	// HysteriaTLSCertPath is the mounted Hysteria 2 certificate path.
+	HysteriaTLSCertPath = "/etc/xray/hysteria-tls/fullchain.pem"
+	// HysteriaTLSKeyPath is the mounted Hysteria 2 private key path.
+	HysteriaTLSKeyPath = "/etc/xray/hysteria-tls/privkey.pem"
+	// HysteriaTLSSelfSigned selects the generated self-signed Hysteria 2 certificate.
+	HysteriaTLSSelfSigned = "self-signed"
+	// HysteriaTLSCustom selects a user-provided Hysteria 2 certificate.
+	HysteriaTLSCustom = "custom"
+	// HysteriaTLSLegacy selects the legacy certificate compatibility mode.
+	HysteriaTLSLegacy = "legacy"
 )
 
+// Settings contains the values needed to render the active Xray configuration and client profiles.
 type Settings struct {
-	PublicHost               string
-	PublicPort               int
-	XrayAPIListen            string
-	RealityTarget            string
-	RealitySNI               string
-	RealityPrivateKey        string
-	RealityPublicKey         string
-	ClientFingerprint        string
-	LogLevel                 string
-	InternalInboundPort      int
-	ReservedShortIDs         []string
-	Hysteria2Enabled         bool
-	HysteriaTLSMode          string
-	HysteriaTLSCertIP        string
-	HysteriaTLSServerName    string
-	HysteriaTLSFingerprint   string
-	HysteriaHost             string
-	HysteriaTLSCertPath      string
-	HysteriaTLSKeyPath       string
-	HysteriaUDPIdleTimeout   int
-	HysteriaMasqueradeType   string
+	// PublicHost is the public DNS name or IP address advertised to clients.
+	PublicHost string
+	// PublicPort is the public listener port advertised to clients.
+	PublicPort int
+	// XrayAPIListen is the private Xray API listen address.
+	XrayAPIListen string
+	// RealityTarget is the REALITY target host and port.
+	RealityTarget string
+	// RealitySNI is the REALITY server name indication.
+	RealitySNI string
+	// RealityPrivateKey is the X25519 REALITY private key.
+	RealityPrivateKey string
+	// RealityPublicKey is the X25519 REALITY public key.
+	RealityPublicKey string
+	// ClientFingerprint is the TLS client fingerprint used in generated profiles.
+	ClientFingerprint string
+	// LogLevel is the active Xray log level.
+	LogLevel string
+	// InternalInboundPort is the internal VLESS inbound port.
+	InternalInboundPort int
+	// ReservedShortIDs is the pool of reserved REALITY short identifiers.
+	ReservedShortIDs []string
+	// Hysteria2Enabled is whether the Hysteria 2 inbound is enabled.
+	Hysteria2Enabled bool
+	// HysteriaTLSMode is the Hysteria 2 TLS certificate mode.
+	HysteriaTLSMode string
+	// HysteriaTLSCertIP is the IPv4 address included in a self-signed certificate.
+	HysteriaTLSCertIP string
+	// HysteriaTLSServerName is the TLS server name used by Hysteria 2.
+	HysteriaTLSServerName string
+	// HysteriaTLSFingerprint is the Hysteria 2 TLS fingerprint.
+	HysteriaTLSFingerprint string
+	// HysteriaHost is the Hysteria 2 host used for generated profiles.
+	HysteriaHost string
+	// HysteriaTLSCertPath is the path to the Hysteria 2 certificate.
+	HysteriaTLSCertPath string
+	// HysteriaTLSKeyPath is the path to the Hysteria 2 private key.
+	HysteriaTLSKeyPath string
+	// HysteriaUDPIdleTimeout is the Hysteria 2 UDP idle timeout in seconds.
+	HysteriaUDPIdleTimeout int
+	// HysteriaMasqueradeType is the Hysteria 2 masquerade mode.
+	HysteriaMasqueradeType string
+	// HysteriaMasqueradeString is the static Hysteria 2 masquerade response.
 	HysteriaMasqueradeString string
-	VMessPublicPort          int
-	ShadowsocksEnabled       bool
-	ShadowsocksPublicPort    int
-	ShadowsocksMethod        string
-	ShadowsocksNetwork       string
-	TrojanEnabled            bool
-	TrojanPublicPort         int
+	// VMessPublicPort is the public VMess listener port.
+	VMessPublicPort int
+	// ShadowsocksEnabled is whether Shadowsocks access is enabled.
+	ShadowsocksEnabled bool
+	// ShadowsocksPublicPort is the public Shadowsocks listener port.
+	ShadowsocksPublicPort int
+	// ShadowsocksMethod is the Shadowsocks cipher method.
+	ShadowsocksMethod string
+	// ShadowsocksNetwork is the Shadowsocks transport network.
+	ShadowsocksNetwork string
+	// TrojanEnabled is whether Trojan access is enabled.
+	TrojanEnabled bool
+	// TrojanPublicPort is the public Trojan listener port.
+	TrojanPublicPort int
 }
 
+// Client contains the credentials and protocol state needed to render one client profile.
 type Client struct {
-	ID                  string
-	Name                string
-	Protocol            domain.ClientProtocol
-	UUID                string
-	Email               string
-	ShortID             string
-	HysteriaAuth        string
-	ClientFingerprint   string
-	Enabled             bool
-	Revoked             bool
-	VLESSEnabled        bool
-	VLESSRevoked        bool
-	HysteriaEnabled     bool
-	HysteriaRevoked     bool
-	VMessEnabled        bool
-	VMessRevoked        bool
+	// ID is the unique identifier for the object.
+	ID string
+	// Name is the human-readable name of the object.
+	Name string
+	// Protocol is the protocol associated with the object.
+	Protocol domain.ClientProtocol
+	// UUID is the UUID credential assigned to the profile.
+	UUID string
+	// Email is the Xray statistics identity for the profile.
+	Email string
+	// ShortID is the REALITY short identifier assigned to the profile.
+	ShortID string
+	// HysteriaAuth is the Hysteria 2 authentication credential.
+	HysteriaAuth string
+	// ClientFingerprint is the TLS client fingerprint used in generated profiles.
+	ClientFingerprint string
+	// Enabled is whether the object is enabled.
+	Enabled bool
+	// Revoked is whether access to the object has been revoked.
+	Revoked bool
+	// VLESSEnabled is whether VLESS access is enabled.
+	VLESSEnabled bool
+	// VLESSRevoked is whether VLESS access is revoked.
+	VLESSRevoked bool
+	// HysteriaEnabled is whether Hysteria 2 access is enabled.
+	HysteriaEnabled bool
+	// HysteriaRevoked is whether Hysteria 2 access is revoked.
+	HysteriaRevoked bool
+	// VMessEnabled is whether VMess access is enabled.
+	VMessEnabled bool
+	// VMessRevoked is whether VMess access is revoked.
+	VMessRevoked bool
+	// ShadowsocksPassword is the Shadowsocks password credential.
 	ShadowsocksPassword string
-	ShadowsocksEnabled  bool
-	ShadowsocksRevoked  bool
-	TrojanPassword      string
-	TrojanEnabled       bool
-	TrojanRevoked       bool
+	// ShadowsocksEnabled is whether Shadowsocks access is enabled.
+	ShadowsocksEnabled bool
+	// ShadowsocksRevoked is whether Shadowsocks access is revoked.
+	ShadowsocksRevoked bool
+	// TrojanPassword is the Trojan password credential.
+	TrojanPassword string
+	// TrojanEnabled is whether Trojan access is enabled.
+	TrojanEnabled bool
+	// TrojanRevoked is whether Trojan access is revoked.
+	TrojanRevoked bool
 }
 
+// Profile contains the generated connection artifacts shown or downloaded for a client.
 type Profile struct {
-	Protocol        domain.ClientProtocol
-	URI             string
-	HysteriaURI     string
-	VMessURI        string
-	ShadowsocksURI  string
+	// Protocol is the protocol associated with the object.
+	Protocol domain.ClientProtocol
+	// URI is the generated connection URI.
+	URI string
+	// HysteriaURI is the generated Hysteria 2 connection URI.
+	HysteriaURI string
+	// VMessURI is the generated VMess connection URI.
+	VMessURI string
+	// ShadowsocksURI is the generated Shadowsocks connection URI.
+	ShadowsocksURI string
+	// ShadowsocksJSON is the generated Shadowsocks client JSON.
 	ShadowsocksJSON []byte
-	TrojanURI       string
-	TrojanJSON      []byte
-	JSON            []byte
-	Name            string
-	UUID            string
-	ShortID         string
+	// TrojanURI is the generated Trojan connection URI.
+	TrojanURI string
+	// TrojanJSON is the generated Trojan client JSON.
+	TrojanJSON []byte
+	// JSON is the generated client JSON document.
+	JSON []byte
+	// Name is the human-readable name of the object.
+	Name string
+	// UUID is the UUID credential assigned to the profile.
+	UUID string
+	// ShortID is the REALITY short identifier assigned to the profile.
+	ShortID string
 }
 
 type serverConfig struct {
@@ -288,6 +372,7 @@ type trojanServerClient struct {
 	Email    string `json:"email"`
 }
 
+// RenderServerConfig renders the requested representation.
 func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	if settings.LogLevel == "" {
 		settings.LogLevel = "warning"
@@ -489,6 +574,7 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// BuildProfile builds the requested representation.
 func BuildProfile(settings Settings, client Client) (Profile, error) {
 	profile := Profile{Protocol: client.Protocol, Name: client.Name, UUID: client.UUID, ShortID: client.ShortID}
 	if client.HasVLESS() && !client.VLESSIsRevoked() {
@@ -678,22 +764,28 @@ func (c Client) protocol() domain.ClientProtocol {
 	return c.Protocol
 }
 
+// HasVLESS reports whether the value contains the requested capability.
 func (c Client) HasVLESS() bool {
 	protocol := c.protocol()
 	return protocol == domain.ProtocolVLESS || protocol == domain.ProtocolLegacyDual
 }
 
+// HasHysteria2 reports whether the value contains the requested capability.
 func (c Client) HasHysteria2() bool {
 	protocol := c.protocol()
 	return protocol == domain.ProtocolHysteria2 || protocol == domain.ProtocolLegacyDual
 }
 
+// HasVMess reports whether the value contains the requested capability.
 func (c Client) HasVMess() bool { return c.protocol() == domain.ProtocolVMess }
 
+// HasShadowsocks reports whether the value contains the requested capability.
 func (c Client) HasShadowsocks() bool { return c.protocol() == domain.ProtocolShadowsocks }
 
+// HasTrojan reports whether the value contains the requested capability.
 func (c Client) HasTrojan() bool { return c.protocol() == domain.ProtocolTrojan }
 
+// VLESSCanConnect performs the operation represented by its name.
 func (c Client) VLESSCanConnect() bool {
 	if c.Protocol == "" {
 		return c.Enabled && !c.Revoked
@@ -701,6 +793,7 @@ func (c Client) VLESSCanConnect() bool {
 	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked
 }
 
+// Hysteria2CanConnect performs the operation represented by its name.
 func (c Client) Hysteria2CanConnect() bool {
 	if c.Protocol == "" {
 		return c.Enabled && !c.Revoked
@@ -708,6 +801,7 @@ func (c Client) Hysteria2CanConnect() bool {
 	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked
 }
 
+// VMessCanConnect performs the operation represented by its name.
 func (c Client) VMessCanConnect() bool {
 	if c.Protocol == "" {
 		return c.Enabled && !c.Revoked
@@ -715,6 +809,7 @@ func (c Client) VMessCanConnect() bool {
 	return c.HasVMess() && c.VMESSEnabled() && !c.VMessIsRevoked()
 }
 
+// ShadowsocksCanConnect performs the operation represented by its name.
 func (c Client) ShadowsocksCanConnect() bool {
 	if c.Protocol == "" {
 		return false
@@ -722,6 +817,7 @@ func (c Client) ShadowsocksCanConnect() bool {
 	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked
 }
 
+// TrojanCanConnect performs the operation represented by its name.
 func (c Client) TrojanCanConnect() bool {
 	if c.Protocol == "" {
 		return false
@@ -729,6 +825,7 @@ func (c Client) TrojanCanConnect() bool {
 	return c.HasTrojan() && c.TrojanEnabled && !c.TrojanRevoked
 }
 
+// VMESSEnabled performs the operation represented by its name.
 func (c Client) VMESSEnabled() bool {
 	if c.Protocol == "" {
 		return c.Enabled
@@ -736,6 +833,7 @@ func (c Client) VMESSEnabled() bool {
 	return c.VMessEnabled
 }
 
+// VLESSIsRevoked performs the operation represented by its name.
 func (c Client) VLESSIsRevoked() bool {
 	if c.Protocol == "" {
 		return c.Revoked
@@ -743,6 +841,7 @@ func (c Client) VLESSIsRevoked() bool {
 	return c.VLESSRevoked
 }
 
+// HysteriaIsRevoked performs the operation represented by its name.
 func (c Client) HysteriaIsRevoked() bool {
 	if c.Protocol == "" {
 		return c.Revoked
@@ -750,6 +849,7 @@ func (c Client) HysteriaIsRevoked() bool {
 	return c.HysteriaRevoked
 }
 
+// VMessIsRevoked performs the operation represented by its name.
 func (c Client) VMessIsRevoked() bool {
 	if c.Protocol == "" {
 		return c.Revoked
@@ -757,6 +857,7 @@ func (c Client) VMessIsRevoked() bool {
 	return c.VMessRevoked
 }
 
+// ShadowsocksIsRevoked performs the operation represented by its name.
 func (c Client) ShadowsocksIsRevoked() bool {
 	if c.Protocol == "" {
 		return false
@@ -764,6 +865,7 @@ func (c Client) ShadowsocksIsRevoked() bool {
 	return c.ShadowsocksRevoked
 }
 
+// TrojanIsRevoked performs the operation represented by its name.
 func (c Client) TrojanIsRevoked() bool {
 	if c.Protocol == "" {
 		return false
@@ -771,6 +873,7 @@ func (c Client) TrojanIsRevoked() bool {
 	return c.TrojanRevoked
 }
 
+// HysteriaCredential performs the operation represented by its name.
 func (c Client) HysteriaCredential() string {
 	if c.HysteriaAuth != "" {
 		return c.HysteriaAuth
@@ -909,6 +1012,7 @@ func buildVMessClientJSON(settings Settings, client Client) ([]byte, error) {
 	return out.Bytes(), nil
 }
 
+// BuildVLESSURI builds the requested representation.
 func BuildVLESSURI(settings Settings, client Client, fingerprint string) string {
 	query := url.Values{}
 	query.Set("encryption", "none")
