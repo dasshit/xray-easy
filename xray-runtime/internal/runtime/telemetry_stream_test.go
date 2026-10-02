@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"io"
+	"strings"
 	"testing"
 	"time"
 
@@ -76,7 +77,7 @@ func TestWatchTelemetryMarksUserOnlineAfterObservedCounterIncrease(t *testing.T)
 	configuration := []byte(`{"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"tag":"vless-reality","protocol":"vless"}]}`)
 	engine := &fakeEngine{stats: true, telemetrySequence: [][]RuntimeUserTelemetry{
 		{{Email: "device@xray-easy", Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, UploadBytes: 10}},
-		{{Email: "device@xray-easy", Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, UploadBytes: 15}},
+		{{Email: "device@xray-easy", Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, UploadBytes: 15, SourceIPs: []RuntimeIPObservation{{Address: "198.51.100.88"}}}},
 	}}
 	service, err := NewService(&fakeLoader{engine: engine}, "test", configuration, 3)
 	if err != nil {
@@ -102,6 +103,20 @@ func TestWatchTelemetryMarksUserOnlineAfterObservedCounterIncrease(t *testing.T)
 		user := active.GetUsers()[0]
 		if !user.GetOnline() || user.GetUploadBytes() != 15 || user.GetLastActivity() == nil {
 			t.Fatalf("user did not become online after counter increase: %+v", user)
+		}
+		logs, err := service.GetRecentLogs(context.Background(), new(xrayruntimev1.EmptyRequest))
+		if err != nil {
+			t.Fatalf("read runtime logs: %v", err)
+		}
+		found := false
+		for _, entry := range logs.GetEntries() {
+			if strings.Contains(entry.GetMessage(), "user_online") && strings.Contains(entry.GetMessage(), "device@xray-easy") && strings.Contains(entry.GetMessage(), "[REDACTED-IP]") {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("online transition was not written to runtime logs: %+v", logs.GetEntries())
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("runtime did not publish a second telemetry sample")

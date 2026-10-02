@@ -980,22 +980,33 @@ func TestValidateConfigUsesBuilderOnly(t *testing.T) {
 	}
 }
 
-func TestCapturedXrayLogsKeepWarningsAndHideAccessAndSecrets(t *testing.T) {
+func TestCapturedXrayLogsKeepAccessWarningsAndHideSecrets(t *testing.T) {
 	var captured []logRecord
 	handler := capturedXrayLog{write: func(level, component, message string) {
 		captured = append(captured, logRecord{level: level, component: component, message: message})
 	}, allow: func(level string) bool { return level == "warn" || level == "error" }}
 	handler.Handle(&corelog.GeneralMessage{Severity: corelog.Severity_Info, Content: "informational log"})
-	handler.Handle(&corelog.AccessMessage{From: "192.0.2.10:1234"})
+	handler.Handle(&corelog.AccessMessage{From: "192.0.2.10:1234", To: "tcp:example.com:443", Status: corelog.AccessAccepted, Email: "device@xray-easy"})
+	handler.Handle(&corelog.AccessMessage{From: "192.0.2.10:1234", To: "tcp:example.com:443", Status: corelog.AccessRejected, Reason: `password="visible-secret"`})
 	handler.Handle(&corelog.GeneralMessage{Severity: corelog.Severity_Warning, Content: `rejected 192.0.2.10:1234 password="visible-secret"`})
-	if len(captured) != 1 {
-		t.Fatalf("captured messages = %+v, want only the warning", captured)
+	if len(captured) != 2 {
+		t.Fatalf("captured messages = %+v, want access and general warnings", captured)
 	}
 	if captured[0].level != "warn" || captured[0].component != "xray" {
 		t.Fatalf("captured warning metadata = %+v", captured[0])
 	}
-	redacted := diagnostics.Redact(captured[0].message)
-	if strings.Contains(redacted, "192.0.2.10") || strings.Contains(redacted, "visible-secret") {
-		t.Fatalf("captured warning leaked private data: %q", redacted)
+	for _, entry := range captured {
+		redacted := diagnostics.Redact(entry.message)
+		if strings.Contains(redacted, "192.0.2.10") || strings.Contains(redacted, "visible-secret") {
+			t.Fatalf("captured warning leaked private data: %q", redacted)
+		}
+	}
+	var accepted []logRecord
+	capturedHandler := capturedXrayLog{write: func(level, component, message string) {
+		accepted = append(accepted, logRecord{level: level, component: component, message: message})
+	}}
+	capturedHandler.Handle(&corelog.AccessMessage{From: "192.0.2.11:1234", To: "tcp:example.com:443", Status: corelog.AccessAccepted, Email: "device@xray-easy"})
+	if len(accepted) != 1 || accepted[0].level != "info" || !strings.Contains(accepted[0].message, "accepted") {
+		t.Fatalf("accepted access event = %+v", accepted)
 	}
 }

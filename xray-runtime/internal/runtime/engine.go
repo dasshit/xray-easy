@@ -41,27 +41,42 @@ type capturedXrayLog struct {
 
 // Handle handles the supplied event.
 func (h capturedXrayLog) Handle(message corelog.Message) {
-	general, ok := message.(*corelog.GeneralMessage)
-	if !ok || h.write == nil {
+	if h.write == nil {
 		return
 	}
 	level := ""
-	switch general.Severity {
-	case corelog.Severity_Error:
-		level = "error"
-	case corelog.Severity_Warning:
-		level = "warn"
-	case corelog.Severity_Info:
+	text := ""
+	switch typed := message.(type) {
+	case *corelog.AccessMessage:
+		// Xray emits accepted and rejected inbound connections as access
+		// messages, which do not carry GeneralMessage severity. Keep the
+		// normal logging filter while mapping rejected access to warning.
 		level = "info"
-	case corelog.Severity_Debug:
-		level = "debug"
+		if typed.Status == corelog.AccessRejected {
+			level = "warn"
+		}
+		text = typed.String()
+	case *corelog.GeneralMessage:
+		switch typed.Severity {
+		case corelog.Severity_Error:
+			level = "error"
+		case corelog.Severity_Warning:
+			level = "warn"
+		case corelog.Severity_Info:
+			level = "info"
+		case corelog.Severity_Debug:
+			level = "debug"
+		default:
+			return
+		}
+		text = fmt.Sprint(typed.Content)
 	default:
 		return
 	}
 	if h.allow != nil && !h.allow(level) {
 		return
 	}
-	h.write(level, "xray", redactXrayLog(fmt.Sprint(general.Content)))
+	h.write(level, "xray", redactXrayLog(text))
 }
 
 var (

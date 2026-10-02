@@ -872,7 +872,14 @@ func (s *Service) WatchTelemetry(request *xrayruntimev1.WatchTelemetryRequest, s
 				if user.Online {
 					eventName, detail = "user_online", "traffic activity observed"
 				}
-				s.emitEvent("info", "connection", eventName, user.GetProtocol(), user.GetEmail(), firstSourceIP(user.GetSourceIps()), detail)
+				sourceIP := firstSourceIP(user.GetSourceIps())
+				logMessage := fmt.Sprintf("%s protocol=%s email=%s", eventName, user.GetProtocol().String(), user.GetEmail())
+				if sourceIP != "" {
+					logMessage += " source=" + sourceIP
+				}
+				logMessage += " detail=" + detail
+				s.addLog("info", "connection", logMessage)
+				s.emitEvent("info", "connection", eventName, user.GetProtocol(), user.GetEmail(), sourceIP, detail)
 			}
 			s.onlineState[user.GetEmail()] = user.Online
 			if !user.Online {
