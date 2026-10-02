@@ -88,7 +88,7 @@ const HysteriaProfileDeliveryDtoSchema = z.object({
 const VMessProfileDeliveryDtoSchema = z.object({
   client_id: z.string(), protocol: z.literal('vmess'), vmess_uri: z.string(), json: z.json(),
 })
-/** Runtime validator for classic Shadowsocks profile delivery. */
+/** Runtime validator for Shadowsocks 2022 profile delivery. */
 const ShadowsocksProfileDeliveryDtoSchema = z.object({
   client_id: z.string(), protocol: z.literal('shadowsocks'), ss_uri: z.string(), json: z.json(),
 })
@@ -195,7 +195,7 @@ export const SettingsDtoSchema = z.object({
   vmess_public_port: z.number(),
   shadowsocks_enabled: z.boolean().default(false),
   shadowsocks_public_port: z.number().default(8388),
-  shadowsocks_method: z.string().default('chacha20-poly1305'),
+  shadowsocks_method: z.string().default('2022-blake3-aes-256-gcm'),
   shadowsocks_network: z.string().default('tcp,udp'),
   trojan_enabled: z.boolean().default(false),
   trojan_public_port: z.number().default(10443),

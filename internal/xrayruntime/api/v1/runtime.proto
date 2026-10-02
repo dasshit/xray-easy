@@ -123,7 +123,7 @@ message AddUserRequest {
   // Zero denotes idempotent runtime user-roster convergence without a
   // persisted config revision. Positive revisions are fenced and committed.
   int64 revision = 6;
-  // Classic Shadowsocks method, for example chacha20-poly1305.
+  // Shadowsocks 2022 method, currently 2022-blake3-aes-256-gcm.
   string shadowsocks_method = 7;
 }
 

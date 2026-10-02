@@ -204,7 +204,7 @@ func (c *Client) AddVMessUser(ctx context.Context, email, id string) error {
 	return err
 }
 
-// AddShadowsocksUser installs a classic Shadowsocks password with its AEAD method.
+// AddShadowsocksUser installs a Shadowsocks 2022 per-device PSK and method.
 func (c *Client) AddShadowsocksUser(ctx context.Context, email, password, method string) error {
 	_, err := c.call(ctx, "AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "shadowsocks", Email: email, Id: password, Method: method})
 	return err

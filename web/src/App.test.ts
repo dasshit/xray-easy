@@ -8,7 +8,7 @@ import { xrayEasyGatewayKey } from './presentation/api'
 
 const settings: Settings = {
   publicHost: 'vpn.example.test', publicPort: 443, vmessPublicPort: 9443,
-  shadowsocksEnabled: true, shadowsocksPublicPort: 10443, shadowsocksMethod: '2022-blake3-aes-128-gcm', shadowsocksNetwork: 'tcp',
+  shadowsocksEnabled: true, shadowsocksPublicPort: 10443, shadowsocksMethod: '2022-blake3-aes-256-gcm', shadowsocksNetwork: 'tcp',
   trojanEnabled: true, trojanPublicPort: 11443, realityTarget: 'www.example.test:443', realitySni: 'www.example.test',
   clientFingerprint: 'chrome', logLevel: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision',
 }

@@ -493,7 +493,7 @@ func TestBuildProfileRejectsInvalidProtocolSpecificTransportSettings(t *testing.
 
 func TestBuildProfileValidatesShadowsocksAndTrojanStateBeforeRendering(t *testing.T) {
 	base := validTestSettings()
-	shadowsocks := Client{ID: "ss", Name: "SS phone", Protocol: domain.ProtocolShadowsocks, ShadowsocksEnabled: true, ShadowsocksPassword: "secret"}
+	shadowsocks := Client{ID: "ss", Name: "SS phone", Protocol: domain.ProtocolShadowsocks, ShadowsocksEnabled: true, ShadowsocksPassword: testShadowsocks2022Key(2)}
 	trojan := Client{ID: "trojan", Name: "Trojan phone", Protocol: domain.ProtocolTrojan, TrojanEnabled: true, TrojanPassword: "secret"}
 
 	for _, test := range []struct {
@@ -507,6 +507,7 @@ func TestBuildProfileValidatesShadowsocksAndTrojanStateBeforeRendering(t *testin
 			s := base
 			s.ShadowsocksEnabled = true
 			s.ShadowsocksPublicPort = 8388
+			s.ShadowsocksServerKey = testShadowsocks2022Key(1)
 			s.PublicHost = "bad host"
 			return s
 		}()},
@@ -522,16 +523,18 @@ func TestBuildProfileValidatesShadowsocksAndTrojanStateBeforeRendering(t *testin
 			s := base
 			s.ShadowsocksEnabled = true
 			s.ShadowsocksPublicPort = 8388
-			s.ShadowsocksMethod = domain.ShadowsocksMethodChaCha20Poly1305
+			s.ShadowsocksMethod = domain.ShadowsocksMethod2022AES256GCM
 			s.ShadowsocksNetwork = "sctp"
+			s.ShadowsocksServerKey = testShadowsocks2022Key(1)
 			return s
 		}()},
 		{"Shadowsocks credentials", func() Client { c := shadowsocks; c.ShadowsocksPassword = ""; return c }(), func() Settings {
 			s := base
 			s.ShadowsocksEnabled = true
 			s.ShadowsocksPublicPort = 8388
-			s.ShadowsocksMethod = domain.ShadowsocksMethodChaCha20Poly1305
+			s.ShadowsocksMethod = domain.ShadowsocksMethod2022AES256GCM
 			s.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
+			s.ShadowsocksServerKey = testShadowsocks2022Key(1)
 			return s
 		}()},
 		{"Trojan disabled", trojan, base},

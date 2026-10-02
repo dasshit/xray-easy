@@ -1,6 +1,6 @@
 # Shadowsocks support plan
 
-Status: implemented in code; VDS acceptance remains manual
+Status: initial classic implementation completed; SS2022 migration is in progress
 
 ## Scope and decisions
 
@@ -8,13 +8,12 @@ Xray-easy will add Shadowsocks as another Xray protocol handled by the
 existing embedded Xray runtime and Controller. A second container is not
 needed.
 
-The MVP uses classic Shadowsocks AEAD because the Xray Shadowsocks server
-implements `UserManager`, which allows a device to be added or removed through
-the runtime API without replacing the inbound. The initial method is
-`chacha20-poly1305`; `aes-256-gcm` and `aes-128-gcm` remain valid configured
-options. `2022-*` methods are outside the MVP: the current Xray 2022 multi-user
-implementation does not provide the same live user-management contract, so a
-full inbound replacement would be required and could interrupt connections.
+The original implementation used classic Shadowsocks AEAD. The project is
+migrating to `2022-blake3-aes-256-gcm`; Xray's pinned SS2022 multi-user inbound
+implements `UserManager`, so devices can still be added or removed through the
+runtime API without replacing the inbound. See
+[`shadowsocks-2022-migration-plan.md`](shadowsocks-2022-migration-plan.md) for
+credential migration, implementation stages, and client compatibility details.
 
 Shadowsocks has a dedicated public port. VLESS TCP and Hysteria 2 UDP already
 use the public port from `XRAY_PUBLIC_PORT`; Shadowsocks cannot share the same
@@ -30,7 +29,7 @@ VMess       9443/TCP
 
 The public Shadowsocks port is configured by `XRAY_SHADOWSOCKS_PORT`. TCP and
 UDP use the same number because they are separate socket namespaces. A profile
-gets one unique password, stored encrypted with `XRAY_EASY_MASTER_KEY`.
+gets one unique SS2022 user PSK, stored encrypted with `XRAY_EASY_MASTER_KEY`.
 
 The Web UI delivers an `ss://` URI, QR code, and JSON profile. It also shows
 the method, network, port, status, source IP, counters, and rates. v2RAGE is
@@ -42,11 +41,11 @@ Shadowsocks support.
 
 1. Verify the current Xray `26.7.28` runtime with a minimal Shadowsocks
    inbound using TCP and UDP.
-2. Verify multiple classic users, `AddUser`, `RemoveUser`, `ListUsers`, user
+2. Verify multiple SS2022 users, `AddUser`, `RemoveUser`, `ListUsers`, user
    counters, online state, and source IP observations.
 3. Verify dual-stack Docker port publishing and document the required TCP and
    UDP firewall rules.
-4. Try the 2022 multi-user path and record the live-management limitation.
+4. Verify the 2022 multi-user path and its live user-management behavior.
 5. Add a compatibility entry and a runtime capability test so a future Xray
    upgrade cannot silently remove live Shadowsocks management.
 
@@ -70,20 +69,21 @@ capability decision.
 ## Stage 2 — Xray configuration renderer
 
 1. Add the `shadowsocks` inbound tag and fixed internal listener port.
-2. Render active users as `clients` with method, password, and email.
-3. Render an enabled inbound even when it currently has no users, so the first
-   profile can be added through `AddUser`.
+2. Render active SS2022 users with a node-level method/server PSK and a
+   per-device user PSK and email.
+3. Render an enabled inbound even when it currently has no users. The first
+   profile may initialize the multi-user inbound through a validated full
+   config apply; later profile changes use live `AddUser`/`RemoveUser`.
 4. Validate method, network, port, credentials, and duplicate emails.
-5. Reject `2022-*` methods in the MVP.
-6. Keep output ordering stable and preserve disabled/revoked lifecycle rules.
-7. Add renderer tests for TCP, UDP, dual network, invalid settings, and mixed
+5. Keep output ordering stable and preserve disabled/revoked lifecycle rules.
+6. Add renderer tests for TCP, UDP, dual network, invalid settings, and mixed
    protocol configurations.
 
 ## Stage 3 — embedded runtime and Protobuf
 
 1. Add `PROTOCOL_SHADOWSOCKS` to the runtime enum.
 2. Add the Shadowsocks cipher/method field to the typed `AddUserRequest`.
-3. Register the classic Shadowsocks Xray package in the embedded runtime.
+3. Register the Shadowsocks 2022 Xray package in the embedded runtime.
 4. Extend account conversion, inbound-tag discovery, capabilities, user list,
    and telemetry mapping.
 5. Preserve operation IDs, revision fencing, idempotency, and redacted
@@ -150,25 +150,17 @@ capability decision.
    create, connect over TCP and UDP, verify stats/source IP, disable, revoke,
    restart, restore, and test IPv4/IPv6 firewall behavior.
 
-## Follow-up: Shadowsocks 2022
-
-This remains a separate feature. It may be added when the selected Xray
-version exposes a reliable live user-management API. Otherwise it must use an
-explicit full-inbound apply with a visible connection-impact warning, or a
-single shared server key without per-device dynamic management. It must not be
-silently mixed with the classic Shadowsocks profile format.
-
 ## Implementation notes
 
-The classic Shadowsocks path is implemented through the embedded Xray runtime
-and Controller. The Web UI exposes protocol selection, read-only listener
-settings, `ss://`/QR/JSON delivery, and streamed status and traffic telemetry.
-Installer and doctor use the dedicated `XRAY_SHADOWSOCKS_*` settings, and
-Compose publishes the configured port in both TCP and UDP namespaces. The
-automated unit and component suites cover persistence, rendering, live user
-lifecycle, profile delivery, telemetry, API schemas, and the installer. A real
-VDS/client pass is still required for TCP/UDP reachability and dual-stack
-firewall behavior.
+The service's existing lifecycle is being moved from classic Shadowsocks to
+SS2022 without changing its public profile-management flow. The Web UI exposes
+protocol selection, read-only listener settings, `ss://`/QR/JSON delivery, and
+streamed status and traffic telemetry. Installer and doctor use the dedicated
+`XRAY_SHADOWSOCKS_*` settings, and Compose publishes the configured port in
+both TCP and UDP namespaces. Automated tests cover persistence, rendering,
+live user lifecycle, profile delivery, telemetry, API schemas, and installer
+migration. A real VDS/client pass is still required for TCP/UDP reachability,
+dual-stack firewall behavior, and client interoperability.
 
 ## Commit boundaries
 

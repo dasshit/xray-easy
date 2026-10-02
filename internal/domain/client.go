@@ -195,7 +195,7 @@ func (c Client) AccessState(protocol ClientProtocol) (ClientState, error) {
 	}
 }
 
-// NewShadowsocksClient creates a profile for the classic Shadowsocks inbound.
+// NewShadowsocksClient creates a profile for the Shadowsocks 2022 inbound.
 // The encrypted password is generated and persisted by the application layer.
 func NewShadowsocksClient(id, name string) (Client, error) {
 	name = strings.TrimSpace(name)

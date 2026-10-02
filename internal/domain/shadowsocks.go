@@ -8,12 +8,11 @@ import (
 )
 
 const (
-	// ShadowsocksMethodChaCha20Poly1305 identifies a supported package value.
-	ShadowsocksMethodChaCha20Poly1305 = "chacha20-poly1305"
-	// ShadowsocksMethodAES256GCM identifies a supported package value.
-	ShadowsocksMethodAES256GCM = "aes-256-gcm"
-	// ShadowsocksMethodAES128GCM identifies a supported package value.
-	ShadowsocksMethodAES128GCM = "aes-128-gcm"
+	// ShadowsocksMethod2022AES256GCM identifies the supported SS2022 multi-user cipher.
+	ShadowsocksMethod2022AES256GCM = "2022-blake3-aes-256-gcm"
+	// ShadowsocksBootstrapUserEmail identifies the hidden SS2022 user that keeps
+	// an empty inbound in multi-user mode so new devices can be added live.
+	ShadowsocksBootstrapUserEmail = "xray-easy-bootstrap@xray-easy.invalid"
 	// ShadowsocksNetworkTCP identifies a supported package value.
 	ShadowsocksNetworkTCP = "tcp"
 	// ShadowsocksNetworkUDP identifies a supported package value.
@@ -22,9 +21,7 @@ const (
 	ShadowsocksNetworkTCPUDP = "tcp,udp"
 )
 
-// ShadowsocksSettings is the node-wide classic Shadowsocks inbound setup.
-// The 2022 cipher family is deliberately excluded until Xray exposes a
-// reliable live per-user management API for it.
+// ShadowsocksSettings is the node-wide Shadowsocks 2022 inbound setup.
 type ShadowsocksSettings struct {
 	// Enabled is whether the object is enabled.
 	Enabled bool
@@ -55,12 +52,7 @@ func (s ShadowsocksSettings) Validate() error {
 
 // SupportsShadowsocksMethod reports whether the supplied option is supported.
 func SupportsShadowsocksMethod(method string) bool {
-	switch strings.ToLower(strings.TrimSpace(method)) {
-	case ShadowsocksMethodChaCha20Poly1305, ShadowsocksMethodAES256GCM, ShadowsocksMethodAES128GCM:
-		return true
-	default:
-		return false
-	}
+	return strings.TrimSpace(method) == ShadowsocksMethod2022AES256GCM
 }
 
 // SupportsShadowsocksNetwork reports whether the supplied option is supported.

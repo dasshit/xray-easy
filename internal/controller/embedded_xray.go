@@ -320,8 +320,8 @@ func (c *EmbeddedXrayClient) RemoveVMessUser(ctx context.Context, email string) 
 	return c.mutateUser(ctx, xrayruntimev1.Protocol_PROTOCOL_VMESS, email, "", "", false)
 }
 
-// AddShadowsocksUser installs a classic Shadowsocks credential with its
-// configured AEAD method into the embedded runtime.
+// AddShadowsocksUser installs a Shadowsocks 2022 per-device PSK and method
+// into the embedded runtime.
 func (c *EmbeddedXrayClient) AddShadowsocksUser(ctx context.Context, email, password, method string) error {
 	return c.mutateUserWithMethod(ctx, xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, email, password, "", method, true)
 }

@@ -311,7 +311,7 @@ func TestEmbeddedXrayAdapterCoversControllerRuntimeInterfaces(t *testing.T) {
 	if err := client.AddVMessUser(context.Background(), "vmess@xray-easy", "uuid"); err != nil {
 		t.Fatalf("AddVMessUser() = %v", err)
 	}
-	if err := client.AddShadowsocksUser(context.Background(), "ss@xray-easy", "password", "aes-128-gcm"); err != nil || stub.seenAdd.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS || stub.seenAdd.GetShadowsocksMethod() != "aes-128-gcm" {
+	if err := client.AddShadowsocksUser(context.Background(), "ss@xray-easy", "password", "2022-blake3-aes-256-gcm"); err != nil || stub.seenAdd.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS || stub.seenAdd.GetShadowsocksMethod() != "2022-blake3-aes-256-gcm" {
 		t.Fatalf("AddShadowsocksUser() = %v, request=%+v", err, stub.seenAdd)
 	}
 	if err := client.AddTrojanUser(context.Background(), "trojan@xray-easy", "password"); err != nil || stub.seenAdd.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_TROJAN {

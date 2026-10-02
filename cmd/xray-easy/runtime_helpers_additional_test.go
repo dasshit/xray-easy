@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"xray-easy/internal/domain"
@@ -35,6 +38,46 @@ func TestRuntimeConfigurationComparisonHelpers(t *testing.T) {
 	}
 	if vmessInboundExpected([]domain.Client{{Protocol: domain.ProtocolVMess, VMessRevoked: true}}) || !vmessInboundExpected([]domain.Client{{Protocol: domain.ProtocolVMess, VMessRevoked: false}}) {
 		t.Fatal("VMess topology expectation did not account for revocation")
+	}
+}
+
+func TestNormalizeShadowsocks2022UserKeyPreservesLegacyBytes(t *testing.T) {
+	original := bytes.Repeat([]byte{0xff}, 32)
+	legacy := base64.RawURLEncoding.EncodeToString(original)
+	want := base64.StdEncoding.EncodeToString(original)
+	for _, value := range []string{legacy, want} {
+		got, err := normalizeShadowsocks2022UserKey(value)
+		if err != nil || got != want {
+			t.Errorf("normalizeShadowsocks2022UserKey(%q) = %q, %v; want %q", value, got, err, want)
+		}
+	}
+	for _, value := range []string{"bad", base64.StdEncoding.EncodeToString([]byte("short")), strings.Repeat("A", 44), want + "\n"} {
+		if got, err := normalizeShadowsocks2022UserKey(value); err == nil || got != "" {
+			t.Errorf("invalid key %q normalized to %q, %v", value, got, err)
+		}
+	}
+}
+
+func TestRendererSettingsDeriveStableShadowsocks2022ServerKey(t *testing.T) {
+	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	masterKey := bytes.Repeat([]byte("k"), 32)
+	settings := domain.Settings{}
+	first, err := rendererSettingsWithMasterKey(settings, "", domain.HysteriaSettings{}, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := rendererSettingsWithMasterKey(settings, "", domain.HysteriaSettings{}, masterKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, decodeErr := base64.StdEncoding.DecodeString(first.ShadowsocksServerKey)
+	bootstrap, bootstrapErr := base64.StdEncoding.DecodeString(first.ShadowsocksBootstrapUserKey)
+	if decodeErr != nil || len(decoded) != 32 || bootstrapErr != nil || len(bootstrap) != 32 || first.ShadowsocksServerKey == first.ShadowsocksBootstrapUserKey || first.ShadowsocksServerKey != second.ShadowsocksServerKey || first.ShadowsocksBootstrapUserKey != second.ShadowsocksBootstrapUserKey || !first.ShadowsocksEnabled || first.ShadowsocksMethod != domain.ShadowsocksMethod2022AES256GCM {
+		t.Fatalf("derived Shadowsocks settings = %+v, decoded key length=%d decode error=%v", first, len(decoded), decodeErr)
+	}
+	if _, err := rendererSettingsWithMasterKey(settings, "", domain.HysteriaSettings{}, []byte("short")); err == nil {
+		t.Fatal("short master key was accepted when deriving the Shadowsocks key")
 	}
 }
 

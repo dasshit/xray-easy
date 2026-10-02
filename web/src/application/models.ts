@@ -143,7 +143,7 @@ export type VMessProfileDelivery = {
   json: unknown
 }
 
-/** Authenticated classic Shadowsocks delivery with a share URI and JSON profile. */
+/** Authenticated Shadowsocks 2022 delivery with a share URI and JSON profile. */
 export type ShadowsocksProfileDelivery = {
   clientId: string
   protocol: 'shadowsocks'

@@ -67,11 +67,11 @@ export type Settings = {
   publicPort: number
   /** VMess + TLS public TCP port from the active Compose environment. */
   vmessPublicPort: number
-  /** Whether the classic Shadowsocks inbound is enabled. */
+  /** Whether the Shadowsocks 2022 inbound is enabled. */
   shadowsocksEnabled?: boolean
   /** Public TCP/UDP port used by Shadowsocks. */
   shadowsocksPublicPort?: number
-  /** Configured classic Shadowsocks cipher. */
+  /** Configured Shadowsocks 2022 cipher. */
   shadowsocksMethod?: string
   /** Configured Shadowsocks transport networks. */
   shadowsocksNetwork?: string

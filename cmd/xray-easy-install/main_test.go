@@ -240,7 +240,6 @@ func TestInstallerValidatesTrojanAndShadowsocksPortsAndMethods(t *testing.T) {
 		{"Trojan invalid port", func() configuration { c := base; c.trojan = 65536; return c }()},
 		{"Shadowsocks public-port collision", func() configuration { c := base; c.shadowsocks = 443; return c }()},
 		{"Shadowsocks UI-port collision", func() configuration { c := base; c.shadowsocks = 8080; return c }()},
-		{"Shadowsocks invalid method", func() configuration { c := base; c.shadowsocksMethod = "unsupported"; return c }()},
 		{"Shadowsocks invalid network", func() configuration { c := base; c.shadowsocksNetwork = "sctp"; return c }()},
 	} {
 		t.Run(test.name, func(t *testing.T) {

@@ -594,7 +594,7 @@ func (w *wizard) shadowsocks(ctx context.Context, cfg configuration) (configurat
 	if cfg.shadowsocks == 0 {
 		cfg.shadowsocks = defaultShadowsocksPort(cfg.public, cfg.vmess, cfg.ui)
 	}
-	cfg.shadowsocksMethod = valueOr(cfg.shadowsocksMethod, "chacha20-poly1305")
+	cfg.shadowsocksMethod = defaultShadowsocksMethod
 	cfg.shadowsocksNetwork = valueOr(cfg.shadowsocksNetwork, "tcp,udp")
 	w.config = cfg
 	w.title = "Shadowsocks"
@@ -982,7 +982,7 @@ func (w *wizard) renderLocked() {
 				put(9, panelLine("  Optional Shadowsocks inbound", panelWidth), "normal")
 				put(11, panelLine("  "+optionText("Off", w.tlsSelection == 0), panelWidth), fieldStyle(w.tlsSelection == 0))
 				put(12, panelLine("  "+optionText("Enable on TCP + UDP", w.tlsSelection == 1), panelWidth), fieldStyle(w.tlsSelection == 1))
-				put(14, panelLine(fmt.Sprintf("  Public port: %d · method: %s · network: %s", w.config.shadowsocks, valueOr(w.config.shadowsocksMethod, "chacha20-poly1305"), valueOr(w.config.shadowsocksNetwork, "tcp,udp")), panelWidth), "dim")
+				put(14, panelLine(fmt.Sprintf("  Public port: %d · method: %s · network: %s", w.config.shadowsocks, valueOr(w.config.shadowsocksMethod, defaultShadowsocksMethod), valueOr(w.config.shadowsocksNetwork, "tcp,udp")), panelWidth), "dim")
 				put(15, panelLine("  Allow both TCP and UDP on this port in the VDS firewall.", panelWidth), "dim")
 			case "trojan-choice":
 				put(9, panelLine("  Optional Trojan TCP/TLS inbound", panelWidth), "normal")
@@ -1007,7 +1007,7 @@ func (w *wizard) renderLocked() {
 			put(9, panelLine("  Xray version:       "+w.config.version, panelWidth), "normal")
 			put(10, panelLine(fmt.Sprintf("  VLESS TCP/UDP:      %d", w.config.public), panelWidth), "normal")
 			put(11, panelLine(fmt.Sprintf("  VMess TCP:          %d", w.config.vmess), panelWidth), "normal")
-			put(12, panelLine(fmt.Sprintf("  Shadowsocks:        %d (%s/%s)", w.config.shadowsocks, valueOr(w.config.shadowsocksMethod, "chacha20-poly1305"), valueOr(w.config.shadowsocksNetwork, "tcp,udp")), panelWidth), "normal")
+			put(12, panelLine(fmt.Sprintf("  Shadowsocks:        %d (%s/%s)", w.config.shadowsocks, valueOr(w.config.shadowsocksMethod, defaultShadowsocksMethod), valueOr(w.config.shadowsocksNetwork, "tcp,udp")), panelWidth), "normal")
 			put(13, panelLine(fmt.Sprintf("  Trojan TCP:         %d (%t)", w.config.trojan, w.config.trojanEnabled), panelWidth), "normal")
 			put(14, panelLine(fmt.Sprintf("  Web UI:             127.0.0.1:%d", w.config.ui), panelWidth), "normal")
 			put(15, panelLine("  Compose project:    "+w.config.project, panelWidth), "normal")

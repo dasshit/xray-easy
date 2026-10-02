@@ -216,7 +216,7 @@ firewall and the provider security group, for IPv4 and IPv6 where enabled.
 | VLESS + REALITY | 443 | TCP | Default Xray profile |
 | Hysteria 2 | 443 | UDP | Optional; shares the public port number with VLESS |
 | VMess + TLS | 9443 | TCP | Optional separate Xray inbound |
-| Shadowsocks | 8388 | TCP and UDP | Optional classic AEAD inbound |
+| Shadowsocks | 8388 | TCP and UDP | Optional Shadowsocks 2022 multi-user inbound |
 | Trojan + TLS | 10443 | TCP | Optional inbound using the VMess TLS certificate |
 | AmneziaWG | 1234 | UDP | Optional separate service |
 | Web UI | 8080 | TCP, loopback only | Reach through SSH; never open publicly |
@@ -242,7 +242,7 @@ other versions as experimental until tested with your clients.
 | VLESS | TCP/RAW + REALITY + XTLS Vision | QR, VLESS link, JSON |
 | Hysteria 2 | UDP + TLS | QR, hysteria2 link |
 | VMess | TCP + TLS, alterId 0 | QR, vmess link, JSON |
-| Shadowsocks | TCP/UDP + classic AEAD | QR, ss link, JSON |
+| Shadowsocks | TCP/UDP + Shadowsocks 2022 | QR, ss link, JSON |
 
 Each new profile uses one protocol. To give one device multiple transports,
 create a separate profile for each one with the same device name.
@@ -298,32 +298,36 @@ REALITY or Hysteria 2; it is not presented as a DPI-resistance improvement.
 
 ### Shadowsocks
 
-Shadowsocks is an optional classic AEAD inbound in the embedded Xray runtime.
-Enable it during installation by setting **XRAY_SHADOWSOCKS_ENABLED=true** and
-choose its public port, method and network in the installer or `.env`:
+Shadowsocks uses an optional **Shadowsocks 2022 multi-user inbound** in the
+embedded Xray runtime. Enable it during installation with
+**XRAY_SHADOWSOCKS_ENABLED=true**, then choose its public port and network in
+the installer or `.env`. The cipher is fixed to
+`2022-blake3-aes-256-gcm`:
 
 ~~~dotenv
 XRAY_SHADOWSOCKS_ENABLED=true
 XRAY_SHADOWSOCKS_PORT=8388
-XRAY_SHADOWSOCKS_METHOD=chacha20-poly1305
+XRAY_SHADOWSOCKS_METHOD=2022-blake3-aes-256-gcm
 XRAY_SHADOWSOCKS_NETWORK=tcp,udp
 ~~~
 
-The supported methods are `chacha20-poly1305`, `aes-256-gcm` and
-`aes-128-gcm`. Each device receives a unique random password. The password is
-encrypted at rest with **XRAY_EASY_MASTER_KEY** and is exposed only in the
-authenticated profile delivery response. The panel provides an `ss://` link,
-QR code and a JSON client configuration; use a client with explicit
-Shadowsocks support because v2RAGE does not list Shadowsocks among its
-supported protocols.
+The installation server key is derived from **XRAY_EASY_MASTER_KEY**. Each
+device receives its own random 32-byte user key, encrypted at rest and shown
+only in its authenticated profile delivery. Profiles include an `ss://` link,
+QR code, and Xray JSON. Use a client that explicitly supports the selected
+Shadowsocks 2022 method; v2RAGE does not currently list Shadowsocks.
+
+This changes the wire format: classic Shadowsocks profiles stop working after
+upgrading and must be re-imported from the panel. Stored device key bytes are
+preserved during migration. Xray-easy can add, disable, enable, and revoke
+users through the embedded runtime without replacing the inbound. SS2022
+improves replay protection, but does not provide REALITY camouflage or TLS
+forward secrecy.
 
 The listener uses one port number in two socket namespaces, so TCP and UDP can
 share **XRAY_SHADOWSOCKS_PORT**. It cannot share a TCP port with VLESS/VMess or
 an UDP port with Hysteria 2. Open both TCP and UDP for the configured port when
-both networks are enabled. Classic Shadowsocks users can be added and removed
-through the live HandlerService without replacing the inbound. Shadowsocks
-does not provide REALITY camouflage; choose it for client compatibility and
-simple UDP/TCP access rather than as a replacement for VLESS + REALITY.
+both networks are enabled.
 
 ### Trojan + TLS
 

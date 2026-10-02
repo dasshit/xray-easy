@@ -31,7 +31,7 @@ export const settings: SettingsDto = {
   vmess_public_port: 9443,
   shadowsocks_enabled: false,
   shadowsocks_public_port: 8388,
-  shadowsocks_method: 'chacha20-poly1305',
+  shadowsocks_method: '2022-blake3-aes-256-gcm',
   shadowsocks_network: 'tcp,udp',
   trojan_enabled: false,
   trojan_public_port: 10443,

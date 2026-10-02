@@ -119,6 +119,10 @@ type Settings struct {
 	ShadowsocksPublicPort int
 	// ShadowsocksMethod is the Shadowsocks cipher method.
 	ShadowsocksMethod string
+	// ShadowsocksServerKey is the installation-level SS2022 PSK in standard base64.
+	ShadowsocksServerKey string
+	// ShadowsocksBootstrapUserKey keeps an empty inbound in SS2022 multi-user mode.
+	ShadowsocksBootstrapUserKey string
 	// ShadowsocksNetwork is the Shadowsocks transport network.
 	ShadowsocksNetwork string
 	// TrojanEnabled is whether Trojan access is enabled.
@@ -469,16 +473,18 @@ type shadowsocksInbound struct {
 
 // shadowsocksInboundSettings is an internal type used by the package.
 type shadowsocksInboundSettings struct {
+	// Method stores the SS2022 cipher associated with this inbound.
+	Method string `json:"method"`
+	// Password stores the installation-level SS2022 PSK.
+	Password string `json:"password"`
 	// Network stores the value associated with the enclosing object.
 	Network string `json:"network"`
-	// Clients stores the value associated with the enclosing object.
-	Clients []shadowsocksServerClient `json:"clients"`
+	// Users stores the SS2022 per-device user keys.
+	Users []shadowsocksServerClient `json:"users"`
 }
 
 // shadowsocksServerClient is an internal type used by the package.
 type shadowsocksServerClient struct {
-	// Method stores the value associated with the enclosing object.
-	Method string `json:"method"`
 	// Password stores the value associated with the enclosing object.
 	Password string `json:"password"`
 	// Email stores the value associated with the enclosing object.
@@ -663,16 +669,28 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		if !domain.SupportsShadowsocksNetwork(settings.ShadowsocksNetwork) {
 			return nil, errors.New("unsupported Shadowsocks network")
 		}
+		if !validShadowsocks2022Key(settings.ShadowsocksServerKey) {
+			return nil, errors.New("invalid Shadowsocks 2022 server key")
+		}
 		ssUsers := make([]shadowsocksServerClient, 0, len(activeShadowsocks))
 		for _, client := range activeShadowsocks {
-			if client.ShadowsocksPassword == "" || client.Email == "" {
+			if !validShadowsocks2022Key(client.ShadowsocksPassword) || client.Email == "" {
 				return nil, fmt.Errorf("client %s is missing Shadowsocks credentials", client.ID)
 			}
-			ssUsers = append(ssUsers, shadowsocksServerClient{Method: settings.ShadowsocksMethod, Password: client.ShadowsocksPassword, Email: client.Email})
+			ssUsers = append(ssUsers, shadowsocksServerClient{Password: client.ShadowsocksPassword, Email: client.Email})
+		}
+		if len(ssUsers) == 0 {
+			if !validShadowsocks2022Key(settings.ShadowsocksBootstrapUserKey) {
+				return nil, errors.New("invalid Shadowsocks 2022 bootstrap user key")
+			}
+			ssUsers = append(ssUsers, shadowsocksServerClient{
+				Password: settings.ShadowsocksBootstrapUserKey,
+				Email:    domain.ShadowsocksBootstrapUserEmail,
+			})
 		}
 		inbounds = append(inbounds, shadowsocksInbound{
 			Listen: "0.0.0.0", Port: ShadowsocksInternalPort, Protocol: "shadowsocks", Tag: ShadowsocksInboundTag,
-			Settings: shadowsocksInboundSettings{Network: settings.ShadowsocksNetwork, Clients: ssUsers},
+			Settings: shadowsocksInboundSettings{Method: settings.ShadowsocksMethod, Password: settings.ShadowsocksServerKey, Network: settings.ShadowsocksNetwork, Users: ssUsers},
 		})
 	}
 	if settings.TrojanEnabled {
@@ -777,7 +795,7 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 		if err := validateShadowsocksProfileSettings(settings); err != nil {
 			return Profile{}, err
 		}
-		if client.ShadowsocksPassword == "" {
+		if !validShadowsocks2022Key(client.ShadowsocksPassword) {
 			return Profile{}, errors.New("Shadowsocks profile is unavailable")
 		}
 		profile.ShadowsocksURI = BuildShadowsocksURI(settings, client)
@@ -849,7 +867,17 @@ func validateShadowsocksProfileSettings(settings Settings) error {
 	if !domain.SupportsShadowsocksNetwork(settings.ShadowsocksNetwork) {
 		return errors.New("unsupported Shadowsocks network")
 	}
+	if !validShadowsocks2022Key(settings.ShadowsocksServerKey) {
+		return errors.New("invalid Shadowsocks 2022 server key")
+	}
 	return nil
+}
+
+// validShadowsocks2022Key reports whether value is a padded standard-base64
+// encoding of the exact 32-byte PSK required by the selected AES-256 method.
+func validShadowsocks2022Key(value string) bool {
+	decoded, err := base64.StdEncoding.Strict().DecodeString(value)
+	return err == nil && len(decoded) == 32 && base64.StdEncoding.EncodeToString(decoded) == value
 }
 
 // validateVMessProfileSettings validates the supplied value.
@@ -1083,7 +1111,7 @@ func BuildVMessURI(settings Settings, client Client) (string, error) {
 
 // BuildShadowsocksURI creates a SIP-002 Shadowsocks share link.
 func BuildShadowsocksURI(settings Settings, client Client) string {
-	credentials := base64.RawURLEncoding.EncodeToString([]byte(settings.ShadowsocksMethod + ":" + client.ShadowsocksPassword))
+	credentials := base64.RawURLEncoding.EncodeToString([]byte(settings.ShadowsocksMethod + ":" + settings.ShadowsocksServerKey + ":" + client.ShadowsocksPassword))
 	u := &url.URL{Scheme: "ss", Host: net.JoinHostPort(settings.PublicHost, strconv.Itoa(settings.ShadowsocksPublicPort)), Fragment: client.Name}
 	return "ss://" + credentials + "@" + u.Host + "#" + url.PathEscape(client.Name)
 }
@@ -1144,7 +1172,7 @@ func buildShadowsocksClientJSON(settings Settings, client Client) ([]byte, error
 			"protocol": "shadowsocks",
 			"settings": map[string]any{"servers": []any{map[string]any{
 				"address": settings.PublicHost, "port": settings.ShadowsocksPublicPort,
-				"method": settings.ShadowsocksMethod, "password": client.ShadowsocksPassword,
+				"method": settings.ShadowsocksMethod, "password": settings.ShadowsocksServerKey + ":" + client.ShadowsocksPassword,
 			}}},
 		}},
 	}

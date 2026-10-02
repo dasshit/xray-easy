@@ -235,7 +235,7 @@ describe('Xray-easy API adapter', () => {
     })
     const api = createXrayEasyApi(send)
     const settings = {
-      publicHost: 'vpn.example.test', publicPort: 443, vmessPublicPort: 9443, shadowsocksEnabled: false, shadowsocksPublicPort: 8388, shadowsocksMethod: 'chacha20-poly1305', shadowsocksNetwork: 'tcp,udp', realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
+      publicHost: 'vpn.example.test', publicPort: 443, vmessPublicPort: 9443, shadowsocksEnabled: false, shadowsocksPublicPort: 8388, shadowsocksMethod: '2022-blake3-aes-256-gcm', shadowsocksNetwork: 'tcp,udp', realityTarget: 'target.example.test:443', realitySni: 'target.example.test',
       clientFingerprint: 'chrome', logLevel: 'warning', protocol: 'vless', network: 'tcp', security: 'reality', flow: 'xtls-rprx-vision', trojanEnabled: false, trojanPublicPort: 10443,
     }
 

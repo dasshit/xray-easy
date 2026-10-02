@@ -100,6 +100,39 @@ func TestOpenRejectsMalformedAndTamperedEnvelopes(t *testing.T) {
 	}
 }
 
+func TestDeriveIsStableAndPurposeSeparated(t *testing.T) {
+	masterKey := []byte(strings.Repeat("k", 32))
+	first, err := Derive(masterKey, "ss2022-server-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := Derive(masterKey, "ss2022-server-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	otherPurpose, err := Derive(masterKey, "another-purpose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 32 || string(first) != string(second) || string(first) == string(otherPurpose) {
+		t.Fatalf("derived keys are not stable and purpose-separated: first=%x second=%x other=%x", first, second, otherPurpose)
+	}
+}
+
+func TestDeriveRejectsInvalidInputs(t *testing.T) {
+	for _, test := range []struct {
+		masterKey []byte
+		purpose   string
+	}{
+		{masterKey: []byte(strings.Repeat("k", 31)), purpose: "ss2022-server-key"},
+		{masterKey: []byte(strings.Repeat("k", 32)), purpose: ""},
+	} {
+		if key, err := Derive(test.masterKey, test.purpose); err == nil || key != nil {
+			t.Errorf("Derive(%d-byte key, %q) = %x, %v; want error", len(test.masterKey), test.purpose, key, err)
+		}
+	}
+}
+
 func TestSealReportsRandomSourceFailuresForSaltAndNonce(t *testing.T) {
 	original := rand.Reader
 	t.Cleanup(func() { rand.Reader = original })

@@ -828,7 +828,7 @@ type AddUserRequest struct {
 	// Zero denotes idempotent runtime user-roster convergence without a
 	// persisted config revision. Positive revisions are fenced and committed.
 	Revision int64 `protobuf:"varint,6,opt,name=revision,proto3" json:"revision,omitempty"`
-	// Classic Shadowsocks method, for example chacha20-poly1305.
+	// Shadowsocks 2022 method, currently 2022-blake3-aes-256-gcm.
 	ShadowsocksMethod string `protobuf:"bytes,7,opt,name=shadowsocks_method,json=shadowsocksMethod,proto3" json:"shadowsocks_method,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache

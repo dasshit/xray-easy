@@ -118,14 +118,14 @@ func TestShadowsocksConfigurationHelpersValidatePortsAndPublicSettings(t *testin
 	t.Setenv("XRAY_SHADOWSOCKS_METHOD", "aes-256-gcm")
 	t.Setenv("XRAY_SHADOWSOCKS_NETWORK", "tcp")
 	settings, err := configuredShadowsocksSettings()
-	if err != nil || !settings.Enabled || settings.PublicPort != 8388 || settings.Method != "aes-256-gcm" || settings.Network != "tcp" {
+	if err != nil || !settings.Enabled || settings.PublicPort != 8388 || settings.Method != domain.ShadowsocksMethod2022AES256GCM || settings.Network != "tcp" {
 		t.Fatalf("configured Shadowsocks settings = %+v, %v", settings, err)
 	}
-	if !configuredShadowsocksEnabled() || configuredShadowsocksMethod() != "aes-256-gcm" {
-		t.Fatal("Shadowsocks environment helpers did not preserve configured values")
+	if !configuredShadowsocksEnabled() || configuredShadowsocksMethod() != domain.ShadowsocksMethod2022AES256GCM {
+		t.Fatal("Shadowsocks environment helpers did not enforce the fixed SS2022 cipher")
 	}
 	public := publicSettings(domain.Settings{PublicHost: "vpn.example.test", PublicPort: 443}, 9443)
-	if public["shadowsocks_enabled"] != true || public["shadowsocks_public_port"] != 8388 || public["shadowsocks_method"] != "aes-256-gcm" || public["shadowsocks_network"] != "tcp" {
+	if public["shadowsocks_enabled"] != true || public["shadowsocks_public_port"] != 8388 || public["shadowsocks_method"] != domain.ShadowsocksMethod2022AES256GCM || public["shadowsocks_network"] != "tcp" {
 		t.Fatalf("public Shadowsocks settings = %#v", public)
 	}
 	for _, test := range []struct {
@@ -145,7 +145,7 @@ func TestShadowsocksConfigurationHelpersValidatePortsAndPublicSettings(t *testin
 	// the documented fallback while the doctor reports the invalid environment.
 	t.Setenv("XRAY_SHADOWSOCKS_PORT", "bad")
 	fallback := publicSettings(domain.Settings{PublicHost: "vpn.example.test", PublicPort: 443}, 9443)
-	if fallback["shadowsocks_public_port"] != 8388 || fallback["shadowsocks_method"] != domain.ShadowsocksMethodChaCha20Poly1305 {
+	if fallback["shadowsocks_public_port"] != 8388 || fallback["shadowsocks_method"] != domain.ShadowsocksMethod2022AES256GCM {
 		t.Fatalf("invalid-port public settings fallback = %#v", fallback)
 	}
 	for _, test := range []struct {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -14,6 +15,7 @@ import (
 	"testing"
 
 	"xray-easy/internal/domain"
+	"xray-easy/internal/secret"
 	"xray-easy/internal/xray"
 )
 
@@ -443,7 +445,7 @@ func TestVMessProfilesUseCertificateAndLiveUserLifecycle(t *testing.T) {
 func TestShadowsocksProfilesUseLiveUserLifecycleAndDelivery(t *testing.T) {
 	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
 	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
-	t.Setenv("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305)
+	t.Setenv("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethod2022AES256GCM)
 	t.Setenv("XRAY_SHADOWSOCKS_NETWORK", domain.ShadowsocksNetworkTCPUDP)
 	app := newTestApp(t, true)
 	handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler}
@@ -454,7 +456,7 @@ func TestShadowsocksProfilesUseLiveUserLifecycleAndDelivery(t *testing.T) {
 		t.Fatalf("first Shadowsocks profile lifecycle: client=%+v apply=%v additions=%v", first, app.sup.applyCalls, handler.added)
 	}
 	second := createRuntimeShadowsocksClient(t, app, "phone-2")
-	if len(handler.added) != 1 || handler.added[0] != second.Email || len(handler.methods) != 1 || handler.methods[0] != domain.ShadowsocksMethodChaCha20Poly1305 {
+	if len(handler.added) != 1 || handler.added[0] != second.Email || len(handler.methods) != 1 || handler.methods[0] != domain.ShadowsocksMethod2022AES256GCM {
 		t.Fatalf("subsequent Shadowsocks profile did not use live user API: additions=%v methods=%v", handler.added, handler.methods)
 	}
 
@@ -463,7 +465,7 @@ func TestShadowsocksProfilesUseLiveUserLifecycleAndDelivery(t *testing.T) {
 		t.Fatalf("Shadowsocks profile response = %d %s", profile.Code, profile.Body.String())
 	}
 	jsonProfile := requestJSON(t, app, http.MethodGet, "/api/clients/"+second.ID+"/profile?format=json", nil, true)
-	if jsonProfile.Code != http.StatusOK || !strings.Contains(jsonProfile.Body.String(), `"method": "chacha20-poly1305"`) {
+	if jsonProfile.Code != http.StatusOK || !strings.Contains(jsonProfile.Body.String(), `"method": "2022-blake3-aes-256-gcm"`) || !strings.Contains(jsonProfile.Body.String(), `"password": "`) {
 		t.Fatalf("Shadowsocks JSON profile = %d %s", jsonProfile.Code, jsonProfile.Body.String())
 	}
 	qr := requestJSON(t, app, http.MethodGet, "/api/clients/"+second.ID+"/profile?format=ss-qr", nil, true)
@@ -484,10 +486,43 @@ func TestShadowsocksProfilesUseLiveUserLifecycleAndDelivery(t *testing.T) {
 	}
 }
 
+func TestNewShadowsocksPasswordIsAStandardBase64SS2022Key(t *testing.T) {
+	value, err := newShadowsocksPassword()
+	if err != nil {
+		t.Fatal(err)
+	}
+	decoded, err := base64.StdEncoding.Strict().DecodeString(value)
+	if err != nil || len(decoded) != 32 {
+		t.Fatalf("new SS2022 password = %q, decoded bytes=%d, error=%v", value, len(decoded), err)
+	}
+}
+
+func TestRendererClientsNormalizeLegacyShadowsocksKeysWithoutChangingBytes(t *testing.T) {
+	masterKey := bytes.Repeat([]byte("m"), 32)
+	legacyBytes := bytes.Repeat([]byte{0xfb}, 32)
+	legacyKey := base64.RawURLEncoding.EncodeToString(legacyBytes)
+	sealed, err := secret.Seal(masterKey, legacyKey, "shadowsocks_password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	clients, err := rendererClientsWithSecrets(masterKey, []domain.Client{{ID: "legacy-ss", ShadowsocksPasswordEnc: sealed}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := base64.StdEncoding.EncodeToString(legacyBytes)
+	if len(clients) != 1 || clients[0].ShadowsocksPassword != want {
+		t.Fatalf("normalized legacy Shadowsocks credential = %+v, want %q", clients, want)
+	}
+	opened, err := secret.Open(masterKey, sealed, "shadowsocks_password")
+	if err != nil || opened != legacyKey {
+		t.Fatalf("normalization changed the stored credential: open=%q error=%v", opened, err)
+	}
+}
+
 func TestShadowsocksStateMutationFailuresPreservePersistedAccess(t *testing.T) {
 	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
 	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
-	t.Setenv("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305)
+	t.Setenv("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethod2022AES256GCM)
 	t.Setenv("XRAY_SHADOWSOCKS_NETWORK", domain.ShadowsocksNetworkTCPUDP)
 	app := newTestApp(t, true)
 	handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler}

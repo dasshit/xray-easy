@@ -1,12 +1,14 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -17,6 +19,7 @@ import (
 	"time"
 
 	corestats "github.com/xtls/xray-core/features/stats"
+	"xray-easy/internal/domain"
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 )
 
@@ -223,9 +226,12 @@ func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) 
 	}
 }
 
-func TestEmbeddedEngineManagesClassicShadowsocksUsersAndTelemetry(t *testing.T) {
+func TestEmbeddedEngineManagesShadowsocks2022UsersAndTelemetry(t *testing.T) {
 	port := freeEngineTCPPort(t)
-	configuration := []byte(fmt.Sprintf(`{"log":{"loglevel":"none"},"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","tag":"shadowsocks","settings":{"network":"tcp,udp","clients":[]}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`, port))
+	serverKey := runtimeShadowsocks2022Key(1)
+	bootstrapUserKey := runtimeShadowsocks2022Key(2)
+	userKey := runtimeShadowsocks2022Key(3)
+	configuration := []byte(fmt.Sprintf(`{"log":{"loglevel":"none"},"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","tag":"shadowsocks","settings":{"method":"2022-blake3-aes-256-gcm","password":%q,"network":"tcp,udp","users":[{"password":%q,"email":%q}]}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`, port, serverKey, bootstrapUserKey, domain.ShadowsocksBootstrapUserEmail))
 	engine, err := LoadEngine(configuration)
 	if err != nil {
 		t.Fatalf("load Shadowsocks engine: %v", err)
@@ -241,13 +247,26 @@ func TestEmbeddedEngineManagesClassicShadowsocksUsersAndTelemetry(t *testing.T) 
 
 	ctx := context.Background()
 	protocol := xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS
-	added, err := engine.AddUserWithMethod(ctx, protocol, "shadowsocks", "device-ss", "secret-password", "", "chacha20-poly1305")
+	visibleUsers, err := engine.ListUsers(ctx, "shadowsocks")
+	if err != nil || len(visibleUsers) != 0 {
+		t.Fatalf("bootstrap user leaked to the user list: users=%v error=%v", visibleUsers, err)
+	}
+	added, err := engine.AddUserWithMethod(ctx, protocol, "shadowsocks", "device-ss", userKey, "", "2022-blake3-aes-256-gcm")
 	if err != nil || added {
 		t.Fatalf("add Shadowsocks user already=%v error=%v", added, err)
+	}
+	if alreadyPresent, err := engine.AddUserWithMethod(ctx, protocol, "shadowsocks", "device-ss", userKey, "", "2022-blake3-aes-256-gcm"); err != nil || !alreadyPresent {
+		t.Fatalf("duplicate Shadowsocks 2022 user alreadyPresent=%v error=%v", alreadyPresent, err)
 	}
 	users, err := engine.ListUsers(ctx, "shadowsocks")
 	if err != nil || len(users) != 1 || users[0] != "device-ss" {
 		t.Fatalf("Shadowsocks users=%v error=%v", users, err)
+	}
+	if _, err := engine.AddUserWithMethod(ctx, protocol, "shadowsocks", domain.ShadowsocksBootstrapUserEmail, userKey, "", "2022-blake3-aes-256-gcm"); err == nil {
+		t.Fatal("reserved bootstrap email was allowed as a regular device")
+	}
+	if _, err := engine.RemoveUser(ctx, "shadowsocks", domain.ShadowsocksBootstrapUserEmail); err == nil {
+		t.Fatal("reserved bootstrap user was removable through the device API")
 	}
 	statsManager, ok := engine.instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
 	if !ok || statsManager == nil {
@@ -279,6 +298,11 @@ func TestEmbeddedEngineManagesClassicShadowsocksUsersAndTelemetry(t *testing.T) 
 	if err != nil || removed {
 		t.Fatalf("remove Shadowsocks user alreadyAbsent=%v error=%v", removed, err)
 	}
+}
+
+// runtimeShadowsocks2022Key returns a standard-base64 32-byte PSK for tests.
+func runtimeShadowsocks2022Key(value byte) string {
+	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, 32))
 }
 
 func TestAccountFactoryRejectsUnsupportedProtocolAndInvalidUUID(t *testing.T) {
@@ -323,16 +347,22 @@ func TestAccountFactoryRejectsUnsupportedProtocolAndInvalidUUID(t *testing.T) {
 	if _, err := accountFor(xrayruntimev1.Protocol_PROTOCOL_TROJAN, "trojan-password", ""); err != nil {
 		t.Fatalf("valid Trojan credential was rejected: %v", err)
 	}
-	for _, method := range []string{"AES-128-GCM", " aes-256-gcm ", "chacha20-poly1305"} {
-		if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, "secret-password", "", method); err != nil {
-			t.Fatalf("Shadowsocks method %q was rejected: %v", method, err)
+	key := runtimeShadowsocks2022Key(7)
+	if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, key, "", "2022-blake3-aes-256-gcm"); err != nil {
+		t.Fatalf("valid Shadowsocks 2022 account was rejected: %v", err)
+	}
+	for _, method := range []string{"aes-128-gcm", "aes-256-gcm", "chacha20-poly1305", "unsupported"} {
+		if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, key, "", method); err == nil {
+			t.Errorf("legacy or unsupported Shadowsocks method %q was accepted", method)
 		}
 	}
-	if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, "secret-password", "flow", "chacha20-poly1305"); err == nil {
+	if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, key, "flow", "2022-blake3-aes-256-gcm"); err == nil {
 		t.Fatal("Shadowsocks flow was accepted")
 	}
-	if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, "secret-password", "", "unsupported"); err == nil {
-		t.Fatal("unsupported Shadowsocks method was accepted")
+	for _, credential := range []string{"secret-password", base64.RawURLEncoding.EncodeToString([]byte("short")), base64.StdEncoding.EncodeToString([]byte("short"))} {
+		if _, err := accountForWithMethod(xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, credential, "", "2022-blake3-aes-256-gcm"); err == nil {
+			t.Errorf("invalid Shadowsocks 2022 user key %q was accepted", credential)
+		}
 	}
 }
 

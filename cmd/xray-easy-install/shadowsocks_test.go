@@ -37,6 +37,44 @@ func TestShadowsocksConfigurationRoundTrip(t *testing.T) {
 	}
 }
 
+func TestLegacyShadowsocksMethodIsReplacedWithoutChangingMasterKeyOrPorts(t *testing.T) {
+	root := t.TempDir()
+	cfg := configuration{project: defaultProject, version: defaultVersion, public: 443, vmess: 9443, ui: 8080, shadowsocks: 8388}
+	if err := createConfiguration(root, cfg); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(root, ".env")
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := strings.Replace(string(contents), "XRAY_SHADOWSOCKS_METHOD="+defaultShadowsocksMethod, "XRAY_SHADOWSOCKS_METHOD=chacha20-poly1305", 1)
+	if err := os.WriteFile(path, []byte(legacy), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before, err := readEnvironmentFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := loadConfiguration(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.shadowsocksMethod != defaultShadowsocksMethod {
+		t.Fatalf("legacy method was not normalized in memory: %q", loaded.shadowsocksMethod)
+	}
+	if err := updateShadowsocksConfiguration(root, loaded); err != nil {
+		t.Fatal(err)
+	}
+	after, err := readEnvironmentFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if after["XRAY_SHADOWSOCKS_METHOD"] != defaultShadowsocksMethod || after["XRAY_EASY_MASTER_KEY"] != before["XRAY_EASY_MASTER_KEY"] || after["XRAY_PUBLIC_PORT"] != "443" || after["XRAY_SHADOWSOCKS_PORT"] != "8388" {
+		t.Fatalf("legacy config migration changed or missed settings: before=%#v after=%#v", before, after)
+	}
+}
+
 func TestShadowsocksTUISelection(t *testing.T) {
 	t.Run("off", func(t *testing.T) {
 		var output bytes.Buffer
@@ -70,7 +108,6 @@ func TestValidateShadowsocksConfiguration(t *testing.T) {
 	}
 	for _, invalid := range []configuration{
 		{public: 443, vmess: 9443, ui: 8080, shadowsocks: 443},
-		{public: 443, vmess: 9443, ui: 8080, shadowsocks: 8388, shadowsocksMethod: "2022-blake3-aes-128-gcm"},
 		{public: 443, vmess: 9443, ui: 8080, shadowsocks: 8388, shadowsocksNetwork: "quic"},
 	} {
 		if err := validateShadowsocksConfiguration(invalid); err == nil {

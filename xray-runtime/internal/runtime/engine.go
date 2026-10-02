@@ -4,6 +4,7 @@ package runtime
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -24,11 +25,12 @@ import (
 	xrayserial "github.com/xtls/xray-core/infra/conf/serial"
 	"github.com/xtls/xray-core/proxy"
 	hysteriaaccount "github.com/xtls/xray-core/proxy/hysteria/account"
-	shadowsocks "github.com/xtls/xray-core/proxy/shadowsocks"
+	shadowsocks2022 "github.com/xtls/xray-core/proxy/shadowsocks_2022"
 	trojan "github.com/xtls/xray-core/proxy/trojan"
 	"github.com/xtls/xray-core/proxy/vless"
 	"github.com/xtls/xray-core/proxy/vmess"
 	"google.golang.org/protobuf/proto"
+	"xray-easy/internal/domain"
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 	_ "xray-easy/xray-runtime/internal/xrayregistration"
 )
@@ -312,9 +314,12 @@ func (e *Engine) AddUser(ctx context.Context, protocolType xrayruntimev1.Protoco
 	return e.AddUserWithMethod(ctx, protocolType, tag, email, credential, flow, "")
 }
 
-// AddUserWithMethod inserts a user and supplies the classic Shadowsocks
-// cipher when that protocol is selected. Other protocols ignore method.
+// AddUserWithMethod inserts a user and supplies the Shadowsocks 2022 cipher
+// when that protocol is selected. Other protocols ignore method.
 func (e *Engine) AddUserWithMethod(ctx context.Context, protocolType xrayruntimev1.Protocol, tag, email, credential, flow, method string) (bool, error) {
+	if strings.EqualFold(strings.TrimSpace(email), domain.ShadowsocksBootstrapUserEmail) {
+		return false, errors.New("reserved Shadowsocks 2022 bootstrap identity")
+	}
 	manager, err := e.userManager(ctx, tag)
 	if err != nil {
 		return false, err
@@ -353,6 +358,9 @@ func sameAccount(current, desired protocol.Account) bool {
 
 // RemoveUser removes a user, treating an already absent user as success.
 func (e *Engine) RemoveUser(ctx context.Context, tag, email string) (bool, error) {
+	if strings.EqualFold(strings.TrimSpace(email), domain.ShadowsocksBootstrapUserEmail) {
+		return false, errors.New("reserved Shadowsocks 2022 bootstrap identity")
+	}
 	manager, err := e.userManager(ctx, tag)
 	if err != nil {
 		return false, err
@@ -377,6 +385,9 @@ func (e *Engine) ListUsers(ctx context.Context, tag string) ([]string, error) {
 	users := manager.GetUsers(ctx)
 	emails := make([]string, 0, len(users))
 	for _, user := range users {
+		if strings.EqualFold(strings.TrimSpace(user.Email), domain.ShadowsocksBootstrapUserEmail) {
+			continue
+		}
 		emails = append(emails, user.Email)
 	}
 	sort.Strings(emails)
@@ -442,11 +453,13 @@ func accountForWithMethod(protocolType xrayruntimev1.Protocol, credential, flow,
 		if flow != "" {
 			return nil, errors.New("Shadowsocks does not accept a flow")
 		}
-		cipherType, ok := shadowsocksCipherType(method)
-		if !ok {
+		if method != "2022-blake3-aes-256-gcm" {
 			return nil, errors.New("unsupported Shadowsocks method")
 		}
-		account, err = (&shadowsocks.Account{Password: credential, CipherType: cipherType}).AsAccount()
+		if !validShadowsocks2022UserKey(credential) {
+			return nil, errors.New("Shadowsocks 2022 user key must be standard base64 for exactly 32 bytes")
+		}
+		account, err = (&shadowsocks2022.Account{Key: credential}).AsAccount()
 	case xrayruntimev1.Protocol_PROTOCOL_TROJAN:
 		if flow != "" {
 			return nil, errors.New("Trojan does not accept a flow")
@@ -464,18 +477,11 @@ func accountForWithMethod(protocolType xrayruntimev1.Protocol, credential, flow,
 	return account, nil
 }
 
-// shadowsocksCipherType performs the operation represented by its name.
-func shadowsocksCipherType(method string) (shadowsocks.CipherType, bool) {
-	switch strings.ToLower(strings.TrimSpace(method)) {
-	case "aes-128-gcm":
-		return shadowsocks.CipherType_AES_128_GCM, true
-	case "aes-256-gcm":
-		return shadowsocks.CipherType_AES_256_GCM, true
-	case "chacha20-poly1305":
-		return shadowsocks.CipherType_CHACHA20_POLY1305, true
-	default:
-		return shadowsocks.CipherType_UNKNOWN, false
-	}
+// validShadowsocks2022UserKey reports whether credential is a padded
+// standard-base64 encoding of the 32-byte per-user PSK used by AES-256-GCM.
+func validShadowsocks2022UserKey(credential string) bool {
+	key, err := base64.StdEncoding.Strict().DecodeString(credential)
+	return err == nil && len(key) == 32 && base64.StdEncoding.EncodeToString(key) == credential
 }
 
 // Version reports the embedded Xray-core version.
@@ -524,7 +530,7 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 			return nil, fmt.Errorf("read configured inbound users: %w", err)
 		}
 		for _, user := range manager.GetUsers(ctx) {
-			if user != nil && strings.TrimSpace(user.Email) != "" {
+			if user != nil && strings.TrimSpace(user.Email) != "" && !strings.EqualFold(strings.TrimSpace(user.Email), domain.ShadowsocksBootstrapUserEmail) {
 				usersByEmail[user.Email] = protocol
 			}
 		}

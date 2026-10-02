@@ -60,7 +60,7 @@ describe('CreateProfileModal', () => {
     await wrapper.get('input[autocomplete="off"]').setValue('tablet')
     await wrapper.get('[data-testid="profile-protocol"]').setValue('shadowsocks')
 
-    expect(wrapper.text()).toContain('Creates a classic Shadowsocks profile')
+    expect(wrapper.text()).toContain('Creates a Shadowsocks 2022 profile')
     await wrapper.get('form').trigger('submit')
 
     expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual({ name: 'tablet', protocol: 'shadowsocks' })

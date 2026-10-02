@@ -12,7 +12,7 @@ import (
 
 const (
 	// defaultShadowsocksMethod is an internal package constant.
-	defaultShadowsocksMethod = domain.ShadowsocksMethodChaCha20Poly1305
+	defaultShadowsocksMethod = domain.ShadowsocksMethod2022AES256GCM
 	// defaultShadowsocksNetwork is an internal package constant.
 	defaultShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
 )
@@ -39,7 +39,7 @@ func updateShadowsocksConfiguration(root string, cfg configuration) error {
 	updates := map[string]string{
 		"XRAY_SHADOWSOCKS_PORT":    strconv.Itoa(port),
 		"XRAY_SHADOWSOCKS_ENABLED": strconv.FormatBool(cfg.shadowsocksEnabled),
-		"XRAY_SHADOWSOCKS_METHOD":  valueOr(cfg.shadowsocksMethod, defaultShadowsocksMethod),
+		"XRAY_SHADOWSOCKS_METHOD":  defaultShadowsocksMethod,
 		"XRAY_SHADOWSOCKS_NETWORK": valueOr(cfg.shadowsocksNetwork, defaultShadowsocksNetwork),
 	}
 	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")

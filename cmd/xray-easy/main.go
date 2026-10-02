@@ -967,7 +967,10 @@ func applyRestoredStateWithRuntime(ctx context.Context, db *store.Store, masterK
 	if err != nil {
 		return err
 	}
-	renderSettings := rendererSettingsWithHysteria(settings, privateKey, hysteriaSettings)
+	renderSettings, err := rendererSettingsWithMasterKey(settings, privateKey, hysteriaSettings, masterKey)
+	if err != nil {
+		return err
+	}
 	renderSettings.ReservedShortIDs = reservedShortIDs
 	rendered, err := xray.RenderServerConfig(renderSettings, xrayClients)
 	if err != nil {
@@ -2792,11 +2795,17 @@ func newShadowsocksPassword() (string, error) {
 	if _, err := io.ReadFull(rand.Reader, value); err != nil {
 		return "", err
 	}
-	return base64.RawURLEncoding.EncodeToString(value), nil
+	return base64.StdEncoding.EncodeToString(value), nil
 }
 
 // newTrojanPassword performs the operation represented by its name.
-func newTrojanPassword() (string, error) { return newShadowsocksPassword() }
+func newTrojanPassword() (string, error) {
+	value := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
 
 // changeClientState performs the operation represented by its name.
 func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client domain.Client, action domain.ClientAction, actorID string) {
@@ -3851,7 +3860,10 @@ func (s *server) prepareCandidateWithHysteriaLocked(ctx context.Context, setting
 	if err != nil {
 		return "", "", err
 	}
-	renderSettings := rendererSettingsWithHysteria(settings, privateKey, hysteriaSettings)
+	renderSettings, err := rendererSettingsWithMasterKey(settings, privateKey, hysteriaSettings, s.masterKey)
+	if err != nil {
+		return "", "", err
+	}
 	renderSettings.ReservedShortIDs = append([]string(nil), reserved...)
 	rendered, err := xray.RenderServerConfig(renderSettings, xrayClients)
 	if err != nil {
@@ -3888,6 +3900,10 @@ func rendererClientsWithSecrets(masterKey []byte, clients []domain.Client) ([]xr
 			if err != nil {
 				return nil, fmt.Errorf("decrypt Shadowsocks password for client %s", clients[index].ID)
 			}
+			password, err = normalizeShadowsocks2022UserKey(password)
+			if err != nil {
+				return nil, fmt.Errorf("normalize Shadowsocks password for client %s: %w", clients[index].ID, err)
+			}
 			result[index].ShadowsocksPassword = password
 		}
 		if clients[index].TrojanPasswordEnc != "" {
@@ -3910,7 +3926,25 @@ func mustDecryptShadowsocksPassword(masterKey []byte, client domain.Client) stri
 	if err != nil {
 		return ""
 	}
-	return value
+	normalized, err := normalizeShadowsocks2022UserKey(value)
+	if err != nil {
+		return ""
+	}
+	return normalized
+}
+
+// normalizeShadowsocks2022UserKey returns a padded standard-base64 encoding of
+// a 32-byte SS2022 user PSK, accepting the legacy unpadded base64url encoding.
+func normalizeShadowsocks2022UserKey(value string) (string, error) {
+	decoded, err := base64.StdEncoding.Strict().DecodeString(value)
+	if err == nil && base64.StdEncoding.EncodeToString(decoded) == value && len(decoded) == 32 {
+		return value, nil
+	}
+	decoded, err = base64.RawURLEncoding.Strict().DecodeString(value)
+	if err != nil || len(decoded) != 32 || base64.RawURLEncoding.EncodeToString(decoded) != value {
+		return "", errors.New("Shadowsocks user key must encode exactly 32 bytes")
+	}
+	return base64.StdEncoding.EncodeToString(decoded), nil
 }
 
 // mustDecryptTrojanPassword performs the operation represented by its name.
@@ -3952,6 +3986,26 @@ func rendererSettingsWithHysteria(settings domain.Settings, privateKey string, h
 	return result
 }
 
+// rendererSettingsWithMasterKey adds installation-derived protocol secrets to
+// the non-secret settings used to render Xray configuration and profiles.
+func rendererSettingsWithMasterKey(settings domain.Settings, privateKey string, hysteriaSettings domain.HysteriaSettings, masterKey []byte) (xray.Settings, error) {
+	result := rendererSettingsWithHysteria(settings, privateKey, hysteriaSettings)
+	if !result.ShadowsocksEnabled {
+		return result, nil
+	}
+	key, err := secret.Derive(masterKey, "shadowsocks_2022_server_key")
+	if err != nil {
+		return xray.Settings{}, fmt.Errorf("derive Shadowsocks 2022 server key: %w", err)
+	}
+	result.ShadowsocksServerKey = base64.StdEncoding.EncodeToString(key)
+	bootstrapKey, err := secret.Derive(masterKey, "shadowsocks_2022_bootstrap_user_key")
+	if err != nil {
+		return xray.Settings{}, fmt.Errorf("derive Shadowsocks 2022 bootstrap user key: %w", err)
+	}
+	result.ShadowsocksBootstrapUserKey = base64.StdEncoding.EncodeToString(bootstrapKey)
+	return result, nil
+}
+
 // configuredShadowsocksSettings performs the operation represented by its name.
 func configuredShadowsocksSettings() (domain.ShadowsocksSettings, error) {
 	port, err := configuredShadowsocksPort()
@@ -3961,7 +4015,7 @@ func configuredShadowsocksSettings() (domain.ShadowsocksSettings, error) {
 	return domain.ShadowsocksSettings{
 		Enabled:    strings.EqualFold(strings.TrimSpace(envOr("XRAY_SHADOWSOCKS_ENABLED", "false")), "true"),
 		PublicPort: port,
-		Method:     envOr("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305),
+		Method:     domain.ShadowsocksMethod2022AES256GCM,
 		Network:    envOr("XRAY_SHADOWSOCKS_NETWORK", domain.ShadowsocksNetworkTCPUDP),
 	}, nil
 }
@@ -3973,7 +4027,7 @@ func configuredShadowsocksEnabled() bool {
 
 // configuredShadowsocksMethod performs the operation represented by its name.
 func configuredShadowsocksMethod() string {
-	return envOr("XRAY_SHADOWSOCKS_METHOD", domain.ShadowsocksMethodChaCha20Poly1305)
+	return domain.ShadowsocksMethod2022AES256GCM
 }
 
 // configuredTrojanEnabled performs the operation represented by its name.
@@ -4099,7 +4153,11 @@ func (s *server) profile(w http.ResponseWriter, r *http.Request, client domain.C
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read Hysteria 2 settings"})
 		return
 	}
-	renderSettings := rendererSettingsWithHysteria(settings, "server-secret-not-exported", hysteriaSettings)
+	renderSettings, err := rendererSettingsWithMasterKey(settings, "server-secret-not-exported", hysteriaSettings, s.masterKey)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not prepare Shadowsocks settings"})
+		return
+	}
 	renderSettings.VMessPublicPort = s.vmessPort
 	renderSettings.TrojanPublicPort = s.trojanPort
 	if ((client.HasVMess() && !client.VMessRevoked) || (client.HasTrojan() && !client.TrojanRevoked)) && (hysteriaSettings.TLSMode == domain.HysteriaTLSSelfSigned || hysteriaSettings.TLSMode == domain.HysteriaTLSLegacy) {
@@ -4325,7 +4383,7 @@ func fatal(err error) {
 func publicSettings(settings domain.Settings, vmessPublicPort int) map[string]any {
 	shadowsocks, err := configuredShadowsocksSettings()
 	if err != nil {
-		shadowsocks = domain.ShadowsocksSettings{PublicPort: 8388, Method: domain.ShadowsocksMethodChaCha20Poly1305, Network: domain.ShadowsocksNetworkTCPUDP}
+		shadowsocks = domain.ShadowsocksSettings{PublicPort: 8388, Method: domain.ShadowsocksMethod2022AES256GCM, Network: domain.ShadowsocksNetworkTCPUDP}
 	}
 	trojanPort, _ := configuredTrojanPort()
 	return map[string]any{

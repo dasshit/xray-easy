@@ -233,7 +233,7 @@ func runInstall(ctx context.Context, root string, input io.Reader, output io.Wri
 			version:            defaultVersion,
 			hysteriaMode:       "custom",
 			awgPublicPort:      defaultAWGPort,
-			shadowsocksMethod:  "chacha20-poly1305",
+			shadowsocksMethod:  defaultShadowsocksMethod,
 			shadowsocksNetwork: "tcp,udp",
 		}
 		cfg.public, cfg.ui, err = ui.ports(ctx, 443, 8080)
@@ -496,7 +496,8 @@ func createConfiguration(root string, cfg configuration) error {
 	if cfg.trojan == 0 {
 		cfg.trojan = defaultTrojanPort(cfg.public, cfg.vmess, cfg.shadowsocks, cfg.ui)
 	}
-	cfg.shadowsocksMethod = valueOr(cfg.shadowsocksMethod, "chacha20-poly1305")
+	// SS2022 uses one fixed cipher; upgrade any legacy .env choice.
+	cfg.shadowsocksMethod = defaultShadowsocksMethod
 	cfg.shadowsocksNetwork = valueOr(cfg.shadowsocksNetwork, "tcp,udp")
 	if cfg.vmess == cfg.public || cfg.vmess == cfg.ui {
 		return errors.New("XRAY_VMESS_PORT must differ from the Xray and Web UI ports")
@@ -611,7 +612,7 @@ func loadConfiguration(root string) (configuration, error) {
 		vmess:              vmessPort,
 		shadowsocks:        ssPort,
 		shadowsocksEnabled: strings.EqualFold(values["XRAY_SHADOWSOCKS_ENABLED"], "true"),
-		shadowsocksMethod:  valueOr(values["XRAY_SHADOWSOCKS_METHOD"], "chacha20-poly1305"),
+		shadowsocksMethod:  defaultShadowsocksMethod,
 		shadowsocksNetwork: valueOr(values["XRAY_SHADOWSOCKS_NETWORK"], "tcp,udp"),
 		trojan:             trojanPort,
 		trojanEnabled:      strings.EqualFold(values["XRAY_TROJAN_ENABLED"], "true"),
@@ -667,7 +668,7 @@ func validateShadowsocksConfiguration(cfg configuration) error {
 	if port == cfg.public || port == cfg.vmess || port == cfg.ui {
 		return errors.New("XRAY_SHADOWSOCKS_PORT must differ from Xray, VMess, and Web UI ports")
 	}
-	method := valueOr(cfg.shadowsocksMethod, "chacha20-poly1305")
+	method := defaultShadowsocksMethod
 	if !domain.SupportsShadowsocksMethod(method) {
 		return errors.New("unsupported XRAY_SHADOWSOCKS_METHOD")
 	}

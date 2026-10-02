@@ -1,6 +1,8 @@
 package xray
 
 import (
+	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"net/url"
 	"strings"
@@ -132,9 +134,10 @@ func TestRenderAndBuildShadowsocksProfile(t *testing.T) {
 	settings := validTestSettings()
 	settings.ShadowsocksEnabled = true
 	settings.ShadowsocksPublicPort = 8388
-	settings.ShadowsocksMethod = domain.ShadowsocksMethodChaCha20Poly1305
+	settings.ShadowsocksMethod = domain.ShadowsocksMethod2022AES256GCM
+	settings.ShadowsocksServerKey = testShadowsocks2022Key(1)
 	settings.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
-	client := Client{ID: "ss", Name: "MacBook Pro", Protocol: domain.ProtocolShadowsocks, Email: "ss@xray-easy", ShadowsocksPassword: "secret-password", ShadowsocksEnabled: true}
+	client := Client{ID: "ss", Name: "MacBook Pro", Protocol: domain.ProtocolShadowsocks, Email: "ss@xray-easy", ShadowsocksPassword: testShadowsocks2022Key(2), ShadowsocksEnabled: true}
 	config, err := RenderServerConfig(settings, []Client{client})
 	if err != nil {
 		t.Fatal(err)
@@ -145,8 +148,10 @@ func TestRenderAndBuildShadowsocksProfile(t *testing.T) {
 			Port     int    `json:"port"`
 			Protocol string `json:"protocol"`
 			Settings struct {
-				Network string                                     `json:"network"`
-				Clients []struct{ Method, Password, Email string } `json:"clients"`
+				Method   string                             `json:"method"`
+				Password string                             `json:"password"`
+				Network  string                             `json:"network"`
+				Users    []struct{ Password, Email string } `json:"users"`
 			} `json:"settings"`
 		} `json:"inbounds"`
 	}
@@ -158,8 +163,10 @@ func TestRenderAndBuildShadowsocksProfile(t *testing.T) {
 		Port     int    `json:"port"`
 		Protocol string `json:"protocol"`
 		Settings struct {
-			Network string                                     `json:"network"`
-			Clients []struct{ Method, Password, Email string } `json:"clients"`
+			Method   string                             `json:"method"`
+			Password string                             `json:"password"`
+			Network  string                             `json:"network"`
+			Users    []struct{ Password, Email string } `json:"users"`
 		} `json:"settings"`
 	}
 	for i := range decoded.Inbounds {
@@ -167,7 +174,7 @@ func TestRenderAndBuildShadowsocksProfile(t *testing.T) {
 			inbound = &decoded.Inbounds[i]
 		}
 	}
-	if inbound == nil || inbound.Port != ShadowsocksInternalPort || inbound.Protocol != "shadowsocks" || inbound.Settings.Network != domain.ShadowsocksNetworkTCPUDP || len(inbound.Settings.Clients) != 1 || inbound.Settings.Clients[0].Password != client.ShadowsocksPassword {
+	if inbound == nil || inbound.Port != ShadowsocksInternalPort || inbound.Protocol != "shadowsocks" || inbound.Settings.Method != domain.ShadowsocksMethod2022AES256GCM || inbound.Settings.Password != settings.ShadowsocksServerKey || inbound.Settings.Network != domain.ShadowsocksNetworkTCPUDP || len(inbound.Settings.Users) != 1 || inbound.Settings.Users[0].Password != client.ShadowsocksPassword || inbound.Settings.Users[0].Email != client.Email {
 		t.Fatalf("unexpected Shadowsocks inbound: %+v", decoded.Inbounds)
 	}
 	profile, err := BuildProfile(settings, client)
@@ -178,12 +185,80 @@ func TestRenderAndBuildShadowsocksProfile(t *testing.T) {
 	if err != nil || parsed.Scheme != "ss" || parsed.Host != "vpn.example.com:8388" || parsed.Fragment != client.Name {
 		t.Fatalf("unexpected Shadowsocks URI: %s (%v)", profile.ShadowsocksURI, err)
 	}
-	if !strings.Contains(profile.ShadowsocksURI, "Y2hhY2hhMjAtcG9seTEzMDU6c2VjcmV0LX") {
-		t.Fatalf("URI does not contain encoded method/password: %s", profile.ShadowsocksURI)
+	if parsed.User == nil {
+		t.Fatal("Shadowsocks URI omitted credential payload")
 	}
-	if len(profile.ShadowsocksJSON) == 0 || !strings.Contains(string(profile.ShadowsocksJSON), client.ShadowsocksPassword) {
-		t.Fatal("Shadowsocks JSON profile missing password")
+	encodedCredentials := parsed.User.Username()
+	credentials, decodeErr := base64.RawURLEncoding.DecodeString(encodedCredentials)
+	if decodeErr != nil || string(credentials) != settings.ShadowsocksMethod+":"+settings.ShadowsocksServerKey+":"+client.ShadowsocksPassword {
+		t.Fatalf("URI credentials = %q, decode error = %v", credentials, decodeErr)
 	}
+	var clientJSON struct {
+		Outbounds []struct {
+			Protocol string `json:"protocol"`
+			Settings struct {
+				Servers []struct {
+					Method   string `json:"method"`
+					Password string `json:"password"`
+				} `json:"servers"`
+			} `json:"settings"`
+		} `json:"outbounds"`
+	}
+	if err := json.Unmarshal(profile.ShadowsocksJSON, &clientJSON); err != nil {
+		t.Fatal(err)
+	}
+	if len(clientJSON.Outbounds) != 1 || clientJSON.Outbounds[0].Protocol != "shadowsocks" || len(clientJSON.Outbounds[0].Settings.Servers) != 1 {
+		t.Fatalf("invalid SS2022 client JSON: %+v", clientJSON)
+	}
+	server := clientJSON.Outbounds[0].Settings.Servers[0]
+	if server.Method != settings.ShadowsocksMethod || server.Password != settings.ShadowsocksServerKey+":"+client.ShadowsocksPassword {
+		t.Fatalf("SS2022 client server settings = %+v", server)
+	}
+}
+
+func TestRenderEmptyShadowsocksInboundStaysMultiUserWithoutExposingBootstrap(t *testing.T) {
+	settings := validTestSettings()
+	settings.ShadowsocksEnabled = true
+	settings.ShadowsocksPublicPort = 8388
+	settings.ShadowsocksMethod = domain.ShadowsocksMethod2022AES256GCM
+	settings.ShadowsocksServerKey = testShadowsocks2022Key(1)
+	settings.ShadowsocksBootstrapUserKey = testShadowsocks2022Key(2)
+	settings.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
+	configuration, err := RenderServerConfig(settings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document struct {
+		Inbounds []struct {
+			Tag      string `json:"tag"`
+			Settings struct {
+				Method   string `json:"method"`
+				Password string `json:"password"`
+				Users    []struct {
+					Password string `json:"password"`
+					Email    string `json:"email"`
+				} `json:"users"`
+			} `json:"settings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(configuration, &document); err != nil {
+		t.Fatal(err)
+	}
+	for _, inbound := range document.Inbounds {
+		if inbound.Tag != ShadowsocksInboundTag {
+			continue
+		}
+		if inbound.Settings.Method != domain.ShadowsocksMethod2022AES256GCM || inbound.Settings.Password != settings.ShadowsocksServerKey || len(inbound.Settings.Users) != 1 || inbound.Settings.Users[0].Email != domain.ShadowsocksBootstrapUserEmail || inbound.Settings.Users[0].Password != settings.ShadowsocksBootstrapUserKey {
+			t.Fatalf("empty SS2022 inbound settings = %+v", inbound.Settings)
+		}
+		return
+	}
+	t.Fatal("rendered config omitted the Shadowsocks inbound")
+}
+
+// testShadowsocks2022Key returns a deterministic valid 32-byte PSK for tests.
+func testShadowsocks2022Key(value byte) string {
+	return base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{value}, 32))
 }
 
 func TestRenderAndBuildTrojanProfile(t *testing.T) {
@@ -369,10 +444,12 @@ func TestRenderServerConfigRejectsInvalidOptionalProtocolClients(t *testing.T) {
 			settings.ShadowsocksEnabled, settings.ShadowsocksPublicPort, settings.ShadowsocksMethod, settings.ShadowsocksNetwork = true, 8388, "unsupported", domain.ShadowsocksNetworkTCPUDP
 		}, "unsupported Shadowsocks method"},
 		{"Shadowsocks network", func(settings *Settings, clients *[]Client) {
-			settings.ShadowsocksEnabled, settings.ShadowsocksPublicPort, settings.ShadowsocksMethod, settings.ShadowsocksNetwork = true, 8388, domain.ShadowsocksMethodChaCha20Poly1305, "sctp"
+			settings.ShadowsocksEnabled, settings.ShadowsocksPublicPort, settings.ShadowsocksMethod, settings.ShadowsocksNetwork = true, 8388, domain.ShadowsocksMethod2022AES256GCM, "sctp"
+			settings.ShadowsocksServerKey = testShadowsocks2022Key(1)
 		}, "unsupported Shadowsocks network"},
 		{"Shadowsocks credentials", func(settings *Settings, clients *[]Client) {
-			settings.ShadowsocksEnabled, settings.ShadowsocksPublicPort, settings.ShadowsocksMethod, settings.ShadowsocksNetwork = true, 8388, domain.ShadowsocksMethodChaCha20Poly1305, domain.ShadowsocksNetworkTCPUDP
+			settings.ShadowsocksEnabled, settings.ShadowsocksPublicPort, settings.ShadowsocksMethod, settings.ShadowsocksNetwork = true, 8388, domain.ShadowsocksMethod2022AES256GCM, domain.ShadowsocksNetworkTCPUDP
+			settings.ShadowsocksServerKey = testShadowsocks2022Key(1)
 			*clients = []Client{{ID: "s", Protocol: domain.ProtocolShadowsocks, Email: "s@example.test", ShadowsocksEnabled: true}}
 		}, "missing Shadowsocks credentials"},
 	}

@@ -94,6 +94,24 @@ func Open(masterKey []byte, encoded, purpose string) (string, error) {
 	return string(plaintext), nil
 }
 
+// Derive deterministically derives a purpose-specific 32-byte key from the
+// installation master key. The result is stable across restarts and is never
+// stored in the database.
+func Derive(masterKey []byte, purpose string) ([]byte, error) {
+	if len(masterKey) < 32 {
+		return nil, errors.New("master key must contain at least 32 bytes")
+	}
+	if purpose == "" {
+		return nil, errors.New("key derivation purpose is required")
+	}
+	reader := hkdf.New(sha256.New, masterKey, nil, []byte("xray-easy/derived/"+purpose))
+	key := make([]byte, 32)
+	if _, err := io.ReadFull(reader, key); err != nil {
+		return nil, fmt.Errorf("derive key: %w", err)
+	}
+	return key, nil
+}
+
 // derive performs the operation represented by its name.
 func derive(masterKey, salt []byte, purpose string) ([]byte, error) {
 	reader := hkdf.New(sha256.New, masterKey, salt, []byte("xray-easy/"+purpose))
