@@ -157,15 +157,19 @@ func TestControllerTelemetryStreamFansInXrayAndCancelsUpstream(t *testing.T) {
 	service := NewServiceWithAdapters(runtime, nil, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := &stopAfterTwoControllerUpdates{ctx: ctx, stop: stop}
+	stream := &stopOnTelemetrySnapshot{ctx: ctx, stop: stop, matched: func(update *controllerv1.TelemetryUpdate) bool {
+		for _, source := range update.GetSources() {
+			if source.GetProtocol() == "xray" && source.GetGeneration() == "runtime-a" {
+				return true
+			}
+		}
+		return false
+	}}
 	err := service.WatchTelemetry(&controllerv1.WatchTelemetryRequest{SampleIntervalMs: 1000}, stream)
 	if !errors.Is(err, stop) {
 		t.Fatalf("WatchTelemetry error = %v", err)
 	}
-	if len(stream.updates) != 2 {
-		t.Fatalf("Controller emitted %d messages, want initial plus Xray snapshot", len(stream.updates))
-	}
-	update := stream.updates[1]
+	update := stream.updates[len(stream.updates)-1]
 	if !update.GetFullSnapshot() || update.GetSources()[0].GetProtocol() != "xray" || !update.GetSources()[0].GetAvailable() || update.GetSources()[0].GetSequence() != 9 {
 		t.Fatalf("Controller source status = %+v", update.GetSources())
 	}
@@ -201,7 +205,18 @@ func TestControllerTelemetryStreamFansInAWGAndReportsXrayAvailability(t *testing
 	service := NewServiceWithAdapters(&fakeRuntime{}, nil, nil, awg)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := &stopAfterThreeControllerUpdates{ctx: ctx, stop: stop}
+	stream := &stopOnTelemetrySnapshot{ctx: ctx, stop: stop, matched: func(update *controllerv1.TelemetryUpdate) bool {
+		var availableAWG, unavailableXray bool
+		for _, source := range update.GetSources() {
+			if source.GetProtocol() == "amneziawg" && source.GetAvailable() && source.GetSequence() == 5 {
+				availableAWG = true
+			}
+			if source.GetProtocol() == "xray" && !source.GetAvailable() && source.GetError() != "" {
+				unavailableXray = true
+			}
+		}
+		return availableAWG && unavailableXray
+	}}
 	err := service.WatchTelemetry(&controllerv1.WatchTelemetryRequest{SampleIntervalMs: 1000}, stream)
 	if !errors.Is(err, stop) {
 		t.Fatalf("WatchTelemetry error = %v", err)
@@ -213,7 +228,7 @@ func TestControllerTelemetryStreamFansInAWGAndReportsXrayAvailability(t *testing
 			if source.GetProtocol() == "amneziawg" && source.GetAvailable() && source.GetSequence() == 5 {
 				awgUpdate = update
 			}
-			if source.GetProtocol() == "xray" && !source.GetAvailable() {
+			if source.GetProtocol() == "xray" && !source.GetAvailable() && source.GetError() != "" {
 				unavailableXray = true
 			}
 		}
@@ -246,12 +261,24 @@ func TestControllerTelemetryStreamReportsUnavailableXray(t *testing.T) {
 	service := NewServiceWithAdapters(&unavailableXrayTelemetry{fakeRuntime: &fakeRuntime{}, openErr: errors.New("private upstream error")}, nil, nil, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := &stopAfterTwoControllerUpdates{ctx: ctx, stop: stop}
+	stream := &stopOnTelemetrySnapshot{ctx: ctx, stop: stop, matched: func(update *controllerv1.TelemetryUpdate) bool {
+		for _, source := range update.GetSources() {
+			if source.GetProtocol() == "xray" && !source.GetAvailable() && source.GetError() != "" {
+				return true
+			}
+		}
+		return false
+	}}
 	err := service.WatchTelemetry(&controllerv1.WatchTelemetryRequest{SampleIntervalMs: 1000}, stream)
 	if !errors.Is(err, stop) {
 		t.Fatalf("WatchTelemetry error = %v", err)
 	}
-	source := stream.updates[1].GetSources()[0]
+	var source *controllerv1.TelemetrySourceStatus
+	for _, item := range stream.updates[len(stream.updates)-1].GetSources() {
+		if item.GetProtocol() == "xray" {
+			source = item
+		}
+	}
 	if source.GetAvailable() || source.GetError() != "telemetry source is temporarily unavailable" {
 		t.Fatalf("Xray unavailable source = %+v", source)
 	}
@@ -265,7 +292,14 @@ func TestControllerTelemetryStreamReportsUnavailableAWG(t *testing.T) {
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	stream := &stopAfterThreeControllerUpdates{ctx: ctx, stop: stop}
+	stream := &stopOnTelemetrySnapshot{ctx: ctx, stop: stop, matched: func(update *controllerv1.TelemetryUpdate) bool {
+		for _, source := range update.GetSources() {
+			if source.GetProtocol() == "amneziawg" && !source.GetAvailable() && source.GetError() != "" {
+				return true
+			}
+		}
+		return false
+	}}
 	err := service.WatchTelemetry(&controllerv1.WatchTelemetryRequest{SampleIntervalMs: 1000}, stream)
 	if !errors.Is(err, stop) {
 		t.Fatalf("WatchTelemetry error = %v", err)
@@ -288,6 +322,27 @@ type stopAfterThreeControllerUpdates struct {
 	updates []*controllerv1.TelemetryUpdate
 	stop    error
 }
+
+type stopOnTelemetrySnapshot struct {
+	ctx     context.Context
+	updates []*controllerv1.TelemetryUpdate
+	stop    error
+	matched func(*controllerv1.TelemetryUpdate) bool
+}
+
+func (s *stopOnTelemetrySnapshot) Send(update *controllerv1.TelemetryUpdate) error {
+	s.updates = append(s.updates, update)
+	if s.matched(update) {
+		return s.stop
+	}
+	return nil
+}
+func (s *stopOnTelemetrySnapshot) SetHeader(metadata.MD) error  { return nil }
+func (s *stopOnTelemetrySnapshot) SendHeader(metadata.MD) error { return nil }
+func (s *stopOnTelemetrySnapshot) SetTrailer(metadata.MD)       {}
+func (s *stopOnTelemetrySnapshot) Context() context.Context     { return s.ctx }
+func (s *stopOnTelemetrySnapshot) SendMsg(any) error            { return nil }
+func (s *stopOnTelemetrySnapshot) RecvMsg(any) error            { return io.EOF }
 
 func (s *stopAfterThreeControllerUpdates) Send(update *controllerv1.TelemetryUpdate) error {
 	s.updates = append(s.updates, update)

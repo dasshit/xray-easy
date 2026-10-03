@@ -33,6 +33,7 @@ type rpcInvoker interface {
 // Client is the authenticated backend gateway to the private Controller.
 type Client struct {
 	connection rpcInvoker
+	streaming  grpc.ClientConnInterface
 	token      string
 	logger     *slog.Logger
 	close      func() error
@@ -52,12 +53,16 @@ func Dial(address, tokenPath string) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Controller gRPC client: %w", err)
 	}
-	return &Client{connection: connection, token: token, logger: slog.Default(), close: connection.Close}, nil
+	client := &Client{connection: connection, token: token, logger: slog.Default(), close: connection.Close}
+	client.streaming = connection
+	return client, nil
 }
 
 // NewClientWithConn creates a client around a test-owned connection.
 func NewClientWithConn(connection rpcInvoker, token string) *Client {
-	return &Client{connection: connection, token: token, logger: slog.Default()}
+	client := &Client{connection: connection, token: token, logger: slog.Default()}
+	client.streaming, _ = connection.(grpc.ClientConnInterface)
+	return client
 }
 
 // Close closes the Controller gRPC connection when this client owns it.
@@ -118,6 +123,61 @@ func (c *Client) Logs(ctx context.Context) ([]string, error) {
 func (c *Client) SetLogLevel(ctx context.Context, level string) error {
 	_, err := c.call(ctx, "SetXrayLogLevel", &controllerv1.SetXrayLogLevelRequest{Level: level})
 	return err
+}
+
+// DisconnectLease asks Controller to close only the specified Xray source-IP lease.
+func (c *Client) DisconnectLease(ctx context.Context, request *controllerv1.DisconnectLeaseRequest) (*controllerv1.DisconnectLeaseResponse, error) {
+	if request == nil {
+		return nil, errors.New("lease disconnect request is required")
+	}
+	result, err := c.call(ctx, "DisconnectLease", request)
+	if err != nil {
+		return nil, err
+	}
+	return result.(*controllerv1.DisconnectLeaseResponse), nil
+}
+
+// WatchLeaseSnapshots opens the restricted lease-service stream from Controller.
+func (c *Client) WatchLeaseSnapshots(ctx context.Context) (controllerv1.Controller_WatchLeaseSnapshotsClient, error) {
+	if c == nil || c.streaming == nil || strings.TrimSpace(c.token) == "" {
+		return nil, errors.New("Controller streaming client is not initialized")
+	}
+	ctx, requestID, err := interaction.OutgoingContext(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("create Controller lease stream request ID: %w", err)
+	}
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+c.token)
+	method := controllerv1.Controller_WatchLeaseSnapshots_FullMethodName
+	started := time.Now()
+	stream, err := controllerv1.NewControllerClient(c.streaming).WatchLeaseSnapshots(ctx, &controllerv1.EmptyRequest{})
+	interaction.LogRPC(c.logger, "xray-lease-service-controller-client", method, requestID, "lease", started, err, interaction.TraceFromContext(ctx))
+	if err != nil {
+		return nil, fmt.Errorf("open Controller lease snapshot stream: %w", err)
+	}
+	return &loggedLeaseSnapshotStream{Controller_WatchLeaseSnapshotsClient: stream, logger: c.logger, requestID: requestID, started: started}, nil
+}
+
+// loggedLeaseSnapshotStream records the final result of a lease stream once.
+type loggedLeaseSnapshotStream struct {
+	controllerv1.Controller_WatchLeaseSnapshotsClient
+	logger    *slog.Logger
+	requestID string
+	started   time.Time
+	logged    bool
+}
+
+// Recv reads a lease snapshot and logs stream termination metadata once.
+func (s *loggedLeaseSnapshotStream) Recv() (*controllerv1.LeaseSnapshot, error) {
+	snapshot, err := s.Controller_WatchLeaseSnapshotsClient.Recv()
+	if err != nil && !s.logged {
+		s.logged = true
+		logErr := err
+		if errors.Is(err, io.EOF) {
+			logErr = nil
+		}
+		interaction.LogRPC(s.logger, "xray-lease-service-controller-client", controllerv1.Controller_WatchLeaseSnapshots_FullMethodName, s.requestID, "lease", s.started, logErr, interaction.Trace{})
+	}
+	return snapshot, err
 }
 
 // Validate asks the Xray adapter to validate a candidate config.
@@ -381,6 +441,8 @@ func newRPCResponse(method string) (proto.Message, error) {
 		return &controllerv1.LogsResponse{}, nil
 	case "ValidateConfig", "ApplyConfig", "ReplaceInbound", "ProbeTarget", "AddDeviceUser", "RemoveDeviceUser", "SetXrayLogLevel", "RemoveAmneziaWGPeer", "RestoreAmneziaWGBackup":
 		return &controllerv1.OperationResponse{}, nil
+	case "DisconnectLease":
+		return &controllerv1.DisconnectLeaseResponse{}, nil
 	case "ProbeIPv6":
 		return &controllerv1.ProbeIPv6Response{}, nil
 	case "ListDeviceUsers":

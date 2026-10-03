@@ -34,6 +34,8 @@ const (
 	Controller_SetXrayLogLevel_FullMethodName          = "/xrayeasy.controller.v1.Controller/SetXrayLogLevel"
 	Controller_GetXrayTelemetry_FullMethodName         = "/xrayeasy.controller.v1.Controller/GetXrayTelemetry"
 	Controller_WatchTelemetry_FullMethodName           = "/xrayeasy.controller.v1.Controller/WatchTelemetry"
+	Controller_WatchLeaseSnapshots_FullMethodName      = "/xrayeasy.controller.v1.Controller/WatchLeaseSnapshots"
+	Controller_DisconnectLease_FullMethodName          = "/xrayeasy.controller.v1.Controller/DisconnectLease"
 	Controller_GetAmneziaWGStatus_FullMethodName       = "/xrayeasy.controller.v1.Controller/GetAmneziaWGStatus"
 	Controller_ListAmneziaWGPeers_FullMethodName       = "/xrayeasy.controller.v1.Controller/ListAmneziaWGPeers"
 	Controller_CreateAmneziaWGPeer_FullMethodName      = "/xrayeasy.controller.v1.Controller/CreateAmneziaWGPeer"
@@ -65,6 +67,8 @@ type ControllerClient interface {
 	SetXrayLogLevel(ctx context.Context, in *SetXrayLogLevelRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	GetXrayTelemetry(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*XrayTelemetryResponse, error)
 	WatchTelemetry(ctx context.Context, in *WatchTelemetryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TelemetryUpdate], error)
+	WatchLeaseSnapshots(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LeaseSnapshot], error)
+	DisconnectLease(ctx context.Context, in *DisconnectLeaseRequest, opts ...grpc.CallOption) (*DisconnectLeaseResponse, error)
 	GetAmneziaWGStatus(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*AmneziaWGStatusResponse, error)
 	ListAmneziaWGPeers(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ListAmneziaWGPeersResponse, error)
 	CreateAmneziaWGPeer(ctx context.Context, in *CreateAmneziaWGPeerRequest, opts ...grpc.CallOption) (*AmneziaWGPeer, error)
@@ -242,6 +246,35 @@ func (c *controllerClient) WatchTelemetry(ctx context.Context, in *WatchTelemetr
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Controller_WatchTelemetryClient = grpc.ServerStreamingClient[TelemetryUpdate]
 
+func (c *controllerClient) WatchLeaseSnapshots(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[LeaseSnapshot], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Controller_ServiceDesc.Streams[1], Controller_WatchLeaseSnapshots_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[EmptyRequest, LeaseSnapshot]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Controller_WatchLeaseSnapshotsClient = grpc.ServerStreamingClient[LeaseSnapshot]
+
+func (c *controllerClient) DisconnectLease(ctx context.Context, in *DisconnectLeaseRequest, opts ...grpc.CallOption) (*DisconnectLeaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DisconnectLeaseResponse)
+	err := c.cc.Invoke(ctx, Controller_DisconnectLease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controllerClient) GetAmneziaWGStatus(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*AmneziaWGStatusResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(AmneziaWGStatusResponse)
@@ -343,6 +376,8 @@ type ControllerServer interface {
 	SetXrayLogLevel(context.Context, *SetXrayLogLevelRequest) (*OperationResponse, error)
 	GetXrayTelemetry(context.Context, *EmptyRequest) (*XrayTelemetryResponse, error)
 	WatchTelemetry(*WatchTelemetryRequest, grpc.ServerStreamingServer[TelemetryUpdate]) error
+	WatchLeaseSnapshots(*EmptyRequest, grpc.ServerStreamingServer[LeaseSnapshot]) error
+	DisconnectLease(context.Context, *DisconnectLeaseRequest) (*DisconnectLeaseResponse, error)
 	GetAmneziaWGStatus(context.Context, *EmptyRequest) (*AmneziaWGStatusResponse, error)
 	ListAmneziaWGPeers(context.Context, *EmptyRequest) (*ListAmneziaWGPeersResponse, error)
 	CreateAmneziaWGPeer(context.Context, *CreateAmneziaWGPeerRequest) (*AmneziaWGPeer, error)
@@ -405,6 +440,12 @@ func (UnimplementedControllerServer) GetXrayTelemetry(context.Context, *EmptyReq
 }
 func (UnimplementedControllerServer) WatchTelemetry(*WatchTelemetryRequest, grpc.ServerStreamingServer[TelemetryUpdate]) error {
 	return status.Errorf(codes.Unimplemented, "method WatchTelemetry not implemented")
+}
+func (UnimplementedControllerServer) WatchLeaseSnapshots(*EmptyRequest, grpc.ServerStreamingServer[LeaseSnapshot]) error {
+	return status.Errorf(codes.Unimplemented, "method WatchLeaseSnapshots not implemented")
+}
+func (UnimplementedControllerServer) DisconnectLease(context.Context, *DisconnectLeaseRequest) (*DisconnectLeaseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DisconnectLease not implemented")
 }
 func (UnimplementedControllerServer) GetAmneziaWGStatus(context.Context, *EmptyRequest) (*AmneziaWGStatusResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetAmneziaWGStatus not implemented")
@@ -714,6 +755,35 @@ func _Controller_WatchTelemetry_Handler(srv interface{}, stream grpc.ServerStrea
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Controller_WatchTelemetryServer = grpc.ServerStreamingServer[TelemetryUpdate]
 
+func _Controller_WatchLeaseSnapshots_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(EmptyRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ControllerServer).WatchLeaseSnapshots(m, &grpc.GenericServerStream[EmptyRequest, LeaseSnapshot]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Controller_WatchLeaseSnapshotsServer = grpc.ServerStreamingServer[LeaseSnapshot]
+
+func _Controller_DisconnectLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisconnectLeaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControllerServer).DisconnectLease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Controller_DisconnectLease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControllerServer).DisconnectLease(ctx, req.(*DisconnectLeaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Controller_GetAmneziaWGStatus_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyRequest)
 	if err := dec(in); err != nil {
@@ -922,6 +992,10 @@ var Controller_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Controller_GetXrayTelemetry_Handler,
 		},
 		{
+			MethodName: "DisconnectLease",
+			Handler:    _Controller_DisconnectLease_Handler,
+		},
+		{
 			MethodName: "GetAmneziaWGStatus",
 			Handler:    _Controller_GetAmneziaWGStatus_Handler,
 		},
@@ -958,6 +1032,11 @@ var Controller_ServiceDesc = grpc.ServiceDesc{
 		{
 			StreamName:    "WatchTelemetry",
 			Handler:       _Controller_WatchTelemetry_Handler,
+			ServerStreams: true,
+		},
+		{
+			StreamName:    "WatchLeaseSnapshots",
+			Handler:       _Controller_WatchLeaseSnapshots_Handler,
 			ServerStreams: true,
 		},
 	},

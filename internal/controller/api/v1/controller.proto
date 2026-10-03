@@ -23,6 +23,8 @@ service Controller {
   rpc SetXrayLogLevel(SetXrayLogLevelRequest) returns (OperationResponse);
   rpc GetXrayTelemetry(EmptyRequest) returns (XrayTelemetryResponse);
   rpc WatchTelemetry(WatchTelemetryRequest) returns (stream TelemetryUpdate);
+  rpc WatchLeaseSnapshots(EmptyRequest) returns (stream LeaseSnapshot);
+  rpc DisconnectLease(DisconnectLeaseRequest) returns (DisconnectLeaseResponse);
   rpc GetAmneziaWGStatus(EmptyRequest) returns (AmneziaWGStatusResponse);
   rpc ListAmneziaWGPeers(EmptyRequest) returns (ListAmneziaWGPeersResponse);
   rpc CreateAmneziaWGPeer(CreateAmneziaWGPeerRequest) returns (AmneziaWGPeer);
@@ -123,6 +125,7 @@ message SetXrayLogLevelRequest { string level = 1; }
 message IPObservation {
   string address = 1;
   google.protobuf.Timestamp last_seen = 2;
+  google.protobuf.Timestamp connected_at = 3;
 }
 
 message XrayUserTelemetry {
@@ -151,6 +154,44 @@ message TelemetryClient {
   int64 upload_bytes = 5;
   int64 download_bytes = 6;
   repeated string source_ips = 7;
+  repeated TelemetrySourceObservation source_observations = 8;
+}
+
+message TelemetrySourceObservation {
+  string address = 1;
+  google.protobuf.Timestamp last_seen = 2;
+  google.protobuf.Timestamp connected_at = 3;
+}
+
+message LeaseObservation {
+  string profile_email = 1;
+  string protocol = 2;
+  string source_ip = 3;
+  google.protobuf.Timestamp last_activity = 4;
+  google.protobuf.Timestamp connected_at = 5;
+}
+
+message LeaseSnapshot {
+  google.protobuf.Timestamp sampled_at = 1;
+  bool source_available = 2;
+  string source_generation = 3;
+  uint64 source_sequence = 4;
+  string source_error = 5;
+  repeated LeaseObservation observations = 6;
+  bool full_snapshot = 7;
+}
+
+message DisconnectLeaseRequest {
+  string protocol = 1;
+  string profile_email = 2;
+  string source_ip = 3;
+  string operation_id = 4;
+  string source_generation = 5;
+}
+
+message DisconnectLeaseResponse {
+  uint32 closed_connections = 1;
+  bool already_applied = 2;
 }
 
 message TelemetrySourceStatus {

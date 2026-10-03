@@ -25,6 +25,8 @@ const (
 	defaultListenAddr = "172.31.241.5:10088"
 	// defaultControllerToken is an internal package constant.
 	defaultControllerToken = "/run/controller-auth/controller.token"
+	// defaultLeaseToken is an internal package constant.
+	defaultLeaseToken = "/run/lease-auth/lease.token"
 	// defaultRuntimeAddr is an internal package constant.
 	defaultRuntimeAddr = "172.31.241.2:10086"
 	// defaultRuntimeToken is an internal package constant.
@@ -119,6 +121,10 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("load Controller token: %w", err)
 	}
+	leaseToken, err := readOptionalToken(envOr("XRAY_LEASE_TOKEN_FILE", defaultLeaseToken))
+	if err != nil {
+		return fmt.Errorf("load lease-service token: %w", err)
+	}
 	runtime, err := dialEmbeddedXray(envOr("XRAY_RUNTIME_ADDR", defaultRuntimeAddr), envOr("XRAY_RUNTIME_TOKEN_FILE", defaultRuntimeToken), envOr("XRAY_CONFIG_DIR", defaultConfigDir))
 	if err != nil {
 		return fmt.Errorf("initialize embedded Xray runtime: %w", err)
@@ -131,8 +137,8 @@ func serve() error {
 	server := grpc.NewServer(
 		grpc.MaxRecvMsgSize(24<<20),
 		grpc.MaxSendMsgSize(24<<20),
-		grpc.ChainUnaryInterceptor(controller.LoggingInterceptor("xray-controller"), controller.AuthInterceptor(token)),
-		grpc.ChainStreamInterceptor(controller.LoggingStreamInterceptor("xray-controller"), controller.AuthStreamInterceptor(token)),
+		grpc.ChainUnaryInterceptor(controller.LoggingInterceptor("xray-controller"), controller.AuthInterceptorWithLeaseToken(token, leaseToken)),
+		grpc.ChainStreamInterceptor(controller.LoggingStreamInterceptor("xray-controller"), controller.AuthStreamInterceptorWithLeaseToken(token, leaseToken)),
 	)
 	var awg controller.AmneziaWGRuntime
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
@@ -160,6 +166,18 @@ func serve() error {
 		}
 		return nil
 	}
+}
+
+// readOptionalToken reads an optional token file, treating absence as disabled.
+func readOptionalToken(path string) (string, error) {
+	if strings.TrimSpace(path) == "" {
+		return "", nil
+	}
+	value, err := readToken(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", nil
+	}
+	return value, err
 }
 
 // readToken reads the requested value.

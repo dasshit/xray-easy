@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,6 +73,15 @@ type EngineHandle interface {
 	RemoveUser(context.Context, string, string) (bool, error)
 	// ListUsers returns the requested collection.
 	ListUsers(context.Context, string) ([]string, error)
+}
+
+// LeaseDisconnectEngine closes a selected authenticated user connection when the
+// implementation has verified connection tracking for that protocol.
+type LeaseDisconnectEngine interface {
+	// LeaseDisconnectSupported reports whether the protocol can be disconnected precisely.
+	LeaseDisconnectSupported(xrayruntimev1.Protocol) bool
+	// DisconnectLease closes active connections matching the exact lease identity.
+	DisconnectLease(context.Context, xrayruntimev1.Protocol, string, string, string) (int, bool, error)
 }
 
 // coreLoader is an internal type used by the package.
@@ -448,14 +458,64 @@ func (s *Service) GetCapabilities(_ context.Context, _ *xrayruntimev1.EmptyReque
 		if !ok {
 			continue
 		}
+		leaseDisconnect := false
+		if leaseEngine, ok := s.engine.(LeaseDisconnectEngine); ok {
+			leaseDisconnect = leaseEngine.LeaseDisconnectSupported(protocol)
+		}
 		response.Protocols = append(response.Protocols, &xrayruntimev1.ProtocolCapability{
 			Protocol: protocol, Configured: true,
 			UserManagement: true, TrafficCounters: s.telemetry.trafficCounters,
 			OnlineStatus: s.telemetry.onlineStatus, SourceIp: s.telemetry.sourceIP,
-			InboundTag: s.inboundTags[protocol],
+			InboundTag: s.inboundTags[protocol], LeaseDisconnect: leaseDisconnect,
 		})
 	}
 	return response, nil
+}
+
+// DisconnectLease closes active connection handles for one protocol, profile and source IP.
+func (s *Service) DisconnectLease(ctx context.Context, request *xrayruntimev1.DisconnectLeaseRequest) (*xrayruntimev1.DisconnectLeaseResponse, error) {
+	if request == nil {
+		return nil, status.Error(codes.InvalidArgument, "lease disconnect request is required")
+	}
+	if !supportedProtocol(request.GetProtocol()) {
+		return nil, status.Error(codes.InvalidArgument, "lease protocol is unsupported")
+	}
+	operationID := strings.TrimSpace(request.GetOperationId())
+	email := strings.TrimSpace(request.GetEmail())
+	if operationID == "" || len(operationID) > maxOperationIDBytes || email == "" || len(email) > maxUserEmailBytes {
+		return nil, status.Error(codes.InvalidArgument, "lease disconnect identity is invalid")
+	}
+	address, err := netip.ParseAddr(strings.TrimSpace(request.GetSourceIp()))
+	if err != nil || address.Zone() != "" {
+		return nil, status.Error(codes.InvalidArgument, "lease source IP is invalid")
+	}
+	s.mu.RLock()
+	engine := s.engine
+	generation := runtimeGeneration(s.startedAt)
+	state := s.state
+	s.mu.RUnlock()
+	if request.GetSourceGeneration() == "" || request.GetSourceGeneration() != generation {
+		return nil, status.Error(codes.Aborted, "lease disconnect source generation is stale")
+	}
+	if state != xrayruntimev1.RuntimeState_RUNTIME_STATE_RUNNING || engine == nil {
+		return nil, status.Error(codes.Unavailable, "embedded Xray runtime is not running")
+	}
+	leaseEngine, ok := engine.(LeaseDisconnectEngine)
+	if !ok || !leaseEngine.LeaseDisconnectSupported(request.GetProtocol()) {
+		return nil, status.Error(codes.Unimplemented, "precise lease disconnect is unavailable for this protocol")
+	}
+	closed, alreadyApplied, err := leaseEngine.DisconnectLease(ctx, request.GetProtocol(), email, address.Unmap().String(), operationID)
+	if err != nil {
+		if errors.Is(err, context.Canceled) {
+			return nil, status.Error(codes.Canceled, "lease disconnect was canceled")
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.Error(codes.DeadlineExceeded, "lease disconnect timed out")
+		}
+		return nil, status.Error(codes.Internal, "could not disconnect the selected lease")
+	}
+	s.emitEvent("info", "lease", "lease_disconnected", request.GetProtocol(), email, address.Unmap().String(), fmt.Sprintf("closed_connections=%d", closed))
+	return &xrayruntimev1.DisconnectLeaseResponse{OperationId: operationID, ClosedConnections: uint32(closed), AlreadyApplied: alreadyApplied}, nil
 }
 
 // GetRecentLogs returns a bounded list of redacted runtime lifecycle messages.
@@ -807,6 +867,9 @@ func (s *Service) GetTelemetry(ctx context.Context, _ *xrayruntimev1.EmptyReques
 				if !observation.LastSeen.IsZero() {
 					ip.LastSeen = timestamppb.New(observation.LastSeen.UTC())
 				}
+				if !observation.ConnectedAt.IsZero() {
+					ip.ConnectedAt = timestamppb.New(observation.ConnectedAt.UTC())
+				}
 				item.SourceIps = append(item.SourceIps, ip)
 			}
 		}
@@ -837,7 +900,7 @@ func (s *Service) WatchTelemetry(request *xrayruntimev1.WatchTelemetryRequest, s
 	defer ticker.Stop()
 	previous := make(map[string][2]int64)
 	lastActivity := make(map[string]time.Time)
-	generation := strconv.FormatInt(s.startedAt.UnixNano(), 10)
+	generation := runtimeGeneration(s.startedAt)
 	send := func() error {
 		ctx, cancel := context.WithTimeout(stream.Context(), interval)
 		defer cancel()
@@ -984,6 +1047,14 @@ func supportedProtocol(protocol xrayruntimev1.Protocol) bool {
 	default:
 		return false
 	}
+}
+
+// runtimeGeneration returns the stable telemetry and lease fence for one runtime process.
+func runtimeGeneration(startedAt time.Time) string {
+	if startedAt.IsZero() {
+		return ""
+	}
+	return strconv.FormatInt(startedAt.UnixNano(), 10)
 }
 
 // ConfiguredInboundTags maps supported product protocols to their configured

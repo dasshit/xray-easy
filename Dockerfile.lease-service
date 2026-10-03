@@ -1,0 +1,26 @@
+# syntax=docker/dockerfile:1
+
+FROM --platform=$BUILDPLATFORM golang:1.27.1-alpine AS build
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+COPY awg-contract/go.mod ./awg-contract/go.mod
+COPY third_party/go-qrcode/go.mod ./third_party/go-qrcode/go.mod
+RUN --mount=type=cache,target=/go/pkg/mod \
+    for attempt in 1 2 3 4 5; do go mod download && exit 0; sleep 5; done; exit 1
+COPY cmd ./cmd
+COPY internal ./internal
+COPY awg-contract ./awg-contract
+COPY third_party ./third_party
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -mod=readonly -trimpath -ldflags='-s -w' -o /out/xray-lease-service ./cmd/xray-lease-service
+
+FROM alpine:3.22
+RUN addgroup -S -g 10001 xray && adduser -S -D -H -u 10001 -G xray xray \
+    && apk add --no-cache ca-certificates
+COPY --from=build /out/xray-lease-service /usr/local/bin/xray-lease-service
+USER 10001:10001
+EXPOSE 8091
+ENTRYPOINT ["/usr/local/bin/xray-lease-service"]

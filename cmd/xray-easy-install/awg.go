@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -48,9 +49,10 @@ func updateAWGConfiguration(root string, cfg configuration) error {
 	if err != nil {
 		return err
 	}
-	profile, publicHost := "", ""
+	profile := managedComposeProfiles(environmentValue(data, "COMPOSE_PROFILES"), cfg)
+	publicHost := ""
 	if cfg.awgEnabled {
-		profile, publicHost = "awg", cfg.awgPublicHost
+		publicHost = cfg.awgPublicHost
 	}
 	port := cfg.awgPublicPort
 	if port == 0 {
@@ -61,6 +63,65 @@ func updateAWGConfiguration(root string, cfg configuration) error {
 		"AWG_PUBLIC_HOST":  publicHost,
 		"AWG_PUBLIC_PORT":  strconv.Itoa(port),
 	}
+	return updateEnvironmentFile(root, data, updates)
+}
+
+// updateLeaseConfiguration enables the optional lease profile without dropping
+// AmneziaWG or unrelated Compose profiles.
+func updateLeaseConfiguration(root string, cfg configuration) error {
+	path := filepath.Join(root, ".env")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	updates := map[string]string{
+		"COMPOSE_PROFILES":           managedComposeProfiles(environmentValue(data, "COMPOSE_PROFILES"), cfg),
+		"XRAY_LEASE_SERVICE_ENABLED": strconv.FormatBool(cfg.leaseEnabled),
+		"XRAY_LEASE_MAX_ACTIVE":      valueOr(environmentValue(data, "XRAY_LEASE_MAX_ACTIVE"), "2"),
+		"XRAY_LEASE_GRACE":           valueOr(environmentValue(data, "XRAY_LEASE_GRACE"), "30s"),
+		"XRAY_LEASE_RETRY_DELAY":     valueOr(environmentValue(data, "XRAY_LEASE_RETRY_DELAY"), "1s"),
+	}
+	return updateEnvironmentFile(root, data, updates)
+}
+
+// managedComposeProfiles preserves unrelated profiles and applies managed toggles.
+func managedComposeProfiles(existing string, cfg configuration) string {
+	profiles := make([]string, 0, 4)
+	seen := make(map[string]bool)
+	for _, profile := range strings.Split(existing, ",") {
+		profile = strings.TrimSpace(profile)
+		switch profile {
+		case "", "awg", "awg-prototype", "lease":
+			continue
+		}
+		if !seen[profile] {
+			profiles = append(profiles, profile)
+			seen[profile] = true
+		}
+	}
+	if cfg.awgEnabled {
+		profiles = append(profiles, "awg")
+	}
+	if cfg.leaseEnabled {
+		profiles = append(profiles, "lease")
+	}
+	return strings.Join(profiles, ",")
+}
+
+// environmentValue returns the first plain KEY=value entry from an env file.
+func environmentValue(data []byte, key string) string {
+	for _, line := range strings.Split(string(data), "\n") {
+		name, value, ok := strings.Cut(strings.TrimSpace(line), "=")
+		if ok && strings.TrimSpace(name) == key {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+// updateEnvironmentFile atomically updates selected values while preserving other entries.
+func updateEnvironmentFile(root string, data []byte, updates map[string]string) error {
+	path := filepath.Join(root, ".env")
 	lines := strings.Split(strings.TrimSuffix(string(data), "\n"), "\n")
 	seen := make(map[string]bool, len(updates))
 	for index, line := range lines {
@@ -77,10 +138,15 @@ func updateAWGConfiguration(root string, cfg configuration) error {
 			seen[key] = true
 		}
 	}
-	for _, key := range []string{"COMPOSE_PROFILES", "AWG_PUBLIC_HOST", "AWG_PUBLIC_PORT"} {
+	var missing []string
+	for key := range updates {
 		if !seen[key] {
-			lines = append(lines, key+"="+updates[key])
+			missing = append(missing, key)
 		}
+	}
+	sort.Strings(missing)
+	for _, key := range missing {
+		lines = append(lines, key+"="+updates[key])
 	}
 	file, err := os.CreateTemp(root, ".env-*")
 	if err != nil {

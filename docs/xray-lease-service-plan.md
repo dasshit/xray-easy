@@ -1,605 +1,227 @@
-# План Xray lease-service
+# Xray lease-service: план и состояние реализации
 
-Статус: план подготовлен, реализация не начата.
+Обновлено: 2026-10-03. Локальная реализация завершена; сервис выключен по
+умолчанию. Перед включением на рабочем VDS нужно пройти ручную проверку из
+раздела 9.
 
-## 1. Цель
+## 1. Цель и выбранная семантика
 
-Добавить для Xray-профилей временное ограничение на совместное использование одних и тех же учётных данных. Если один профиль одновременно используется из нескольких сетевых источников, сервис должен дать короткое окно для обычной смены сети, а затем закрыть самый старый lease и оставить самый новый.
+Опциональный `xray-lease-service` ограничивает одновременное использование
+одного Xray-профиля с разных source IP. Один профиль может иметь не более двух
+активных source-IP leases:
 
-AmneziaWG в этот механизм не входит. Для AmneziaWG сохраняется текущая модель: один профиль создаётся с отдельной key pair и идентифицируется public key peer’а.
+- первый источник продолжает работу без ограничения времени;
+- после появления второго оба работают в течение 30 секунд; если к концу
+  окна оба всё ещё активны, закрывается только более старый;
+- третий источник приводит к немедленному закрытию самого старого; остаются
+  два более новых;
+- AmneziaWG не участвует в этой политике.
 
-## 2. Что именно защищаем
+Lease идентифицируется как `(protocol, profile email, canonical source IP)`.
+Это ограничение совместного использования по сетевому адресу, а не привязка к
+физическому устройству. Два устройства за одним NAT выглядят как один lease;
+одно устройство при смене Wi-Fi/LTE или IPv4/IPv6 может выглядеть как два.
 
-Xray идентифицирует пользователя UUID/паролем или другим протокольным credential. Если одна и та же ссылка скопирована на два устройства, Xray не получает криптографический идентификатор физического устройства. Поэтому lease в проекте является сетевым наблюдением, а не доказательством отдельного устройства.
+## 2. Актуальная архитектура и ограничения
 
-В MVP lease определяется ключом:
+- Xray работает как embedded instance внутри `xray-core-service`; внешнего
+  процесса Xray и его административного gRPC API нет.
+- Runtime получает authenticated inbound session из Xray dispatch и хранит
+  closable parent connection по протоколу, email и source IP. `DisconnectLease`
+  закрывает соединения ровно этого ключа, не удаляя пользователя.
+- Точное закрытие включено только для TCP VLESS, VMess и Trojan. VLESS прошёл
+  integration test с двумя одновременными source IP: закрытие одного оставляет
+  второй активным. VMess и Trojan используют тот же runtime hook и покрыты
+  тестами извлечения lease identity, но требуют ручной проверки на VDS.
+- Hysteria 2, Shadowsocks UDP и AmneziaWG исключены. Добавлять их можно только
+  после отдельного теста, подтверждающего точечное закрытие активного клиента.
+- Key registry хранит время начала непрерывного source-IP lease. Controller
+  передаёт `connected_at`, чтобы после рестарта lease-service порядок oldest
+  не зависел от порядка IP в snapshot. Xray restart завершает сессии и создаёт
+  новый runtime generation.
+- Источник online/offline — существующая Xray telemetry policy: user считается
+  online, пока его traffic counters продвигаются в текущем 15-секундном окне.
+  Это окно действует на весь профиль, а не отдельно на каждый source IP. Поэтому
+  открытое, но простаивающее соединение одного IP может оставаться в lease
+  snapshot, пока другой источник того же профиля продолжает передавать трафик.
+  В проекте нет независимого точного per-source idle timer; lease-service не
+  должен выдавать профильный 15-секундный признак за per-source disconnect.
+- Controller держит общий telemetry hub с latest-wins fanout. Он открывается,
+  пока есть хотя бы один subscriber: Web/SSE или lease-service. Enforcement не
+  зависит от открытого Web UI; при выключенном lease profile остаётся только
+  прежнее поведение backend telemetry.
+- Lease-service использует отдельный Controller token. ACL разрешает только
+  `Health`, `GetCapabilities`, `WatchLeaseSnapshots` и `DisconnectLease`.
+  Сервис не имеет опубликованных портов, доступа к `/data`, SQLite или общему
+  backend token.
 
-```text
-(xray protocol, profile email, source IP)
-```
-
-В один профиль могут входить несколько TCP/UDP-соединений. Они не считаются отдельными lease, если относятся к одному и тому же `(profile, protocol, source IP)`.
-
-### Ограничения такой идентификации
-
-- два устройства за одним NAT могут выглядеть как один lease;
-- переход Wi-Fi ↔ LTE может создать новый lease;
-- IPv4 и IPv6 одного устройства могут быть двумя lease;
-- VPN, CGNAT и мобильные сети могут менять source IP без копирования профиля;
-- source IP нельзя считать стабильным или секретным идентификатором устройства.
-
-UI, audit и документация должны называть это обнаружением совместного использования профиля, а не гарантированным device binding.
-
-## 3. Термины и временные параметры
-
-| Термин | Значение |
-| --- | --- |
-| profile | Внутренний профиль устройства backend; для Xray используется его email и протокол |
-| lease | Активное наблюдение профиля с одного source IP |
-| `idle_timeout` | 15 секунд без наблюдаемой активности; совпадает с текущим Xray online window |
-| `dual_lease_grace` | 30 секунд, в течение которых два lease допускаются временно |
-| `max_active_leases` | 2 для первой версии |
-| oldest lease | Lease с наименьшим `first_seen` среди активных lease |
-
-Рекомендуемые значения по умолчанию:
-
-```text
-XRAY_LEASE_SERVICE_ENABLED=false
-XRAY_LEASE_MAX_ACTIVE=2
-XRAY_LEASE_GRACE=30s
-XRAY_LEASE_IDLE_TIMEOUT=15s
-```
-
-Параметры не должны задаваться произвольными отрицательными или нулевыми значениями. Их валидация должна происходить в lease-service и в Doctor.
-
-## 4. Точная семантика lease-flow
-
-### 4.1 Первый lease
-
-При появлении первого активного source IP сервис создаёт lease:
-
-```text
-first_seen = event time
-last_activity = event time
-state = active
-```
-
-Один активный lease не ограничивается по длительности. Пока поступает трафик, `last_activity` обновляется.
-
-### 4.2 Второй lease
-
-При появлении второго отличающегося source IP:
-
-1. создаётся второй lease;
-2. определяется самый старый lease по `first_seen`;
-3. запускается deadline `second.first_seen + XRAY_LEASE_GRACE`;
-4. до deadline оба lease могут работать.
-
-Если один из lease становится offline раньше deadline, он удаляется из активного набора, таймер отменяется, оставшийся lease продолжает работу.
-
-### 4.3 Истечение 30 секунд
-
-Если к deadline оба lease всё ещё активны:
-
-1. lease-service фиксирует `lease_conflict`;
-2. выбирает lease с минимальным `first_seen`;
-3. вызывает точечное закрытие соединений только этого lease;
-4. помечает oldest lease как `terminated`;
-5. оставляет второй, более новый lease активным;
-6. не отзывает credential профиля и не затрагивает новый lease.
-
-Это заменяет первоначальное решение «закрывать оба соединения». Разрыв должен быть адресным, иначе закрытие пользователя целиком нарушит требование.
-
-### 4.4 Третий lease
-
-При появлении третьего активного source IP набор превышает лимит в два lease. Рекомендуемое поведение:
-
-1. зафиксировать конфликт без ожидания 30 секунд;
-2. закрыть самый старый активный lease;
-3. оставить два самых новых lease;
-4. для оставшихся двух запустить новый `dual_lease_grace`.
-
-Таким образом, сервис всегда удерживает не более двух активных lease и предпочитает более новые источники. Если продукт решит применять 30-секундное окно и к третьему lease, это должно быть отдельной настройкой, а не скрытым изменением семантики.
-
-### 4.5 Offline и повторное подключение
-
-- lease считается offline, если `now - last_activity > idle_timeout`;
-- offline lease удаляется из активного набора, но остаётся в короткой истории для диагностики;
-- повторное появление того же source IP создаёт новый lease с новым `first_seen`;
-- старый lease не должен воскресать из кеша после перезапуска сервиса;
-- после рестарта состояние восстанавливается из текущего полного telemetry snapshot, а не из старых lease.
-
-## 5. Архитектура
+## 3. Поток данных
 
 ```mermaid
 flowchart LR
-    XRAY["Embedded Xray runtime"]
-    CTRL["Controller"]
-    LEASE["xray-lease-service"]
-    BACKEND["Backend"]
-    UI["Web UI"]
-
-    XRAY -->|"typed telemetry"| CTRL
-    CTRL -->|"WatchLeaseEvents gRPC"| LEASE
-    LEASE -->|"DisconnectLease gRPC"| CTRL
-    CTRL -->|"close matching connections"| XRAY
-
-    CTRL -->|"WatchTelemetry"| BACKEND
-    BACKEND -->|"SSE"| UI
+    R["Embedded Xray runtime"] -->|"typed telemetry + connected_at"| C["Controller"]
+    C -->|"shared telemetry hub"| W["Backend / SSE"]
+    C -->|"lease-only snapshot stream"| L["xray-lease-service"]
+    L -->|"DisconnectLease: protocol + profile + source IP"| C
+    C -->|"close exact TCP source lease"| R
+    W --> UI["Web UI"]
 ```
 
-`xray-lease-service` — отдельный внутренний контейнер без опубликованных портов. Он постоянно подключается к Controller, а не запускается только при наличии Web UI/SSE-подписки.
-
-### Почему lease-service должен быть отдельным
-
-- lease enforcement должен работать без открытой панели;
-- backend не должен содержать сетевую state machine и таймеры блокировок;
-- Controller остаётся адаптером между сервисами и предоставляет нормализованный источник событий;
-- сервис можно перезапустить независимо от Xray и backend;
-- позднее можно добавить другие policy services без изменения Xray runtime.
-
-## 6. Изменения Controller
-
-### 6.1 Общий telemetry hub
-
-Сейчас каждый `WatchTelemetry` подписчик может создать отдельный upstream stream к Xray Runtime. После добавления постоянного lease-service одновременно будут работать как минимум backend и lease-service.
-
-Нужно вынести сбор телеметрии в Controller-owned hub:
-
-- один upstream stream к Xray Runtime;
-- один upstream stream к AWG, если AWG включён;
-- кэш последнего полного snapshot;
-- подписчики получают latest-wins обновления без накопления очереди;
-- медленный подписчик не блокирует runtime collector;
-- backend и lease-service используют разные представления одного snapshot.
-
-AWG данные проходят через hub только для общей инфраструктуры. Lease policy фильтрует и обрабатывает только Xray-протоколы.
-
-### 6.2 Новый lease event contract
-
-Добавить в Controller protobuf отдельный server-streaming RPC:
-
-```protobuf
-rpc WatchLeaseEvents(WatchLeaseEventsRequest)
-    returns (stream LeaseEvent);
-```
-
-Минимальный контракт:
-
-```protobuf
-message WatchLeaseEventsRequest {
-  uint32 sample_interval_ms = 1;
-}
-
-enum LeaseEventType {
-  LEASE_EVENT_TYPE_UNSPECIFIED = 0;
-  LEASE_ONLINE = 1;
-  LEASE_ACTIVITY = 2;
-  LEASE_OFFLINE = 3;
-  LEASE_SOURCE_CHANGED = 4;
-  LEASE_SOURCE_UNAVAILABLE = 5;
-}
-
-message LeaseEvent {
-  string profile_email = 1;
-  string protocol = 2;
-  string source_ip = 3;
-  LeaseEventType type = 4;
-  google.protobuf.Timestamp observed_at = 5;
-  google.protobuf.Timestamp last_activity = 6;
-  int64 upload_bytes = 7;
-  int64 download_bytes = 8;
-  string source_generation = 9;
-  uint64 source_sequence = 10;
-}
-```
-
-Секреты, UUID и полные профили в event payload не передаются. `profile_email` является внутренним идентификатором Xray и не должен попадать в публичные логи.
-
-### 6.3 Source observations
-
-Текущий runtime знает source IP и `last_seen`, но Controller частично упрощает эту информацию до массива строк. Для lease-flow нужно сохранить наблюдения с временем:
-
-```protobuf
-message SourceObservation {
-  string address = 1;
-  google.protobuf.Timestamp last_seen = 2;
-}
-```
-
-Runtime response и Controller event adapter должны передавать список таких наблюдений. Источником offline-события остаётся Controller/runtime policy с окном 15 секунд; lease-service не должен самостоятельно вводить второе несовместимое окно.
-
-### 6.4 RPC для точечного закрытия
-
-Добавить в Controller:
-
-```protobuf
-rpc DisconnectLease(DisconnectLeaseRequest)
-    returns (DisconnectLeaseResponse);
-```
-
-```protobuf
-message DisconnectLeaseRequest {
-  string protocol = 1;
-  string profile_email = 2;
-  string source_ip = 3;
-  string operation_id = 4;
-}
-
-message DisconnectLeaseResponse {
-  bool already_disconnected = 1;
-  uint32 closed_connections = 2;
-}
-```
-
-`operation_id` нужен для идемпотентности после временного обрыва gRPC. Повтор той же операции не должен закрывать уже новый lease с тем же source IP.
-
-Controller проверяет:
-
-- корректность protocol/email/source IP;
-- текущую revision/generation runtime;
-- что операция не устарела;
-- права вызывающего lease-service identity.
-
-## 7. Изменения embedded Xray runtime
-
-### 7.1 Почему `RemoveUser` недостаточно
-
-Удаление пользователя из Xray `UserManager` запрещает новые аутентификации, но не даёт гарантированного адресного закрытия уже установленных соединений. Оно также не позволяет закрыть только oldest lease и оставить newest.
-
-### 7.2 Реестр активных соединений
-
-В runtime потребуется внутренний connection registry:
-
-```text
-key: protocol + user email + source IP
-value: set of active connection handles
-```
-
-Для каждого соединения нужно:
-
-1. определить пользователя после успешной аутентификации;
-2. получить remote source IP;
-3. зарегистрировать closable handle;
-4. удалить handle при штатном завершении или ошибке;
-5. закрывать все handles по ключу `DisconnectLease`.
-
-Регистрация не должна выполняться для неаутентифицированных или отклонённых соединений.
-
-### 7.3 Точки интеграции
-
-Сначала проверить, можно ли безопасно обернуть connection lifecycle через доступные интерфейсы Xray-core. Если после аутентификации upstream не передаёт user identity во внешний hook, потребуется один из вариантов:
-
-1. небольшой patch/fork закреплённой версии Xray-core;
-2. собственная регистрация inbound implementation для поддерживаемых протоколов;
-3. fallback только на блокировку новых подключений.
-
-Собственный fork допустим только после документированного spike и тестов на точной версии Xray-core. Нельзя объявлять `DisconnectLease` работающим, если runtime закрывает только будущие подключения.
-
-### 7.4 Требования к close
-
-- закрытие должно быть идемпотентным;
-- закрытие одного lease не должно затрагивать второй source IP;
-- новые соединения этого lease после close должны отклоняться до следующей разрешённой политики;
-- close не должен блокировать Xray event loop;
-- graceful close должен иметь короткий deadline, после которого соединение закрывается принудительно;
-- counters и telemetry должны корректно перейти в offline после close.
-
-## 8. Реализация lease-service
-
-### 8.1 Внутренние компоненты
-
-1. `controller client` — аутентифицированный reconnecting gRPC client;
-2. `event normalizer` — проверка порядка generation/sequence;
-3. `lease store` — in-memory state machine с fake clock в тестах;
-4. `deadline scheduler` — отдельные таймеры dual lease;
-5. `enforcement client` — идемпотентный `DisconnectLease`;
-6. `audit/logger` — structured logs без секретов;
-7. `health server` — внутренний healthcheck для Compose и Doctor.
-
-### 8.2 Обработка порядка событий
-
-Controller должен передавать generation и sequence. Lease-service:
-
-- принимает только события текущего generation;
-- игнорирует sequence, старше последнего обработанного;
-- очищает state при смене generation;
-- после gap или reconnect ждёт полный snapshot;
-- не запускает close по неполному snapshot без подтверждённой доступности источника.
-
-### 8.3 Reconnect
-
-- stream открывается с backoff и jitter;
-- после Controller restart сервис переподключается автоматически;
-- старые timers отменяются при смене generation;
-- текущие Xray sessions не закрываются из-за временной недоступности telemetry;
-- при недоступности Controller lease enforcement переходит в fail-open и сообщает состояние через health/Doctor.
-
-### 8.4 Fail-open policy
-
-Рекомендуемый режим для MVP — fail-open:
-
-- при сбое lease-service не разрывать существующие VPN-сессии;
-- не удалять пользователей массово;
-- разрешить нормальную работу Xray;
-- вывести предупреждение в Doctor и structured logs;
-- после восстановления начать с полного snapshot.
-
-Fail-closed должен быть отдельной осознанной настройкой, потому что падение Controller не должно случайно отключать всех пользователей.
-
-## 9. Compose и токены
-
-### 9.1 Сервис
-
-Добавить:
-
-```yaml
-xray-lease-service:
-  profiles: ["lease"]
-  restart: unless-stopped
-  networks:
-    - control
-  depends_on:
-    controller:
-      condition: service_healthy
-    xray-core-service:
-      condition: service_healthy
-```
-
-Сервис не имеет `ports`, `devices`, доступа к `/data` или к SQLite.
-
-### 9.2 Отдельная identity
-
-Не монтировать в lease-service общий backend token. Добавить отдельный init service и volume:
-
-```text
-lease-auth-init
-lease_controller_token_data
-```
-
-Controller должен различать identity и разрешать lease-service только:
-
-- `WatchLeaseEvents`;
-- `DisconnectLease`;
-- `Health`/capabilities.
-
-Доступ к настройкам, профилям, backup и административным RPC запрещён.
-
-### 9.3 Compose profiles
-
-Текущий installer перезаписывает `COMPOSE_PROFILES` при настройке AWG. Нужно вынести объединение профилей в общий helper, чтобы поддерживать комбинации:
-
-```text
-""
-"awg"
-"lease"
-"awg,lease"
-```
-
-Helper должен:
-
-- читать существующие профили;
-- добавлять/удалять один профиль;
-- сортировать результат в стабильном порядке;
-- удалять дубликаты;
-- не уничтожать неизвестные будущие профили;
-- корректно обрабатывать пустое значение.
-
-## 10. Изменения установщика
-
-### 10.1 TUI
-
-Добавить экран после настроек протоколов:
-
-```text
-Xray lease protection
-
-1. Disabled
-2. Enabled
-```
-
-По умолчанию `Disabled`.
-
-На существующей установке значение читается из `.env` и сохраняется, если пользователь не изменил его. На финальном экране показывать:
-
-```text
-Lease service: enabled
-Maximum active leases: 2
-Conflict grace period: 30s
-Offline timeout: 15s
-```
-
-Для первой версии installer не должен позволять включить сервис, если текущий образ/checkout не содержит рабочий `xray-lease-service` и его healthcheck. Нельзя записать флаг, который заведомо приведёт к неработающему Compose.
-
-### 10.2 `.env`
-
-Новая чистая установка записывает:
-
-```dotenv
-XRAY_LEASE_SERVICE_ENABLED=false
-XRAY_LEASE_MAX_ACTIVE=2
-XRAY_LEASE_GRACE=30s
-XRAY_LEASE_IDLE_TIMEOUT=15s
-```
-
-При включении установщик добавляет профиль `lease` в `COMPOSE_PROFILES`.
-
-### 10.3 Upgrade/disable
-
-При отключении существующей установки:
-
-1. записать `XRAY_LEASE_SERVICE_ENABLED=false`;
-2. удалить `lease` из `COMPOSE_PROFILES`;
-3. остановить старый `xray-lease-service`, если он запущен;
-4. выполнить Compose с `--remove-orphans`;
-5. не удалять lease state и audit из volume, если они появятся позднее.
-
-При включении:
-
-1. проверить Compose config;
-2. убедиться, что Controller и runtime healthy;
-3. запустить lease-service;
-4. дождаться его healthcheck;
-5. выполнить Doctor.
-
-## 11. Doctor и диагностика
-
-Добавить проверки:
-
-- lease flag и effective Compose profile согласованы;
-- lease-service container healthy;
-- lease-service подключён к Controller;
-- Controller принимает lease identity;
-- runtime поддерживает `DisconnectLease`;
-- параметры `max_active`, `grace`, `idle_timeout` валидны;
-- текущий generation/sequence telemetry не устарел.
-
-Предлагаемые результаты:
-
-```text
-PASS  Xray lease service: enabled and healthy
-PASS  Xray lease stream: Controller connection is authenticated
-PASS  Xray lease enforcement: DisconnectLease is supported
-WARN  Xray lease service: disabled by configuration
-WARN  Xray lease service: telemetry stream is temporarily unavailable
-FAIL  Xray lease service: enabled but container is unhealthy
-FAIL  Xray lease enforcement: runtime supports blocking only, not connection close
-```
-
-Логи должны содержать только:
-
-- operation ID;
-- protocol;
-- redacted internal profile ID;
-- source IP — только если это уже разрешено текущей политикой логирования;
-- lease state transition;
-- age/deadline;
-- результат close и количество закрытых соединений.
-
-Не логировать UUID, passwords, profile links, private keys и полные protobuf payloads.
-
-## 12. Backend и Web UI
-
-В первой версии lease-service не должен менять backend API и не должен зависеть от SSE. Backend продолжает получать обычную telemetry для отображения статуса.
-
-После стабилизации enforcement можно добавить в Web UI:
-
-- текущие активные lease;
-- source IP и время первого наблюдения;
-- countdown dual-lease grace;
-- факт закрытия oldest lease;
-- кнопку «сбросить lease state»;
-- настройку включения policy без изменения Compose.
-
-Это отдельный этап. До него UI показывает только обычный online/source status.
-
-## 13. Тестовый план
-
-### 13.1 Lease state machine
-
-Покрыть unit-тестами:
-
-- первый lease;
-- второй lease запускает deadline;
-- второй lease offline до deadline отменяет действие;
-- deadline закрывает только oldest;
-- newest остаётся active;
-- третий lease закрывает oldest и оставляет два новых;
-- одинаковый source IP не создаёт второй lease;
-- повторное событие не создаёт дубликат;
-- stale sequence игнорируется;
-- смена generation очищает transient state;
-- idle timeout ровно на границе 15 секунд;
-- timer cancellation и повторный запуск;
-- Controller reconnect;
-- fail-open при недоступном enforcement.
-
-### 13.2 Runtime
-
-- несколько соединений одного lease закрываются вместе;
-- соединения второго source IP не закрываются;
-- закрытие уже завершённого lease идемпотентно;
-- новый connection после close не регистрируется как старый handle;
-- ошибочный/неаутентифицированный connection не попадает в registry;
-- concurrent register/close безопасны под race detector;
-- counters и online status становятся offline после закрытия.
-
-### 13.3 Controller
-
-- authentication lease identity;
-- ACL для lease RPC;
-- generation/sequence ordering;
-- event conversion из runtime source observations;
-- reconnect upstream runtime;
-- multiple subscribers через общий hub;
-- latest-wins backpressure;
-- `DisconnectLease` revision fence и idempotency.
-
-### 13.4 Installer
-
-- новая установка сохраняет disabled;
-- включение сохраняет `XRAY_LEASE_SERVICE_ENABLED=true`;
-- комбинации `awg`, `lease`, `awg,lease`;
-- повторный запуск не дублирует профили;
-- отключение удаляет только `lease`;
-- неизвестные Compose profiles сохраняются;
-- существующий `.env` и master key не заменяются;
-- старый стек без lease продолжает устанавливаться;
-- чистая установка с включённым lease запускает healthy service.
-
-### 13.5 Integration/runtime stack
-
-Добавить сценарии:
-
-1. Controller restart и восстановление lease stream;
-2. Xray runtime restart и generation reset;
-3. второй source IP → 30 секунд → закрывается только старый lease;
-4. третий source IP → закрывается oldest;
-5. close failure не закрывает newest и попадает в Doctor/logs;
-6. lease-service restart без массового отключения пользователей.
-
-## 14. Порядок коммитов
-
-Каждый этап фиксируется отдельным коммитом:
-
-1. `docs: record xray lease service plan` — этот документ;
-2. `proto: add lease events and disconnect lease contract`;
-3. `runtime: track and disconnect xray lease connections`;
-4. `controller: add telemetry hub and lease event stream`;
-5. `lease: add lease state machine and enforcement service`;
-6. `compose: add optional lease service and dedicated token`;
-7. `installer: add lease service toggle and profile merging`;
-8. `doctor: validate lease service and enforcement capability`;
-9. `test: add lease integration and installer coverage`;
-10. `docs: document lease configuration and troubleshooting`.
-
-Перед каждым переходом к следующему этапу должны проходить релевантные unit, race, coverage и Compose checks.
-
-## 15. Критерии готовности
-
-Функция считается готовой, когда:
-
-- AmneziaWG не изменён и продолжает работать прежним способом;
-- lease-service можно включить/выключить через installer;
-- сервис не имеет публичного порта;
-- lease stream работает независимо от Web UI/SSE;
-- один профиль с одним source IP работает без ограничений по времени;
-- второй source IP получает 30-секундное grace window;
-- по истечении окна закрывается только oldest lease;
-- newest lease продолжает работу;
-- третий lease не оставляет более двух активных lease;
-- Controller и runtime переживают перезапуск без массового disconnect;
-- Doctor различает disabled, unavailable и unsupported enforcement;
-- все gRPC операции аутентифицированы, идемпотентны и имеют operation ID;
-- нет утечек секретов в логах и telemetry payloads;
-- тесты покрывают state machine, runtime close, Controller, Compose и installer.
-
-## 16. Риски и открытые решения
-
-1. **Source IP — эвристика.** Нужно явно показать это в UI и README.
-2. **Точечное закрытие может потребовать fork Xray-core.** Сначала провести spike на закреплённой версии, затем выбрать hook или fork.
-3. **IPv4/IPv6 одного устройства могут создать два lease.** Нужно решить, считать ли dual-stack переход отдельным lease или добавить короткое окно объединения адресов.
-4. **Третий lease.** В этом плане выбран немедленный close oldest и сохранение двух новых; решение должно быть подтверждено до реализации.
-5. **Сбой enforcement.** В этом плане выбран fail-open; fail-closed не должен включаться неявно.
-6. **Перезапуск lease-service.** Transient lease timers не сохраняются; после рестарта сервис начинает с полного snapshot, чтобы не закрыть новый lease по устаревшему таймеру.
-
+## 4. Реализация по этапам
+
+### Этап 1. Проверка runtime interception и точечного disconnect — реализовано
+
+- Оборачивать outbound dispatch embedded Xray, сохраняя исходные handlers и
+  специализированные connection interfaces.
+- После аутентификации регистрировать parent connection, protocol, profile
+  email и нормализованный source IP; освобождать запись после завершения
+  dispatch.
+- Сделать disconnect адресным, идемпотентным по operation ID и безопасным при
+  одновременном register/close. Не удалять профиль и не закрывать соседний IP.
+- Проверить реальный параллельный VLESS сценарий. Точечное закрытие подтверждено
+  integration test; ручные VMess/Trojan клиентские тесты остаются в этапе 8.
+
+### Этап 2. Typed runtime и Controller contracts, auth и revisions — реализовано
+
+- Добавить typed protobuf `DisconnectLease` и `connected_at` для source
+  observations.
+- Пропустить disconnect через Controller с generation fencing, проверкой
+  protocol/profile/IP и отдельной lease identity.
+- Ограничить lease identity allowlist RPC и покрыть его аутентификацию тестами.
+
+### Этап 3. Общий Controller telemetry hub — реализовано
+
+- Один upstream telemetry stream на источник для всех подписчиков Controller.
+- Latest-wins fanout и отмена upstream при отсутствии подписчиков.
+- Использовать одинаковые typed telemetry snapshots для Web/SSE и lease policy;
+  не создавать отдельный polling path.
+
+### Этап 4. Lease policy worker — реализовано
+
+- Реализовать тестируемую state machine с generation/sequence fencing, полными
+  snapshots, фиксированным лимитом 2, grace 30s, немедленным enforcement при
+  третьем IP, повтором временно неудавшегося RPC и fail-open при потере Controller.
+- Выбирать oldest по `connected_at`, а не порядку массива. После перезапуска
+  worker восстанавливает source order из активного runtime snapshot. Если два
+  lease уже существуют при старте worker, для их проверки начинается новое
+  grace-окно; рестарт policy не должен неожиданно обрывать активную сессию.
+- Стабильный operation ID сохраняется при неопределённом исходе RPC; новый
+  generation сбрасывает старые operation IDs. Для определённого `Internal`
+  ответа используется новый ID: runtime может кэшировать результат неудачного
+  close под прежним ID, и его повтор без нового ID не дал бы повторить операцию.
+- Логи содержат protocol, хешированный внутренний profile ID, source IP,
+  operation ID и исход disconnect; секреты и полные protobuf payload не пишутся.
+
+### Этап 5. Отдельный optional container и ограниченный доступ — реализовано
+
+- Добавить `xray-lease-service` в Compose под profile `lease`, выключенный по
+  умолчанию, без published ports и с внутренним `/healthz`.
+- Создавать отдельный token в отдельном volume; Controller принимает его только
+  для lease allowlist RPC.
+- Включить сервис в сборку образов CI и использовать non-root/read-only
+  настройки контейнера.
+
+### Этап 6. Installer и Doctor — реализовано и проверено локально
+
+- Добавить выбор включения lease-service в TUI, по умолчанию выключенный.
+- Сохранять `XRAY_LEASE_SERVICE_ENABLED` и объединять Compose profiles, не
+  удаляя `awg` или неизвестные сторонние profiles.
+- Валидировать лимит/grace/retry до запуска Compose. Отключение удаляет только
+  профиль `lease`; данные остальных сервисов не меняются.
+- Doctor проверяет enabled service health и состояние Controller stream; на
+  чистой установке до первой настройки показывает WARN.
+- Doctor считает сервис включённым как по `XRAY_LEASE_SERVICE_ENABLED=true`, так
+  и по наличию `lease` в `COMPOSE_PROFILES`; это покрыто unit-тестом.
+- Installer, policy validation, Doctor health probe и обнаружение Compose
+  profile покрыты unit-тестами. `docker compose config --quiet` проходит без
+  optional profile, с `lease` и с комбинацией `awg,lease`.
+
+### Этап 7. Документация — реализовано
+
+- Синхронизировать README и 10 переводов: Compose profile, ограничения
+  протоколов, NAT/IP caveat, включение из установщика, диагностика и образ.
+- Уточнить `.env.example`: нет per-source idle timeout; используется общий
+  профильный Xray online window в 15 секунд.
+
+### Этап 8. Локальная проверка — выполнено, кроме сборки контейнерного образа
+
+- Go tests для root module и nested `xray-runtime` прошли. Runtime integration
+  test выполнен с loopback bind и подтвердил точечное отключение VLESS lease.
+- Race detector прошёл для `internal/lease`, `internal/controller` и
+  `xray-runtime/internal/runtime`.
+- Backend handwritten coverage: 90.0% в целом; каждый пакет выше CI-порога 80%.
+- Godoc checker и Compose config validation прошли; installer transitions и
+  Doctor lease-проверки покрыты unit-тестами.
+- Docker image build/start в локальной среде не проверены: Docker daemon
+  недоступен. Сборку и запуск нужно выполнить на VDS вместе с ручными
+  пользовательскими сценариями этапа 9.
+
+### Этап 9. Ручная проверка на VDS — ожидает владельца установки
+
+1. Установить обновление, оставить lease выключенным, проверить обычные VLESS,
+   VMess и Trojan подключения.
+2. Включить Lease protection в `install.sh`; выполнить `docker compose ps` и
+   Doctor. Убедиться, что `xray-lease-service` healthy и отдельный порт не
+   опубликован.
+3. Одним профилем подключить первое устройство и убедиться, что оно не
+   отключается. Подключить второе с другого публичного IP; проверить, что оба
+   работают в течение 30 секунд, после чего остаётся второе, а первое
+   отключается.
+4. Подключить третий source IP: должен быть отключён самый старый, а два новых
+   остаются подключёнными.
+5. Проверить, что повторное подключение из того же source IP не создаёт lease;
+   проверить особенности NAT, смену сети и IPv4/IPv6 как разные source IP.
+6. Перезапустить lease-service и Controller при двух активных IP; worker должен
+   восстановить connected order по `connected_at`, переподключиться и не закрыть
+   неправильный lease. Перезапустить Xray runtime отдельно: его соединения
+   завершатся обычным runtime restart.
+7. Временно остановить Controller/runtime: сервис должен работать fail-open,
+   без массового сброса клиентов; после восстановления snapshots enforcement
+   возобновляется.
+8. Убедиться, что Hysteria 2, Shadowsocks UDP и AWG не затрагиваются; отключить
+   lease в установщике и проверить удаление только Compose profile `lease`.
+
+## 5. Настройки и поддерживаемый охват
+
+| Переменная | Значение по умолчанию | Назначение |
+| --- | --- | --- |
+| `XRAY_LEASE_SERVICE_ENABLED` | `false` | Установщик сохраняет состояние; Compose profile `lease` включает сервис. |
+| `XRAY_LEASE_MAX_ACTIVE` | `2` | В MVP фиксированная политика требует ровно 2. |
+| `XRAY_LEASE_GRACE` | `30s` | Допустимый период с двумя source IP. |
+| `XRAY_LEASE_RETRY_DELAY` | `1s` | Пауза перед повтором временно неудачного disconnect. |
+
+Реализация принимает только `vless`, `vmess`, `trojan`; прочие protocol
+identities отвергаются. Отдельной `XRAY_LEASE_IDLE_TIMEOUT` переменной нет.
+
+## 6. Основные риски и принятые меры
+
+- **Ошибочно закрыть соседнее соединение:** registry индексирован полным
+  lease identity; integration test проверяет сохранение второго IP.
+- **Неопределённый исход gRPC disconnect:** operation ID идемпотентен и
+  generation-scoped.
+- **Устаревший или неполный telemetry:** enforcement ждёт доступный полный
+  snapshot и игнорирует старые sequence/generation.
+- **Падение policy сервиса:** fail-open; существующие соединения остаются в
+  Xray.
+- **Несколько устройств за NAT:** они неразличимы; это явно описано как
+  ограничение source-IP policy.
+- **Простаивающее соединение:** профильный traffic activity может сохранять
+  online статус source observations, пока другой source того же профиля активен.
+  Это ограничение не маскируется per-source idle timer.
+- **UDP и multiplex transports:** они исключены до подтверждения точного
+  закрытия конкретной сессии тестами.
+
+## 7. Проверяемые критерии готовности к VDS
+
+- `go test` проходит в обоих Go modules; runtime integration tests проходят при
+  разрешённом loopback bind.
+- Race detector не выявляет гонок в registry, telemetry hub и lease worker.
+- Go documentation checker проходит для нового production кода.
+- Compose config валиден как без `lease`, так и с `COMPOSE_PROFILES=lease` и
+  комбинацией `awg,lease`.
+- Установщик сохраняет существующие master key, AWG настройки и сторонние
+  Compose profiles при повторном включении/отключении lease.
+- Doctor обнаруживает и healthy, и unhealthy lease service, включая случай,
+  когда `COMPOSE_PROFILES` включает lease.
+- VDS сценарии из этапа 9 завершены вручную до рекомендации включать механизм в
+  рабочей установке.

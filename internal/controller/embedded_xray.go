@@ -478,6 +478,24 @@ func (c *EmbeddedXrayClient) WatchTelemetry(ctx context.Context, interval time.D
 	return &loggedRuntimeTelemetryStream{Runtime_WatchTelemetryClient: stream, logger: c.logger, requestID: requestID, started: started}, nil
 }
 
+// DisconnectLease asks the embedded Xray runtime to close one protocol/profile/source-IP lease.
+func (c *EmbeddedXrayClient) DisconnectLease(ctx context.Context, request *xrayruntimev1.DisconnectLeaseRequest) (*xrayruntimev1.DisconnectLeaseResponse, error) {
+	if request == nil {
+		return nil, errors.New("embedded Xray lease disconnect request is required")
+	}
+	response, err := c.call(ctx, embeddedControlIdentity, xrayruntimev1.Runtime_DisconnectLease_FullMethodName, request, func(ctx context.Context, request proto.Message) (proto.Message, error) {
+		return c.rpc.DisconnectLease(ctx, request.(*xrayruntimev1.DisconnectLeaseRequest))
+	})
+	if err != nil {
+		return nil, err
+	}
+	result, ok := response.(*xrayruntimev1.DisconnectLeaseResponse)
+	if !ok || result.GetOperationId() != request.GetOperationId() {
+		return nil, errors.New("embedded Xray runtime returned an invalid lease disconnect response")
+	}
+	return result, nil
+}
+
 // loggedRuntimeTelemetryStream is an internal type used by the package.
 type loggedRuntimeTelemetryStream struct {
 	xrayruntimev1.Runtime_WatchTelemetryClient

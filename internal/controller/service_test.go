@@ -3,27 +3,32 @@ package controller
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
+	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type fakeRuntime struct {
-	status        domain.XrayRuntimeStatus
-	logs          []string
-	err           error
-	called        string
-	args          []string
-	requestID     string
-	operationID   string
-	attempt       int
-	stateRevision int64
+	status           domain.XrayRuntimeStatus
+	logs             []string
+	err              error
+	called           string
+	args             []string
+	requestID        string
+	operationID      string
+	attempt          int
+	stateRevision    int64
+	leaseRequest     *xrayruntimev1.DisconnectLeaseRequest
+	leaseResponse    *xrayruntimev1.DisconnectLeaseResponse
+	leaseResponseSet bool
 }
 
 func (f *fakeRuntime) Health(ctx context.Context) error {
@@ -74,6 +79,17 @@ func (f *fakeRuntime) SetLogLevel(context.Context, string) error {
 	return f.err
 }
 
+func (f *fakeRuntime) DisconnectLease(_ context.Context, request *xrayruntimev1.DisconnectLeaseRequest) (*xrayruntimev1.DisconnectLeaseResponse, error) {
+	f.called = "DisconnectLease"
+	f.leaseRequest = request
+	if f.leaseResponseSet {
+		return f.leaseResponse, f.err
+	}
+	return &xrayruntimev1.DisconnectLeaseResponse{OperationId: request.GetOperationId(), ClosedConnections: 1}, f.err
+}
+
+type runtimeWithoutLease struct{ XrayRuntime }
+
 func TestServiceHealthStatusAndLogs(t *testing.T) {
 	runtime := &fakeRuntime{
 		status: domain.XrayRuntimeStatus{Protocol: "embedded-core", XrayVersion: "26.7.28", State: "running", StartedAt: time.Date(2026, 9, 30, 10, 0, 0, 0, time.UTC), ActiveRevision: 17, InboundTags: []string{"vless-reality", "vmess-tls"}, StatsAvailable: true},
@@ -94,6 +110,89 @@ func TestServiceHealthStatusAndLogs(t *testing.T) {
 	}
 	if response, err := service.GetCapabilities(context.Background(), &controllerv1.EmptyRequest{}); err != nil || !response.Xray.Configured || response.Amneziawg.Configured {
 		t.Fatalf("GetCapabilities() = %v, %v", response, err)
+	}
+}
+
+func TestServiceDisconnectLeaseValidationAndNormalization(t *testing.T) {
+	runtime := &fakeRuntime{}
+	service := NewService(runtime)
+	request := &controllerv1.DisconnectLeaseRequest{
+		Protocol: "vless", ProfileEmail: "ios@xray-easy", SourceIp: "::ffff:192.0.2.10",
+		OperationId: "0123456789abcdef0123456789abcdef", SourceGeneration: "runtime-generation-1",
+	}
+	response, err := service.DisconnectLease(context.Background(), request)
+	if err != nil || response.GetClosedConnections() != 1 || runtime.leaseRequest.GetSourceIp() != "192.0.2.10" || runtime.leaseRequest.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_VLESS {
+		t.Fatalf("DisconnectLease() = %+v, runtime request=%+v, err=%v", response, runtime.leaseRequest, err)
+	}
+	invalid := *request
+	invalid.OperationId = "bad"
+	if _, err := service.DisconnectLease(context.Background(), &invalid); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("invalid lease operation error = %v", err)
+	}
+	unsupported := *request
+	unsupported.Protocol = "hysteria2"
+	if _, err := service.DisconnectLease(context.Background(), &unsupported); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("unsupported lease protocol error = %v", err)
+	}
+}
+
+func TestServiceDisconnectLeaseRejectsInvalidIdentityAndUnsupportedRuntime(t *testing.T) {
+	valid := &controllerv1.DisconnectLeaseRequest{Protocol: "trojan", ProfileEmail: "device@xray-easy", SourceIp: "2001:db8::8", OperationId: "0123456789abcdef0123456789abcdef", SourceGeneration: "runtime-generation"}
+	service := NewService(&fakeRuntime{})
+	if _, err := service.DisconnectLease(context.Background(), nil); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("nil request error=%v", err)
+	}
+	tests := []struct {
+		name   string
+		change func(*controllerv1.DisconnectLeaseRequest)
+	}{
+		{"empty profile", func(request *controllerv1.DisconnectLeaseRequest) { request.ProfileEmail = " " }},
+		{"oversized profile", func(request *controllerv1.DisconnectLeaseRequest) { request.ProfileEmail = strings.Repeat("x", 257) }},
+		{"control character profile", func(request *controllerv1.DisconnectLeaseRequest) { request.ProfileEmail = "profile\nname" }},
+		{"invalid hex operation", func(request *controllerv1.DisconnectLeaseRequest) { request.OperationId = strings.Repeat("g", 32) }},
+		{"missing generation", func(request *controllerv1.DisconnectLeaseRequest) { request.SourceGeneration = " " }},
+		{"oversized generation", func(request *controllerv1.DisconnectLeaseRequest) {
+			request.SourceGeneration = strings.Repeat("g", 129)
+		}},
+		{"invalid source address", func(request *controllerv1.DisconnectLeaseRequest) { request.SourceIp = "not-an-ip" }},
+		{"zoned source address", func(request *controllerv1.DisconnectLeaseRequest) { request.SourceIp = "fe80::1%en0" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := *valid
+			test.change(&request)
+			if _, err := service.DisconnectLease(context.Background(), &request); status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("invalid lease identity error=%v", err)
+			}
+		})
+	}
+	if _, err := NewService(runtimeWithoutLease{XrayRuntime: &fakeRuntime{}}).DisconnectLease(context.Background(), valid); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("runtime without disconnect support error=%v", err)
+	}
+}
+
+func TestServiceDisconnectLeaseMapsRuntimeErrorsAndInvalidResults(t *testing.T) {
+	request := &controllerv1.DisconnectLeaseRequest{Protocol: "vless", ProfileEmail: "device", SourceIp: "192.0.2.2", OperationId: "0123456789abcdef0123456789abcdef", SourceGeneration: "runtime-generation"}
+	for _, test := range []struct {
+		name string
+		err  error
+		want codes.Code
+	}{
+		{"retryable runtime status", status.Error(codes.Unavailable, "offline"), codes.Unavailable},
+		{"unexpected runtime error", errors.New("private runtime detail"), codes.Internal},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := NewService(&fakeRuntime{err: test.err}).DisconnectLease(context.Background(), request)
+			if status.Code(err) != test.want || strings.Contains(err.Error(), "private runtime detail") {
+				t.Fatalf("runtime error mapping=%v, want %s", err, test.want)
+			}
+		})
+	}
+	for _, result := range []*xrayruntimev1.DisconnectLeaseResponse{nil, {OperationId: "different-operation"}} {
+		runtime := &fakeRuntime{leaseResponse: result, leaseResponseSet: true}
+		if _, err := NewService(runtime).DisconnectLease(context.Background(), request); status.Code(err) != codes.Internal {
+			t.Fatalf("invalid runtime response=%+v error=%v", result, err)
+		}
 	}
 }
 

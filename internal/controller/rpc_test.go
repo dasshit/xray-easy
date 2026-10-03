@@ -73,6 +73,39 @@ func TestControllerTelemetryStreamRequiresBearerAndHonorsCancellation(t *testing
 	t.Fatal("canceled stream did not terminate")
 }
 
+func TestLeaseTokenIsRestrictedToLeaseRPCs(t *testing.T) {
+	interceptor := AuthInterceptorWithLeaseToken("admin-secret", "lease-secret")
+	info := &grpc.UnaryServerInfo{FullMethod: controllerv1.Controller_DisconnectLease_FullMethodName}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer lease-secret"))
+	_, err := interceptor(ctx, &controllerv1.EmptyRequest{}, info, func(callContext context.Context, _ any) (any, error) {
+		if got := ControllerIdentityFromContext(callContext); got != "lease-service" {
+			t.Fatalf("lease identity = %q", got)
+		}
+		return &controllerv1.DisconnectLeaseResponse{}, nil
+	})
+	if err != nil {
+		t.Fatalf("allowed lease RPC: %v", err)
+	}
+	info.FullMethod = controllerv1.Controller_GetStatus_FullMethodName
+	_, err = interceptor(ctx, &controllerv1.EmptyRequest{}, info, func(context.Context, any) (any, error) {
+		t.Fatal("lease token reached a forbidden admin RPC")
+		return nil, nil
+	})
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("forbidden lease RPC error = %v", err)
+	}
+	adminContext := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer admin-secret"))
+	_, err = interceptor(adminContext, &controllerv1.EmptyRequest{}, info, func(callContext context.Context, _ any) (any, error) {
+		if got := ControllerIdentityFromContext(callContext); got != "admin" {
+			t.Fatalf("admin identity = %q", got)
+		}
+		return &controllerv1.StatusResponse{}, nil
+	})
+	if err != nil {
+		t.Fatalf("admin RPC: %v", err)
+	}
+}
+
 func TestGeneratedRPCDispatchesEveryTypedMethod(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
@@ -103,6 +136,7 @@ func TestGeneratedRPCDispatchesEveryTypedMethod(t *testing.T) {
 		{"RemoveDeviceUser", &controllerv1.RemoveDeviceUserRequest{}, &controllerv1.OperationResponse{}},
 		{"ListDeviceUsers", &controllerv1.ListDeviceUsersRequest{}, &controllerv1.ListDeviceUsersResponse{}},
 		{"GetXrayTelemetry", &controllerv1.EmptyRequest{}, &controllerv1.XrayTelemetryResponse{}},
+		{"DisconnectLease", &controllerv1.DisconnectLeaseRequest{Protocol: "vless", ProfileEmail: "device@xray-easy", SourceIp: "192.0.2.1", OperationId: "0123456789abcdef0123456789abcdef", SourceGeneration: "runtime-generation"}, &controllerv1.DisconnectLeaseResponse{}},
 		{"GetAmneziaWGStatus", &controllerv1.EmptyRequest{}, &controllerv1.AmneziaWGStatusResponse{}},
 		{"ListAmneziaWGPeers", &controllerv1.EmptyRequest{}, &controllerv1.ListAmneziaWGPeersResponse{}},
 		{"CreateAmneziaWGPeer", &controllerv1.CreateAmneziaWGPeerRequest{}, &controllerv1.AmneziaWGPeer{}},
@@ -112,12 +146,16 @@ func TestGeneratedRPCDispatchesEveryTypedMethod(t *testing.T) {
 		{"ExportAmneziaWGBackup", &controllerv1.EmptyRequest{}, &controllerv1.AmneziaWGBackupResponse{}},
 		{"RestoreAmneziaWGBackup", &controllerv1.RestoreAmneziaWGBackupRequest{}, &controllerv1.OperationResponse{}},
 	}
-	if got := controllerv1.File_controller_proto.Services().Get(0).Methods().Len(); got != len(cases)+1 {
+	if got := controllerv1.File_controller_proto.Services().Get(0).Methods().Len(); got != len(cases)+2 {
 		t.Fatalf("generated RPC descriptor methods=%d, test cases=%d", got, len(cases))
 	}
 	watch := controllerv1.File_controller_proto.Services().Get(0).Methods().ByName("WatchTelemetry")
 	if watch == nil || !watch.IsStreamingServer() {
 		t.Fatalf("WatchTelemetry descriptor is missing server streaming")
+	}
+	leaseWatch := controllerv1.File_controller_proto.Services().Get(0).Methods().ByName("WatchLeaseSnapshots")
+	if leaseWatch == nil || !leaseWatch.IsStreamingServer() {
+		t.Fatalf("WatchLeaseSnapshots descriptor is missing server streaming")
 	}
 	for _, test := range cases {
 		t.Run(test.method, func(t *testing.T) {

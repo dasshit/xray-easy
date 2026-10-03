@@ -726,6 +726,53 @@ func (w *wizard) trojan(ctx context.Context, cfg configuration) (configuration, 
 	}
 }
 
+// leaseService selects whether the optional Xray source-IP lease policy starts.
+func (w *wizard) leaseService(ctx context.Context, cfg configuration) (configuration, error) {
+	w.mu.Lock()
+	w.configPage = "lease-choice"
+	w.focus = 0
+	w.tlsSelection = 0
+	if cfg.leaseEnabled {
+		w.tlsSelection = 1
+	}
+	w.title = "Xray lease policy"
+	w.notice = ""
+	w.renderLocked()
+	w.mu.Unlock()
+
+	for {
+		key, err := w.key(ctx)
+		if err != nil {
+			return configuration{}, err
+		}
+		w.mu.Lock()
+		if (w.width < 64 || w.height < 22) && key.kind != keyEscape {
+			w.notice = "Enlarge the terminal before continuing."
+			w.renderLocked()
+			w.mu.Unlock()
+			continue
+		}
+		if key.kind == keyEscape {
+			w.mu.Unlock()
+			return configuration{}, errCancelled
+		}
+		switch key.kind {
+		case keyUp, keyLeft, keyDown, keyRight, keyTab:
+			w.tlsSelection = 1 - w.tlsSelection
+		case keyCharacter:
+			if key.char == '1' || key.char == '2' {
+				w.tlsSelection = int(key.char - '1')
+			}
+		case keyEnter:
+			cfg.leaseEnabled = w.tlsSelection == 1
+			w.mu.Unlock()
+			return cfg, nil
+		}
+		w.renderLocked()
+		w.mu.Unlock()
+	}
+}
+
 // ports performs the operation represented by its name.
 func (w *wizard) ports(ctx context.Context, publicDefault, uiDefault int) (int, int, error) {
 	defaults := [2]int{publicDefault, uiDefault}
@@ -996,6 +1043,12 @@ func (w *wizard) renderLocked() {
 				put(12, panelLine("  Type digits · Backspace edits · Enter keeps the shown value.", panelWidth), "dim")
 				put(14, panelLine("  Must differ from Xray, VMess, Shadowsocks, and Web UI ports.", panelWidth), "dim")
 				put(15, panelLine("  Allow this TCP port in the VDS firewall/security group.", panelWidth), "dim")
+			case "lease-choice":
+				put(9, panelLine("  Optional source-IP lease limit for Xray profiles", panelWidth), "normal")
+				put(11, panelLine("  "+optionText("Off", w.tlsSelection == 0), panelWidth), fieldStyle(w.tlsSelection == 0))
+				put(12, panelLine("  "+optionText("Enable: allow 2 leases, close the oldest after 30s", w.tlsSelection == 1), panelWidth), fieldStyle(w.tlsSelection == 1))
+				put(14, panelLine("  A third source IP closes the oldest lease immediately.", panelWidth), "dim")
+				put(15, panelLine("  This is source-IP sharing detection; AmneziaWG is unaffected.", panelWidth), "dim")
 			default:
 				put(10, panelLine("  Public Xray TCP / UDP port", panelWidth), "normal")
 				put(11, panelLine("  "+fieldText(w.fields[0], "443", w.focus == 0), panelWidth), fieldStyle(w.focus == 0))
@@ -1022,7 +1075,11 @@ func (w *wizard) renderLocked() {
 			if w.config.awgEnabled {
 				awgDescription = fmt.Sprintf("%s · UDP %d", w.config.awgPublicHost, w.config.awgPublicPort)
 			}
-			put(16, panelLine("  Hysteria 2: "+hysteriaDescription+" · AmneziaWG: "+awgDescription, panelWidth), "normal")
+			leaseDescription := "off"
+			if w.config.leaseEnabled {
+				leaseDescription = "2 leases · 30s grace"
+			}
+			put(16, panelLine("  Hysteria 2: "+hysteriaDescription+" · AmneziaWG: "+awgDescription+" · Xray leases: "+leaseDescription, panelWidth), "normal")
 			put(17, panelLine("  "+optionText("Build and start", w.choice), panelWidth), fieldStyle(w.choice))
 			put(18, panelLine("  "+optionText("Cancel", !w.choice), panelWidth), fieldStyle(!w.choice))
 		case 4:

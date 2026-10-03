@@ -10,10 +10,12 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
@@ -78,6 +80,118 @@ func TestDoctorOmitsAmneziaWGChecksWhenDisabled(t *testing.T) {
 	)
 	if findDoctorCheck(checks, "AmneziaWG service") != nil || findDoctorCheck(checks, "AmneziaWG UDP firewall") != nil {
 		t.Fatalf("disabled AmneziaWG produced checks: %+v", checks)
+	}
+}
+
+func TestDoctorLeaseServiceChecksAreConditionalAndReportHealth(t *testing.T) {
+	t.Setenv("XRAY_LEASE_SERVICE_ENABLED", "false")
+	t.Setenv("COMPOSE_PROFILES", "")
+	checks := collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
+	if findDoctorCheck(checks, "Xray lease service") != nil {
+		t.Fatalf("disabled lease service produced checks: %+v", checks)
+	}
+	t.Setenv("XRAY_LEASE_SERVICE_ENABLED", "true")
+	previousProbe := leaseHealthProbe
+	t.Cleanup(func() { leaseHealthProbe = previousProbe })
+	var address string
+	leaseHealthProbe = func(_ context.Context, got string) (leaseHealthStatus, error) {
+		address = got
+		return leaseHealthStatus{Ready: true, ControllerStreamConnected: true}, nil
+	}
+	checks = collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
+	if !hasDoctorCheck(checks, "Xray lease service", doctorPass) || address != "172.31.242.4:8091" {
+		t.Fatalf("healthy lease service check/address = %+v, %q", findDoctorCheck(checks, "Xray lease service"), address)
+	}
+	leaseHealthProbe = func(context.Context, string) (leaseHealthStatus, error) {
+		return leaseHealthStatus{ControllerStreamConnected: true}, nil
+	}
+	checks = collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "no-config"}}, &doctorHandlerStub{}, &doctorStatsStub{})
+	if !hasDoctorCheck(checks, "Xray lease service", doctorWarn) {
+		t.Fatalf("lease service awaiting first-run setup was not a warning: %+v", findDoctorCheck(checks, "Xray lease service"))
+	}
+	leaseHealthProbe = func(context.Context, string) (leaseHealthStatus, error) {
+		return leaseHealthStatus{}, errors.New("connection refused")
+	}
+	checks = collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
+	if !hasDoctorCheck(checks, "Xray lease service", doctorFail) {
+		t.Fatalf("disconnected lease service was not a failure: %+v", findDoctorCheck(checks, "Xray lease service"))
+	}
+}
+
+func TestLeaseServiceEnabledFromEnvironmentRecognizesComposeProfile(t *testing.T) {
+	t.Setenv("XRAY_LEASE_SERVICE_ENABLED", "false")
+	for _, profiles := range []string{"lease", "awg,lease", "awg, lease ,custom"} {
+		t.Setenv("COMPOSE_PROFILES", profiles)
+		if !leaseServiceEnabledFromEnvironment() {
+			t.Errorf("lease profile %q was not recognized", profiles)
+		}
+	}
+	t.Setenv("COMPOSE_PROFILES", "awg,custom")
+	if leaseServiceEnabledFromEnvironment() {
+		t.Fatal("disabled service was enabled without the lease Compose profile")
+	}
+	t.Setenv("XRAY_LEASE_SERVICE_ENABLED", "TRUE")
+	if !leaseServiceEnabledFromEnvironment() {
+		t.Fatal("enabled environment flag was ignored")
+	}
+}
+
+type doctorRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f doctorRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
+}
+
+func TestProbeLeaseServiceValidatesEndpointAndHealthPayload(t *testing.T) {
+	if _, err := probeLeaseService(context.Background(), "invalid host"); err == nil {
+		t.Fatal("invalid health endpoint address was accepted")
+	}
+	for _, test := range []struct {
+		name       string
+		status     int
+		body       string
+		transport  error
+		wantStatus bool
+	}{
+		{name: "healthy", status: http.StatusOK, body: `{"ready":true,"controllerStreamConnected":true}`},
+		{name: "non-success status", status: http.StatusServiceUnavailable, body: `{}`, wantStatus: true},
+		{name: "invalid payload", status: http.StatusOK, body: `not-json`},
+		{name: "transport failure", transport: errors.New("connection refused")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := &http.Client{Transport: doctorRoundTripFunc(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path != "/healthz" {
+					t.Errorf("health endpoint path=%q", request.URL.Path)
+				}
+				if test.transport != nil {
+					return nil, test.transport
+				}
+				return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
+			})}
+			health, err := probeLeaseServiceWithClient(context.Background(), "127.0.0.1:8091", client)
+			if test.name == "healthy" {
+				if err != nil || !health.Ready || !health.ControllerStreamConnected {
+					t.Fatalf("lease health=%+v error=%v", health, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("invalid lease health response was accepted")
+			}
+			if test.wantStatus && !strings.Contains(err.Error(), "HTTP 503") {
+				t.Fatalf("health error=%v", err)
+			}
+		})
+	}
+}
+
+func TestLeasePolicyFromEnvironmentValidatesAllDurations(t *testing.T) {
+	t.Setenv("XRAY_LEASE_MAX_ACTIVE", "2")
+	t.Setenv("XRAY_LEASE_GRACE", "30s")
+	t.Setenv("XRAY_LEASE_RETRY_DELAY", "1s")
+	config, err := leasePolicyFromEnvironment()
+	if err != nil || config.MaxActiveLeases != 2 || config.GracePeriod != 30*time.Second {
+		t.Fatalf("lease policy = %+v, %v", config, err)
 	}
 }
 

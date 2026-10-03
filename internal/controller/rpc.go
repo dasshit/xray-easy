@@ -4,14 +4,12 @@ package controller
 
 import (
 	"context"
-	"crypto/subtle"
 	"log/slog"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	controllerv1 "xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/interaction"
@@ -31,20 +29,29 @@ func RegisterRPC(registrar grpc.ServiceRegistrar, api RPCServer) {
 // AuthStreamInterceptor authenticates Controller server streams with the
 // same private bearer token used by its unary API.
 func AuthStreamInterceptor(token string) grpc.StreamServerInterceptor {
-	return func(server any, stream grpc.ServerStream, _ *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
-		values, ok := metadata.FromIncomingContext(stream.Context())
-		provided := ""
-		if ok {
-			if entries := values.Get("authorization"); len(entries) == 1 && strings.HasPrefix(entries[0], "Bearer ") {
-				provided = strings.TrimPrefix(entries[0], "Bearer ")
-			}
+	return AuthStreamInterceptorWithLeaseToken(token, "")
+}
+
+// AuthStreamInterceptorWithLeaseToken authenticates Controller streams with
+// separate administrator and lease-service identities.
+func AuthStreamInterceptorWithLeaseToken(token, leaseToken string) grpc.StreamServerInterceptor {
+	return func(server any, stream grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
+		identity, err := controllerIdentity(stream.Context(), info.FullMethod, token, leaseToken)
+		if err != nil {
+			return err
 		}
-		if len(provided) != len(token) || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
-			return status.Error(codes.Unauthenticated, "invalid Controller token")
-		}
-		return handler(server, stream)
+		return handler(server, &controllerIdentityServerStream{ServerStream: stream, ctx: context.WithValue(stream.Context(), controllerIdentityContextKey{}, identity)})
 	}
 }
+
+// controllerIdentityServerStream exposes the authenticated identity in stream context.
+type controllerIdentityServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+// Context returns the stream context annotated with the authenticated caller.
+func (s *controllerIdentityServerStream) Context() context.Context { return s.ctx }
 
 // LoggingStreamInterceptor logs stream completion metadata without payloads.
 func LoggingStreamInterceptor(service string) grpc.StreamServerInterceptor {
@@ -55,7 +62,11 @@ func LoggingStreamInterceptor(service string) grpc.StreamServerInterceptor {
 		}
 		started := time.Now()
 		err := handler(server, &controllerContextServerStream{ServerStream: stream, ctx: ctx})
-		interaction.LogRPC(slog.Default(), service, info.FullMethod, requestID, "runtime", started, err, interaction.TraceFromContext(ctx))
+		protocol := "runtime"
+		if strings.Contains(info.FullMethod, "Lease") {
+			protocol = "lease"
+		}
+		interaction.LogRPC(slog.Default(), service, info.FullMethod, requestID, protocol, started, err, interaction.TraceFromContext(ctx))
 		return err
 	}
 }

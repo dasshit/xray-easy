@@ -17,20 +17,68 @@ import (
 
 // AuthInterceptor requires the private Controller bearer token.
 func AuthInterceptor(token string) grpc.UnaryServerInterceptor {
+	return AuthInterceptorWithLeaseToken(token, "")
+}
+
+// AuthInterceptorWithLeaseToken authenticates the administrator token for all
+// methods and a separate lease token for the small lease-service method set.
+func AuthInterceptorWithLeaseToken(token, leaseToken string) grpc.UnaryServerInterceptor {
 	return func(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-		values, ok := metadata.FromIncomingContext(ctx)
-		if !ok {
-			return nil, status.Error(codes.Unauthenticated, "missing Controller token")
+		identity, err := controllerIdentity(ctx, info.FullMethod, token, leaseToken)
+		if err != nil {
+			return nil, err
 		}
-		entries := values.Get("authorization")
-		provided := ""
-		if len(entries) == 1 && strings.HasPrefix(entries[0], "Bearer ") {
-			provided = strings.TrimPrefix(entries[0], "Bearer ")
+		return handler(context.WithValue(ctx, controllerIdentityContextKey{}, identity), request)
+	}
+}
+
+// controllerIdentityContextKey stores the authenticated Controller caller.
+type controllerIdentityContextKey struct{}
+
+// ControllerIdentityFromContext returns the authenticated Controller caller.
+func ControllerIdentityFromContext(ctx context.Context) string {
+	identity, _ := ctx.Value(controllerIdentityContextKey{}).(string)
+	return identity
+}
+
+// controllerIdentity validates the bearer token and applies the lease method ACL.
+func controllerIdentity(ctx context.Context, method, adminToken, leaseToken string) (string, error) {
+	values, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return "", status.Error(codes.Unauthenticated, "missing Controller token")
+	}
+	entries := values.Get("authorization")
+	provided := ""
+	if len(entries) == 1 && strings.HasPrefix(entries[0], "Bearer ") {
+		provided = strings.TrimPrefix(entries[0], "Bearer ")
+	}
+	if validControllerToken(provided, adminToken) {
+		return "admin", nil
+	}
+	if validControllerToken(provided, leaseToken) {
+		if !leaseMethodAllowed(method) {
+			return "", status.Error(codes.PermissionDenied, "lease-service identity cannot call this method")
 		}
-		if len(provided) != len(token) || subtle.ConstantTimeCompare([]byte(provided), []byte(token)) != 1 {
-			return nil, status.Error(codes.Unauthenticated, "invalid Controller token")
-		}
-		return handler(ctx, request)
+		return "lease-service", nil
+	}
+	return "", status.Error(codes.Unauthenticated, "invalid Controller token")
+}
+
+// validControllerToken compares a supplied bearer token without timing leaks.
+func validControllerToken(provided, expected string) bool {
+	return expected != "" && len(provided) == len(expected) && subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
+}
+
+// leaseMethodAllowed limits the dedicated lease identity to read/enforcement RPCs.
+func leaseMethodAllowed(method string) bool {
+	switch method {
+	case "/xrayeasy.controller.v1.Controller/Health",
+		"/xrayeasy.controller.v1.Controller/GetCapabilities",
+		"/xrayeasy.controller.v1.Controller/WatchLeaseSnapshots",
+		"/xrayeasy.controller.v1.Controller/DisconnectLease":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -50,6 +98,9 @@ func LoggingInterceptor(service string) grpc.UnaryServerInterceptor {
 
 // protocolForRPC performs the operation represented by its name.
 func protocolForRPC(method string, request any) string {
+	if strings.Contains(method, "Lease") {
+		return "lease"
+	}
 	if strings.Contains(method, "AmneziaWG") {
 		return "amneziawg"
 	}
@@ -70,7 +121,7 @@ func protocolForRPC(method string, request any) string {
 // safeProtocolName performs the operation represented by its name.
 func safeProtocolName(protocol string) string {
 	switch protocol {
-	case "vless", "vmess", "hysteria2", "amneziawg":
+	case "vless", "vmess", "hysteria2", "shadowsocks", "trojan", "amneziawg":
 		return protocol
 	default:
 		return "xray"

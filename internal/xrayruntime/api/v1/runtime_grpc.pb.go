@@ -30,6 +30,7 @@ const (
 	Runtime_RemoveUser_FullMethodName            = "/xrayeasy.xray.v1.Runtime/RemoveUser"
 	Runtime_ListUsers_FullMethodName             = "/xrayeasy.xray.v1.Runtime/ListUsers"
 	Runtime_SetLogLevel_FullMethodName           = "/xrayeasy.xray.v1.Runtime/SetLogLevel"
+	Runtime_DisconnectLease_FullMethodName       = "/xrayeasy.xray.v1.Runtime/DisconnectLease"
 	Runtime_GetTelemetry_FullMethodName          = "/xrayeasy.xray.v1.Runtime/GetTelemetry"
 	Runtime_WatchTelemetry_FullMethodName        = "/xrayeasy.xray.v1.Runtime/WatchTelemetry"
 	Runtime_WatchEvents_FullMethodName           = "/xrayeasy.xray.v1.Runtime/WatchEvents"
@@ -55,6 +56,7 @@ type RuntimeClient interface {
 	RemoveUser(ctx context.Context, in *RemoveUserRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	ListUsers(ctx context.Context, in *ListUsersRequest, opts ...grpc.CallOption) (*ListUsersResponse, error)
 	SetLogLevel(ctx context.Context, in *SetLogLevelRequest, opts ...grpc.CallOption) (*OperationResponse, error)
+	DisconnectLease(ctx context.Context, in *DisconnectLeaseRequest, opts ...grpc.CallOption) (*DisconnectLeaseResponse, error)
 	GetTelemetry(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*TelemetryResponse, error)
 	WatchTelemetry(ctx context.Context, in *WatchTelemetryRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[TelemetryResponse], error)
 	WatchEvents(ctx context.Context, in *WatchEventsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[RuntimeEvent], error)
@@ -180,6 +182,16 @@ func (c *runtimeClient) SetLogLevel(ctx context.Context, in *SetLogLevelRequest,
 	return out, nil
 }
 
+func (c *runtimeClient) DisconnectLease(ctx context.Context, in *DisconnectLeaseRequest, opts ...grpc.CallOption) (*DisconnectLeaseResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DisconnectLeaseResponse)
+	err := c.cc.Invoke(ctx, Runtime_DisconnectLease_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *runtimeClient) GetTelemetry(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*TelemetryResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(TelemetryResponse)
@@ -266,6 +278,7 @@ type RuntimeServer interface {
 	RemoveUser(context.Context, *RemoveUserRequest) (*OperationResponse, error)
 	ListUsers(context.Context, *ListUsersRequest) (*ListUsersResponse, error)
 	SetLogLevel(context.Context, *SetLogLevelRequest) (*OperationResponse, error)
+	DisconnectLease(context.Context, *DisconnectLeaseRequest) (*DisconnectLeaseResponse, error)
 	GetTelemetry(context.Context, *EmptyRequest) (*TelemetryResponse, error)
 	WatchTelemetry(*WatchTelemetryRequest, grpc.ServerStreamingServer[TelemetryResponse]) error
 	WatchEvents(*WatchEventsRequest, grpc.ServerStreamingServer[RuntimeEvent]) error
@@ -313,6 +326,9 @@ func (UnimplementedRuntimeServer) ListUsers(context.Context, *ListUsersRequest) 
 }
 func (UnimplementedRuntimeServer) SetLogLevel(context.Context, *SetLogLevelRequest) (*OperationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method SetLogLevel not implemented")
+}
+func (UnimplementedRuntimeServer) DisconnectLease(context.Context, *DisconnectLeaseRequest) (*DisconnectLeaseResponse, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method DisconnectLease not implemented")
 }
 func (UnimplementedRuntimeServer) GetTelemetry(context.Context, *EmptyRequest) (*TelemetryResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method GetTelemetry not implemented")
@@ -548,6 +564,24 @@ func _Runtime_SetLogLevel_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Runtime_DisconnectLease_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DisconnectLeaseRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RuntimeServer).DisconnectLease(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Runtime_DisconnectLease_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RuntimeServer).DisconnectLease(ctx, req.(*DisconnectLeaseRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Runtime_GetTelemetry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(EmptyRequest)
 	if err := dec(in); err != nil {
@@ -674,6 +708,10 @@ var Runtime_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SetLogLevel",
 			Handler:    _Runtime_SetLogLevel_Handler,
+		},
+		{
+			MethodName: "DisconnectLease",
+			Handler:    _Runtime_DisconnectLease_Handler,
 		},
 		{
 			MethodName: "GetTelemetry",

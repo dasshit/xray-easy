@@ -23,7 +23,7 @@ func TestInstallerSelectsMkcertIPv4AndPreservesItOnRetry(t *testing.T) {
 	root := t.TempDir()
 	runner := &fakeRunner{}
 	var output bytes.Buffer
-	if err := run(context.Background(), root, strings.NewReader("\n\n2\n89.169.13.234\n\n\n\n\n"), &output, runner); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("\n\n2\n89.169.13.234\n\n\n\n\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
 	before := readPrivateFile(t, filepath.Join(root, ".env"))
@@ -35,7 +35,7 @@ func TestInstallerSelectsMkcertIPv4AndPreservesItOnRetry(t *testing.T) {
 		t.Fatalf("mkcert mode was not saved: %#v", values)
 	}
 	runner.calls = nil
-	if err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n\n\n"), &output, runner); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n\n\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
 	if got := readPrivateFile(t, filepath.Join(root, ".env")); got != before {
@@ -54,13 +54,13 @@ func TestInstallerCanSwitchExistingHysteriaModeWithoutChangingMasterKey(t *testi
 	root := t.TempDir()
 	runner := &fakeRunner{}
 	var output bytes.Buffer
-	if err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n\n\n"), &output, runner); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("\n\n\n\n\n\n\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
 	before := readPrivateFile(t, filepath.Join(root, ".env"))
 	key := strings.Split(strings.Split(before, "XRAY_EASY_MASTER_KEY=")[1], "\n")[0]
 	runner.calls = nil
-	if err := run(context.Background(), root, strings.NewReader("2\n89.169.13.234\n\n\n\n\n"), &output, runner); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("2\n89.169.13.234\n\n\n\n\n\n"), &output, runner); err != nil {
 		t.Fatal(err)
 	}
 	after := readPrivateFile(t, filepath.Join(root, ".env"))
@@ -100,7 +100,7 @@ func TestLegacyHysteriaRequiresExplicitCertificateChoice(t *testing.T) {
 	if got := readPrivateFile(t, envPath); got != legacy {
 		t.Fatal("incomplete selection changed the legacy environment")
 	}
-	if err := run(context.Background(), root, strings.NewReader("2\n89.169.13.234\n\n\n\n\n"), &output, &fakeRunner{}); err != nil {
+	if err := run(context.Background(), root, strings.NewReader("2\n89.169.13.234\n\n\n\n\n\n"), &output, &fakeRunner{}); err != nil {
 		t.Fatal(err)
 	}
 	if got := readPrivateFile(t, envPath); !strings.Contains(got, "XRAY_HYSTERIA2_TLS_MODE=self-signed\n") {
@@ -149,7 +149,7 @@ func TestInstallerRejectsInvalidCustomCertificateBeforeSavingEnvironment(t *test
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	input := "\n\n3\n" + certPath + "\n" + keyPath + "\nvpn.example.com\n\n\n\n\n"
+	input := "\n\n3\n" + certPath + "\n" + keyPath + "\nvpn.example.com\n\n\n\n\n\n"
 	if err := run(context.Background(), root, strings.NewReader(input), &output, &fakeRunner{}); err == nil || !strings.Contains(err.Error(), "certificate and key are invalid") {
 		t.Fatalf("invalid PEM error: %v", err)
 	}
@@ -203,7 +203,7 @@ func TestInstallerImportsAndRenewsCustomCertificate(t *testing.T) {
 	writeCertificate()
 	runner := &fakeRunner{}
 	var output bytes.Buffer
-	input := "\n\n3\n" + certPath + "\n" + keyPath + "\nvpn.example.com\n\n\n\n\n"
+	input := "\n\n3\n" + certPath + "\n" + keyPath + "\nvpn.example.com\n\n\n\n\n\n"
 	if err := run(context.Background(), root, strings.NewReader(input), &output, runner); err != nil {
 		t.Fatal(err)
 	}
@@ -221,7 +221,7 @@ func TestInstallerImportsAndRenewsCustomCertificate(t *testing.T) {
 	}
 	writeCertificate()
 	runner.calls = nil
-	input = "\n" + certPath + "\n" + keyPath + "\n\n\n\n\n\n"
+	input = "\n" + certPath + "\n" + keyPath + "\n\n\n\n\n\n\n"
 	if err := run(context.Background(), root, strings.NewReader(input), &output, runner); err != nil {
 		t.Fatal(err)
 	}

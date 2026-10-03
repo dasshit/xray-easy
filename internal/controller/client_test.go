@@ -301,3 +301,70 @@ func TestClientOpensAuthenticatedTelemetryStreamAndClampsInterval(t *testing.T) 
 		}
 	}
 }
+
+type leaseControllerAPIServer struct {
+	controllerv1.UnimplementedControllerServer
+	leaseToken string
+	request    *controllerv1.DisconnectLeaseRequest
+}
+
+func (s *leaseControllerAPIServer) DisconnectLease(ctx context.Context, request *controllerv1.DisconnectLeaseRequest) (*controllerv1.DisconnectLeaseResponse, error) {
+	values, _ := metadata.FromIncomingContext(ctx)
+	if got := values.Get("authorization"); len(got) != 1 || got[0] != "Bearer "+s.leaseToken {
+		return nil, status.Error(codes.Unauthenticated, "lease token missing")
+	}
+	s.request = request
+	return &controllerv1.DisconnectLeaseResponse{ClosedConnections: 2, AlreadyApplied: true}, nil
+}
+
+func (s *leaseControllerAPIServer) WatchLeaseSnapshots(_ *controllerv1.EmptyRequest, stream controllerv1.Controller_WatchLeaseSnapshotsServer) error {
+	values, _ := metadata.FromIncomingContext(stream.Context())
+	if got := values.Get("authorization"); len(got) != 1 || got[0] != "Bearer "+s.leaseToken {
+		return status.Error(codes.Unauthenticated, "lease token missing")
+	}
+	return stream.Send(&controllerv1.LeaseSnapshot{SourceAvailable: true, FullSnapshot: true, SourceGeneration: "runtime-generation", SourceSequence: 4})
+}
+
+func TestClientUsesRestrictedLeaseControllerRPCs(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	adminToken, leaseToken := "admin-secret", "lease-secret"
+	server := grpc.NewServer(
+		grpc.ChainUnaryInterceptor(LoggingInterceptor("controller-test"), AuthInterceptorWithLeaseToken(adminToken, leaseToken)),
+		grpc.ChainStreamInterceptor(LoggingStreamInterceptor("controller-test"), AuthStreamInterceptorWithLeaseToken(adminToken, leaseToken)),
+	)
+	stub := &leaseControllerAPIServer{leaseToken: leaseToken}
+	controllerv1.RegisterControllerServer(server, stub)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	connection, err := grpc.NewClient("passthrough:///controller-lease-test", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	client := NewClientWithConn(connection, leaseToken)
+	request := &controllerv1.DisconnectLeaseRequest{Protocol: "vless", ProfileEmail: "ios@xray-easy", SourceIp: "192.0.2.14", OperationId: "0123456789abcdef0123456789abcdef", SourceGeneration: "runtime-generation"}
+	response, err := client.DisconnectLease(context.Background(), request)
+	if err != nil || response.GetClosedConnections() != 2 || !response.GetAlreadyApplied() || stub.request.GetOperationId() != request.GetOperationId() {
+		t.Fatalf("DisconnectLease response=%+v request=%+v error=%v", response, stub.request, err)
+	}
+	if _, err := client.DisconnectLease(context.Background(), nil); err == nil {
+		t.Fatal("nil DisconnectLease request was accepted")
+	}
+	stream, err := client.WatchLeaseSnapshots(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot, err := stream.Recv()
+	if err != nil || snapshot.GetSourceSequence() != 4 || !snapshot.GetFullSnapshot() {
+		t.Fatalf("lease snapshot=%+v error=%v", snapshot, err)
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatalf("lease stream completion=%v, want EOF", err)
+	}
+	if err := client.Health(context.Background()); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("lease token health result=%v, want unimplemented", err)
+	}
+	if _, err := NewClientWithConn(&staticInvoker{}, leaseToken).WatchLeaseSnapshots(context.Background()); err == nil {
+		t.Fatal("lease stream opened without a streaming connection")
+	}
+}

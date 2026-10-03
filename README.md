@@ -66,8 +66,9 @@ cd xray-easy
 
 The installer opens a full-screen terminal wizard. It checks Docker, guides
 you through the public and panel ports, optional Hysteria 2 TLS and optional
-AmneziaWG, then creates the secrets, pulls the service images, starts Compose
-and runs the final health check. Use **↑/↓** or **Tab** to move, **Enter** to
+AmneziaWG and optional Xray source-IP lease enforcement, then creates the
+secrets, pulls the service images, starts Compose and runs the final health
+check. Lease enforcement is off by default and can be enabled in the wizard. Use **↑/↓** or **Tab** to move, **Enter** to
 continue, **Esc** to cancel and **Ctrl+C** to stop. If pulling the installer
 image fails, `install.sh` builds that image locally. If pulling service images
 fails, the wizard builds the services locally from this checkout.
@@ -111,10 +112,11 @@ Security page after the first login.
 ## Docker services
 
 Compose separates the public control plane from the VPN runtimes. The runtime
-gRPC endpoints and the Controller are reachable only on private Docker
-networks; the only published application port is the Web UI on the VPS
-loopback interface. `amneziawg-service` is started only when the `awg` Compose
-profile is enabled. The administrator's browser reaches the panel through an
+gRPC endpoints, Controller, and optional lease policy service are reachable
+only on private Docker networks; the only published application port is the Web
+UI on the VPS loopback interface. `amneziawg-service` is started only with the
+`awg` Compose profile. `xray-lease-service` is off by default and starts with
+the `lease` profile when selected in the installer. The administrator's browser reaches the panel through an
 SSH tunnel, while VPN client devices use the public Xray or AmneziaWG ports.
 
 ```mermaid
@@ -122,6 +124,7 @@ flowchart LR
     classDef admin fill:#f3e8ff,stroke:#7c3aed,color:#3b0764,stroke-width:2px;
     classDef client fill:#e8f0ff,stroke:#4c6ef5,color:#172033,stroke-width:1px;
     classDef control fill:#e0f2fe,stroke:#0284c7,color:#0c4a6e,stroke-width:2px;
+    classDef policy fill:#fff0f6,stroke:#c2255c,color:#5f1230,stroke-width:2px;
     classDef runtime fill:#e7f8ef,stroke:#2b8a3e,color:#183c23,stroke-width:2px;
     classDef bootstrap fill:#f5f5f5,stroke:#777,color:#222,stroke-dasharray:4 3;
     classDef network fill:#fff3bf,stroke:#e67700,color:#4d2d00,stroke-width:2px;
@@ -137,6 +140,7 @@ flowchart LR
         direction TB
         ui[[control-plane]]:::control
         controller[[controller]]:::control
+        lease[[xray-lease-service]]:::policy
     end
 
     subgraph runtimes [VPN runtimes]
@@ -151,6 +155,7 @@ flowchart LR
         runtimeAuth[/runtime-auth-init/]:::bootstrap
         runtimeState[/runtime-state-init/]:::bootstrap
         controllerAuth[/controller-auth-init/]:::bootstrap
+        leaseAuth[/lease-auth-init/]:::bootstrap
         awgAuth[/awg-auth-init/]:::bootstrap
         tlsInit[/hysteria-tls-init/]:::bootstrap
         awgData[/awg-data-init/]:::bootstrap
@@ -161,6 +166,7 @@ flowchart LR
 
     admin -->|SSH tunnel| ui
     ui <-->|Authenticated control gRPC| controller
+    controller <-->|Restricted lease gRPC| lease
     controller <-->|Xray runtime gRPC| xray
     controller <-->|AWG control gRPC| awg
 
@@ -169,6 +175,8 @@ flowchart LR
     runtimeState -.-> xray
     tlsInit -.-> xray
     controllerAuth -.-> controller
+    leaseAuth -.-> controller
+    leaseAuth -.-> lease
     runtimeAuth -.-> controller
     awgAuth -.-> controller
     awgData -.-> awg
@@ -191,6 +199,7 @@ bootstrap dependencies; solid arrows show runtime traffic or control calls.
 | --- | --- |
 | `control-plane` | Serves the authenticated Web UI and HTTP API, stores devices and settings in SQLite, prepares Xray configuration, and forwards management and telemetry calls through the Controller. Its port is bound to the VPS loopback interface. |
 | `controller` | Internal protocol adapter. It exposes the stable application gRPC contract, validates revisions, routes commands to the embedded Xray runtime and optional AmneziaWG service, and aggregates health, statistics and telemetry. |
+| `xray-lease-service` | Optional source-IP sharing policy for VLESS, VMess and Trojan. It consumes full Controller snapshots and can request an exact TCP source-lease disconnect through a lease-only gRPC identity. Enable it with the `lease` Compose profile. |
 | `xray-core-service` | Runs the pinned Xray-core version inside the embedded runtime, serves Xray's management APIs through the runtime wrapper, applies active configuration revisions, and carries VLESS, VMess, Hysteria 2, Shadowsocks and Trojan traffic. |
 | `amneziawg-service` | Optional AmneziaWG engine. It owns the TUN interface, peer lifecycle and WireGuard telemetry. Enable it with the `awg` Compose profile. |
 | `hysteria-tls-init` | One-shot certificate preparation job. It creates or copies the Hysteria 2 certificate into the shared volume before Xray starts. |
@@ -198,6 +207,7 @@ bootstrap dependencies; solid arrows show runtime traffic or control calls.
 | `runtime-auth-init` | Generates and protects the token used to authenticate calls to the Xray runtime. |
 | `runtime-state-init` | Creates the runtime state directory used to persist the applied configuration revision. |
 | `controller-auth-init` | Generates and protects the token used by the control plane and Controller gRPC clients. |
+| `lease-auth-init` | Generates a separate token restricted to lease snapshots and exact lease disconnects. |
 | `awg-auth-init` | Generates and protects the token used for Controller-to-AmneziaWG gRPC calls. It also runs when AWG is disabled so the main stack has a consistent dependency graph. |
 | `awg-data-init` | Optional one-shot job that prepares ownership and permissions for the persistent AmneziaWG data volume. |
 
@@ -241,6 +251,7 @@ other versions as experimental until tested with your clients.
 | --- | --- | --- |
 | VLESS | TCP/RAW + REALITY + XTLS Vision | QR, VLESS link, JSON |
 | Hysteria 2 | UDP + TLS | QR, hysteria2 link |
+| Trojan | TCP + TLS | QR, trojan link, JSON |
 | VMess | TCP + TLS, alterId 0 | QR, vmess link, JSON |
 | Shadowsocks | TCP/UDP + Shadowsocks 2022 | QR, ss link, JSON |
 
@@ -342,6 +353,24 @@ keep normal TLS verification. `allowInsecure` is not exported. Users are
 added and removed through the live HandlerService when the inbound is already
 running, so routine profile changes do not restart Xray.
 
+### Xray source-IP lease policy
+
+The optional `xray-lease-service` detects profile sharing by source IP. It
+currently applies only to VLESS, VMess and Trojan TCP connections, where the
+runtime can close the exact authenticated connection without revoking the
+profile. Hysteria 2, Shadowsocks and AmneziaWG are not affected.
+
+One profile may have two active source-IP leases. When a second source appears,
+both are allowed for 30 seconds; if both remain, the oldest lease is closed. A
+third source closes the oldest immediately and keeps the two newer leases. This
+is network-source tracking, not device identity: two devices behind the same
+NAT appear as one lease, while one device switching networks can appear as two.
+
+The 15-second offline window is currently measured per profile by Xray traffic
+counters. Xray does not expose a separate per-source traffic clock, so an idle
+source whose connection remains open can stay listed while another source for
+the same profile continues to send traffic.
+
 ### Xray status and troubleshooting
 
 Profiles show online/last-seen state, cumulative upload/download, current
@@ -350,7 +379,8 @@ it. While the authenticated Web UI is open, Xray and AmneziaWG publish telemetry
 through a shared gRPC stream about once per second, which the existing SSE
 connection forwards to the page. A client is online while its user-data
 counters have advanced within the last 15 seconds; an idle open tunnel does not
-keep it online. When no Web UI SSE clients are connected, the backend keeps its
+keep it online. The optional lease policy uses the same profile-level online
+window to remove source observations after traffic stops. When no Web UI SSE clients are connected, the backend keeps its
 10-second poll to continue saving traffic totals in SQLite. If a VPN service
 restarts between polls while the UI is closed, traffic since the previous poll
 can be lost because service counters are process-local.
@@ -596,7 +626,7 @@ npm run typecheck
 npm run build
 ~~~
 
-Push a version tag such as `v1.2.3` to publish the five service images and the
+Push a version tag such as `v1.2.3` to publish the six service images and the
 installer image into GitHub Container Registry. The workflow publishes one
 package per component under `ghcr.io/dasshit/xray-easy/<component>` and tags it
 `1.2.3`, `v1.2.3`, and `latest` after all test jobs pass. It uses the workflow's
@@ -608,13 +638,14 @@ login.
 Package visibility is independent from the source repository's visibility.
 The default GHCR owner is `dasshit`; set `XRAY_EASY_IMAGE_NAMESPACE` in `.env`
 to use another owner with the same package layout. GHCR packages include the
-Xray runtime, Controller, web
-backend, optional AmneziaWG service, Hysteria TLS initializer and installer:
+Xray runtime, Controller, web backend, optional lease and AmneziaWG services,
+Hysteria TLS initializer and installer:
 
 | Compose service | GHCR image |
 | --- | --- |
 | `control-plane` | `ghcr.io/dasshit/xray-easy/control-plane:latest` |
 | `controller` | `ghcr.io/dasshit/xray-easy/controller:latest` |
+| `xray-lease-service` | `ghcr.io/dasshit/xray-easy/lease-service:latest` |
 | `xray-core-service` | `ghcr.io/dasshit/xray-easy/xray-core-service:latest` |
 | `amneziawg-service` | `ghcr.io/dasshit/xray-easy/amneziawg-service:latest` |
 | `hysteria-tls-init` | `ghcr.io/dasshit/xray-easy/hysteria-tls-init:latest` |

@@ -7,14 +7,16 @@ import (
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 )
 
-// RuntimeIPObservation describes a currently tracked client address. The Xray
-// online map drops the address when its last connection closes, so callers
-// must not treat this as historical source-IP data.
+// RuntimeIPObservation describes an address associated with a current Xray
+// connection or online-map entry. It is not historical source-IP data.
 type RuntimeIPObservation struct {
 	// Address is the endpoint address observed by the runtime.
 	Address string
-	// LastSeen is the last time the runtime observed traffic.
+	// LastSeen is the latest Xray online-map observation, or the source lease's
+	// connection time when only the active-connection registry has an entry.
 	LastSeen time.Time
+	// ConnectedAt is when this continuous source-IP lease first opened.
+	ConnectedAt time.Time
 }
 
 // RuntimeUserTelemetry combines a configured-user roster entry with whatever
@@ -30,7 +32,7 @@ type RuntimeUserTelemetry struct {
 	DownloadBytes int64
 	// Online is whether the client is currently online.
 	Online bool
-	// LastSeen is the last time the runtime observed traffic.
+	// LastSeen is the latest observed profile traffic time.
 	LastSeen time.Time
 	// SourceIPs is the source IP observations associated with the client.
 	SourceIPs []RuntimeIPObservation

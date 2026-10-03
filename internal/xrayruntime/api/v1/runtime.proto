@@ -20,6 +20,7 @@ service Runtime {
   rpc RemoveUser(RemoveUserRequest) returns (OperationResponse);
   rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
   rpc SetLogLevel(SetLogLevelRequest) returns (OperationResponse);
+  rpc DisconnectLease(DisconnectLeaseRequest) returns (DisconnectLeaseResponse);
   rpc GetTelemetry(EmptyRequest) returns (TelemetryResponse);
   rpc WatchTelemetry(WatchTelemetryRequest) returns (stream TelemetryResponse);
   rpc WatchEvents(WatchEventsRequest) returns (stream RuntimeEvent);
@@ -75,6 +76,21 @@ message ProtocolCapability {
   bool online_status = 5;
   bool source_ip = 6;
   string inbound_tag = 7;
+  bool lease_disconnect = 8;
+}
+
+message DisconnectLeaseRequest {
+  Protocol protocol = 1;
+  string email = 2;
+  string source_ip = 3;
+  string operation_id = 4;
+  string source_generation = 5;
+}
+
+message DisconnectLeaseResponse {
+  string operation_id = 1;
+  uint32 closed_connections = 2;
+  bool already_applied = 3;
 }
 
 message CapabilitiesResponse {
@@ -163,6 +179,7 @@ message RuntimeEvent {
 message IPObservation {
   string address = 1;
   google.protobuf.Timestamp last_seen = 2;
+  google.protobuf.Timestamp connected_at = 3;
 }
 
 message UserTelemetry {

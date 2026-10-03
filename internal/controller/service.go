@@ -3,6 +3,7 @@ package controller
 import (
 	"context"
 	"encoding/hex"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/xrayapi"
+	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -79,6 +81,13 @@ type XrayLogRuntime interface {
 	SetLogLevel(context.Context, string) error
 }
 
+// XrayLeaseRuntime performs the narrowly scoped disconnect operation exposed
+// to the lease service.
+type XrayLeaseRuntime interface {
+	// DisconnectLease closes the active connection(s) for the given source lease.
+	DisconnectLease(context.Context, *xrayruntimev1.DisconnectLeaseRequest) (*xrayruntimev1.DisconnectLeaseResponse, error)
+}
+
 // AmneziaWGRuntime owns AmneziaWG peer lifecycle and credential-bearing
 // profiles. Controller returns private material only on explicit delivery or
 // backup calls and never logs it.
@@ -101,16 +110,21 @@ type Service struct {
 	awg            AmneziaWGRuntime
 	now            func() time.Time
 	userMutationMu sync.Mutex
+	telemetryHub   *telemetryHub
 }
 
 // NewService creates a Controller backed by the Xray runtime adapter.
 func NewService(xray XrayRuntime) *Service {
-	return &Service{xray: xray, now: time.Now}
+	service := &Service{xray: xray, now: time.Now}
+	service.telemetryHub = newTelemetryHub(service)
+	return service
 }
 
 // NewServiceWithAdapters composes the configured protocol runtime adapters.
 func NewServiceWithAdapters(xray XrayRuntime, handler XrayHandlerRuntime, stats XrayStatsRuntime, awg AmneziaWGRuntime) *Service {
-	return &Service{xray: xray, handler: handler, stats: stats, awg: awg, now: time.Now}
+	service := &Service{xray: xray, handler: handler, stats: stats, awg: awg, now: time.Now}
+	service.telemetryHub = newTelemetryHub(service)
+	return service
 }
 
 // Health performs the operation represented by its name.
@@ -131,6 +145,55 @@ func (s *Service) GetCapabilities(context.Context, *controllerv1.EmptyRequest) (
 		Xray:      &controllerv1.ProtocolCapability{Configured: s != nil && s.xray != nil, Protocols: []string{"vless", "vmess", "hysteria2", "shadowsocks", "trojan"}},
 		Amneziawg: &controllerv1.ProtocolCapability{Configured: s != nil && s.awg != nil, Protocols: []string{"amneziawg"}},
 	}, nil
+}
+
+// DisconnectLease asks the embedded runtime to close connections for one
+// authenticated Xray profile and source-IP lease.
+func (s *Service) DisconnectLease(ctx context.Context, request *controllerv1.DisconnectLeaseRequest) (*controllerv1.DisconnectLeaseResponse, error) {
+	if request == nil {
+		return nil, status.Error(codes.InvalidArgument, "lease disconnect request is required")
+	}
+	protocol := strings.ToLower(strings.TrimSpace(request.GetProtocol()))
+	if !leaseProtocolSupported(protocol) {
+		return nil, status.Error(codes.Unimplemented, "lease disconnect is unsupported for this protocol")
+	}
+	email := strings.TrimSpace(request.GetProfileEmail())
+	if email == "" || len(email) > 256 || strings.ContainsAny(email, "\r\n\x00") {
+		return nil, status.Error(codes.InvalidArgument, "lease profile identity is invalid")
+	}
+	operationID := strings.ToLower(strings.TrimSpace(request.GetOperationId()))
+	operation, decodeErr := hex.DecodeString(operationID)
+	if len(operationID) != 32 || decodeErr != nil || len(operation) != 16 {
+		return nil, status.Error(codes.InvalidArgument, "operation_id must be a 128-bit hexadecimal ID")
+	}
+	if strings.TrimSpace(request.GetSourceGeneration()) == "" || len(request.GetSourceGeneration()) > 128 {
+		return nil, status.Error(codes.InvalidArgument, "source generation is required")
+	}
+	address, err := netip.ParseAddr(strings.TrimSpace(request.GetSourceIp()))
+	if err != nil || address.Zone() != "" {
+		return nil, status.Error(codes.InvalidArgument, "source_ip must be an IP address without a zone")
+	}
+	runtime, ok := s.xray.(XrayLeaseRuntime)
+	if !ok {
+		return nil, status.Error(codes.Unimplemented, "Xray lease disconnect is unavailable")
+	}
+	protocolValue := map[string]xrayruntimev1.Protocol{"vless": xrayruntimev1.Protocol_PROTOCOL_VLESS, "vmess": xrayruntimev1.Protocol_PROTOCOL_VMESS, "trojan": xrayruntimev1.Protocol_PROTOCOL_TROJAN}[protocol]
+	result, err := runtime.DisconnectLease(ctx, &xrayruntimev1.DisconnectLeaseRequest{
+		Protocol: protocolValue, Email: email, SourceIp: address.Unmap().String(),
+		OperationId: operationID, SourceGeneration: strings.TrimSpace(request.GetSourceGeneration()),
+	})
+	if err != nil {
+		switch status.Code(err) {
+		case codes.Aborted, codes.InvalidArgument, codes.Unimplemented, codes.Unavailable, codes.DeadlineExceeded, codes.Canceled:
+			return nil, err
+		default:
+			return nil, status.Error(codes.Internal, "could not disconnect the requested lease")
+		}
+	}
+	if result == nil || result.GetOperationId() != operationID {
+		return nil, status.Error(codes.Internal, "Xray runtime returned an invalid lease disconnect response")
+	}
+	return &controllerv1.DisconnectLeaseResponse{ClosedConnections: result.GetClosedConnections(), AlreadyApplied: result.GetAlreadyApplied()}, nil
 }
 
 // GetStatus returns the requested value.

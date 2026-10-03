@@ -7,7 +7,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/netip"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -20,6 +22,7 @@ import (
 	"xray-easy/internal/diagnostics"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
+	"xray-easy/internal/lease"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/xray"
@@ -51,6 +54,17 @@ var doctorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}
 
 // xrayReleasePattern is an internal package variable.
 var xrayReleasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
+
+// leaseHealthProbe reads the optional lease-service health endpoint.
+var leaseHealthProbe = probeLeaseService
+
+// leaseHealthStatus describes lease-worker and telemetry readiness.
+type leaseHealthStatus struct {
+	// Ready indicates that a usable Xray snapshot has been accepted.
+	Ready bool `json:"ready"`
+	// ControllerStreamConnected indicates an authenticated live Controller stream.
+	ControllerStreamConnected bool `json:"controllerStreamConnected"`
+}
 
 // doctorXrayRuntime is an internal type used by the package.
 type doctorXrayRuntime interface {
@@ -620,8 +634,100 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		}
 		appendCheck(doctorWarn, "AmneziaWG UDP firewall", "public UDP reachability cannot be checked from inside the Compose network", fmt.Sprintf("Allow inbound UDP %s for IPv4 and IPv6 in the VDS firewall/security group, then verify an AmneziaWG client connection.", safeDoctorPort("AWG_PUBLIC_PORT", "1234")))
 	}
+	if leaseServiceEnabledFromEnvironment() {
+		policy, policyErr := leasePolicyFromEnvironment()
+		if policyErr != nil {
+			appendCheck(doctorFail, "Xray lease policy", "lease policy environment values are invalid", "Set XRAY_LEASE_MAX_ACTIVE=2 and valid duration values for XRAY_LEASE_GRACE and XRAY_LEASE_RETRY_DELAY, then rerun the installer.")
+		} else if tracker, trackerErr := lease.NewTracker(policy); trackerErr != nil || tracker == nil {
+			appendCheck(doctorFail, "Xray lease policy", "lease policy values are outside supported limits", "Use a maximum of 2 leases, a grace period up to 10m, and a retry delay up to 1m.")
+		} else {
+			healthAddress := envOr("XRAY_LEASE_HEALTH_ADDR", "172.31.242.4:8091")
+			health, healthErr := leaseHealthProbe(ctx, healthAddress)
+			switch {
+			case healthErr != nil:
+				appendCheck(doctorFail, "Xray lease service", "service health endpoint is unavailable", "Check the xray-lease-service container, Controller health, and the lease token volume.")
+			case !health.ControllerStreamConnected:
+				appendCheck(doctorFail, "Xray lease service", "Controller snapshot stream is disconnected", "Check Controller and Xray telemetry logs; enforcement pauses while telemetry is unavailable.")
+			case !health.Ready && !settingsReady:
+				appendCheck(doctorWarn, "Xray lease service", "waiting for initial Xray setup and a usable telemetry snapshot", "Complete first-run setup in the Web UI, then rerun doctor.")
+			case !health.Ready:
+				appendCheck(doctorFail, "Xray lease service", "Controller is connected but Xray lease telemetry is not ready", "Check embedded Xray telemetry and Controller logs; enforcement pauses until complete snapshots resume.")
+			default:
+				appendCheck(doctorPass, "Xray lease service", "Controller stream and Xray lease telemetry are ready; oldest source-IP lease is enforced", "")
+			}
+		}
+	}
 
 	return checks
+}
+
+// leaseServiceEnabledFromEnvironment reports whether the installer flag or
+// Compose profile enables the optional lease service.
+func leaseServiceEnabledFromEnvironment() bool {
+	if strings.EqualFold(strings.TrimSpace(os.Getenv("XRAY_LEASE_SERVICE_ENABLED")), "true") {
+		return true
+	}
+	for _, profile := range strings.Split(os.Getenv("COMPOSE_PROFILES"), ",") {
+		if strings.TrimSpace(profile) == "lease" {
+			return true
+		}
+	}
+	return false
+}
+
+// leasePolicyFromEnvironment parses and validates lease policy settings.
+func leasePolicyFromEnvironment() (lease.Config, error) {
+	config := lease.DefaultConfig()
+	maxActive, err := strconv.Atoi(envOr("XRAY_LEASE_MAX_ACTIVE", "2"))
+	if err != nil {
+		return lease.Config{}, err
+	}
+	config.MaxActiveLeases = maxActive
+	for _, item := range []struct {
+		name     string
+		value    *time.Duration
+		fallback string
+	}{{"XRAY_LEASE_GRACE", &config.GracePeriod, "30s"}, {"XRAY_LEASE_RETRY_DELAY", &config.RetryDelay, "1s"}} {
+		parsed, parseErr := time.ParseDuration(envOr(item.name, item.fallback))
+		if parseErr != nil {
+			return lease.Config{}, parseErr
+		}
+		*item.value = parsed
+	}
+	return config, nil
+}
+
+// probeLeaseService requests the lease worker's internal health endpoint.
+func probeLeaseService(ctx context.Context, address string) (leaseHealthStatus, error) {
+	return probeLeaseServiceWithClient(ctx, address, &http.Client{Timeout: 2 * time.Second})
+}
+
+// probeLeaseServiceWithClient checks the configured health endpoint through an HTTP client.
+func probeLeaseServiceWithClient(ctx context.Context, address string, client *http.Client) (leaseHealthStatus, error) {
+	endpoint := "http://" + strings.TrimSpace(address) + "/healthz"
+	if _, err := url.ParseRequestURI(endpoint); err != nil {
+		return leaseHealthStatus{}, errors.New("lease health address is invalid")
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return leaseHealthStatus{}, err
+	}
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		return leaseHealthStatus{}, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return leaseHealthStatus{}, fmt.Errorf("lease health endpoint returned HTTP %d", response.StatusCode)
+	}
+	var result leaseHealthStatus
+	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&result); err != nil {
+		return leaseHealthStatus{}, errors.New("lease health endpoint returned invalid JSON")
+	}
+	return result, nil
 }
 
 // matchEmbeddedInboundTags performs the operation represented by its name.

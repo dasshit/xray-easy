@@ -277,6 +277,8 @@ jobs:
             dockerfile: Dockerfile.control
           - image: controller
             dockerfile: Dockerfile.controller
+          - image: lease-service
+            dockerfile: Dockerfile.lease-service
           - image: xray-core-service
             dockerfile: Dockerfile.xray-runtime
           - image: amneziawg-service

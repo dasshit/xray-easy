@@ -60,6 +60,12 @@ type fakeEngine struct {
 	closes            int
 	replacements      int
 	users             map[string]string
+	leaseProtocols    map[xrayruntimev1.Protocol]bool
+	leaseDisconnectErr error
+	leaseDisconnectCalls int
+	leaseDisconnectClosed int
+	leaseDisconnectAlready bool
+	leaseDisconnectInput *xrayruntimev1.DisconnectLeaseRequest
 }
 
 func (e *fakeEngine) Start() error         { e.starts++; return e.startErr }
@@ -119,6 +125,17 @@ func (e *fakeEngine) ListUsers(_ context.Context, _ string) ([]string, error) {
 		users = append(users, email)
 	}
 	return users, nil
+}
+func (e *fakeEngine) LeaseDisconnectSupported(protocol xrayruntimev1.Protocol) bool {
+	return e.leaseProtocols[protocol]
+}
+func (e *fakeEngine) DisconnectLease(ctx context.Context, protocol xrayruntimev1.Protocol, email, sourceIP, operationID string) (int, bool, error) {
+	e.leaseDisconnectCalls++
+	e.leaseDisconnectInput = &xrayruntimev1.DisconnectLeaseRequest{Protocol: protocol, Email: email, SourceIp: sourceIP, OperationId: operationID}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	return e.leaseDisconnectClosed, e.leaseDisconnectAlready, e.leaseDisconnectErr
 }
 
 func TestNewServiceStartsActiveSnapshotAndReportsState(t *testing.T) {

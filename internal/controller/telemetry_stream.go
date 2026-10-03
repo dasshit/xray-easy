@@ -2,7 +2,6 @@ package controller
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	awgapi "xray-easy/awg-contract/api/v1"
@@ -11,7 +10,6 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // xrayTelemetryStreamer is an internal type used by the package.
@@ -34,120 +32,20 @@ type telemetrySourceEvent struct {
 	err      error
 }
 
-// WatchTelemetry fans in Xray and AmneziaWG snapshots. Upstream streams are
-// opened only for the lifetime of this backend subscription.
+// WatchTelemetry streams full snapshots from the Controller-owned telemetry
+// collector shared by every backend and lease-service subscriber.
 func (s *Service) WatchTelemetry(request *controllerv1.WatchTelemetryRequest, stream controllerv1.Controller_WatchTelemetryServer) error {
 	if request == nil {
 		return status.Error(codes.InvalidArgument, "watch request is required")
 	}
-	interval := time.Duration(request.GetSampleIntervalMs()) * time.Millisecond
-	if interval < 500*time.Millisecond {
-		interval = time.Second
-	}
-	if interval > 5*time.Second {
-		interval = 5 * time.Second
-	}
-	ctx, cancel := context.WithCancel(stream.Context())
-	defer cancel()
-	xrayEvents := make(chan telemetrySourceEvent, 1)
-	awgEvents := make(chan telemetrySourceEvent, 1)
-	if watcher, ok := s.xray.(xrayTelemetryStreamer); ok {
-		go pumpXrayTelemetry(ctx, watcher, interval, xrayEvents)
-	} else {
-		offerTelemetryEvent(xrayEvents, telemetrySourceEvent{protocol: "xray", err: status.Error(codes.Unavailable, "stream is unsupported")})
-	}
-	if s.awg != nil {
-		if watcher, ok := s.awg.(awgTelemetryStreamer); ok {
-			go pumpAWGTelemetry(ctx, watcher, interval, awgEvents)
-		} else {
-			offerTelemetryEvent(awgEvents, telemetrySourceEvent{protocol: "amneziawg", err: status.Error(codes.Unavailable, "stream is unsupported")})
-		}
-	}
-
-	clients := make(map[string]*controllerv1.TelemetryClient)
-	sources := map[string]*controllerv1.TelemetrySourceStatus{
-		"xray": {Protocol: "xray"},
-	}
-	if s.awg != nil {
-		sources["amneziawg"] = &controllerv1.TelemetrySourceStatus{Protocol: "amneziawg"}
-	}
-	var sequence uint64
-	send := func() error {
-		sequence++
-		update := &controllerv1.TelemetryUpdate{SampledAt: timestamppb.New(time.Now().UTC()), Sequence: sequence, FullSnapshot: true}
-		for _, client := range clients {
-			update.Clients = append(update.Clients, client)
-		}
-		for _, source := range sources {
-			update.Sources = append(update.Sources, source)
-		}
-		return stream.Send(update)
-	}
-	if err := send(); err != nil {
-		return err
-	}
-	handleEvent := func(event telemetrySourceEvent) error {
-		source := sources[event.protocol]
-		if source == nil {
-			return nil
-		}
-		if event.err != nil {
-			source.Available = false
-			source.Error = "telemetry source is temporarily unavailable"
-			return send()
-		}
-		source.Available = true
-		source.Error = ""
-		if event.xray != nil {
-			source.Generation = event.xray.GetSourceGeneration()
-			source.Sequence = event.xray.GetSequence()
-			source.SampledAt = event.xray.GetSampledAt()
-			removeProtocolClients(clients, "xray")
-			for _, user := range event.xray.GetUsers() {
-				if user == nil || strings.TrimSpace(user.GetEmail()) == "" {
-					continue
-				}
-				protocol := xrayProtocolName(user.GetProtocol())
-				if protocol == "" {
-					continue
-				}
-				item := &controllerv1.TelemetryClient{DeviceKey: user.GetEmail(), Protocol: protocol, Online: user.GetOnline(), UploadBytes: user.GetUploadBytes(), DownloadBytes: user.GetDownloadBytes(), LastActivity: user.GetLastActivity()}
-				for _, observation := range user.GetSourceIps() {
-					if observation != nil && strings.TrimSpace(observation.GetAddress()) != "" {
-						item.SourceIps = append(item.SourceIps, observation.GetAddress())
-					}
-				}
-				clients[item.GetDeviceKey()] = item
-			}
-		}
-		if event.awg != nil {
-			source.Generation = event.awg.GetSourceGeneration()
-			source.Sequence = event.awg.GetSequence()
-			source.SampledAt = event.awg.GetSampledAt()
-			removeProtocolClients(clients, "amneziawg")
-			for _, peer := range event.awg.GetPeers() {
-				if peer == nil || strings.TrimSpace(peer.GetName()) == "" {
-					continue
-				}
-				item := &controllerv1.TelemetryClient{DeviceKey: "awg:" + peer.GetName(), Protocol: "amneziawg", Online: peer.GetOnline(), UploadBytes: peer.GetUploadBytes(), DownloadBytes: peer.GetDownloadBytes(), LastActivity: peer.GetLastActivity()}
-				if peer.GetSourceIp() != "" && peer.GetOnline() {
-					item.SourceIps = []string{peer.GetSourceIp()}
-				}
-				clients[item.GetDeviceKey()] = item
-			}
-		}
-		return send()
-	}
+	updates, unsubscribe := s.telemetryHub.subscribe()
+	defer unsubscribe()
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case event := <-xrayEvents:
-			if err := handleEvent(event); err != nil {
-				return err
-			}
-		case event := <-awgEvents:
-			if err := handleEvent(event); err != nil {
+		case <-stream.Context().Done():
+			return stream.Context().Err()
+		case update := <-updates:
+			if err := stream.Send(update); err != nil {
 				return err
 			}
 		}

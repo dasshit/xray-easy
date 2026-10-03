@@ -107,7 +107,9 @@ func redactXrayLog(message string) string {
 
 // Engine owns the one Xray instance active in this process.
 type Engine struct {
-	instance *core.Instance
+	instance      *core.Instance
+	leases        *leaseConnectionRegistry
+	leaseTracking bool
 }
 
 // ErrInboundRollbackFailed marks a replacement failure whose previous handler
@@ -124,7 +126,13 @@ func LoadEngine(configuration []byte) (*Engine, error) {
 	if err != nil {
 		return nil, fmt.Errorf("construct Xray instance: %w", err)
 	}
-	return &Engine{instance: instance}, nil
+	leases := newLeaseConnectionRegistry()
+	leaseTracking, err := installLeaseTracking(instance, leases)
+	if err != nil {
+		_ = instance.Close()
+		return nil, fmt.Errorf("install Xray lease tracking: %w", err)
+	}
+	return &Engine{instance: instance, leases: leases, leaseTracking: leaseTracking}, nil
 }
 
 // ValidateConfig runs Xray's config builder without constructing a core
@@ -504,8 +512,8 @@ func (e *Engine) StatsAvailable() bool {
 	}
 }
 
-// GetTelemetry collects configured user roster, cumulative counters, and
-// currently tracked source addresses through Xray's in-process stats feature.
+// GetTelemetry collects configured users, cumulative counters, Xray online-map
+// addresses, and active source addresses from the lease connection registry.
 func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1.Protocol]string) ([]RuntimeUserTelemetry, error) {
 	if e == nil || e.instance == nil {
 		return nil, errors.New("Xray instance is not initialized")
@@ -546,6 +554,10 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 			return nil, err
 		}
 		user := RuntimeUserTelemetry{Email: email, Protocol: usersByEmail[email], SourceIPs: make([]RuntimeIPObservation, 0)}
+		observedByAddress := make(map[string]RuntimeIPObservation)
+		for _, observation := range e.leases.observations(user.Protocol, email) {
+			observedByAddress[observation.Address] = observation
+		}
 		if counter := statsManager.GetCounter("user>>>" + email + ">>>traffic>>>uplink"); counter != nil {
 			user.UploadBytes = clampNonNegative(counter.Value())
 		}
@@ -562,17 +574,30 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 				}
 				canonical := address.WithZone("").Unmap().String()
 				lastSeen := time.Unix(unixLastSeen, 0).UTC()
-				observed = append(observed, RuntimeIPObservation{Address: canonical, LastSeen: lastSeen})
+				observation, exists := observedByAddress[canonical]
+				if !exists {
+					observation = RuntimeIPObservation{Address: canonical, LastSeen: lastSeen}
+				}
+				observed = append(observed, observation)
+				delete(observedByAddress, canonical)
 				if lastSeen.After(user.LastSeen) {
 					user.LastSeen = lastSeen
 				}
 				return true
 			})
+			for _, observation := range observedByAddress {
+				observed = append(observed, observation)
+			}
 			sort.Slice(observed, func(i, j int) bool { return observed[i].Address < observed[j].Address })
 			if len(observed) > maxTelemetrySourceIPs {
 				observed = observed[:maxTelemetrySourceIPs]
 			}
 			user.SourceIPs = observed
+		} else {
+			for _, observation := range observedByAddress {
+				user.SourceIPs = append(user.SourceIPs, observation)
+			}
+			sort.Slice(user.SourceIPs, func(i, j int) bool { return user.SourceIPs[i].Address < user.SourceIPs[j].Address })
 		}
 		result = append(result, user)
 	}

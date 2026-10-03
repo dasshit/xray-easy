@@ -67,7 +67,7 @@ func TestUpdateAWGConfigurationPreservesOtherEnvironment(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, line := range []string{
-		"# keep this comment", "XRAY_PUBLIC_PORT=443", "COMPOSE_PROFILES=awg",
+		"# keep this comment", "XRAY_PUBLIC_PORT=443", "COMPOSE_PROFILES=old,awg",
 		"AWG_PUBLIC_HOST=vpn.example.com", "AWG_PUBLIC_PORT=51821", "OTHER=value",
 	} {
 		if !strings.Contains(string(data), line) {
