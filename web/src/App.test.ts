@@ -36,7 +36,7 @@ function createGateway(callbacks: { events?: XrayEventCallbacks } = {}) {
       list: vi.fn().mockResolvedValue(clients), create: vi.fn(), profile: vi.fn((id: string) => {
         const profile = profiles[id]
         return profile ? Promise.resolve(profile) : Promise.reject(new Error(`No profile fixture for ${id}`))
-      }), setAction: vi.fn(),
+      }), setAction: vi.fn(), setExpiry: vi.fn(),
       profileQrUrl: vi.fn(() => '/qr'), profileAmneziaWGUrl: vi.fn(() => '/awg'), profileAmneziaWGQrUrl: vi.fn(() => '/awg-qr'), profileHysteriaQrUrl: vi.fn(() => '/hy-qr'),
       profileVMessQrUrl: vi.fn(() => '/vmess-qr'), profileShadowsocksQrUrl: vi.fn(() => '/ss-qr'), profileTrojanQrUrl: vi.fn(() => '/trojan-qr'), profileJsonUrl: vi.fn(() => '/json'),
     },
@@ -74,7 +74,9 @@ describe('App profile delivery actions', () => {
     for (const [index, uri] of ['vmess://profile', 'ss://profile', 'trojan://profile'].entries()) {
       const device = wrapper.findAll('.device-card')[index]
       if (!device) throw new Error(`No device card at index ${index}`)
-      await device.find('.device-actions button').trigger('click')
+      const profileButton = device.findAll('.device-actions button').find(button => button.text() === 'Profile')
+      if (!profileButton) throw new Error('Profile action was not rendered')
+      await profileButton.trigger('click')
       await flushPromises()
       await wrapper.get('.profile-modal .copy-button').trigger('click')
       await flushPromises()
@@ -114,4 +116,35 @@ describe('App profile delivery actions', () => {
     expect(wrapper.get('.settings-trojan-card .status-badge').text()).toBe('Unavailable')
     wrapper.unmount()
   })
+
+  it('lets the administrator extend an expired profile before explicitly enabling it', async () => {
+    const gateway = createGateway()
+    const expiredClient: Client = {
+      id: 'expired-vless', name: 'old-phone', protocol: 'vless', protocols: ['vless'],
+      vless: { enabled: false, revoked: false }, enabled: false, revoked: false, expired: true,
+      expirationPending: false, expiresAt: '2026-09-30T12:00:00Z', online: false, uploadBytes: 0, downloadBytes: 0,
+    }
+    vi.mocked(gateway.clients.list).mockResolvedValue([expiredClient])
+    vi.mocked(gateway.clients.setExpiry).mockResolvedValue({ ...expiredClient, expiresAt: '2099-02-03T12:00:00Z', expired: false })
+    const wrapper = mount(App, {
+      global: {
+        provide: { [xrayEasyGatewayKey as symbol]: gateway },
+        stubs: { HysteriaSettingsPanel: { template: '<div />' } },
+      },
+    })
+    await flushPromises()
+    expect(wrapper.get('.status-badge').text()).toBe('expired')
+    expect(wrapper.findAll('.device-actions button').map(button => button.text())).not.toContain('Enable')
+
+    await wrapper.get('.expiry-button').trigger('click')
+    await wrapper.get('[data-testid="expiry-custom"]').setValue('2099-02-03T12:00')
+    await wrapper.get('.modal form').trigger('submit')
+    await flushPromises()
+
+    expect(gateway.clients.setExpiry).toHaveBeenCalledWith('expired-vless', new Date('2099-02-03T12:00').toISOString())
+    expect(wrapper.get('.status-badge').text()).toBe('disabled')
+    expect(wrapper.findAll('.device-actions button').map(button => button.text())).toContain('Enable')
+    wrapper.unmount()
+  })
+
 })

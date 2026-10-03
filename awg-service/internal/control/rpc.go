@@ -221,6 +221,12 @@ func mapError(err error) error {
 	if errors.Is(err, ErrOperationCompleted) {
 		return status.Error(codes.FailedPrecondition, err.Error())
 	}
+	if errors.Is(err, ErrPeerExpired) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
+	if errors.Is(err, ErrPeerExpiryPending) {
+		return status.Error(codes.FailedPrecondition, err.Error())
+	}
 	if errors.Is(err, ErrInvalid) {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}

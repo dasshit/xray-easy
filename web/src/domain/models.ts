@@ -20,6 +20,12 @@ export type Client = {
   enabled: boolean
   /** Whether the profile was permanently revoked and cannot be re-enabled. */
   revoked: boolean
+  /** Optional RFC 3339 expiry instant; absent means unlimited lifetime. */
+  expiresAt?: string
+  /** Whether the profile deadline has passed. */
+  expired?: boolean
+  /** Whether the worker is still applying an overdue disable. */
+  expirationPending?: boolean
   fingerprint?: string
   /** Whether the device's protocol has reported activity in the last five minutes. */
   online: boolean
@@ -122,6 +128,7 @@ export type ClientAction = { client: Client; action: ClientActionType } | null
  */
 export function clientActionFor(client: Client): ClientActionType | null {
   if (client.revoked) return null
+  if (!client.enabled && client.expired === true) return null
   return client.enabled ? 'disable' : 'enable'
 }
 
@@ -131,5 +138,5 @@ export function clientActionFor(client: Client): ClientActionType | null {
  * @returns True when the device is neither revoked nor already enabled.
  */
 export function canEnableClient(client: Client): boolean {
-  return !client.revoked && !client.enabled
+  return !client.revoked && !client.enabled && client.expired !== true
 }

@@ -21,6 +21,9 @@ var (
 // ErrClientRevoked indicates that a revoked profile cannot be enabled again.
 var ErrClientRevoked = errors.New("revoked client cannot be enabled")
 
+// ErrClientExpired indicates that a profile must be extended before it can be enabled.
+var ErrClientExpired = errors.New("expired client cannot be enabled")
+
 // ClientAction identifies a lifecycle transition for a device profile.
 type ClientAction string
 
@@ -104,6 +107,24 @@ type Client struct {
 	CreatedAt time.Time
 	// UpdatedAt is the time the object was last updated.
 	UpdatedAt time.Time
+	// ExpiresAt is the optional UTC instant when access to this profile ends.
+	ExpiresAt *time.Time
+}
+
+// IsExpired reports whether this profile's configured expiry has passed.
+func (c Client) IsExpired(now time.Time) bool {
+	return c.ExpiresAt != nil && !c.ExpiresAt.After(now)
+}
+
+// CanEnableAt reports whether an administrator may enable this profile at now.
+func (c Client) CanEnableAt(now time.Time) error {
+	if c.Revoked {
+		return ErrClientRevoked
+	}
+	if c.IsExpired(now) {
+		return ErrClientExpired
+	}
+	return nil
 }
 
 // HasVLESS reports whether this profile contains VLESS credentials.
@@ -127,24 +148,28 @@ func (c Client) HasTrojan() bool { return c.Protocol == ProtocolTrojan }
 
 // VLESSCanConnect reports whether the VLESS access for this profile is active.
 func (c Client) VLESSCanConnect() bool {
-	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked
+	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked && !c.IsExpired(time.Now().UTC())
 }
 
 // Hysteria2CanConnect reports whether the Hysteria 2 access for this profile is active.
 func (c Client) Hysteria2CanConnect() bool {
-	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked
+	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked && !c.IsExpired(time.Now().UTC())
 }
 
 // VMessCanConnect reports whether the VMess access for this profile is active.
-func (c Client) VMessCanConnect() bool { return c.HasVMess() && c.Enabled && !c.Revoked }
+func (c Client) VMessCanConnect() bool {
+	return c.HasVMess() && c.Enabled && !c.Revoked && !c.IsExpired(time.Now().UTC())
+}
 
 // ShadowsocksCanConnect reports whether the Shadowsocks access is active.
 func (c Client) ShadowsocksCanConnect() bool {
-	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked
+	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked && !c.IsExpired(time.Now().UTC())
 }
 
 // TrojanCanConnect reports whether the Trojan access is active.
-func (c Client) TrojanCanConnect() bool { return c.HasTrojan() && c.TrojanEnabled && !c.TrojanRevoked }
+func (c Client) TrojanCanConnect() bool {
+	return c.HasTrojan() && c.TrojanEnabled && !c.TrojanRevoked && !c.IsExpired(time.Now().UTC())
+}
 
 // HysteriaCredential returns the stored password or the legacy UUID fallback.
 func (c Client) HysteriaCredential() string {
@@ -267,12 +292,14 @@ func SupportsFingerprint(value string) bool {
 }
 
 // CanConnect reports whether the requested operation is allowed.
-func (c Client) CanConnect() bool { return c.Enabled && !c.Revoked }
+func (c Client) CanConnect() bool {
+	return c.Enabled && !c.Revoked && !c.IsExpired(time.Now().UTC())
+}
 
 // Enable performs the operation represented by its name.
 func (c Client) Enable() (Client, error) {
-	if c.Revoked {
-		return Client{}, ErrClientRevoked
+	if err := c.CanEnableAt(time.Now().UTC()); err != nil {
+		return Client{}, err
 	}
 	c.Enabled = true
 	return c, nil

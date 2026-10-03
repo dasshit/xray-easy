@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"net/netip"
 )
@@ -144,6 +145,192 @@ func TestAddPeerAppliesLiveAndPersistsAllocatedAddresses(t *testing.T) {
 	}
 	if strings.Contains(string(mustRead(t, filepath.Join(opts.DataDir, "state.json"))), manager.serverPrivateKey) {
 		t.Fatal("server private key was not encrypted in persistent state")
+	}
+}
+
+func TestPeerExpiryIsReversibleAndDoesNotDeletePeerIdentity(t *testing.T) {
+	opts := testOptions(t)
+	device := &fakeDevice{}
+	manager, err := Open(opts, fakeFactory{device: device})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().UTC().Add(time.Hour)
+	peer, _, err := manager.AddPeerWithExpiry("phone", publicKey, "", &deadline)
+	if err != nil || peer.ExpiresAt == nil || !peer.ExpiresAt.Equal(deadline) || peer.Disabled {
+		t.Fatalf("AddPeerWithExpiry() = %+v, %v", peer, err)
+	}
+	past := time.Now().UTC().Add(-time.Second)
+	if _, err := manager.SetPeerExpiry("phone", &past); err != nil {
+		t.Fatal(err)
+	}
+	expired, err := manager.ExpireDuePeers(time.Now().UTC())
+	if err != nil || len(expired) != 1 || !expired[0].Disabled {
+		t.Fatalf("ExpireDuePeers() = %+v, %v", expired, err)
+	}
+	if len(manager.Peers()) != 1 || !manager.Peers()[0].Disabled {
+		t.Fatalf("expiration removed or enabled the peer: %+v", manager.Peers())
+	}
+	if !strings.Contains(device.sets[len(device.sets)-1], "remove=true") {
+		t.Fatalf("expiration did not remove the live UAPI peer: %q", device.sets[len(device.sets)-1])
+	}
+	if _, err := manager.SetPeerEnabled("phone", true); !errors.Is(err, ErrPeerExpired) {
+		t.Fatalf("enabling expired peer = %v", err)
+	}
+	future := time.Now().UTC().Add(time.Hour)
+	extended, err := manager.SetPeerExpiry("phone", &future)
+	if err != nil || !extended.Disabled || extended.ExpiresAt == nil || !extended.ExpiresAt.Equal(future) {
+		t.Fatalf("SetPeerExpiry() after expiration = %+v, %v", extended, err)
+	}
+	if _, err := manager.SetPeerEnabled("phone", true); err != nil {
+		t.Fatalf("explicit re-enable after extension = %v", err)
+	}
+	if manager.Peers()[0].Disabled || len(manager.Peers()) != 1 {
+		t.Fatalf("explicit enable did not restore retained peer: %+v", manager.Peers())
+	}
+}
+
+func TestAWGExpiryManagerHandlesIdempotencyAndTransactionalFailures(t *testing.T) {
+	opts := testOptions(t)
+	device := &fakeDevice{}
+	manager, err := Open(opts, fakeFactory{device: device})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddPeer("phone", publicKey); err != nil {
+		t.Fatal(err)
+	}
+	sets := len(device.sets)
+	if _, err := manager.SetPeerEnabled("phone", true); err != nil || len(device.sets) != sets {
+		t.Fatalf("idempotent enable changed runtime: sets=%d error=%v", len(device.sets), err)
+	}
+	if _, err := manager.SetPeerExpiry("missing", nil); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expiry change for missing peer = %v", err)
+	}
+	device.setErr = errors.New("injected live device failure")
+	if _, err := manager.SetPeerEnabled("phone", false); err == nil {
+		t.Fatal("device failure while disabling was ignored")
+	}
+	device.setErr = nil
+	past := time.Now().UTC().Add(-time.Second)
+	if _, err := manager.SetPeerExpiry("phone", &past); err != nil {
+		t.Fatal(err)
+	}
+	device.setErr = errors.New("injected expiry device failure")
+	if expired, err := manager.ExpireDuePeers(time.Now().UTC()); err == nil || len(expired) != 0 || manager.Peers()[0].Disabled {
+		t.Fatalf("failed expiry sweep = peers=%+v error=%v", expired, err)
+	}
+	device.setErr = nil
+	statePath := filepath.Join(opts.DataDir, "state.json")
+	backupPath := filepath.Join(opts.DataDir, "state.json.saved")
+	if err := os.Rename(statePath, backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(statePath, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.ExpireDuePeers(time.Now().UTC()); err == nil || manager.Peers()[0].Disabled {
+		t.Fatalf("state persistence failure did not roll back peer: %+v, error=%v", manager.Peers(), err)
+	}
+	if !strings.Contains(device.sets[len(device.sets)-1], "allowed_ip=10.88.0.2/32") {
+		t.Fatalf("live peer was not restored after persistence failure: %q", device.sets[len(device.sets)-1])
+	}
+	if err := os.Remove(statePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(backupPath, statePath); err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+	if _, err := manager.SetPeerEnabled("phone", false); err == nil {
+		t.Fatal("closed manager accepted peer state change")
+	}
+	if _, err := manager.SetPeerExpiry("phone", nil); err == nil {
+		t.Fatal("closed manager accepted expiry change")
+	}
+	if _, err := manager.ExpireDuePeers(time.Now().UTC()); err == nil {
+		t.Fatal("closed manager accepted expiration sweep")
+	}
+}
+
+func TestAddPeerWithExpiryRejectsChangedExpiryForOperationRetry(t *testing.T) {
+	manager, err := Open(testOptions(t), fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Close()
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	operationID := "abcdef0123456789abcdef0123456789"
+	deadline := time.Now().UTC().Add(time.Hour)
+	if _, _, err := manager.AddPeerWithExpiry("phone", publicKey, operationID, &deadline); err != nil {
+		t.Fatal(err)
+	}
+	different := deadline.Add(time.Second)
+	if _, _, err := manager.AddPeerWithExpiry("phone", publicKey, operationID, &different); !errors.Is(err, ErrOperationConflict) {
+		t.Fatalf("operation retry with a different expiry = %v", err)
+	}
+}
+
+func TestAWGExpiryMethodsRejectClosedManager(t *testing.T) {
+	manager, err := Open(testOptions(t), fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+	if _, _, err := manager.AddPeerWithExpiry("phone", "invalid", "", nil); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid create after close should validate input first: %v", err)
+	}
+}
+
+func TestOldAWGStateMigratesExistingPeersAsEnabledAndUnlimited(t *testing.T) {
+	opts := testOptions(t)
+	manager, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, publicKey, err := GenerateKeypair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := manager.AddPeer("old-phone", publicKey); err != nil {
+		t.Fatal(err)
+	}
+	manager.Close()
+	statePath := filepath.Join(opts.DataDir, "state.json")
+	state, err := readState(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	state.Version = 1
+	state.Peers[0].ExpiresAt = nil
+	state.Peers[0].Disabled = false
+	if err := writeState(statePath, state); err != nil {
+		t.Fatal(err)
+	}
+	restarted, err := Open(opts, fakeFactory{device: &fakeDevice{}})
+	if err != nil {
+		t.Fatalf("open legacy state: %v", err)
+	}
+	defer restarted.Close()
+	peers := restarted.Peers()
+	if len(peers) != 1 || peers[0].Disabled || peers[0].ExpiresAt != nil {
+		t.Fatalf("migrated legacy peer = %+v", peers)
+	}
+	migrated, err := readState(statePath)
+	if err != nil || migrated.Version != stateVersion {
+		t.Fatalf("persisted migrated state version = %d, %v", migrated.Version, err)
 	}
 }
 
@@ -559,7 +746,7 @@ func TestPersistedAWGStateRejectsCorruptionUnsafePermissionsAndInvalidPeers(t *t
 	if _, err := readState(statePath); err == nil || !strings.Contains(err.Error(), "decode AWG state") {
 		t.Fatalf("malformed persisted state = %v", err)
 	}
-	if err := os.WriteFile(statePath, []byte(`{"version":2,"privateKeyEnvelope":"x"}`), 0o600); err != nil {
+	if err := os.WriteFile(statePath, []byte(`{"version":99,"privateKeyEnvelope":"x"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := readState(statePath); err == nil || !strings.Contains(err.Error(), "unsupported AWG state version") {

@@ -23,6 +23,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 WORKDIR /src
 COPY internal/diagnostics ./internal/diagnostics
+COPY internal/domain ./internal/domain
 COPY internal/interaction ./internal/interaction
 COPY internal/runtimeauth ./internal/runtimeauth
 COPY internal/xrayruntime/api/v1 ./internal/xrayruntime/api/v1

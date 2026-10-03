@@ -93,6 +93,9 @@ function mapClient(dto: ClientDto): Client {
     ...(dto.trojan === undefined ? {} : { trojan: dto.trojan }),
     enabled: dto.enabled,
     revoked: dto.revoked,
+    ...(dto.expires_at === undefined ? {} : { expiresAt: dto.expires_at }),
+    expired: dto.expired,
+    expirationPending: dto.expiration_pending,
     online: dto.online,
     uploadBytes: dto.upload_bytes,
     downloadBytes: dto.download_bytes,
@@ -351,7 +354,11 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
           protocol: input.protocol,
           ...(input.fingerprint === undefined || input.fingerprint === '' ? {} : { fingerprint: input.fingerprint }),
           ...(input.auth === undefined || input.auth === '' ? {} : { auth: input.auth }),
+          ...(input.expiresAt === undefined ? {} : { expires_at: input.expiresAt }),
         }),
+      })),
+      setExpiry: async (clientId: string, expiresAt?: string): Promise<Client> => mapClient(await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/expiry`, ClientDtoSchema, {
+        method: 'PUT', body: JSON.stringify({ expires_at: expiresAt ?? null }),
       })),
       profile: async (clientId: string): Promise<ProfileDelivery> => {
         const dto = await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/profile?format=uri`, ProfileDeliveryDtoSchema)
@@ -370,9 +377,10 @@ export function createXrayEasyApi(send: JsonRequester = request): XrayEasyGatewa
       },
       setAction: async (clientId: string, action: ClientActionType): Promise<Client | undefined> => {
         if (clientId.startsWith('awg:')) {
-          if (action !== 'revoke') throw new Error('AmneziaWG profiles support revoke only')
-          await sendVoid(`/api/clients/${encodeURIComponent(clientId)}/revoke`, post())
-          return undefined
+          if (action === 'revoke') {
+            await sendVoid(`/api/clients/${encodeURIComponent(clientId)}/revoke`, post())
+            return undefined
+          }
         }
         return mapClient(await sendDto(send, `/api/clients/${encodeURIComponent(clientId)}/${action}`, ClientDtoSchema, post()))
       },

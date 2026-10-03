@@ -34,6 +34,7 @@ interface and is intended to be accessed through an SSH tunnel.
 - [Ports and firewall](#ports-and-firewall)
 - [Protocol guide: Xray](#protocol-guide-xray)
 - [Protocol guide: AmneziaWG](#protocol-guide-amneziawg)
+- [Profile expiry](#profile-expiry)
 - [Operations and troubleshooting](#operations-and-troubleshooting)
 - [Security and architecture](#security-and-architecture)
 - [Development](#development)
@@ -554,6 +555,25 @@ Replace the example address and port. A successful TCP check confirms basic
 reachability only; also test an actual client connection. For DNS profiles,
 confirm the AAAA record points to a working endpoint. Doctor tests outbound
 IPv6 connectivity from the Xray container, not public inbound reachability.
+
+## Profile expiry
+
+Profile expiry is optional: new profiles default to **No expiry**, and profiles
+created before this feature remain unlimited after an upgrade. Set a deadline
+while creating a profile or edit it later from the Profiles page. The date and
+time are entered in the browser's local timezone and stored as UTC. The
+background worker enforces deadlines even when the Web UI is closed. Expiry
+disables access but keeps the profile, credentials, traffic history and audit
+records. Extending an expired profile does not enable it; enable it separately.
+Permanent revoke remains irreversible.
+
+When Xray expires a profile, new authentication is rejected, tracked TCP
+connections for VLESS, VMess and Trojan are closed, and each authenticated
+outbound dispatch is cancelled and interrupted, including Hysteria 2 and
+Shadowsocks UDP flows. Verify the client-visible teardown for active UDP traffic
+on the target VDS. AmneziaWG expiry disables the peer while retaining its key
+and client configuration, so it can be re-enabled after extending the deadline.
+Check Diagnostics and `xray-easy doctor` if enforcement is pending.
 
 ## Security and architecture
 

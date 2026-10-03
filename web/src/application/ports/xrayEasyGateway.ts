@@ -140,6 +140,14 @@ export interface XrayEasyGateway {
      */
     create(input: CreateClientCommand): Promise<Client>
     /**
+     * Set or clear the expiry deadline without enabling a disabled profile.
+     * @param clientId - The internal profile ID.
+     * @param expiresAt - Optional RFC 3339 deadline; omitted clears the expiry.
+     * @returns The updated profile state.
+     * @rejects {Error} When the profile is missing, the date is invalid, or expiry enforcement is pending.
+     */
+    setExpiry(clientId: string, expiresAt?: string): Promise<Client>
+    /**
      * Read the connection profile for a device.
      * @param clientId - The internal ID of the device.
      * @returns A protocol-specific profile URI and any supported JSON configuration.

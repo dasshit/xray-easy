@@ -146,6 +146,8 @@ type Peer struct {
 	Ipv4          string                 `protobuf:"bytes,3,opt,name=ipv4,proto3" json:"ipv4,omitempty"`
 	Ipv6          string                 `protobuf:"bytes,4,opt,name=ipv6,proto3" json:"ipv6,omitempty"`
 	CreatedAt     *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=created_at,json=createdAt,proto3" json:"created_at,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	Disabled      bool                   `protobuf:"varint,7,opt,name=disabled,proto3" json:"disabled,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -213,6 +215,20 @@ func (x *Peer) GetCreatedAt() *timestamppb.Timestamp {
 		return x.CreatedAt
 	}
 	return nil
+}
+
+func (x *Peer) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *Peer) GetDisabled() bool {
+	if x != nil {
+		return x.Disabled
+	}
+	return false
 }
 
 type ListPeersResponse struct {
@@ -519,6 +535,7 @@ func (x *PeerStatsUpdate) GetPeers() []*PeerStats {
 type CreatePeerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -560,6 +577,125 @@ func (x *CreatePeerRequest) GetName() string {
 	return ""
 }
 
+func (x *CreatePeerRequest) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+type SetPeerEnabledRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	Enabled       bool                   `protobuf:"varint,2,opt,name=enabled,proto3" json:"enabled,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetPeerEnabledRequest) Reset() {
+	*x = SetPeerEnabledRequest{}
+	mi := &file_api_v1_control_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetPeerEnabledRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetPeerEnabledRequest) ProtoMessage() {}
+
+func (x *SetPeerEnabledRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_control_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetPeerEnabledRequest.ProtoReflect.Descriptor instead.
+func (*SetPeerEnabledRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_control_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *SetPeerEnabledRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SetPeerEnabledRequest) GetEnabled() bool {
+	if x != nil {
+		return x.Enabled
+	}
+	return false
+}
+
+type SetPeerExpiryRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
+	ExpiresAt     *timestamppb.Timestamp `protobuf:"bytes,2,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
+	ClearExpiry   bool                   `protobuf:"varint,3,opt,name=clear_expiry,json=clearExpiry,proto3" json:"clear_expiry,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetPeerExpiryRequest) Reset() {
+	*x = SetPeerExpiryRequest{}
+	mi := &file_api_v1_control_proto_msgTypes[9]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetPeerExpiryRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetPeerExpiryRequest) ProtoMessage() {}
+
+func (x *SetPeerExpiryRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_v1_control_proto_msgTypes[9]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetPeerExpiryRequest.ProtoReflect.Descriptor instead.
+func (*SetPeerExpiryRequest) Descriptor() ([]byte, []int) {
+	return file_api_v1_control_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *SetPeerExpiryRequest) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *SetPeerExpiryRequest) GetExpiresAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.ExpiresAt
+	}
+	return nil
+}
+
+func (x *SetPeerExpiryRequest) GetClearExpiry() bool {
+	if x != nil {
+		return x.ClearExpiry
+	}
+	return false
+}
+
 type AddPeerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -570,7 +706,7 @@ type AddPeerRequest struct {
 
 func (x *AddPeerRequest) Reset() {
 	*x = AddPeerRequest{}
-	mi := &file_api_v1_control_proto_msgTypes[8]
+	mi := &file_api_v1_control_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -582,7 +718,7 @@ func (x *AddPeerRequest) String() string {
 func (*AddPeerRequest) ProtoMessage() {}
 
 func (x *AddPeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[8]
+	mi := &file_api_v1_control_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -595,7 +731,7 @@ func (x *AddPeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AddPeerRequest.ProtoReflect.Descriptor instead.
 func (*AddPeerRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{8}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *AddPeerRequest) GetName() string {
@@ -621,7 +757,7 @@ type RemovePeerRequest struct {
 
 func (x *RemovePeerRequest) Reset() {
 	*x = RemovePeerRequest{}
-	mi := &file_api_v1_control_proto_msgTypes[9]
+	mi := &file_api_v1_control_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -633,7 +769,7 @@ func (x *RemovePeerRequest) String() string {
 func (*RemovePeerRequest) ProtoMessage() {}
 
 func (x *RemovePeerRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[9]
+	mi := &file_api_v1_control_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -646,7 +782,7 @@ func (x *RemovePeerRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePeerRequest.ProtoReflect.Descriptor instead.
 func (*RemovePeerRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{9}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *RemovePeerRequest) GetName() string {
@@ -666,7 +802,7 @@ type RemovePeerResponse struct {
 
 func (x *RemovePeerResponse) Reset() {
 	*x = RemovePeerResponse{}
-	mi := &file_api_v1_control_proto_msgTypes[10]
+	mi := &file_api_v1_control_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -678,7 +814,7 @@ func (x *RemovePeerResponse) String() string {
 func (*RemovePeerResponse) ProtoMessage() {}
 
 func (x *RemovePeerResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[10]
+	mi := &file_api_v1_control_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -691,7 +827,7 @@ func (x *RemovePeerResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RemovePeerResponse.ProtoReflect.Descriptor instead.
 func (*RemovePeerResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{10}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *RemovePeerResponse) GetRemoved() bool {
@@ -717,7 +853,7 @@ type GetClientConfigRequest struct {
 
 func (x *GetClientConfigRequest) Reset() {
 	*x = GetClientConfigRequest{}
-	mi := &file_api_v1_control_proto_msgTypes[11]
+	mi := &file_api_v1_control_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -729,7 +865,7 @@ func (x *GetClientConfigRequest) String() string {
 func (*GetClientConfigRequest) ProtoMessage() {}
 
 func (x *GetClientConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[11]
+	mi := &file_api_v1_control_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -742,7 +878,7 @@ func (x *GetClientConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetClientConfigRequest.ProtoReflect.Descriptor instead.
 func (*GetClientConfigRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{11}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *GetClientConfigRequest) GetName() string {
@@ -762,7 +898,7 @@ type RenderClientConfigRequest struct {
 
 func (x *RenderClientConfigRequest) Reset() {
 	*x = RenderClientConfigRequest{}
-	mi := &file_api_v1_control_proto_msgTypes[12]
+	mi := &file_api_v1_control_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -774,7 +910,7 @@ func (x *RenderClientConfigRequest) String() string {
 func (*RenderClientConfigRequest) ProtoMessage() {}
 
 func (x *RenderClientConfigRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[12]
+	mi := &file_api_v1_control_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -787,7 +923,7 @@ func (x *RenderClientConfigRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RenderClientConfigRequest.ProtoReflect.Descriptor instead.
 func (*RenderClientConfigRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{12}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RenderClientConfigRequest) GetName() string {
@@ -813,7 +949,7 @@ type ClientConfigResponse struct {
 
 func (x *ClientConfigResponse) Reset() {
 	*x = ClientConfigResponse{}
-	mi := &file_api_v1_control_proto_msgTypes[13]
+	mi := &file_api_v1_control_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -825,7 +961,7 @@ func (x *ClientConfigResponse) String() string {
 func (*ClientConfigResponse) ProtoMessage() {}
 
 func (x *ClientConfigResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[13]
+	mi := &file_api_v1_control_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -838,7 +974,7 @@ func (x *ClientConfigResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ClientConfigResponse.ProtoReflect.Descriptor instead.
 func (*ClientConfigResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{13}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *ClientConfigResponse) GetConfig() string {
@@ -857,7 +993,7 @@ type BackupResponse struct {
 
 func (x *BackupResponse) Reset() {
 	*x = BackupResponse{}
-	mi := &file_api_v1_control_proto_msgTypes[14]
+	mi := &file_api_v1_control_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -869,7 +1005,7 @@ func (x *BackupResponse) String() string {
 func (*BackupResponse) ProtoMessage() {}
 
 func (x *BackupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[14]
+	mi := &file_api_v1_control_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -882,7 +1018,7 @@ func (x *BackupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use BackupResponse.ProtoReflect.Descriptor instead.
 func (*BackupResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{14}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *BackupResponse) GetData() []byte {
@@ -901,7 +1037,7 @@ type RestoreBackupRequest struct {
 
 func (x *RestoreBackupRequest) Reset() {
 	*x = RestoreBackupRequest{}
-	mi := &file_api_v1_control_proto_msgTypes[15]
+	mi := &file_api_v1_control_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -913,7 +1049,7 @@ func (x *RestoreBackupRequest) String() string {
 func (*RestoreBackupRequest) ProtoMessage() {}
 
 func (x *RestoreBackupRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[15]
+	mi := &file_api_v1_control_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -926,7 +1062,7 @@ func (x *RestoreBackupRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreBackupRequest.ProtoReflect.Descriptor instead.
 func (*RestoreBackupRequest) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{15}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *RestoreBackupRequest) GetData() []byte {
@@ -945,7 +1081,7 @@ type RestoreBackupResponse struct {
 
 func (x *RestoreBackupResponse) Reset() {
 	*x = RestoreBackupResponse{}
-	mi := &file_api_v1_control_proto_msgTypes[16]
+	mi := &file_api_v1_control_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -957,7 +1093,7 @@ func (x *RestoreBackupResponse) String() string {
 func (*RestoreBackupResponse) ProtoMessage() {}
 
 func (x *RestoreBackupResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_v1_control_proto_msgTypes[16]
+	mi := &file_api_v1_control_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -970,7 +1106,7 @@ func (x *RestoreBackupResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreBackupResponse.ProtoReflect.Descriptor instead.
 func (*RestoreBackupResponse) Descriptor() ([]byte, []int) {
-	return file_api_v1_control_proto_rawDescGZIP(), []int{16}
+	return file_api_v1_control_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *RestoreBackupResponse) GetRestored() bool {
@@ -1001,7 +1137,7 @@ const file_api_v1_control_proto_rawDesc = "" +
 	"\fipv6_network\x18\b \x01(\tR\vipv6Network\x12\x1a\n" +
 	"\bprotocol\x18\t \x01(\tR\bprotocol\x12'\n" +
 	"\x0fservice_version\x18\n" +
-	" \x01(\tR\x0eserviceVersion\"\x9c\x01\n" +
+	" \x01(\tR\x0eserviceVersion\"\xf3\x01\n" +
 	"\x04Peer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
@@ -1009,7 +1145,10 @@ const file_api_v1_control_proto_rawDesc = "" +
 	"\x04ipv4\x18\x03 \x01(\tR\x04ipv4\x12\x12\n" +
 	"\x04ipv6\x18\x04 \x01(\tR\x04ipv6\x129\n" +
 	"\n" +
-	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\"@\n" +
+	"created_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\tcreatedAt\x129\n" +
+	"\n" +
+	"expires_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12\x1a\n" +
+	"\bdisabled\x18\a \x01(\bR\bdisabled\"@\n" +
 	"\x11ListPeersResponse\x12+\n" +
 	"\x05peers\x18\x01 \x03(\v2\x15.xrayeasy.awg.v1.PeerR\x05peers\"\xa2\x02\n" +
 	"\tPeerStats\x12\x12\n" +
@@ -1030,9 +1169,19 @@ const file_api_v1_control_proto_rawDesc = "" +
 	"\x11source_generation\x18\x02 \x01(\tR\x10sourceGeneration\x12\x1a\n" +
 	"\bsequence\x18\x03 \x01(\x04R\bsequence\x12#\n" +
 	"\rfull_snapshot\x18\x04 \x01(\bR\ffullSnapshot\x120\n" +
-	"\x05peers\x18\x05 \x03(\v2\x1a.xrayeasy.awg.v1.PeerStatsR\x05peers\"'\n" +
+	"\x05peers\x18\x05 \x03(\v2\x1a.xrayeasy.awg.v1.PeerStatsR\x05peers\"b\n" +
 	"\x11CreatePeerRequest\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"C\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x129\n" +
+	"\n" +
+	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\"E\n" +
+	"\x15SetPeerEnabledRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x12\x18\n" +
+	"\aenabled\x18\x02 \x01(\bR\aenabled\"\x88\x01\n" +
+	"\x14SetPeerExpiryRequest\x12\x12\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\x129\n" +
+	"\n" +
+	"expires_at\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\texpiresAt\x12!\n" +
+	"\fclear_expiry\x18\x03 \x01(\bR\vclearExpiry\"C\n" +
 	"\x0eAddPeerRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
@@ -1055,14 +1204,16 @@ const file_api_v1_control_proto_rawDesc = "" +
 	"\x14RestoreBackupRequest\x12\x12\n" +
 	"\x04data\x18\x01 \x01(\fR\x04data\"3\n" +
 	"\x15RestoreBackupResponse\x12\x1a\n" +
-	"\brestored\x18\x01 \x01(\bR\brestored2\x9d\a\n" +
+	"\brestored\x18\x01 \x01(\bR\brestored2\xbd\b\n" +
 	"\aControl\x12D\n" +
 	"\tGetStatus\x12\x16.google.protobuf.Empty\x1a\x1f.xrayeasy.awg.v1.StatusResponse\x12G\n" +
 	"\tListPeers\x12\x16.google.protobuf.Empty\x1a\".xrayeasy.awg.v1.ListPeersResponse\x12M\n" +
 	"\fGetPeerStats\x12\x16.google.protobuf.Empty\x1a%.xrayeasy.awg.v1.GetPeerStatsResponse\x12\\\n" +
 	"\x0eWatchPeerStats\x12&.xrayeasy.awg.v1.WatchPeerStatsRequest\x1a .xrayeasy.awg.v1.PeerStatsUpdate0\x01\x12G\n" +
 	"\n" +
-	"CreatePeer\x12\".xrayeasy.awg.v1.CreatePeerRequest\x1a\x15.xrayeasy.awg.v1.Peer\x12A\n" +
+	"CreatePeer\x12\".xrayeasy.awg.v1.CreatePeerRequest\x1a\x15.xrayeasy.awg.v1.Peer\x12O\n" +
+	"\x0eSetPeerEnabled\x12&.xrayeasy.awg.v1.SetPeerEnabledRequest\x1a\x15.xrayeasy.awg.v1.Peer\x12M\n" +
+	"\rSetPeerExpiry\x12%.xrayeasy.awg.v1.SetPeerExpiryRequest\x1a\x15.xrayeasy.awg.v1.Peer\x12A\n" +
 	"\aAddPeer\x12\x1f.xrayeasy.awg.v1.AddPeerRequest\x1a\x15.xrayeasy.awg.v1.Peer\x12U\n" +
 	"\n" +
 	"RemovePeer\x12\".xrayeasy.awg.v1.RemovePeerRequest\x1a#.xrayeasy.awg.v1.RemovePeerResponse\x12a\n" +
@@ -1083,7 +1234,7 @@ func file_api_v1_control_proto_rawDescGZIP() []byte {
 	return file_api_v1_control_proto_rawDescData
 }
 
-var file_api_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 17)
+var file_api_v1_control_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_api_v1_control_proto_goTypes = []any{
 	(*StatusResponse)(nil),            // 0: xrayeasy.awg.v1.StatusResponse
 	(*Peer)(nil),                      // 1: xrayeasy.awg.v1.Peer
@@ -1093,53 +1244,62 @@ var file_api_v1_control_proto_goTypes = []any{
 	(*WatchPeerStatsRequest)(nil),     // 5: xrayeasy.awg.v1.WatchPeerStatsRequest
 	(*PeerStatsUpdate)(nil),           // 6: xrayeasy.awg.v1.PeerStatsUpdate
 	(*CreatePeerRequest)(nil),         // 7: xrayeasy.awg.v1.CreatePeerRequest
-	(*AddPeerRequest)(nil),            // 8: xrayeasy.awg.v1.AddPeerRequest
-	(*RemovePeerRequest)(nil),         // 9: xrayeasy.awg.v1.RemovePeerRequest
-	(*RemovePeerResponse)(nil),        // 10: xrayeasy.awg.v1.RemovePeerResponse
-	(*GetClientConfigRequest)(nil),    // 11: xrayeasy.awg.v1.GetClientConfigRequest
-	(*RenderClientConfigRequest)(nil), // 12: xrayeasy.awg.v1.RenderClientConfigRequest
-	(*ClientConfigResponse)(nil),      // 13: xrayeasy.awg.v1.ClientConfigResponse
-	(*BackupResponse)(nil),            // 14: xrayeasy.awg.v1.BackupResponse
-	(*RestoreBackupRequest)(nil),      // 15: xrayeasy.awg.v1.RestoreBackupRequest
-	(*RestoreBackupResponse)(nil),     // 16: xrayeasy.awg.v1.RestoreBackupResponse
-	(*timestamppb.Timestamp)(nil),     // 17: google.protobuf.Timestamp
-	(*emptypb.Empty)(nil),             // 18: google.protobuf.Empty
+	(*SetPeerEnabledRequest)(nil),     // 8: xrayeasy.awg.v1.SetPeerEnabledRequest
+	(*SetPeerExpiryRequest)(nil),      // 9: xrayeasy.awg.v1.SetPeerExpiryRequest
+	(*AddPeerRequest)(nil),            // 10: xrayeasy.awg.v1.AddPeerRequest
+	(*RemovePeerRequest)(nil),         // 11: xrayeasy.awg.v1.RemovePeerRequest
+	(*RemovePeerResponse)(nil),        // 12: xrayeasy.awg.v1.RemovePeerResponse
+	(*GetClientConfigRequest)(nil),    // 13: xrayeasy.awg.v1.GetClientConfigRequest
+	(*RenderClientConfigRequest)(nil), // 14: xrayeasy.awg.v1.RenderClientConfigRequest
+	(*ClientConfigResponse)(nil),      // 15: xrayeasy.awg.v1.ClientConfigResponse
+	(*BackupResponse)(nil),            // 16: xrayeasy.awg.v1.BackupResponse
+	(*RestoreBackupRequest)(nil),      // 17: xrayeasy.awg.v1.RestoreBackupRequest
+	(*RestoreBackupResponse)(nil),     // 18: xrayeasy.awg.v1.RestoreBackupResponse
+	(*timestamppb.Timestamp)(nil),     // 19: google.protobuf.Timestamp
+	(*emptypb.Empty)(nil),             // 20: google.protobuf.Empty
 }
 var file_api_v1_control_proto_depIdxs = []int32{
-	17, // 0: xrayeasy.awg.v1.Peer.created_at:type_name -> google.protobuf.Timestamp
-	1,  // 1: xrayeasy.awg.v1.ListPeersResponse.peers:type_name -> xrayeasy.awg.v1.Peer
-	17, // 2: xrayeasy.awg.v1.PeerStats.last_handshake:type_name -> google.protobuf.Timestamp
-	17, // 3: xrayeasy.awg.v1.PeerStats.last_activity:type_name -> google.protobuf.Timestamp
-	3,  // 4: xrayeasy.awg.v1.GetPeerStatsResponse.peers:type_name -> xrayeasy.awg.v1.PeerStats
-	17, // 5: xrayeasy.awg.v1.PeerStatsUpdate.sampled_at:type_name -> google.protobuf.Timestamp
-	3,  // 6: xrayeasy.awg.v1.PeerStatsUpdate.peers:type_name -> xrayeasy.awg.v1.PeerStats
-	18, // 7: xrayeasy.awg.v1.Control.GetStatus:input_type -> google.protobuf.Empty
-	18, // 8: xrayeasy.awg.v1.Control.ListPeers:input_type -> google.protobuf.Empty
-	18, // 9: xrayeasy.awg.v1.Control.GetPeerStats:input_type -> google.protobuf.Empty
-	5,  // 10: xrayeasy.awg.v1.Control.WatchPeerStats:input_type -> xrayeasy.awg.v1.WatchPeerStatsRequest
-	7,  // 11: xrayeasy.awg.v1.Control.CreatePeer:input_type -> xrayeasy.awg.v1.CreatePeerRequest
-	8,  // 12: xrayeasy.awg.v1.Control.AddPeer:input_type -> xrayeasy.awg.v1.AddPeerRequest
-	9,  // 13: xrayeasy.awg.v1.Control.RemovePeer:input_type -> xrayeasy.awg.v1.RemovePeerRequest
-	11, // 14: xrayeasy.awg.v1.Control.GetClientConfig:input_type -> xrayeasy.awg.v1.GetClientConfigRequest
-	18, // 15: xrayeasy.awg.v1.Control.ExportBackup:input_type -> google.protobuf.Empty
-	15, // 16: xrayeasy.awg.v1.Control.RestoreBackup:input_type -> xrayeasy.awg.v1.RestoreBackupRequest
-	12, // 17: xrayeasy.awg.v1.Control.RenderClientConfig:input_type -> xrayeasy.awg.v1.RenderClientConfigRequest
-	0,  // 18: xrayeasy.awg.v1.Control.GetStatus:output_type -> xrayeasy.awg.v1.StatusResponse
-	2,  // 19: xrayeasy.awg.v1.Control.ListPeers:output_type -> xrayeasy.awg.v1.ListPeersResponse
-	4,  // 20: xrayeasy.awg.v1.Control.GetPeerStats:output_type -> xrayeasy.awg.v1.GetPeerStatsResponse
-	6,  // 21: xrayeasy.awg.v1.Control.WatchPeerStats:output_type -> xrayeasy.awg.v1.PeerStatsUpdate
-	1,  // 22: xrayeasy.awg.v1.Control.CreatePeer:output_type -> xrayeasy.awg.v1.Peer
-	1,  // 23: xrayeasy.awg.v1.Control.AddPeer:output_type -> xrayeasy.awg.v1.Peer
-	10, // 24: xrayeasy.awg.v1.Control.RemovePeer:output_type -> xrayeasy.awg.v1.RemovePeerResponse
-	13, // 25: xrayeasy.awg.v1.Control.GetClientConfig:output_type -> xrayeasy.awg.v1.ClientConfigResponse
-	14, // 26: xrayeasy.awg.v1.Control.ExportBackup:output_type -> xrayeasy.awg.v1.BackupResponse
-	16, // 27: xrayeasy.awg.v1.Control.RestoreBackup:output_type -> xrayeasy.awg.v1.RestoreBackupResponse
-	13, // 28: xrayeasy.awg.v1.Control.RenderClientConfig:output_type -> xrayeasy.awg.v1.ClientConfigResponse
-	18, // [18:29] is the sub-list for method output_type
-	7,  // [7:18] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	19, // 0: xrayeasy.awg.v1.Peer.created_at:type_name -> google.protobuf.Timestamp
+	19, // 1: xrayeasy.awg.v1.Peer.expires_at:type_name -> google.protobuf.Timestamp
+	1,  // 2: xrayeasy.awg.v1.ListPeersResponse.peers:type_name -> xrayeasy.awg.v1.Peer
+	19, // 3: xrayeasy.awg.v1.PeerStats.last_handshake:type_name -> google.protobuf.Timestamp
+	19, // 4: xrayeasy.awg.v1.PeerStats.last_activity:type_name -> google.protobuf.Timestamp
+	3,  // 5: xrayeasy.awg.v1.GetPeerStatsResponse.peers:type_name -> xrayeasy.awg.v1.PeerStats
+	19, // 6: xrayeasy.awg.v1.PeerStatsUpdate.sampled_at:type_name -> google.protobuf.Timestamp
+	3,  // 7: xrayeasy.awg.v1.PeerStatsUpdate.peers:type_name -> xrayeasy.awg.v1.PeerStats
+	19, // 8: xrayeasy.awg.v1.CreatePeerRequest.expires_at:type_name -> google.protobuf.Timestamp
+	19, // 9: xrayeasy.awg.v1.SetPeerExpiryRequest.expires_at:type_name -> google.protobuf.Timestamp
+	20, // 10: xrayeasy.awg.v1.Control.GetStatus:input_type -> google.protobuf.Empty
+	20, // 11: xrayeasy.awg.v1.Control.ListPeers:input_type -> google.protobuf.Empty
+	20, // 12: xrayeasy.awg.v1.Control.GetPeerStats:input_type -> google.protobuf.Empty
+	5,  // 13: xrayeasy.awg.v1.Control.WatchPeerStats:input_type -> xrayeasy.awg.v1.WatchPeerStatsRequest
+	7,  // 14: xrayeasy.awg.v1.Control.CreatePeer:input_type -> xrayeasy.awg.v1.CreatePeerRequest
+	8,  // 15: xrayeasy.awg.v1.Control.SetPeerEnabled:input_type -> xrayeasy.awg.v1.SetPeerEnabledRequest
+	9,  // 16: xrayeasy.awg.v1.Control.SetPeerExpiry:input_type -> xrayeasy.awg.v1.SetPeerExpiryRequest
+	10, // 17: xrayeasy.awg.v1.Control.AddPeer:input_type -> xrayeasy.awg.v1.AddPeerRequest
+	11, // 18: xrayeasy.awg.v1.Control.RemovePeer:input_type -> xrayeasy.awg.v1.RemovePeerRequest
+	13, // 19: xrayeasy.awg.v1.Control.GetClientConfig:input_type -> xrayeasy.awg.v1.GetClientConfigRequest
+	20, // 20: xrayeasy.awg.v1.Control.ExportBackup:input_type -> google.protobuf.Empty
+	17, // 21: xrayeasy.awg.v1.Control.RestoreBackup:input_type -> xrayeasy.awg.v1.RestoreBackupRequest
+	14, // 22: xrayeasy.awg.v1.Control.RenderClientConfig:input_type -> xrayeasy.awg.v1.RenderClientConfigRequest
+	0,  // 23: xrayeasy.awg.v1.Control.GetStatus:output_type -> xrayeasy.awg.v1.StatusResponse
+	2,  // 24: xrayeasy.awg.v1.Control.ListPeers:output_type -> xrayeasy.awg.v1.ListPeersResponse
+	4,  // 25: xrayeasy.awg.v1.Control.GetPeerStats:output_type -> xrayeasy.awg.v1.GetPeerStatsResponse
+	6,  // 26: xrayeasy.awg.v1.Control.WatchPeerStats:output_type -> xrayeasy.awg.v1.PeerStatsUpdate
+	1,  // 27: xrayeasy.awg.v1.Control.CreatePeer:output_type -> xrayeasy.awg.v1.Peer
+	1,  // 28: xrayeasy.awg.v1.Control.SetPeerEnabled:output_type -> xrayeasy.awg.v1.Peer
+	1,  // 29: xrayeasy.awg.v1.Control.SetPeerExpiry:output_type -> xrayeasy.awg.v1.Peer
+	1,  // 30: xrayeasy.awg.v1.Control.AddPeer:output_type -> xrayeasy.awg.v1.Peer
+	12, // 31: xrayeasy.awg.v1.Control.RemovePeer:output_type -> xrayeasy.awg.v1.RemovePeerResponse
+	15, // 32: xrayeasy.awg.v1.Control.GetClientConfig:output_type -> xrayeasy.awg.v1.ClientConfigResponse
+	16, // 33: xrayeasy.awg.v1.Control.ExportBackup:output_type -> xrayeasy.awg.v1.BackupResponse
+	18, // 34: xrayeasy.awg.v1.Control.RestoreBackup:output_type -> xrayeasy.awg.v1.RestoreBackupResponse
+	15, // 35: xrayeasy.awg.v1.Control.RenderClientConfig:output_type -> xrayeasy.awg.v1.ClientConfigResponse
+	23, // [23:36] is the sub-list for method output_type
+	10, // [10:23] is the sub-list for method input_type
+	10, // [10:10] is the sub-list for extension type_name
+	10, // [10:10] is the sub-list for extension extendee
+	0,  // [0:10] is the sub-list for field type_name
 }
 
 func init() { file_api_v1_control_proto_init() }
@@ -1153,7 +1313,7 @@ func file_api_v1_control_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_v1_control_proto_rawDesc), len(file_api_v1_control_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   17,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

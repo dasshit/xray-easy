@@ -1,5 +1,5 @@
 import { flushPromises, mount } from '@vue/test-utils'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import CreateProfileModal from './CreateProfileModal.vue'
 
 describe('CreateProfileModal', () => {
@@ -74,5 +74,20 @@ describe('CreateProfileModal', () => {
     await wrapper.get('form').trigger('submit')
 
     expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual({ name: 'iphone', protocol: 'amneziawg' })
+  })
+
+  it('passes the selected expiry to the new profile request', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
+    try {
+      const wrapper = mount(CreateProfileModal, { props: { language: 'en', hysteriaAvailable: true, vmessAvailable: true, busy: false } })
+      await wrapper.get('input[autocomplete="off"]').setValue('macbook')
+      await wrapper.get('[data-testid="expiry-preset"]').setValue('7-days')
+      await wrapper.get('form').trigger('submit')
+
+      expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual({ name: 'macbook', protocol: 'vless', expiresAt: '2026-10-08T12:00:00.000Z' })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

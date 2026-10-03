@@ -235,7 +235,7 @@ func TestClientStateChangeReportsPreparationAndRuntimeFailures(t *testing.T) {
 		}
 		response := httptest.NewRecorder()
 		app.server.changeClientState(response, httptest.NewRequest(http.MethodPost, "/", nil), client, domain.ActionDisable, app.admin.ID)
-		if response.Code != http.StatusConflict {
+		if response.Code != http.StatusInternalServerError {
 			t.Fatalf("closed store state change = %d %s", response.Code, response.Body.String())
 		}
 	})

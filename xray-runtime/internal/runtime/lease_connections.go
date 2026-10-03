@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/outbound"
@@ -20,11 +21,25 @@ import (
 // leaseOperationLimit bounds cached disconnect results for idempotent retries.
 const leaseOperationLimit = 2048
 
+// removedProfileBlockDuration bounds protection for stale inbound requests
+// authenticated shortly before profile removal.
+const removedProfileBlockDuration = 30 * time.Second
+
+// removedProfileLimit bounds stale-profile markers for installations with
+// frequent profile churn.
+const removedProfileLimit = 2048
+
 // leaseConnectionKey identifies one observed source-IP lease.
 type leaseConnectionKey struct {
 	protocol xrayruntimev1.Protocol
 	email    string
 	sourceIP netip.Addr
+}
+
+// leaseProfileKey identifies the complete Xray identity whose credential is removed.
+type leaseProfileKey struct {
+	protocol xrayruntimev1.Protocol
+	email    string
 }
 
 // leaseConnection stores one physical client connection and its active dispatch references.
@@ -40,28 +55,35 @@ type leaseDisconnectResult struct {
 	key    leaseConnectionKey
 }
 
-// leaseConnectionRegistry tracks closable authenticated inbound connections.
+// leaseConnectionRegistry tracks authenticated client connections and outbound dispatches.
 type leaseConnectionRegistry struct {
-	mu           sync.Mutex
-	connections  map[leaseConnectionKey]map[uintptr]*leaseConnection
-	connectedAt  map[leaseConnectionKey]time.Time
-	closing      map[leaseConnectionKey]bool
-	operations   map[string]leaseDisconnectResult
-	operationIDs []string
+	mu              sync.Mutex
+	connections     map[leaseConnectionKey]map[uintptr]*leaseConnection
+	connectedAt     map[leaseConnectionKey]time.Time
+	closing         map[leaseConnectionKey]bool
+	closingProfiles map[leaseProfileKey]bool
+	removedProfiles map[leaseProfileKey]time.Time
+	flows           map[leaseProfileKey]map[uint64]func()
+	nextFlowID      uint64
+	operations      map[string]leaseDisconnectResult
+	operationIDs    []string
 }
 
 // newLeaseConnectionRegistry creates an empty authenticated-connection registry.
 func newLeaseConnectionRegistry() *leaseConnectionRegistry {
 	return &leaseConnectionRegistry{
-		connections: make(map[leaseConnectionKey]map[uintptr]*leaseConnection),
-		connectedAt: make(map[leaseConnectionKey]time.Time),
-		closing:     make(map[leaseConnectionKey]bool),
-		operations:  make(map[string]leaseDisconnectResult),
+		connections:     make(map[leaseConnectionKey]map[uintptr]*leaseConnection),
+		connectedAt:     make(map[leaseConnectionKey]time.Time),
+		closing:         make(map[leaseConnectionKey]bool),
+		closingProfiles: make(map[leaseProfileKey]bool),
+		removedProfiles: make(map[leaseProfileKey]time.Time),
+		flows:           make(map[leaseProfileKey]map[uint64]func()),
+		operations:      make(map[string]leaseDisconnectResult),
 	}
 }
 
-// installLeaseTracking wraps the configured outbound handlers so each authenticated Xray dispatch
-// registers its parent client connection for exact source-lease termination.
+// installLeaseTracking wraps configured outbound handlers to track each authenticated dispatch
+// and its parent client connection for profile shutdown and source-lease termination.
 func installLeaseTracking(instance *core.Instance, registry *leaseConnectionRegistry) (bool, error) {
 	if instance == nil || registry == nil {
 		return false, errors.New("Xray instance and lease registry are required")
@@ -118,14 +140,46 @@ func (h *leaseTrackedOutbound) Dispatch(ctx context.Context, link *transport.Lin
 		return
 	}
 	inbound := session.InboundFromContext(ctx)
-	if inbound != nil && inbound.User != nil && inbound.Conn != nil && h.registry != nil {
-		key, ok := leaseKeyFromInbound(inbound)
+	if inbound != nil && inbound.User != nil && h.registry != nil {
+		profile, ok := leaseProfileFromInbound(inbound)
 		if ok {
-			release := h.registry.register(key, inbound.Conn)
+			flowCtx, cancel := context.WithCancel(ctx)
+			release, registered := h.registry.registerFlow(profile, func() {
+				cancel()
+				if link != nil {
+					_ = common.Interrupt(link.Reader)
+					_ = common.Interrupt(link.Writer)
+				}
+			})
+			if !registered {
+				cancel()
+				return
+			}
+			defer cancel()
 			defer release()
+			ctx = flowCtx
+		}
+		if inbound.Conn != nil {
+			key, ok := leaseKeyFromInbound(inbound)
+			if ok {
+				release := h.registry.register(key, inbound.Conn)
+				defer release()
+			}
 		}
 	}
 	h.Handler.Dispatch(ctx, link)
+}
+
+// leaseProfileFromInbound converts authenticated inbound metadata to a profile key.
+func leaseProfileFromInbound(inbound *session.Inbound) (leaseProfileKey, bool) {
+	if inbound == nil || inbound.User == nil || strings.TrimSpace(inbound.User.Email) == "" {
+		return leaseProfileKey{}, false
+	}
+	protocol := leaseProtocol(inbound.Name)
+	if protocol == xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED {
+		return leaseProfileKey{}, false
+	}
+	return leaseProfileKey{protocol: protocol, email: inbound.User.Email}, true
 }
 
 // leaseKeyFromInbound converts Xray's authenticated inbound metadata into a canonical lease key.
@@ -169,7 +223,8 @@ func (r *leaseConnectionRegistry) register(key leaseConnectionKey, connection in
 		return func() {}
 	}
 	r.mu.Lock()
-	if r.closing[key] {
+	profile := leaseProfileKey{protocol: key.protocol, email: key.email}
+	if r.closing[key] || r.closingProfiles[profile] || r.profileRemovedLocked(profile) {
 		r.mu.Unlock()
 		_ = connection.Close()
 		return func() {}
@@ -192,6 +247,143 @@ func (r *leaseConnectionRegistry) register(key leaseConnectionKey, connection in
 	return func() {
 		once.Do(func() { r.release(key, identity) })
 	}
+}
+
+// registerFlow tracks an authenticated outbound dispatch so profile removal can cancel its
+// context and interrupt only that profile's packet or stream path.
+func (r *leaseConnectionRegistry) registerFlow(profile leaseProfileKey, closeFlow func()) (func(), bool) {
+	if r == nil || closeFlow == nil || profile.protocol == xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED || strings.TrimSpace(profile.email) == "" {
+		return func() {}, false
+	}
+	r.mu.Lock()
+	if r.closingProfiles[profile] || r.profileRemovedLocked(profile) {
+		r.mu.Unlock()
+		closeFlow()
+		return func() {}, false
+	}
+	r.nextFlowID++
+	flowID := r.nextFlowID
+	if r.flows[profile] == nil {
+		r.flows[profile] = make(map[uint64]func())
+	}
+	r.flows[profile][flowID] = closeFlow
+	r.mu.Unlock()
+
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			delete(r.flows[profile], flowID)
+			if len(r.flows[profile]) == 0 {
+				delete(r.flows, profile)
+			}
+		})
+	}, true
+}
+
+// allowProfile permits dispatches again after a removed credential is explicitly added.
+func (r *leaseConnectionRegistry) allowProfile(profile leaseProfileKey) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	delete(r.removedProfiles, profile)
+	r.mu.Unlock()
+}
+
+// profileRemovedLocked expires stale-authentication markers and reports whether
+// an authentication that began before credential removal must still be blocked.
+// The caller must hold r.mu.
+func (r *leaseConnectionRegistry) profileRemovedLocked(profile leaseProfileKey) bool {
+	blockedUntil, ok := r.removedProfiles[profile]
+	if !ok {
+		return false
+	}
+	if time.Now().Before(blockedUntil) {
+		return true
+	}
+	delete(r.removedProfiles, profile)
+	return false
+}
+
+// markProfileRemovedLocked blocks late dispatches from already-authenticated
+// connections for a short bounded period and caps memory use under profile churn.
+// The caller must hold r.mu.
+func (r *leaseConnectionRegistry) markProfileRemovedLocked(profile leaseProfileKey) {
+	now := time.Now()
+	for key, blockedUntil := range r.removedProfiles {
+		if !now.Before(blockedUntil) {
+			delete(r.removedProfiles, key)
+		}
+	}
+	r.removedProfiles[profile] = now.Add(removedProfileBlockDuration)
+	for len(r.removedProfiles) > removedProfileLimit {
+		var oldest leaseProfileKey
+		var oldestDeadline time.Time
+		for key, deadline := range r.removedProfiles {
+			if oldestDeadline.IsZero() || deadline.Before(oldestDeadline) {
+				oldest, oldestDeadline = key, deadline
+			}
+		}
+		delete(r.removedProfiles, oldest)
+	}
+}
+
+// removeProfileSessions blocks new dispatches while removing the credential,
+// then closes tracked client connections and interrupts the profile's active flows.
+func (r *leaseConnectionRegistry) removeProfileSessions(protocol xrayruntimev1.Protocol, email string, remove func() (bool, error)) (bool, int, int, error) {
+	if r == nil {
+		return false, 0, 0, errors.New("lease connection registry is unavailable")
+	}
+	profile := leaseProfileKey{protocol: protocol, email: strings.TrimSpace(email)}
+	if profile.protocol == xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED || profile.email == "" || remove == nil {
+		return false, 0, 0, errors.New("profile connection close identity is invalid")
+	}
+	r.mu.Lock()
+	r.closingProfiles[profile] = true
+	r.mu.Unlock()
+
+	wasAbsent, err := remove()
+	if err != nil {
+		r.mu.Lock()
+		delete(r.closingProfiles, profile)
+		r.mu.Unlock()
+		return false, 0, 0, err
+	}
+	r.mu.Lock()
+	r.markProfileRemovedLocked(profile)
+	var connections []interface{ Close() error }
+	for key, tracked := range r.connections {
+		if key.protocol != profile.protocol || key.email != profile.email {
+			continue
+		}
+		for _, connection := range tracked {
+			connections = append(connections, connection.connection)
+		}
+	}
+	flows := make([]func(), 0, len(r.flows[profile]))
+	for _, closeFlow := range r.flows[profile] {
+		flows = append(flows, closeFlow)
+	}
+	r.mu.Unlock()
+
+	closed := 0
+	var closeErr error
+	for _, connection := range connections {
+		if err := connection.Close(); err != nil {
+			closeErr = errors.Join(closeErr, err)
+			continue
+		}
+		closed++
+	}
+	for _, closeFlow := range flows {
+		closeFlow()
+	}
+	r.mu.Lock()
+	delete(r.closingProfiles, profile)
+	r.mu.Unlock()
+	return wasAbsent, closed, len(flows), closeErr
 }
 
 // connectionStart returns when the continuous source-IP lease first opened.
@@ -313,6 +505,18 @@ func (e *Engine) LeaseDisconnectSupported(protocol xrayruntimev1.Protocol) bool 
 		// have integration coverage proving a single-lease disconnect.
 		return false
 	}
+}
+
+// RemoveUserWithProtocol removes a credential, closes tracked client connections, and
+// cancels its active outbound dispatches, including existing UDP proxy flows.
+func (e *Engine) RemoveUserWithProtocol(ctx context.Context, protocol xrayruntimev1.Protocol, tag, email string) (bool, int, int, error) {
+	if e == nil || e.leases == nil {
+		absent, err := e.RemoveUser(ctx, tag, email)
+		return absent, 0, 0, err
+	}
+	return e.leases.removeProfileSessions(protocol, email, func() (bool, error) {
+		return e.RemoveUser(ctx, tag, email)
+	})
 }
 
 // DisconnectLease closes only the authenticated connection handles currently

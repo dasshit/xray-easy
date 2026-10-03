@@ -38,6 +38,10 @@ export const ClientDtoSchema = z.object({
   trojan: ClientProtocolAccessDtoSchema.optional(),
   enabled: z.boolean(),
   revoked: z.boolean(),
+  /** Optional RFC 3339 expiry instant; omitted for unlimited profiles. */
+  expires_at: z.string().optional(),
+  expired: z.boolean().default(false),
+  expiration_pending: z.boolean().default(false),
   fingerprint: z.string().optional(),
   online: z.boolean(),
   /** RFC 3339 timestamp of the last traffic observed, when available. */

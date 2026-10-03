@@ -39,7 +39,7 @@ func TestCreateProtocolClientReportsPreparationAndPersistenceFailures(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, err = app.server.createProtocolClient(t.Context(), settings, test.protocol, test.profile, "", "", app.admin.ID)
+			_, err = app.server.createProtocolClient(t.Context(), settings, test.protocol, test.profile, "", "", nil, app.admin.ID)
 			if err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("createProtocolClient() error = %v, want %q", err, test.want)
 			}
@@ -59,7 +59,7 @@ func TestCreateProtocolClientReportsPreparationAndPersistenceFailures(t *testing
 		defer lock.Close()
 		ctx, cancel := context.WithTimeout(t.Context(), 120*time.Millisecond)
 		defer cancel()
-		_, err = app.server.createProtocolClient(ctx, settings, "", "phone", "", "", app.admin.ID)
+		_, err = app.server.createProtocolClient(ctx, settings, "", "phone", "", "", nil, app.admin.ID)
 		if err == nil {
 			t.Fatal("profile creation proceeded while maintenance lock was held")
 		}

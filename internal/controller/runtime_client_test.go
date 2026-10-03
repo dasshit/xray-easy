@@ -110,6 +110,8 @@ func TestAWGClientRoutesTypedOperations(t *testing.T) {
 		"/" + RPCServiceName + "/GetAmneziaWGStatus":       &controllerv1.AmneziaWGStatusResponse{Running: true, PublicKey: "server-key", ListenPort: 1234, PublicHost: "vpn.example.test", PublicPort: 1234, PeerCount: 1, Ipv4Network: "10.0.0.0/24", Ipv6Network: "fd00::/64", ServiceVersion: "v1"},
 		"/" + RPCServiceName + "/ListAmneziaWGPeers":       &controllerv1.ListAmneziaWGPeersResponse{Peers: []*controllerv1.AmneziaWGPeer{peer}},
 		"/" + RPCServiceName + "/CreateAmneziaWGPeer":      peer,
+		"/" + RPCServiceName + "/SetAmneziaWGPeerEnabled":  peer,
+		"/" + RPCServiceName + "/SetAmneziaWGPeerExpiry":   peer,
 		"/" + RPCServiceName + "/GetAmneziaWGClientConfig": &controllerv1.AmneziaWGClientConfigResponse{Config: "private-client-profile"},
 		"/" + RPCServiceName + "/GetAmneziaWGPeerStats":    &controllerv1.AmneziaWGPeerStatsResponse{Peers: []*controllerv1.AmneziaWGPeerStats{{Name: "phone", SourceIp: "203.0.113.4", LastSeen: timestamppb.New(createdAt), UploadBytes: 99, DownloadBytes: 101}}},
 		"/" + RPCServiceName + "/ExportAmneziaWGBackup":    &controllerv1.AmneziaWGBackupResponse{Data: []byte("archive")},
@@ -124,9 +126,15 @@ func TestAWGClientRoutesTypedOperations(t *testing.T) {
 	if err != nil || len(peers) != 1 || peers[0].Name != "phone" || peers[0].CreatedAt != createdAt {
 		t.Fatalf("ListPeers() = %+v, %v", peers, err)
 	}
-	created, err := awg.CreatePeer(context.Background(), "phone")
+	created, err := awg.CreatePeer(context.Background(), "phone", nil)
 	if err != nil || created.IPv4 != "10.0.0.2" {
 		t.Fatalf("CreatePeer() = %+v, %v", created, err)
+	}
+	if _, err := awg.SetPeerEnabled(context.Background(), "phone", true); err != nil {
+		t.Fatalf("SetPeerEnabled() = %v", err)
+	}
+	if _, err := awg.SetPeerExpiry(context.Background(), "phone", nil); err != nil {
+		t.Fatalf("SetPeerExpiry(clear) = %v", err)
 	}
 	if err := awg.RemovePeer(context.Background(), "phone"); err != nil {
 		t.Fatal(err)
@@ -188,13 +196,24 @@ func TestAWGClientRejectsInvalidTypedResponses(t *testing.T) {
 		}
 	}
 	for method, call := range map[string]func(*AWGClient) error{
-		"CreateAmneziaWGPeer": func(client *AWGClient) error { _, err := client.CreatePeer(context.Background(), "phone"); return err },
+		"CreateAmneziaWGPeer": func(client *AWGClient) error {
+			_, err := client.CreatePeer(context.Background(), "phone", nil)
+			return err
+		},
 		"GetAmneziaWGClientConfig": func(client *AWGClient) error {
 			_, err := client.ClientConfig(context.Background(), "phone")
 			return err
 		},
 		"RestoreAmneziaWGBackup": func(client *AWGClient) error { return client.RestoreBackup(context.Background(), nil) },
 		"RemoveAmneziaWGPeer":    func(client *AWGClient) error { return client.RemovePeer(context.Background(), "phone") },
+		"SetAmneziaWGPeerEnabled": func(client *AWGClient) error {
+			_, err := client.SetPeerEnabled(context.Background(), "phone", false)
+			return err
+		},
+		"SetAmneziaWGPeerExpiry": func(client *AWGClient) error {
+			_, err := client.SetPeerExpiry(context.Background(), "phone", nil)
+			return err
+		},
 	} {
 		invoker := &responseInvoker{errors: map[string]error{"/" + RPCServiceName + "/" + method: status.Error(codes.Unavailable, "offline")}}
 		if err := call(NewClientWithConn(invoker, "token").AWG()); status.Code(err) != codes.Unavailable {

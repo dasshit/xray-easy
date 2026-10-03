@@ -25,6 +25,8 @@ const (
 	Control_GetPeerStats_FullMethodName       = "/xrayeasy.awg.v1.Control/GetPeerStats"
 	Control_WatchPeerStats_FullMethodName     = "/xrayeasy.awg.v1.Control/WatchPeerStats"
 	Control_CreatePeer_FullMethodName         = "/xrayeasy.awg.v1.Control/CreatePeer"
+	Control_SetPeerEnabled_FullMethodName     = "/xrayeasy.awg.v1.Control/SetPeerEnabled"
+	Control_SetPeerExpiry_FullMethodName      = "/xrayeasy.awg.v1.Control/SetPeerExpiry"
 	Control_AddPeer_FullMethodName            = "/xrayeasy.awg.v1.Control/AddPeer"
 	Control_RemovePeer_FullMethodName         = "/xrayeasy.awg.v1.Control/RemovePeer"
 	Control_GetClientConfig_FullMethodName    = "/xrayeasy.awg.v1.Control/GetClientConfig"
@@ -45,6 +47,8 @@ type ControlClient interface {
 	GetPeerStats(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*GetPeerStatsResponse, error)
 	WatchPeerStats(ctx context.Context, in *WatchPeerStatsRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[PeerStatsUpdate], error)
 	CreatePeer(ctx context.Context, in *CreatePeerRequest, opts ...grpc.CallOption) (*Peer, error)
+	SetPeerEnabled(ctx context.Context, in *SetPeerEnabledRequest, opts ...grpc.CallOption) (*Peer, error)
+	SetPeerExpiry(ctx context.Context, in *SetPeerExpiryRequest, opts ...grpc.CallOption) (*Peer, error)
 	AddPeer(ctx context.Context, in *AddPeerRequest, opts ...grpc.CallOption) (*Peer, error)
 	RemovePeer(ctx context.Context, in *RemovePeerRequest, opts ...grpc.CallOption) (*RemovePeerResponse, error)
 	GetClientConfig(ctx context.Context, in *GetClientConfigRequest, opts ...grpc.CallOption) (*ClientConfigResponse, error)
@@ -114,6 +118,26 @@ func (c *controlClient) CreatePeer(ctx context.Context, in *CreatePeerRequest, o
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Peer)
 	err := c.cc.Invoke(ctx, Control_CreatePeer_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetPeerEnabled(ctx context.Context, in *SetPeerEnabledRequest, opts ...grpc.CallOption) (*Peer, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Peer)
+	err := c.cc.Invoke(ctx, Control_SetPeerEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) SetPeerExpiry(ctx context.Context, in *SetPeerExpiryRequest, opts ...grpc.CallOption) (*Peer, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Peer)
+	err := c.cc.Invoke(ctx, Control_SetPeerExpiry_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -192,6 +216,8 @@ type ControlServer interface {
 	GetPeerStats(context.Context, *emptypb.Empty) (*GetPeerStatsResponse, error)
 	WatchPeerStats(*WatchPeerStatsRequest, grpc.ServerStreamingServer[PeerStatsUpdate]) error
 	CreatePeer(context.Context, *CreatePeerRequest) (*Peer, error)
+	SetPeerEnabled(context.Context, *SetPeerEnabledRequest) (*Peer, error)
+	SetPeerExpiry(context.Context, *SetPeerExpiryRequest) (*Peer, error)
 	AddPeer(context.Context, *AddPeerRequest) (*Peer, error)
 	RemovePeer(context.Context, *RemovePeerRequest) (*RemovePeerResponse, error)
 	GetClientConfig(context.Context, *GetClientConfigRequest) (*ClientConfigResponse, error)
@@ -222,6 +248,12 @@ func (UnimplementedControlServer) WatchPeerStats(*WatchPeerStatsRequest, grpc.Se
 }
 func (UnimplementedControlServer) CreatePeer(context.Context, *CreatePeerRequest) (*Peer, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreatePeer not implemented")
+}
+func (UnimplementedControlServer) SetPeerEnabled(context.Context, *SetPeerEnabledRequest) (*Peer, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetPeerEnabled not implemented")
+}
+func (UnimplementedControlServer) SetPeerExpiry(context.Context, *SetPeerExpiryRequest) (*Peer, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetPeerExpiry not implemented")
 }
 func (UnimplementedControlServer) AddPeer(context.Context, *AddPeerRequest) (*Peer, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method AddPeer not implemented")
@@ -341,6 +373,42 @@ func _Control_CreatePeer_Handler(srv interface{}, ctx context.Context, dec func(
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).CreatePeer(ctx, req.(*CreatePeerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetPeerEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPeerEnabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetPeerEnabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetPeerEnabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetPeerEnabled(ctx, req.(*SetPeerEnabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_SetPeerExpiry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetPeerExpiryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).SetPeerExpiry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_SetPeerExpiry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).SetPeerExpiry(ctx, req.(*SetPeerExpiryRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -475,6 +543,14 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreatePeer",
 			Handler:    _Control_CreatePeer_Handler,
+		},
+		{
+			MethodName: "SetPeerEnabled",
+			Handler:    _Control_SetPeerEnabled_Handler,
+		},
+		{
+			MethodName: "SetPeerExpiry",
+			Handler:    _Control_SetPeerExpiry_Handler,
 		},
 		{
 			MethodName: "AddPeer",

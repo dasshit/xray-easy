@@ -33,7 +33,7 @@ describe('profile list and creation', () => {
     const dialog = wrapper.get('[role="dialog"]')
     await dialog.get('input.device-name-input').setValue('work mac')
     await dialog.get('[data-testid="profile-protocol"]').setValue('vless')
-    await dialog.findAll('select')[1]?.setValue('safari')
+    await dialog.findAll('select')[2]?.setValue('safari')
     await dialog.get('form').trigger('submit')
     await flushPromises()
 

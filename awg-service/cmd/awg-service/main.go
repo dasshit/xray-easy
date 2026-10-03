@@ -136,9 +136,15 @@ func serveControlService(manager *control.Manager, opts control.Options, token s
 		defer close(monitorDone)
 		service.RunConnectionMonitor(monitorContext)
 	}()
+	expirationDone := make(chan struct{})
+	go func() {
+		defer close(expirationDone)
+		service.RunExpirationMonitor(monitorContext)
+	}()
 	defer func() {
 		stopMonitor()
 		<-monitorDone
+		<-expirationDone
 	}()
 	server := grpc.NewServer(
 		grpc.ChainUnaryInterceptor(control.LoggingInterceptor(), control.AuthInterceptor(token)),

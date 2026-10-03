@@ -96,6 +96,12 @@ func TestEmbeddedRuntimeDisconnectsOnlySelectedVLESSSourceLease(t *testing.T) {
 	}
 	assertConnectionClosed(t, first)
 	assertLeaseEcho(t, second, "second-remains-active")
+
+	absent, closed, flows, err := engine.RemoveUserWithProtocol(context.Background(), xrayruntimev1.Protocol_PROTOCOL_VLESS, "vless", profile)
+	if err != nil || absent || closed != 1 || flows != 1 {
+		t.Fatalf("remove VLESS user and close its remaining session = (absent:%t closed:%d flows:%d err:%v)", absent, closed, flows, err)
+	}
+	assertConnectionClosed(t, second)
 }
 
 func dialVLESSLease(t *testing.T, proxyPort int, sourceIP, email, credential string, destination *net.TCPAddr) net.Conn {

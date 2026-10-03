@@ -140,6 +140,8 @@ func TestGeneratedRPCDispatchesEveryTypedMethod(t *testing.T) {
 		{"GetAmneziaWGStatus", &controllerv1.EmptyRequest{}, &controllerv1.AmneziaWGStatusResponse{}},
 		{"ListAmneziaWGPeers", &controllerv1.EmptyRequest{}, &controllerv1.ListAmneziaWGPeersResponse{}},
 		{"CreateAmneziaWGPeer", &controllerv1.CreateAmneziaWGPeerRequest{}, &controllerv1.AmneziaWGPeer{}},
+		{"SetAmneziaWGPeerEnabled", &controllerv1.SetAmneziaWGPeerEnabledRequest{}, &controllerv1.AmneziaWGPeer{}},
+		{"SetAmneziaWGPeerExpiry", &controllerv1.SetAmneziaWGPeerExpiryRequest{}, &controllerv1.AmneziaWGPeer{}},
 		{"RemoveAmneziaWGPeer", &controllerv1.RemoveAmneziaWGPeerRequest{}, &controllerv1.OperationResponse{}},
 		{"GetAmneziaWGPeerStats", &controllerv1.EmptyRequest{}, &controllerv1.AmneziaWGPeerStatsResponse{}},
 		{"GetAmneziaWGClientConfig", &controllerv1.GetAmneziaWGClientConfigRequest{}, &controllerv1.AmneziaWGClientConfigResponse{}},

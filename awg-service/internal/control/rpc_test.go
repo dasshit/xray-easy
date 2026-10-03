@@ -260,8 +260,8 @@ func TestGeneratedAWGServiceRegistersTypedMethods(t *testing.T) {
 	server := grpc.NewServer()
 	Register(server, NewService(nil, Options{}))
 	info := server.GetServiceInfo()["xrayeasy.awg.v1.Control"]
-	if len(info.Methods) != 11 {
-		t.Fatalf("registered methods = %d, want 11", len(info.Methods))
+	if len(info.Methods) != 13 {
+		t.Fatalf("registered methods = %d, want 13", len(info.Methods))
 	}
 	for _, method := range info.Methods {
 		if method.Name == "WatchPeerStats" && !method.IsServerStream {

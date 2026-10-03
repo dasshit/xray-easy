@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
@@ -8,9 +9,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xtls/xray-core/common/buf"
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
+	"github.com/xtls/xray-core/features/outbound"
+	"github.com/xtls/xray-core/transport"
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 )
 
@@ -148,6 +152,174 @@ func TestLeaseConnectionRegistryHandlesCloseErrorsAndOperationEviction(t *testin
 	}
 	if _, exists := registry.operations["failure"]; exists {
 		t.Fatal("oldest operation was not evicted")
+	}
+}
+
+func TestLeaseConnectionRegistryRemovesProfileAndClosesAllItsConnections(t *testing.T) {
+	registry := newLeaseConnectionRegistry()
+	firstKey := leaseConnectionKey{protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, email: "profile", sourceIP: netip.MustParseAddr("192.0.2.1")}
+	secondKey := leaseConnectionKey{protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, email: "profile", sourceIP: netip.MustParseAddr("192.0.2.2")}
+	otherProfileKey := leaseConnectionKey{protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, email: "other", sourceIP: netip.MustParseAddr("192.0.2.3")}
+	first, second, other := &leaseTestConnection{}, &leaseTestConnection{}, &leaseTestConnection{}
+	registry.register(firstKey, first)
+	registry.register(secondKey, second)
+	registry.register(otherProfileKey, other)
+	removeCalls := 0
+
+	wasAbsent, closed, flows, err := registry.removeProfileSessions(xrayruntimev1.Protocol_PROTOCOL_VLESS, "profile", func() (bool, error) {
+		removeCalls++
+		return false, nil
+	})
+	if err != nil || wasAbsent || closed != 2 || flows != 0 || removeCalls != 1 || first.closeCount() != 1 || second.closeCount() != 1 || other.closeCount() != 0 {
+		t.Fatalf("profile removal = (absent:%t closed:%d flows:%d err:%v), calls=%d closes=(%d,%d,%d)", wasAbsent, closed, flows, err, removeCalls, first.closeCount(), second.closeCount(), other.closeCount())
+	}
+}
+
+func TestLeaseTrackedOutboundCancelsAndBlocksRemovedProfileFlows(t *testing.T) {
+	registry := newLeaseConnectionRegistry()
+	profile := leaseProfileKey{protocol: xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS, email: "udp-profile"}
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	handler := &blockingLeaseOutbound{started: started, finished: finished}
+	tracked := &leaseTrackedOutbound{Handler: handler, registry: registry}
+	inbound := &session.Inbound{Name: "shadowsocks-2022", User: &protocol.MemoryUser{Email: profile.email}}
+	ctx := session.ContextWithInbound(context.Background(), inbound)
+	reader := &leaseInterruptReader{}
+	writer := &leaseInterruptWriter{}
+
+	go tracked.Dispatch(ctx, &transport.Link{Reader: reader, Writer: writer})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("authenticated UDP profile flow did not start")
+	}
+
+	_, closed, flows, err := registry.removeProfileSessions(profile.protocol, profile.email, func() (bool, error) { return false, nil })
+	if err != nil || closed != 0 || flows != 1 {
+		t.Fatalf("remove profile flow = (closed:%d flows:%d err:%v)", closed, flows, err)
+	}
+	if reader.interruptions != 1 || writer.interruptions != 1 {
+		t.Fatalf("removed profile interrupted reader/writer %d/%d times, want 1/1", reader.interruptions, writer.interruptions)
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("profile removal did not cancel the active UDP flow")
+	}
+
+	blockedStarted := make(chan struct{})
+	blocked := &leaseTrackedOutbound{Handler: &blockingLeaseOutbound{started: blockedStarted, finished: make(chan struct{})}, registry: registry}
+	blocked.Dispatch(ctx, &transport.Link{})
+	select {
+	case <-blockedStarted:
+		t.Fatal("a removed profile started a stale authenticated flow")
+	default:
+	}
+
+	registry.allowProfile(profile)
+	reenabledStarted := make(chan struct{})
+	reenabledFinished := make(chan struct{})
+	reenabled := &leaseTrackedOutbound{Handler: &blockingLeaseOutbound{started: reenabledStarted, finished: reenabledFinished}, registry: registry}
+	reenabledCtx, cancel := context.WithCancel(ctx)
+	go reenabled.Dispatch(reenabledCtx, &transport.Link{})
+	select {
+	case <-reenabledStarted:
+	case <-time.After(time.Second):
+		t.Fatal("explicitly re-enabled profile could not start a new flow")
+	}
+	cancel()
+	select {
+	case <-reenabledFinished:
+	case <-time.After(time.Second):
+		t.Fatal("canceled test flow did not finish")
+	}
+}
+
+func TestLeaseTrackedOutboundCancelsHysteriaUDPFlows(t *testing.T) {
+	registry := newLeaseConnectionRegistry()
+	started := make(chan struct{})
+	finished := make(chan struct{})
+	tracked := &leaseTrackedOutbound{
+		Handler:  &blockingLeaseOutbound{started: started, finished: finished},
+		registry: registry,
+	}
+	ctx := session.ContextWithInbound(context.Background(), &session.Inbound{
+		Name: "hysteria", User: &protocol.MemoryUser{Email: "hysteria-profile"},
+	})
+	go tracked.Dispatch(ctx, &transport.Link{})
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("authenticated Hysteria flow did not start")
+	}
+	_, _, flows, err := registry.removeProfileSessions(xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, "hysteria-profile", func() (bool, error) { return false, nil })
+	if err != nil || flows != 1 {
+		t.Fatalf("remove Hysteria profile flow = (flows:%d err:%v)", flows, err)
+	}
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("profile removal did not cancel the active Hysteria flow")
+	}
+}
+
+func TestRemovedProfileMarkersExpireAndStayBounded(t *testing.T) {
+	registry := newLeaseConnectionRegistry()
+	registry.mu.Lock()
+	for index := 0; index <= removedProfileLimit; index++ {
+		registry.markProfileRemovedLocked(leaseProfileKey{
+			protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS,
+			email:    fmt.Sprintf("profile-%d", index),
+		})
+	}
+	if len(registry.removedProfiles) != removedProfileLimit {
+		registry.mu.Unlock()
+		t.Fatalf("removed profile marker count = %d, want at most %d", len(registry.removedProfiles), removedProfileLimit)
+	}
+	last := leaseProfileKey{protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, email: fmt.Sprintf("profile-%d", removedProfileLimit)}
+	if !registry.profileRemovedLocked(last) {
+		registry.mu.Unlock()
+		t.Fatal("fresh removed profile marker was not active")
+	}
+	registry.removedProfiles[last] = time.Now().Add(-time.Second)
+	if registry.profileRemovedLocked(last) {
+		registry.mu.Unlock()
+		t.Fatal("expired profile marker remained active")
+	}
+	registry.mu.Unlock()
+}
+
+type leaseInterruptReader struct{ interruptions int }
+
+func (r *leaseInterruptReader) ReadMultiBuffer() (buf.MultiBuffer, error) { return nil, nil }
+func (r *leaseInterruptReader) Interrupt()                                { r.interruptions++ }
+
+type leaseInterruptWriter struct{ interruptions int }
+
+func (w *leaseInterruptWriter) WriteMultiBuffer(buf.MultiBuffer) error { return nil }
+func (w *leaseInterruptWriter) Interrupt()                             { w.interruptions++ }
+
+type blockingLeaseOutbound struct {
+	outbound.Handler
+	started  chan struct{}
+	finished chan struct{}
+}
+
+func (h *blockingLeaseOutbound) Dispatch(ctx context.Context, _ *transport.Link) {
+	close(h.started)
+	<-ctx.Done()
+	close(h.finished)
+}
+
+func TestLeaseConnectionRegistryDoesNotCloseSessionsWhenCredentialRemovalFails(t *testing.T) {
+	registry := newLeaseConnectionRegistry()
+	key := leaseConnectionKey{protocol: xrayruntimev1.Protocol_PROTOCOL_TROJAN, email: "profile", sourceIP: netip.MustParseAddr("2001:db8::1")}
+	connection := &leaseTestConnection{}
+	registry.register(key, connection)
+	wantErr := errors.New("user removal failed")
+	_, closed, flows, err := registry.removeProfileSessions(key.protocol, key.email, func() (bool, error) { return false, wantErr })
+	if !errors.Is(err, wantErr) || closed != 0 || flows != 0 || connection.closeCount() != 0 || registry.closingProfiles[leaseProfileKey{protocol: key.protocol, email: key.email}] {
+		t.Fatalf("failed removal = (closed:%d err:%v), close count=%d marker=%t", closed, err, connection.closeCount(), registry.closingProfiles[leaseProfileKey{protocol: key.protocol, email: key.email}])
 	}
 }
 

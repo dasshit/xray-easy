@@ -15,6 +15,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 type fakeXrayHandler struct {
@@ -137,8 +138,26 @@ func (f *fakeAWGRuntime) Status(context.Context) (domain.AmneziaWGStatus, error)
 func (f *fakeAWGRuntime) ListPeers(context.Context) ([]domain.AmneziaWGPeer, error) {
 	return f.peers, f.err
 }
-func (f *fakeAWGRuntime) CreatePeer(_ context.Context, name string) (domain.AmneziaWGPeer, error) {
-	return domain.AmneziaWGPeer{Name: name, PublicKey: "public", IPv4: "10.0.0.2", IPv6: "fd00::2", CreatedAt: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}, f.err
+func (f *fakeAWGRuntime) CreatePeer(_ context.Context, name string, expiresAt *time.Time) (domain.AmneziaWGPeer, error) {
+	return domain.AmneziaWGPeer{Name: name, PublicKey: "public", IPv4: "10.0.0.2", IPv6: "fd00::2", CreatedAt: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), ExpiresAt: expiresAt}, f.err
+}
+func (f *fakeAWGRuntime) SetPeerEnabled(_ context.Context, name string, enabled bool) (domain.AmneziaWGPeer, error) {
+	for _, peer := range f.peers {
+		if peer.Name == name {
+			peer.Disabled = !enabled
+			return peer, f.err
+		}
+	}
+	return domain.AmneziaWGPeer{}, f.err
+}
+func (f *fakeAWGRuntime) SetPeerExpiry(_ context.Context, name string, expiresAt *time.Time) (domain.AmneziaWGPeer, error) {
+	for _, peer := range f.peers {
+		if peer.Name == name {
+			peer.ExpiresAt = expiresAt
+			return peer, f.err
+		}
+	}
+	return domain.AmneziaWGPeer{}, f.err
 }
 func (f *fakeAWGRuntime) RemovePeer(_ context.Context, name string) error {
 	f.removed = name
@@ -214,8 +233,15 @@ func TestServiceRoutesAllAmneziaWGRuntimeOperations(t *testing.T) {
 	if response, err := service.ListAmneziaWGPeers(context.Background(), &controllerv1.EmptyRequest{}); err != nil || len(response.Peers) != 1 || response.Peers[0].CreatedAt.AsTime() != createdAt {
 		t.Fatalf("ListAmneziaWGPeers() = %+v, %v", response, err)
 	}
-	if response, err := service.CreateAmneziaWGPeer(context.Background(), &controllerv1.CreateAmneziaWGPeerRequest{Name: "tablet"}); err != nil || response.Name != "tablet" {
+	future := time.Now().UTC().Add(time.Hour)
+	if response, err := service.CreateAmneziaWGPeer(context.Background(), &controllerv1.CreateAmneziaWGPeerRequest{Name: "tablet", ExpiresAt: timestamppb.New(future)}); err != nil || response.Name != "tablet" || response.ExpiresAt == nil || !response.ExpiresAt.AsTime().Equal(future) {
 		t.Fatalf("CreateAmneziaWGPeer() = %+v, %v", response, err)
+	}
+	if response, err := service.SetAmneziaWGPeerEnabled(context.Background(), &controllerv1.SetAmneziaWGPeerEnabledRequest{Name: "phone", Enabled: false}); err != nil || !response.Disabled {
+		t.Fatalf("SetAmneziaWGPeerEnabled() = %+v, %v", response, err)
+	}
+	if response, err := service.SetAmneziaWGPeerExpiry(context.Background(), &controllerv1.SetAmneziaWGPeerExpiryRequest{Name: "phone", ExpiresAt: timestamppb.New(future)}); err != nil || response.ExpiresAt == nil || !response.ExpiresAt.AsTime().Equal(future) {
+		t.Fatalf("SetAmneziaWGPeerExpiry() = %+v, %v", response, err)
 	}
 	if _, err := service.RemoveAmneziaWGPeer(context.Background(), &controllerv1.RemoveAmneziaWGPeerRequest{Name: "phone"}); err != nil || awg.removed != "phone" {
 		t.Fatalf("RemoveAmneziaWGPeer() = %v, removed=%q", err, awg.removed)
@@ -231,6 +257,45 @@ func TestServiceRoutesAllAmneziaWGRuntimeOperations(t *testing.T) {
 	}
 	if _, err := service.RestoreAmneziaWGBackup(context.Background(), &controllerv1.RestoreAmneziaWGBackupRequest{Data: backup}); err != nil || string(awg.restored) != string(backup) {
 		t.Fatalf("RestoreAmneziaWGBackup() = %v, restored=%v", err, awg.restored)
+	}
+}
+
+func TestServiceValidatesAndPropagatesAmneziaWGExpiryOperations(t *testing.T) {
+	ctx := context.Background()
+	unavailable := NewServiceWithAdapters(&fakeRuntime{}, nil, nil, nil)
+	if _, err := unavailable.SetAmneziaWGPeerEnabled(ctx, nil); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("nil AWG enable request = %v", err)
+	}
+	if _, err := unavailable.SetAmneziaWGPeerEnabled(ctx, &controllerv1.SetAmneziaWGPeerEnabledRequest{}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("empty AWG enable name = %v", err)
+	}
+	if _, err := unavailable.SetAmneziaWGPeerEnabled(ctx, &controllerv1.SetAmneziaWGPeerEnabledRequest{Name: "phone"}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("AWG enable without runtime = %v", err)
+	}
+	for _, request := range []*controllerv1.SetAmneziaWGPeerExpiryRequest{
+		nil,
+		{},
+		{Name: "phone"},
+		{Name: "phone", ClearExpiry: true, ExpiresAt: timestamppb.Now()},
+		{Name: "phone", ExpiresAt: &timestamppb.Timestamp{Seconds: 253402300800}},
+	} {
+		if _, err := unavailable.SetAmneziaWGPeerExpiry(ctx, request); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("invalid AWG expiry request %+v = %v", request, err)
+		}
+	}
+	if _, err := unavailable.SetAmneziaWGPeerExpiry(ctx, &controllerv1.SetAmneziaWGPeerExpiryRequest{Name: "phone", ClearExpiry: true}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("AWG expiry without runtime = %v", err)
+	}
+
+	awg := &fakeAWGRuntime{peers: []domain.AmneziaWGPeer{{Name: "phone"}}, err: errors.New("AWG unavailable")}
+	service := NewServiceWithAdapters(&fakeRuntime{}, nil, nil, awg)
+	future := time.Now().UTC().Add(time.Hour)
+	service.now = func() time.Time { return future.Add(-time.Minute) }
+	if _, err := service.SetAmneziaWGPeerExpiry(ctx, &controllerv1.SetAmneziaWGPeerExpiryRequest{Name: "phone", ExpiresAt: timestamppb.New(future)}); err == nil || !errors.Is(err, awg.err) {
+		t.Fatalf("AWG expiry runtime error = %v", err)
+	}
+	if _, err := service.SetAmneziaWGPeerEnabled(ctx, &controllerv1.SetAmneziaWGPeerEnabledRequest{Name: "phone", Enabled: true}); err == nil || !errors.Is(err, awg.err) {
+		t.Fatalf("AWG enable runtime error = %v", err)
 	}
 }
 

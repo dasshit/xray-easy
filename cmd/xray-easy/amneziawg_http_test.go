@@ -26,6 +26,7 @@ type fakeAmneziaWGGateway struct {
 	statusErr  error
 	listErr    error
 	createErr  error
+	expiryErr  error
 	removeErr  error
 	profileErr error
 }
@@ -45,16 +46,42 @@ func (f *fakeAmneziaWGGateway) ListPeers(context.Context) ([]domain.AmneziaWGPee
 	return peers, nil
 }
 
-func (f *fakeAmneziaWGGateway) CreatePeer(_ context.Context, name string) (domain.AmneziaWGPeer, error) {
+func (f *fakeAmneziaWGGateway) CreatePeer(_ context.Context, name string, expiresAt *time.Time) (domain.AmneziaWGPeer, error) {
 	if f.createErr != nil {
 		return domain.AmneziaWGPeer{}, f.createErr
 	}
 	if _, exists := f.peers[name]; exists {
 		return domain.AmneziaWGPeer{}, status.Error(codes.AlreadyExists, "exists")
 	}
-	peer := domain.AmneziaWGPeer{Name: name, PublicKey: "public-key", IPv4: "10.88.0.2", IPv6: "fd88:88:88::2", CreatedAt: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)}
+	peer := domain.AmneziaWGPeer{Name: name, PublicKey: "public-key", IPv4: "10.88.0.2", IPv6: "fd88:88:88::2", CreatedAt: time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC), ExpiresAt: expiresAt}
 	f.peers[name] = peer
 	f.profiles[name] = "[Interface]\nPrivateKey = client-private\n[Peer]\n"
+	return peer, nil
+}
+
+func (f *fakeAmneziaWGGateway) SetPeerEnabled(_ context.Context, name string, enabled bool) (domain.AmneziaWGPeer, error) {
+	peer, exists := f.peers[name]
+	if !exists {
+		return domain.AmneziaWGPeer{}, status.Error(codes.NotFound, "missing")
+	}
+	if enabled && peer.IsExpired(time.Now().UTC()) {
+		return domain.AmneziaWGPeer{}, status.Error(codes.FailedPrecondition, "expired")
+	}
+	peer.Disabled = !enabled
+	f.peers[name] = peer
+	return peer, nil
+}
+
+func (f *fakeAmneziaWGGateway) SetPeerExpiry(_ context.Context, name string, expiresAt *time.Time) (domain.AmneziaWGPeer, error) {
+	if f.expiryErr != nil {
+		return domain.AmneziaWGPeer{}, f.expiryErr
+	}
+	peer, exists := f.peers[name]
+	if !exists {
+		return domain.AmneziaWGPeer{}, status.Error(codes.NotFound, "missing")
+	}
+	peer.ExpiresAt = expiresAt
+	f.peers[name] = peer
 	return peer, nil
 }
 
@@ -102,9 +129,14 @@ func TestAmneziaWGUsesUnifiedProfileAPIAndKeepsSecretsInAWGService(t *testing.T)
 	}
 	app.server.awg = gateway
 
-	created := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "iphone", Protocol: string(domain.ProtocolAmneziaWG)}, true)
+	expiresAt := futureTimePtr()
+	created := requestJSON(t, app, http.MethodPost, "/api/clients", clientRequest{Name: "iphone", Protocol: string(domain.ProtocolAmneziaWG), ExpiresAt: expiresAt}, true)
 	if created.Code != http.StatusCreated || !strings.Contains(created.Body.String(), `"id":"awg:iphone"`) || !strings.Contains(created.Body.String(), `"protocol":"amneziawg"`) || strings.Contains(created.Body.String(), "client-private") {
 		t.Fatalf("unified AWG create = %d %s", created.Code, created.Body.String())
+	}
+	createdProfile := decodeResponse[clientResponse](t, created)
+	if createdProfile.ExpiresAt == nil || !createdProfile.ExpiresAt.Equal(*expiresAt) || !createdProfile.Enabled {
+		t.Fatalf("AWG profile expiry state = %+v", createdProfile)
 	}
 	listed := requestJSON(t, app, http.MethodGet, "/api/clients", nil, true)
 	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"id":"awg:iphone"`) || !strings.Contains(listed.Body.String(), `"protocols":["amneziawg"]`) {
@@ -124,9 +156,73 @@ func TestAmneziaWGUsesUnifiedProfileAPIAndKeepsSecretsInAWGService(t *testing.T)
 		t.Fatalf("AWG config delivery = %d %s", file.Code, file.Body.String())
 	}
 
+	disabled := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aiphone/disable", nil, true)
+	if disabled.Code != http.StatusOK || decodeResponse[clientResponse](t, disabled).Enabled || len(gateway.profiles) != 1 {
+		t.Fatalf("AWG reversible disable = %d %s profiles=%d", disabled.Code, disabled.Body.String(), len(gateway.profiles))
+	}
+	newExpiry := futureTimePtr()
+	updatedExpiry := requestJSON(t, app, http.MethodPut, "/api/clients/awg%3Aiphone/expiry", clientExpiryRequest{ExpiresAt: newExpiry}, true)
+	if updatedExpiry.Code != http.StatusOK || decodeResponse[clientResponse](t, updatedExpiry).Enabled {
+		t.Fatalf("AWG expiry extension changed enable state = %d %s", updatedExpiry.Code, updatedExpiry.Body.String())
+	}
+	enabled := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aiphone/enable", nil, true)
+	if enabled.Code != http.StatusOK || !decodeResponse[clientResponse](t, enabled).Enabled {
+		t.Fatalf("AWG explicit enable = %d %s", enabled.Code, enabled.Body.String())
+	}
+	peer := gateway.peers["iphone"]
+	past := time.Now().UTC().Add(-time.Minute)
+	peer.ExpiresAt = &past
+	gateway.peers["iphone"] = peer
+	pending := requestJSON(t, app, http.MethodGet, "/api/clients", nil, true)
+	if pending.Code != http.StatusOK || !strings.Contains(pending.Body.String(), `"expiration_pending":true`) {
+		t.Fatalf("AWG pending expiry state = %d %s", pending.Code, pending.Body.String())
+	}
+	blockedEnable := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aiphone/enable", nil, true)
+	if blockedEnable.Code != http.StatusConflict {
+		t.Fatalf("enable of expired AWG profile = %d %s", blockedEnable.Code, blockedEnable.Body.String())
+	}
+	if _, err := gateway.SetPeerEnabled(context.Background(), "iphone", false); err != nil {
+		t.Fatal(err)
+	}
+	replacementExpiry := futureTimePtr()
+	extended := requestJSON(t, app, http.MethodPut, "/api/clients/awg%3Aiphone/expiry", clientExpiryRequest{ExpiresAt: replacementExpiry}, true)
+	if extended.Code != http.StatusOK || decodeResponse[clientResponse](t, extended).Enabled {
+		t.Fatalf("AWG extension implicitly enabled profile = %d %s", extended.Code, extended.Body.String())
+	}
+	enabled = requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aiphone/enable", nil, true)
+	if enabled.Code != http.StatusOK || !decodeResponse[clientResponse](t, enabled).Enabled {
+		t.Fatalf("explicit enable after AWG extension = %d %s", enabled.Code, enabled.Body.String())
+	}
+
 	revoked := requestJSON(t, app, http.MethodPost, "/api/clients/awg%3Aiphone/revoke", nil, true)
 	if revoked.Code != http.StatusOK || len(gateway.peers) != 0 || len(gateway.profiles) != 0 {
 		t.Fatalf("unified AWG revoke = %d %s peers=%d", revoked.Code, revoked.Body.String(), len(gateway.peers))
+	}
+}
+
+func TestAmneziaWGExpiryUpdateRejectsMalformedAndPastDeadlinesAndReportsServiceError(t *testing.T) {
+	t.Parallel()
+	app := newTestApp(t, true)
+	gateway := &fakeAmneziaWGGateway{
+		peers:    map[string]domain.AmneziaWGPeer{"phone": {Name: "phone", PublicKey: "peer-key", IPv4: "10.88.0.2", IPv6: "fd88:88:88::2", CreatedAt: time.Now().UTC()}},
+		profiles: make(map[string]string),
+	}
+	app.server.awg = gateway
+	path := "/api/clients/awg%3Aphone/expiry"
+
+	malformed := requestJSON(t, app, http.MethodPut, path, "not-an-object", true)
+	if malformed.Code != http.StatusBadRequest {
+		t.Fatalf("malformed AWG expiry update = %d %s", malformed.Code, malformed.Body.String())
+	}
+	past := time.Now().UTC().Add(-time.Minute)
+	invalid := requestJSON(t, app, http.MethodPut, path, clientExpiryRequest{ExpiresAt: &past}, true)
+	if invalid.Code != http.StatusBadRequest {
+		t.Fatalf("past AWG expiry update = %d %s", invalid.Code, invalid.Body.String())
+	}
+	gateway.expiryErr = status.Error(codes.Unavailable, "AWG service unavailable")
+	failed := requestJSON(t, app, http.MethodPut, path, clientExpiryRequest{}, true)
+	if failed.Code != http.StatusBadGateway && failed.Code != http.StatusServiceUnavailable {
+		t.Fatalf("AWG expiry service failure = %d %s", failed.Code, failed.Body.String())
 	}
 }
 

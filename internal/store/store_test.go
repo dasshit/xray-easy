@@ -74,6 +74,152 @@ func TestVMessProfileStoresAndTransitionsIndependentAccessState(t *testing.T) {
 	}
 }
 
+func TestClientExpiryPersistsInUTCAndSelectsDueEnabledProfiles(t *testing.T) {
+	db, ctx := openTestStore(t, "client-expiry.db")
+	deadline := time.Date(2026, time.September, 1, 12, 30, 45, 123000000, time.FixedZone("UTC+3", 3*60*60))
+	expired, err := domain.NewProtocolClient("expired-profile", "expired-phone", domain.ProtocolVLESS, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expired.Email = "expired@example.test"
+	expired.UUID = "uuid-expired"
+	expired.ExpiresAt = &deadline
+	if err := db.CreateClient(ctx, expired, expired.UUID, expired.Email, "short-expired"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetClient(ctx, expired.ID)
+	if err != nil || got.ExpiresAt == nil || !got.ExpiresAt.Equal(deadline) || got.ExpiresAt.Location() != time.UTC {
+		t.Fatalf("expiry round trip = %v, error %v; want the same UTC instant", got.ExpiresAt, err)
+	}
+
+	unlimited := domain.Client{ID: "unlimited-profile", Name: "unlimited-phone", Enabled: true}
+	if err := db.CreateClient(ctx, unlimited, "uuid-unlimited", "unlimited@example.test", "short-unlimited"); err != nil {
+		t.Fatal(err)
+	}
+	due, err := db.ListExpiredEnabledClients(ctx, deadline.Add(time.Second))
+	if err != nil || len(due) != 1 || due[0].ID != expired.ID {
+		t.Fatalf("due profiles = %+v, error %v", due, err)
+	}
+	count, err := CountExpiredEnabledClientsFromDatabase(ctx, db.dbPath, deadline.Add(time.Second))
+	if err != nil || count != 1 {
+		t.Fatalf("read-only expiry count = %d, error %v", count, err)
+	}
+	comparisonTime := deadline.Add(time.Second).Truncate(time.Second)
+	futurePrecision := domain.Client{ID: "future-precision", Name: "future-precision", Enabled: true}
+	futureExpiry := comparisonTime.Add(time.Nanosecond)
+	futurePrecision.ExpiresAt = &futureExpiry
+	if err := db.CreateClient(ctx, futurePrecision, "uuid-future-precision", "future-precision@example.test", "short-future-precision"); err != nil {
+		t.Fatal(err)
+	}
+	count, err = CountExpiredEnabledClientsFromDatabase(ctx, db.dbPath, comparisonTime)
+	if err != nil || count != 1 {
+		t.Fatalf("fractional future deadline was counted as expired: count=%d error=%v", count, err)
+	}
+
+	future := deadline.Add(24 * time.Hour)
+	if err := db.SetClientExpiry(ctx, expired.ID, &future); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetClientExpiry(ctx, unlimited.ID, &time.Time{}); err == nil {
+		t.Fatal("zero expiry timestamp was accepted")
+	}
+	if err := db.SetClientExpiry(ctx, "missing-profile", nil); err == nil {
+		t.Fatal("expiry update for a missing profile succeeded")
+	}
+	if err := db.SetClientExpiry(ctx, expired.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetClientExpiry(ctx, futurePrecision.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err = db.GetClient(ctx, expired.ID)
+	if err != nil || got.ExpiresAt != nil {
+		t.Fatalf("cleared expiry = %v, error %v", got.ExpiresAt, err)
+	}
+	due, err = db.ListExpiredEnabledClients(ctx, deadline.Add(time.Hour))
+	if err != nil || len(due) != 0 {
+		t.Fatalf("due profiles after clearing expiry = %+v, error %v", due, err)
+	}
+	count, err = CountExpiredEnabledClientsFromDatabase(ctx, db.dbPath, deadline.Add(time.Hour))
+	if err != nil || count != 0 {
+		t.Fatalf("read-only expiry count after clear = %d, error %v", count, err)
+	}
+	if _, err := CountExpiredEnabledClientsFromDatabase(ctx, filepath.Join(t.TempDir(), "missing.db"), time.Now()); err == nil {
+		t.Fatal("expiry count succeeded for a missing database")
+	}
+	incompletePath := filepath.Join(t.TempDir(), "incomplete.db")
+	incomplete, err := sql.Open("sqlite", "file:"+incompletePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := incomplete.Exec(`CREATE TABLE clients(enabled INTEGER, revoked INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	if err := incomplete.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CountExpiredEnabledClientsFromDatabase(ctx, incompletePath, time.Now()); err == nil {
+		t.Fatal("expiry count succeeded for a schema without the expiry column")
+	}
+	malformedPath := filepath.Join(t.TempDir(), "malformed-expiry.db")
+	malformed, err := sql.Open("sqlite", "file:"+malformedPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := malformed.Exec(`CREATE TABLE clients(enabled INTEGER, revoked INTEGER, expires_at TEXT); INSERT INTO clients VALUES(1, 0, 'not-a-timestamp')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := malformed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := CountExpiredEnabledClientsFromDatabase(ctx, malformedPath, time.Now()); err == nil {
+		t.Fatal("expiry count accepted a malformed persisted timestamp")
+	}
+}
+
+func TestRestorePreservesProfileExpiry(t *testing.T) {
+	db, ctx := openTestStore(t, "restore-profile-expiry.db")
+	expiresAt := time.Now().UTC().Add(48 * time.Hour).Truncate(time.Second)
+	client, err := domain.NewProtocolClient("restore-expiry", "restore-phone", domain.ProtocolVMess, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.UUID = "restore-expiry-uuid"
+	client.Email = "restore-expiry@example.test"
+	client.ExpiresAt = &expiresAt
+	if err := db.CreateVMessClient(ctx, client); err != nil {
+		t.Fatal(err)
+	}
+	backupPath := filepath.Join(t.TempDir(), "state.db")
+	if err := db.BackupTo(backupPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SetClientExpiry(ctx, client.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.RestoreFrom(backupPath); err != nil {
+		t.Fatal(err)
+	}
+	got, err := db.GetClient(ctx, client.ID)
+	if err != nil || got.ExpiresAt == nil || !got.ExpiresAt.Equal(expiresAt) {
+		t.Fatalf("restored profile expiry = %v, error %v; want %v", got.ExpiresAt, err, expiresAt)
+	}
+}
+
+func TestExpiryStoreMethodsReturnErrorsForClosedStore(t *testing.T) {
+	db, ctx := openTestStore(t, "closed-expiry.db")
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	expiresAt := time.Now().UTC().Add(time.Hour)
+	if err := db.SetClientExpiry(ctx, "profile", &expiresAt); err == nil {
+		t.Fatal("SetClientExpiry succeeded with a closed store")
+	}
+	if _, err := db.ListExpiredEnabledClients(ctx, time.Now()); err == nil {
+		t.Fatal("ListExpiredEnabledClients succeeded with a closed store")
+	}
+}
+
 func TestShadowsocksProfileStoresEncryptedCredentialAndTransitionsState(t *testing.T) {
 	db, ctx := openTestStore(t, "shadowsocks-client.db")
 	client, err := domain.NewShadowsocksClient("ss-device", "phone")

@@ -45,6 +45,15 @@ type AmneziaWGPeer struct {
 	IPv6 string
 	// CreatedAt is the time the object was created.
 	CreatedAt time.Time
+	// ExpiresAt is the optional UTC instant after which the peer cannot connect.
+	ExpiresAt *time.Time
+	// Disabled indicates that the peer is deliberately inactive but retained.
+	Disabled bool
+}
+
+// IsExpired reports whether the optional peer deadline has passed.
+func (peer AmneziaWGPeer) IsExpired(now time.Time) bool {
+	return peer.ExpiresAt != nil && !now.Before(*peer.ExpiresAt)
 }
 
 // AmneziaWGPeerStats is the runtime telemetry observable for one peer.

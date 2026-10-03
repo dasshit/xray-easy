@@ -453,7 +453,7 @@ func newRPCResponse(method string) (proto.Message, error) {
 		return &controllerv1.AmneziaWGStatusResponse{}, nil
 	case "ListAmneziaWGPeers":
 		return &controllerv1.ListAmneziaWGPeersResponse{}, nil
-	case "CreateAmneziaWGPeer":
+	case "CreateAmneziaWGPeer", "SetAmneziaWGPeerEnabled", "SetAmneziaWGPeerExpiry":
 		return &controllerv1.AmneziaWGPeer{}, nil
 	case "GetAmneziaWGPeerStats":
 		return &controllerv1.AmneziaWGPeerStatsResponse{}, nil

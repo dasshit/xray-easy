@@ -15,6 +15,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -44,6 +45,9 @@ import (
 
 // usernamePattern is an internal package variable.
 var usernamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{3,32}$`)
+
+// expirySystemActorID identifies state changes initiated by the expiry worker.
+const expirySystemActorID = "system:expiry"
 
 // server is an internal type used by the package.
 type server struct {
@@ -234,6 +238,14 @@ type clientRequest struct {
 	Fingerprint string `json:"fingerprint"`
 	// Auth stores the value associated with the enclosing object.
 	Auth string `json:"auth"`
+	// ExpiresAt is the optional profile expiry in RFC3339 format.
+	ExpiresAt *time.Time `json:"expires_at"`
+}
+
+// clientExpiryRequest contains the optional expiry update for one profile.
+type clientExpiryRequest struct {
+	// ExpiresAt is the optional RFC3339 expiry; null clears the deadline.
+	ExpiresAt *time.Time `json:"expires_at"`
 }
 
 // hysteriaSettingsRequest is an internal type used by the package.
@@ -414,6 +426,12 @@ type clientResponse struct {
 	CreatedAt time.Time `json:"created_at"`
 	// UpdatedAt stores the value associated with the enclosing object.
 	UpdatedAt time.Time `json:"updated_at"`
+	// ExpiresAt is the optional deadline after which this profile cannot connect.
+	ExpiresAt *time.Time `json:"expires_at,omitempty"`
+	// Expired reports that the profile deadline has passed and it is not revoked.
+	Expired bool `json:"expired"`
+	// ExpirationPending reports that the deadline passed but access remains enabled.
+	ExpirationPending bool `json:"expiration_pending"`
 	// Online stores the value associated with the enclosing object.
 	Online bool `json:"online"`
 	// LastSeen stores the value associated with the enclosing object.
@@ -464,10 +482,12 @@ func runControlPlane(ctx context.Context, initialize func(context.Context) (*ser
 	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
 	statsDone := s.stats.Start(runtimeCtx)
 	reconcilerDone := s.startReconciler(runtimeCtx)
+	expirationDone := s.startExpirationWorker(runtimeCtx)
 	defer func() {
 		cancelRuntime()
 		<-statsDone
 		<-reconcilerDone
+		<-expirationDone
 	}()
 	mux := newMux(s)
 	serverHTTP := &http.Server{Addr: envOr("XRAY_EASY_LISTEN", "127.0.0.1:8080"), Handler: interaction.HTTPMiddleware(controlPlaneMiddleware(mux)), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 120 * time.Second, MaxHeaderBytes: 64 << 10}
@@ -2290,6 +2310,11 @@ func clientsFingerprint(clients []domain.Client) string {
 		fmt.Fprintf(&value, "%t\x00%t\n", client.VMessEnabled, client.VMessRevoked)
 		fmt.Fprintf(&value, "%t\x00%t\x00%s\n", client.ShadowsocksEnabled, client.ShadowsocksRevoked, client.ShadowsocksPasswordEnc)
 		fmt.Fprintf(&value, "%t\x00%t\x00%s\n", client.TrojanEnabled, client.TrojanRevoked, client.TrojanPasswordEnc)
+		expiresAt := ""
+		if client.ExpiresAt != nil {
+			expiresAt = client.ExpiresAt.UTC().Format(time.RFC3339Nano)
+		}
+		fmt.Fprintf(&value, "%s\n", expiresAt)
 	}
 	hash := sha256.Sum256([]byte(value.String()))
 	return hex.EncodeToString(hash[:])
@@ -2378,6 +2403,15 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 	name := strings.TrimSpace(req.Name)
 	fingerprint := strings.TrimSpace(req.Fingerprint)
 	authValue := strings.TrimSpace(req.Auth)
+	expiresAt := req.ExpiresAt
+	if expiresAt != nil {
+		if expiresAt.IsZero() || !expiresAt.After(time.Now()) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "expires_at must be a future RFC3339 timestamp or null"})
+			return
+		}
+		normalizedExpiry := expiresAt.UTC()
+		expiresAt = &normalizedExpiry
+	}
 	protocol := domain.ClientProtocol(strings.ToLower(strings.TrimSpace(req.Protocol)))
 	if protocol == "" {
 		protocol = domain.ProtocolVLESS
@@ -2387,7 +2421,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if protocol == domain.ProtocolAmneziaWG {
-		s.createAWGClient(w, r, admin, name, fingerprint, authValue)
+		s.createAWGClient(w, r, admin, name, fingerprint, authValue, expiresAt)
 		return
 	}
 	if protocol != domain.ProtocolHysteria2 && authValue != "" {
@@ -2459,7 +2493,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not decrypt REALITY private key"})
 		return
 	}
-	client, err := s.createProtocolClient(r.Context(), settings, protocol, name, fingerprint, authValue, admin.ID)
+	client, err := s.createProtocolClient(r.Context(), settings, protocol, name, fingerprint, authValue, expiresAt, admin.ID)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
@@ -2509,11 +2543,66 @@ func (s *server) clientRoute(w http.ResponseWriter, r *http.Request) {
 		s.changeClientState(w, r, client, domain.ActionRevoke, admin.ID)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "expiry" && r.Method == http.MethodPut {
+		s.updateClientExpiry(w, r, client, admin.ID)
+		return
+	}
 	writeJSON(w, http.StatusNotFound, map[string]any{"error": "route not found"})
 }
 
+// updateClientExpiry changes only the requested profile deadline. Enabling a
+// profile after expiry remains a separate, explicit action.
+func (s *server) updateClientExpiry(w http.ResponseWriter, r *http.Request, client domain.Client, actorID string) {
+	var request clientExpiryRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
+	}
+	if request.ExpiresAt != nil {
+		if request.ExpiresAt.IsZero() || !request.ExpiresAt.After(time.Now()) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "expires_at must be a future RFC3339 timestamp or null"})
+			return
+		}
+		normalizedExpiry := request.ExpiresAt.UTC()
+		request.ExpiresAt = &normalizedExpiry
+	}
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	lock, err := maintenance.Acquire(r.Context(), s.maintenancePath)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, map[string]any{"error": "maintenance is in progress"})
+		return
+	}
+	defer lock.Close()
+	current, err := s.store.GetClient(r.Context(), client.ID)
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+		return
+	}
+	if current.Enabled && !current.Revoked && current.IsExpired(time.Now().UTC()) {
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "expiration_pending", "error": "profile expiry enforcement is pending; retry after the profile has been disabled"})
+		return
+	}
+	if err := s.store.SetClientExpiry(r.Context(), current.ID, request.ExpiresAt); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not update profile expiry"})
+		return
+	}
+	if request.ExpiresAt == nil {
+		current.ExpiresAt = nil
+		_ = s.store.AddAudit(r.Context(), actorID, "client.expiry.update", "client", current.ID, "profile expiry removed")
+	} else {
+		current.ExpiresAt = request.ExpiresAt
+		_ = s.store.AddAudit(r.Context(), actorID, "client.expiry.update", "client", current.ID, "profile expiry changed to "+request.ExpiresAt.Format(time.RFC3339))
+	}
+	updated, err := s.store.GetClient(r.Context(), current.ID)
+	if err == nil {
+		current = updated
+	}
+	writeJSON(w, http.StatusOK, s.withStats([]domain.Client{current})[0])
+}
+
 // createProtocolClient creates the requested value.
-func (s *server) createProtocolClient(ctx context.Context, settings domain.Settings, protocol domain.ClientProtocol, name, fingerprint, authValue, actorID string) (domain.Client, error) {
+func (s *server) createProtocolClient(ctx context.Context, settings domain.Settings, protocol domain.ClientProtocol, name, fingerprint, authValue string, expiresAt *time.Time, actorID string) (domain.Client, error) {
 	s.applyMu.Lock()
 	defer s.applyMu.Unlock()
 	maintenanceLock, err := maintenance.Acquire(ctx, s.maintenancePath)
@@ -2542,6 +2631,7 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 	if err != nil {
 		return domain.Client{}, err
 	}
+	client.ExpiresAt = expiresAt
 	client.Email = "device-" + clientID + "-" + string(protocol) + "@xray-easy"
 	if protocol == domain.ProtocolShadowsocks {
 		password, generationErr := newShadowsocksPassword()
@@ -2809,13 +2899,27 @@ func newTrojanPassword() (string, error) {
 
 // changeClientState performs the operation represented by its name.
 func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, client domain.Client, action domain.ClientAction, actorID string) {
+	s.applyMu.Lock()
+	defer s.applyMu.Unlock()
+	currentClient, err := s.store.GetClient(r.Context(), client.ID)
+	if err != nil {
+		if errors.Is(err, store.ErrClientNotFound) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "client not found"})
+		} else {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read client state"})
+		}
+		return
+	}
+	client = currentClient
+	if actorID == expirySystemActorID && !client.IsExpired(time.Now().UTC()) {
+		writeJSON(w, http.StatusOK, s.withStats([]domain.Client{client})[0])
+		return
+	}
 	states, next, err := transitionClientAccesses(client, action)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": err.Error()})
 		return
 	}
-	s.applyMu.Lock()
-	defer s.applyMu.Unlock()
 	maintenanceLock, err := maintenance.Acquire(r.Context(), s.maintenancePath)
 	if err != nil {
 		writeJSON(w, http.StatusConflict, map[string]any{"error": "Xray maintenance is in progress"})
@@ -3100,6 +3204,11 @@ func (s *server) changeClientState(w http.ResponseWriter, r *http.Request, clien
 
 // transitionClientAccesses performs the operation represented by its name.
 func transitionClientAccesses(client domain.Client, action domain.ClientAction) (map[domain.ClientProtocol]domain.ClientState, domain.Client, error) {
+	if action == domain.ActionEnable {
+		if err := client.CanEnableAt(time.Now().UTC()); err != nil {
+			return nil, domain.Client{}, err
+		}
+	}
 	states := make(map[domain.ClientProtocol]domain.ClientState, 2)
 	next := client
 	for _, protocol := range []domain.ClientProtocol{domain.ProtocolVLESS, domain.ProtocolHysteria2, domain.ProtocolVMess, domain.ProtocolShadowsocks, domain.ProtocolTrojan} {
@@ -3182,10 +3291,12 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 			Protocol: client.Protocol,
 			ID:       client.ID, Name: client.Name, ClientFingerprint: client.ClientFingerprint,
 			Enabled: client.Enabled, Revoked: client.Revoked, CreatedAt: client.CreatedAt, UpdatedAt: client.UpdatedAt,
+			ExpiresAt: client.ExpiresAt, Expired: client.IsExpired(time.Now().UTC()) && !client.Revoked,
 			Online: current.Online, LastSeen: current.LastSeen, SourceIPs: current.SourceIPs,
 			UploadBytes: current.UploadBytes, DownloadBytes: current.DownloadBytes,
 			UploadRate: current.UploadBytesPerSecond, DownloadRate: current.DownloadBytesPerSecond,
 		}
+		response.ExpirationPending = response.Expired && client.Enabled
 		if client.HasVLESS() {
 			response.Protocols = append(response.Protocols, string(domain.ProtocolVLESS))
 			response.VLESS = &clientAccessResponse{Enabled: client.VLESSEnabled, Revoked: client.VLESSRevoked}
@@ -3209,6 +3320,73 @@ func (s *server) withStats(clients []domain.Client) []clientResponse {
 		result = append(result, response)
 	}
 	return result
+}
+
+// startExpirationWorker starts deadline enforcement independently of Web UI or SSE subscribers.
+func (s *server) startExpirationWorker(ctx context.Context) <-chan struct{} {
+	return s.startExpirationWorkerWithInterval(ctx, 5*time.Second)
+}
+
+// startExpirationWorkerWithInterval starts a testable expiry sweep at the requested cadence.
+func (s *server) startExpirationWorkerWithInterval(ctx context.Context, interval time.Duration) <-chan struct{} {
+	if interval <= 0 {
+		interval = 5 * time.Second
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if s == nil || s.store == nil {
+			return
+		}
+		sweep := func() {
+			sweepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			defer cancel()
+			if err := s.expireDueClients(sweepCtx); err != nil && !errors.Is(err, context.Canceled) {
+				s.recordDiagnostic("warn", "profile expiry enforcement will retry: "+err.Error())
+				slog.Warn("profile expiry enforcement will retry", "service", "xray-easy", "error", err)
+			}
+		}
+		sweep()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				sweep()
+			}
+		}
+	}()
+	return done
+}
+
+// expireDueClients disables all active Xray accesses whose profile deadline passed.
+// The existing state-change path owns candidate validation, live HandlerService
+// updates, rollback, persistence and audit creation.
+func (s *server) expireDueClients(ctx context.Context) error {
+	clients, err := s.store.ListExpiredEnabledClients(ctx, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("list expired profiles: %w", err)
+	}
+	var failures []error
+	for _, client := range clients {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(failures, err)...)
+		}
+		request := httptest.NewRequest(http.MethodPost, "/api/clients/"+client.ID+"/disable", nil).WithContext(ctx)
+		response := httptest.NewRecorder()
+		s.changeClientState(response, request, client, domain.ActionDisable, expirySystemActorID)
+		if response.Code < http.StatusOK || response.Code >= http.StatusMultipleChoices {
+			failure := fmt.Errorf("profile %s: HTTP %d: %s", client.ID, response.Code, strings.TrimSpace(response.Body.String()))
+			s.recordDiagnostic("warn", "profile expiry pending: "+failure.Error())
+			slog.Warn("profile expiry pending", "service", "xray-easy", "profile_id", client.ID, "error", failure)
+			failures = append(failures, failure)
+			continue
+		}
+		slog.Info("profile expired", "service", "xray-easy", "profile_id", client.ID)
+	}
+	return errors.Join(failures...)
 }
 
 // startReconciler performs the operation represented by its name.

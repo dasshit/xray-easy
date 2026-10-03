@@ -3,10 +3,13 @@ package controller
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"xray-easy/internal/awgcontrol"
 	"xray-easy/internal/controller/api/v1"
 	"xray-easy/internal/domain"
+
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // AWGClient exposes the AmneziaWG subset through the shared Controller gRPC
@@ -56,8 +59,34 @@ func (c *AWGClient) ListPeers(ctx context.Context) ([]domain.AmneziaWGPeer, erro
 }
 
 // CreatePeer creates the requested value.
-func (c *AWGClient) CreatePeer(ctx context.Context, name string) (domain.AmneziaWGPeer, error) {
-	response, err := c.controller.call(ctx, "CreateAmneziaWGPeer", &controllerv1.CreateAmneziaWGPeerRequest{Name: name})
+func (c *AWGClient) CreatePeer(ctx context.Context, name string, expiresAt *time.Time) (domain.AmneziaWGPeer, error) {
+	request := &controllerv1.CreateAmneziaWGPeerRequest{Name: name}
+	if expiresAt != nil {
+		request.ExpiresAt = timestamppb.New(expiresAt.UTC())
+	}
+	response, err := c.controller.call(ctx, "CreateAmneziaWGPeer", request)
+	if err != nil {
+		return domain.AmneziaWGPeer{}, err
+	}
+	return fromProtoPeer(response.(*controllerv1.AmneziaWGPeer))
+}
+
+// SetPeerEnabled enables or reversibly disables an AmneziaWG peer.
+func (c *AWGClient) SetPeerEnabled(ctx context.Context, name string, enabled bool) (domain.AmneziaWGPeer, error) {
+	response, err := c.controller.call(ctx, "SetAmneziaWGPeerEnabled", &controllerv1.SetAmneziaWGPeerEnabledRequest{Name: name, Enabled: enabled})
+	if err != nil {
+		return domain.AmneziaWGPeer{}, err
+	}
+	return fromProtoPeer(response.(*controllerv1.AmneziaWGPeer))
+}
+
+// SetPeerExpiry sets or clears an AmneziaWG peer deadline without enabling it.
+func (c *AWGClient) SetPeerExpiry(ctx context.Context, name string, expiresAt *time.Time) (domain.AmneziaWGPeer, error) {
+	request := &controllerv1.SetAmneziaWGPeerExpiryRequest{Name: name, ClearExpiry: expiresAt == nil}
+	if expiresAt != nil {
+		request.ExpiresAt = timestamppb.New(expiresAt.UTC())
+	}
+	response, err := c.controller.call(ctx, "SetAmneziaWGPeerExpiry", request)
 	if err != nil {
 		return domain.AmneziaWGPeer{}, err
 	}
@@ -124,7 +153,15 @@ func fromProtoPeer(value *controllerv1.AmneziaWGPeer) (domain.AmneziaWGPeer, err
 	if err != nil {
 		return domain.AmneziaWGPeer{}, err
 	}
-	return domain.AmneziaWGPeer{Name: value.Name, PublicKey: value.PublicKey, IPv4: value.Ipv4, IPv6: value.Ipv6, CreatedAt: createdAt}, nil
+	var expiresAt *time.Time
+	if value.ExpiresAt != nil {
+		expiry, err := protobufTimeToTime("expires_at", value.ExpiresAt)
+		if err != nil {
+			return domain.AmneziaWGPeer{}, err
+		}
+		expiresAt = &expiry
+	}
+	return domain.AmneziaWGPeer{Name: value.Name, PublicKey: value.PublicKey, IPv4: value.Ipv4, IPv6: value.Ipv6, CreatedAt: createdAt, ExpiresAt: expiresAt, Disabled: value.Disabled}, nil
 }
 
 var _ awgcontrol.Gateway = (*AWGClient)(nil)

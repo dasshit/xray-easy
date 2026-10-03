@@ -37,6 +37,10 @@ var (
 	ErrOperationConflict = errors.New("operation ID was already used for a different peer")
 	// ErrOperationCompleted indicates that a completed operation cannot be replayed.
 	ErrOperationCompleted = errors.New("operation was already completed and its result cannot be replayed")
+	// ErrPeerExpired indicates that an expired peer must be extended before it can be enabled.
+	ErrPeerExpired = errors.New("expired peer cannot be enabled")
+	// ErrPeerExpiryPending indicates that the expiry worker must disable an overdue peer before its deadline can change.
+	ErrPeerExpiryPending = errors.New("peer expiry enforcement is pending")
 )
 
 // peerNamePattern is an internal package variable.
@@ -46,7 +50,7 @@ var peerNamePattern = regexp.MustCompile(`^[A-Za-z0-9-]{1,32}$`)
 var dnsLabelPattern = regexp.MustCompile(`^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$`)
 
 // stateVersion is an internal package constant.
-const stateVersion = 1
+const stateVersion = 2
 
 // Peer is the non-secret, persisted identity and tunnel address of a client.
 type Peer struct {
@@ -62,6 +66,10 @@ type Peer struct {
 	CreatedAt time.Time `json:"createdAt"`
 	// OperationID is the idempotency key for the operation.
 	OperationID string `json:"operationId,omitempty"`
+	// ExpiresAt is the optional UTC deadline for the peer.
+	ExpiresAt *time.Time `json:"expiresAt,omitempty"`
+	// Disabled records an explicit or expiry-driven disable without deleting the peer.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 // persistedState is an internal type used by the package.
@@ -169,6 +177,12 @@ func Open(opts Options, factory DeviceFactory) (*Manager, error) {
 		}
 	} else if err != nil {
 		return nil, err
+	}
+	if state.Version == 1 {
+		state.Version = stateVersion
+		if err := writeState(statePath, state); err != nil {
+			return nil, fmt.Errorf("migrate AWG state: %w", err)
+		}
 	}
 	if state.Operations == nil {
 		state.Operations = map[string]OperationReceipt{}
@@ -317,6 +331,11 @@ func (m *Manager) AddPeer(name, publicKey string) (Peer, error) {
 // the receipt atomically with the peer state. The optional persisted field is
 // backward compatible with existing AWG state files.
 func (m *Manager) AddPeerForOperation(name, publicKey, operationID string) (Peer, bool, error) {
+	return m.AddPeerWithExpiry(name, publicKey, operationID, nil)
+}
+
+// AddPeerWithExpiry creates an enabled peer with an optional expiry deadline.
+func (m *Manager) AddPeerWithExpiry(name, publicKey, operationID string, expiresAt *time.Time) (Peer, bool, error) {
 	if !peerNamePattern.MatchString(name) {
 		return Peer{}, false, fmt.Errorf("peer name must contain 1-32 letters, digits or hyphens: %w", ErrInvalid)
 	}
@@ -343,6 +362,9 @@ func (m *Manager) AddPeerForOperation(name, publicKey, operationID string) (Peer
 			if receipt.Action != "create" || receipt.Name != name {
 				return Peer{}, false, ErrOperationConflict
 			}
+			if !sameExpiry(receipt.Peer.ExpiresAt, expiresAt) {
+				return Peer{}, false, ErrOperationConflict
+			}
 			if receipt.Removed {
 				return Peer{}, false, ErrOperationCompleted
 			}
@@ -351,7 +373,7 @@ func (m *Manager) AddPeerForOperation(name, publicKey, operationID string) (Peer
 	}
 	for _, peer := range m.state.Peers {
 		if operationID != "" && peer.OperationID == operationID {
-			if peer.Name != name {
+			if peer.Name != name || !sameExpiry(peer.ExpiresAt, expiresAt) {
 				return Peer{}, false, ErrOperationConflict
 			}
 			return peer, true, nil
@@ -364,7 +386,7 @@ func (m *Manager) AddPeerForOperation(name, publicKey, operationID string) (Peer
 	if err != nil {
 		return Peer{}, false, err
 	}
-	peer := Peer{Name: name, PublicKey: publicKey, IPv4: ipv4.String(), IPv6: ipv6.String(), CreatedAt: time.Now().UTC(), OperationID: operationID}
+	peer := Peer{Name: name, PublicKey: publicKey, IPv4: ipv4.String(), IPv6: ipv6.String(), CreatedAt: time.Now().UTC(), OperationID: operationID, ExpiresAt: copyTimeUTC(expiresAt)}
 	if err := m.device.Set(peerConfig(peer)); err != nil {
 		return Peer{}, false, fmt.Errorf("activate peer: %w", err)
 	}
@@ -380,6 +402,164 @@ func (m *Manager) AddPeerForOperation(name, publicKey, operationID string) (Peer
 	m.state = next
 	slog.Info("AWG peer event", "service", "amneziawg-service", "component", "peer", "event", "peer_added", "peer_name", name)
 	return peer, false, nil
+}
+
+// SetPeerEnabled activates or reversibly deactivates a peer while retaining its identity and client profile.
+func (m *Manager) SetPeerEnabled(name string, enabled bool) (Peer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return Peer{}, errors.New("AWG manager is closed")
+	}
+	index := -1
+	for i := range m.state.Peers {
+		if m.state.Peers[i].Name == name {
+			index = i
+			break
+		}
+	}
+	if index < 0 {
+		return Peer{}, ErrNotFound
+	}
+	peer := m.state.Peers[index]
+	if enabled && peer.IsExpired(time.Now().UTC()) {
+		return Peer{}, ErrPeerExpired
+	}
+	return m.setPeerEnabledLocked(index, enabled)
+}
+
+// ExpireDuePeers disables peers whose deadlines have passed and reports peers newly disabled.
+func (m *Manager) ExpireDuePeers(now time.Time) ([]Peer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return nil, errors.New("AWG manager is closed")
+	}
+	var expired []Peer
+	var failures []error
+	for index := range m.state.Peers {
+		peer := m.state.Peers[index]
+		if peer.Disabled || !peer.IsExpired(now) {
+			continue
+		}
+		updated, err := m.setPeerEnabledLocked(index, false)
+		if err != nil {
+			failures = append(failures, fmt.Errorf("disable expired peer %q: %w", peer.Name, err))
+			continue
+		}
+		expired = append(expired, updated)
+	}
+	return expired, errors.Join(failures...)
+}
+
+// setPeerEnabledLocked applies a peer enabled-state transition while m.mu is held.
+func (m *Manager) setPeerEnabledLocked(index int, enabled bool) (Peer, error) {
+	peer := m.state.Peers[index]
+	if enabled && peer.IsExpired(time.Now().UTC()) {
+		return Peer{}, ErrPeerExpired
+	}
+	if enabled == !peer.Disabled {
+		return peer, nil
+	}
+	command := removePeerConfig(peer)
+	if enabled {
+		command = peerConfig(peer)
+	}
+	if err := m.device.Set(command); err != nil {
+		return Peer{}, fmt.Errorf("change peer enabled state: %w", err)
+	}
+	next := cloneState(m.state)
+	next.Peers[index].Disabled = !enabled
+	updated := next.Peers[index]
+	if updated.OperationID != "" {
+		if receipt, ok := next.Operations[updated.OperationID]; ok && receipt.Action == "create" {
+			receipt.Peer = updated
+			next.Operations[updated.OperationID] = receipt
+		}
+	}
+	if err := writeState(filepath.Join(m.opts.DataDir, "state.json"), next); err != nil {
+		rollbackCommand := peerConfig(peer)
+		if enabled {
+			rollbackCommand = removePeerConfig(peer)
+		}
+		_ = m.device.Set(rollbackCommand)
+		return Peer{}, err
+	}
+	m.state = next
+	event := "peer_disabled"
+	if enabled {
+		event = "peer_enabled"
+	}
+	slog.Info("AWG peer event", "service", "amneziawg-service", "component", "peer", "event", event, "peer_name", peer.Name)
+	return updated, nil
+}
+
+// SetPeerExpiry changes or clears a deadline without implicitly enabling a peer.
+func (m *Manager) SetPeerExpiry(name string, expiresAt *time.Time) (Peer, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed {
+		return Peer{}, errors.New("AWG manager is closed")
+	}
+	next := cloneState(m.state)
+	for index := range next.Peers {
+		if next.Peers[index].Name != name {
+			continue
+		}
+		if !next.Peers[index].Disabled && next.Peers[index].IsExpired(time.Now().UTC()) {
+			return Peer{}, ErrPeerExpiryPending
+		}
+		next.Peers[index].ExpiresAt = copyTimeUTC(expiresAt)
+		updated := next.Peers[index]
+		if updated.OperationID != "" {
+			if receipt, ok := next.Operations[updated.OperationID]; ok && receipt.Action == "create" {
+				receipt.Peer = updated
+				next.Operations[updated.OperationID] = receipt
+			}
+		}
+		if err := writeState(filepath.Join(m.opts.DataDir, "state.json"), next); err != nil {
+			return Peer{}, err
+		}
+		m.state = next
+		slog.Info("AWG peer expiry updated", "service", "amneziawg-service", "component", "peer", "event", "peer_expiry_updated", "peer_name", name, "expires_at", expiryLogValue(updated.ExpiresAt))
+		return updated, nil
+	}
+	return Peer{}, ErrNotFound
+}
+
+// IsExpired reports whether the peer expiry deadline has passed.
+func (peer Peer) IsExpired(now time.Time) bool {
+	return peer.ExpiresAt != nil && !now.Before(*peer.ExpiresAt)
+}
+
+// IsEnabledAt reports whether the peer may currently accept connections.
+func (peer Peer) IsEnabledAt(now time.Time) bool {
+	return !peer.Disabled && !peer.IsExpired(now)
+}
+
+// copyTimeUTC clones an optional timestamp and normalizes it to UTC.
+func copyTimeUTC(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	result := value.UTC()
+	return &result
+}
+
+// sameExpiry reports whether two optional deadlines represent the same instant.
+func sameExpiry(left, right *time.Time) bool {
+	if left == nil || right == nil {
+		return left == nil && right == nil
+	}
+	return left.Equal(*right)
+}
+
+// expiryLogValue formats an optional deadline for structured service logs.
+func expiryLogValue(value *time.Time) any {
+	if value == nil {
+		return "unlimited"
+	}
+	return value.UTC().Format(time.RFC3339)
 }
 
 // operationIDPattern is an internal package variable.
@@ -485,6 +665,9 @@ func (m *Manager) RestorePersistedState(data []byte) error {
 	if next.Peers == nil {
 		next.Peers = []Peer{}
 	}
+	if next.Version == 1 {
+		next.Version = stateVersion
+	}
 	if err := validateState(next, m.opts); err != nil {
 		return fmt.Errorf("validate restored AWG state: %w", err)
 	}
@@ -579,6 +762,9 @@ func (m *Manager) PeerTelemetry() ([]PeerTelemetry, error) {
 	}
 	managed := make(map[string]string, len(m.state.Peers))
 	for _, peer := range m.state.Peers {
+		if !peer.IsEnabledAt(time.Now().UTC()) {
+			continue
+		}
 		managed[peer.PublicKey] = peer.Name
 	}
 	result := make([]PeerTelemetry, 0, len(observed))
@@ -709,6 +895,9 @@ func (m *Manager) applyAllLocked() error {
 		return fmt.Errorf("configure AmneziaWG device: %w", err)
 	}
 	for _, peer := range m.state.Peers {
+		if !peer.IsEnabledAt(time.Now().UTC()) {
+			continue
+		}
 		if err := m.device.Set(peerConfig(peer)); err != nil {
 			return fmt.Errorf("restore peer %q: %w", peer.Name, err)
 		}
@@ -745,7 +934,7 @@ func readState(path string) (persistedState, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return persistedState{}, fmt.Errorf("decode AWG state: %w", err)
 	}
-	if state.Version != stateVersion {
+	if state.Version != 1 && state.Version != stateVersion {
 		return persistedState{}, fmt.Errorf("unsupported AWG state version %d", state.Version)
 	}
 	if state.Peers == nil {
@@ -816,7 +1005,7 @@ func writeStateWith(path string, state persistedState, createTemp func(string, s
 
 // validateState validates the supplied value.
 func validateState(state persistedState, opts Options) error {
-	if state.Version != stateVersion {
+	if state.Version != 1 && state.Version != stateVersion {
 		return fmt.Errorf("unsupported AWG state version %d", state.Version)
 	}
 	if state.PrivateKeyEnvelope == "" {
@@ -829,6 +1018,9 @@ func validateState(state persistedState, opts Options) error {
 		}
 		if _, err := decodeKey(peer.PublicKey); err != nil {
 			return fmt.Errorf("invalid persisted peer key: %w", err)
+		}
+		if peer.ExpiresAt != nil && peer.ExpiresAt.IsZero() {
+			return fmt.Errorf("invalid persisted peer expiry: %w", ErrInvalid)
 		}
 		if peer.OperationID != "" && (!operationIDPattern.MatchString(peer.OperationID) || seenOperation[peer.OperationID]) {
 			return fmt.Errorf("invalid or duplicate persisted operation ID: %w", ErrInvalid)

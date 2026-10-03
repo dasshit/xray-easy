@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"xray-easy/internal/domain"
 )
@@ -177,6 +178,8 @@ type Client struct {
 	TrojanEnabled bool
 	// TrojanRevoked is whether Trojan access is revoked.
 	TrojanRevoked bool
+	// ExpiresAt is the optional UTC expiry instant for all credentials on this profile.
+	ExpiresAt *time.Time
 }
 
 // Profile contains the generated connection artifacts shown or downloaded for a client.
@@ -977,25 +980,25 @@ func (c Client) HasTrojan() bool { return c.protocol() == domain.ProtocolTrojan 
 // VLESSCanConnect performs the operation represented by its name.
 func (c Client) VLESSCanConnect() bool {
 	if c.Protocol == "" {
-		return c.Enabled && !c.Revoked
+		return c.Enabled && !c.Revoked && !c.isExpired(time.Now().UTC())
 	}
-	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked
+	return c.HasVLESS() && c.VLESSEnabled && !c.VLESSRevoked && !c.isExpired(time.Now().UTC())
 }
 
 // Hysteria2CanConnect performs the operation represented by its name.
 func (c Client) Hysteria2CanConnect() bool {
 	if c.Protocol == "" {
-		return c.Enabled && !c.Revoked
+		return c.Enabled && !c.Revoked && !c.isExpired(time.Now().UTC())
 	}
-	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked
+	return c.HasHysteria2() && c.HysteriaEnabled && !c.HysteriaRevoked && !c.isExpired(time.Now().UTC())
 }
 
 // VMessCanConnect performs the operation represented by its name.
 func (c Client) VMessCanConnect() bool {
 	if c.Protocol == "" {
-		return c.Enabled && !c.Revoked
+		return c.Enabled && !c.Revoked && !c.isExpired(time.Now().UTC())
 	}
-	return c.HasVMess() && c.VMESSEnabled() && !c.VMessIsRevoked()
+	return c.HasVMess() && c.VMESSEnabled() && !c.VMessIsRevoked() && !c.isExpired(time.Now().UTC())
 }
 
 // ShadowsocksCanConnect performs the operation represented by its name.
@@ -1003,7 +1006,7 @@ func (c Client) ShadowsocksCanConnect() bool {
 	if c.Protocol == "" {
 		return false
 	}
-	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked
+	return c.HasShadowsocks() && c.ShadowsocksEnabled && !c.ShadowsocksRevoked && !c.isExpired(time.Now().UTC())
 }
 
 // TrojanCanConnect performs the operation represented by its name.
@@ -1011,7 +1014,12 @@ func (c Client) TrojanCanConnect() bool {
 	if c.Protocol == "" {
 		return false
 	}
-	return c.HasTrojan() && c.TrojanEnabled && !c.TrojanRevoked
+	return c.HasTrojan() && c.TrojanEnabled && !c.TrojanRevoked && !c.isExpired(time.Now().UTC())
+}
+
+// isExpired reports whether the optional expiry is at or before the supplied instant.
+func (c Client) isExpired(now time.Time) bool {
+	return c.ExpiresAt != nil && !c.ExpiresAt.After(now)
 }
 
 // VMESSEnabled performs the operation represented by its name.

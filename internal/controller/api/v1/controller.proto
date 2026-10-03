@@ -28,6 +28,8 @@ service Controller {
   rpc GetAmneziaWGStatus(EmptyRequest) returns (AmneziaWGStatusResponse);
   rpc ListAmneziaWGPeers(EmptyRequest) returns (ListAmneziaWGPeersResponse);
   rpc CreateAmneziaWGPeer(CreateAmneziaWGPeerRequest) returns (AmneziaWGPeer);
+  rpc SetAmneziaWGPeerEnabled(SetAmneziaWGPeerEnabledRequest) returns (AmneziaWGPeer);
+  rpc SetAmneziaWGPeerExpiry(SetAmneziaWGPeerExpiryRequest) returns (AmneziaWGPeer);
   rpc RemoveAmneziaWGPeer(RemoveAmneziaWGPeerRequest) returns (OperationResponse);
   rpc GetAmneziaWGPeerStats(EmptyRequest) returns (AmneziaWGPeerStatsResponse);
   rpc GetAmneziaWGClientConfig(GetAmneziaWGClientConfigRequest) returns (AmneziaWGClientConfigResponse);
@@ -230,10 +232,14 @@ message AmneziaWGPeer {
   string ipv4 = 3;
   string ipv6 = 4;
   google.protobuf.Timestamp created_at = 5;
+  google.protobuf.Timestamp expires_at = 6;
+  bool disabled = 7;
 }
 
 message ListAmneziaWGPeersResponse { repeated AmneziaWGPeer peers = 1; }
-message CreateAmneziaWGPeerRequest { string name = 1; }
+message CreateAmneziaWGPeerRequest { string name = 1; google.protobuf.Timestamp expires_at = 2; }
+message SetAmneziaWGPeerEnabledRequest { string name = 1; bool enabled = 2; }
+message SetAmneziaWGPeerExpiryRequest { string name = 1; google.protobuf.Timestamp expires_at = 2; bool clear_expiry = 3; }
 message RemoveAmneziaWGPeerRequest { string name = 1; }
 
 message AmneziaWGPeerStats {

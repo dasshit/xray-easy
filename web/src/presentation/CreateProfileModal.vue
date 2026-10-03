@@ -3,6 +3,7 @@ import { computed, nextTick, onMounted, ref } from 'vue'
 import type { CreateClientCommand } from '../application/models'
 import { translations } from './i18n/messages'
 import type { UILanguage } from './i18n'
+import ExpirySelector from './ExpirySelector.vue'
 
 const props = defineProps<{ language: UILanguage; hysteriaAvailable: boolean; vmessAvailable: boolean; shadowsocksAvailable?: boolean; trojanAvailable?: boolean; awgAvailable?: boolean; busy: boolean }>()
 const emit = defineEmits<{
@@ -12,7 +13,8 @@ const emit = defineEmits<{
 }>()
 const text = computed(() => translations[props.language])
 const nameInput = ref<HTMLInputElement | null>(null)
-const form = ref<{ name: string; protocol: 'vless' | 'vmess' | 'hysteria2' | 'shadowsocks' | 'trojan' | 'amneziawg'; fingerprint: string; auth: string }>({ name: '', protocol: 'vless', fingerprint: '', auth: '' })
+const form = ref<{ name: string; protocol: 'vless' | 'vmess' | 'hysteria2' | 'shadowsocks' | 'trojan' | 'amneziawg'; fingerprint: string; auth: string; expiresAt?: string }>({ name: '', protocol: 'vless', fingerprint: '', auth: '' })
+const expiryIsValid = ref(true)
 
 /** Focus the device name field when the dialog appears. */
 onMounted(() => { void nextTick(() => nameInput.value?.focus()) })
@@ -20,26 +22,27 @@ onMounted(() => { void nextTick(() => nameInput.value?.focus()) })
 /** Submit only the options belonging to the selected transport. */
 function submit(): void {
   const name = form.value.name.trim()
-  if (!name || (form.value.protocol === 'hysteria2' && !props.hysteriaAvailable) || (form.value.protocol === 'vmess' && !props.vmessAvailable) || (form.value.protocol === 'shadowsocks' && !props.shadowsocksAvailable) || (form.value.protocol === 'trojan' && !props.trojanAvailable)) return
+  if (!name || !expiryIsValid.value || (form.value.protocol === 'hysteria2' && !props.hysteriaAvailable) || (form.value.protocol === 'vmess' && !props.vmessAvailable) || (form.value.protocol === 'shadowsocks' && !props.shadowsocksAvailable) || (form.value.protocol === 'trojan' && !props.trojanAvailable)) return
   if (form.value.protocol === 'amneziawg' && !props.awgAvailable) return
+  const expiry = form.value.expiresAt === undefined ? {} : { expiresAt: form.value.expiresAt }
   if (form.value.protocol === 'vless') {
-    emit('submit', { name, protocol: 'vless', ...(form.value.fingerprint ? { fingerprint: form.value.fingerprint } : {}) })
+    emit('submit', { name, protocol: 'vless', ...(form.value.fingerprint ? { fingerprint: form.value.fingerprint } : {}), ...expiry })
     return
   }
   if (form.value.protocol === 'vmess') {
-    emit('submit', { name, protocol: 'vmess' })
+    emit('submit', { name, protocol: 'vmess', ...expiry })
     return
   }
   if (form.value.protocol === 'hysteria2') {
-    emit('submit', { name, protocol: 'hysteria2', ...(form.value.auth.trim() ? { auth: form.value.auth.trim() } : {}) })
+    emit('submit', { name, protocol: 'hysteria2', ...(form.value.auth.trim() ? { auth: form.value.auth.trim() } : {}), ...expiry })
     return
   }
   if (form.value.protocol === 'shadowsocks') {
-    emit('submit', { name, protocol: 'shadowsocks' })
+    emit('submit', { name, protocol: 'shadowsocks', ...expiry })
     return
   }
-  if (form.value.protocol === 'trojan') { emit('submit', { name, protocol: 'trojan' }); return }
-  emit('submit', { name, protocol: 'amneziawg' })
+  if (form.value.protocol === 'trojan') { emit('submit', { name, protocol: 'trojan', ...expiry }); return }
+  emit('submit', { name, protocol: 'amneziawg', ...expiry })
 }
 </script>
 
@@ -66,6 +69,7 @@ function submit(): void {
             <option value="amneziawg" :disabled="!awgAvailable">AmneziaWG</option>
           </select>
         </label>
+        <ExpirySelector v-model="form.expiresAt" :language="language" @valid-change="expiryIsValid = $event" />
         <p v-if="!hysteriaAvailable && form.protocol !== 'vmess' && form.protocol !== 'shadowsocks' && form.protocol !== 'trojan' && form.protocol !== 'amneziawg'" class="hint" role="status">
           {{ text.hysteriaUnavailable }}
           <button class="text-button" type="button" @click="emit('openSettings')">{{ text.hysteriaSettingsLink }}</button>
@@ -112,7 +116,7 @@ function submit(): void {
         </template>
         <div class="modal-actions">
           <button class="secondary" type="button" :disabled="busy" @click="emit('cancel')">{{ text.cancel }}</button>
-          <button type="submit" :disabled="busy || !form.name.trim() || (form.protocol === 'hysteria2' && !hysteriaAvailable) || (form.protocol === 'vmess' && !vmessAvailable) || (form.protocol === 'shadowsocks' && !shadowsocksAvailable) || (form.protocol === 'trojan' && !trojanAvailable) || (form.protocol === 'amneziawg' && !awgAvailable)">{{ text.createDevice }}</button>
+          <button type="submit" :disabled="busy || !expiryIsValid || !form.name.trim() || (form.protocol === 'hysteria2' && !hysteriaAvailable) || (form.protocol === 'vmess' && !vmessAvailable) || (form.protocol === 'shadowsocks' && !shadowsocksAvailable) || (form.protocol === 'trojan' && !trojanAvailable) || (form.protocol === 'amneziawg' && !awgAvailable)">{{ text.createDevice }}</button>
         </div>
       </form>
     </div>

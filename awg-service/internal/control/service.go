@@ -25,6 +25,8 @@ const (
 	connectionMonitorInterval = time.Second
 	// peerOnlineWindow is the maximum time since observed activity for a peer to remain online.
 	peerOnlineWindow = 15 * time.Second
+	// expirationMonitorInterval is the cadence for durable AWG expiry enforcement.
+	expirationMonitorInterval = time.Second
 )
 
 // Service maps the prototype's gRPC methods onto the AWG lifecycle manager.
@@ -296,6 +298,9 @@ func (s *Service) runConnectionMonitor(ctx context.Context, interval time.Durati
 func (s *Service) CreatePeer(ctx context.Context, request *awgapi.CreatePeerRequest) (*awgapi.Peer, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if request == nil {
+		return nil, status.Error(codes.InvalidArgument, "create peer request is required")
+	}
 	name := request.GetName()
 	var err error
 	if name == "" {
@@ -303,6 +308,10 @@ func (s *Service) CreatePeer(ctx context.Context, request *awgapi.CreatePeerRequ
 	}
 	if !servicePeerNamePattern.MatchString(name) {
 		return nil, mapError(fmt.Errorf("invalid peer name: %w", ErrInvalid))
+	}
+	expiresAt, err := expiryFromProto(request.GetExpiresAt(), s.nowUTC())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 	operationID := OperationID(ctx)
 	if operationID != "" {
@@ -312,7 +321,7 @@ func (s *Service) CreatePeer(ctx context.Context, request *awgapi.CreatePeerRequ
 			return nil, status.Error(codes.FailedPrecondition, "peer creation operation was already revoked")
 		}
 		if peer, ok := s.manager.PeerForOperation(operationID); ok {
-			if peer.Name != name {
+			if peer.Name != name || !sameExpiry(peer.ExpiresAt, expiresAt) {
 				return nil, status.Error(codes.Aborted, "operation ID was already used for a different peer")
 			}
 			if _, err := readClientProfile(s.options.DataDir, name); err == nil {
@@ -350,7 +359,7 @@ func (s *Service) CreatePeer(ctx context.Context, request *awgapi.CreatePeerRequ
 			return nil, statusError("persist peer creation intent", err)
 		}
 	}
-	peer, repeated, err := s.manager.AddPeerForOperation(name, publicKey, operationID)
+	peer, repeated, err := s.manager.AddPeerWithExpiry(name, publicKey, operationID, expiresAt)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -367,6 +376,106 @@ func (s *Service) CreatePeer(ctx context.Context, request *awgapi.CreatePeerRequ
 		return nil, statusError("persist client profile", err)
 	}
 	return peerMessage(peer), nil
+}
+
+// SetPeerEnabled enables or reversibly disables a peer without deleting its identity.
+func (s *Service) SetPeerEnabled(_ context.Context, request *awgapi.SetPeerEnabledRequest) (*awgapi.Peer, error) {
+	if request == nil || !servicePeerNamePattern.MatchString(request.GetName()) {
+		return nil, status.Error(codes.InvalidArgument, "valid peer name is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	peer, err := s.manager.SetPeerEnabled(request.GetName(), request.GetEnabled())
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return peerMessage(peer), nil
+}
+
+// SetPeerExpiry sets or clears a peer's UTC expiration deadline without enabling it.
+func (s *Service) SetPeerExpiry(_ context.Context, request *awgapi.SetPeerExpiryRequest) (*awgapi.Peer, error) {
+	if request == nil || !servicePeerNamePattern.MatchString(request.GetName()) {
+		return nil, status.Error(codes.InvalidArgument, "valid peer name is required")
+	}
+	if request.GetClearExpiry() && request.GetExpiresAt() != nil {
+		return nil, status.Error(codes.InvalidArgument, "clear_expiry and expires_at are mutually exclusive")
+	}
+	if !request.GetClearExpiry() && request.GetExpiresAt() == nil {
+		return nil, status.Error(codes.InvalidArgument, "expires_at or clear_expiry is required")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var expiresAt *time.Time
+	if !request.GetClearExpiry() {
+		value, err := expiryFromProto(request.GetExpiresAt(), s.nowUTC())
+		if err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+		expiresAt = value
+	}
+	peer, err := s.manager.SetPeerExpiry(request.GetName(), expiresAt)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	return peerMessage(peer), nil
+}
+
+// RunExpirationMonitor sweeps due peer deadlines independently of gRPC streams.
+func (s *Service) RunExpirationMonitor(ctx context.Context) {
+	s.runExpirationMonitor(ctx, expirationMonitorInterval)
+}
+
+// runExpirationMonitor repeatedly disables due peers until ctx is canceled.
+func (s *Service) runExpirationMonitor(ctx context.Context, interval time.Duration) {
+	if s == nil || s.manager == nil || ctx == nil {
+		return
+	}
+	if interval <= 0 {
+		interval = expirationMonitorInterval
+	}
+	sweep := func() {
+		peers, err := s.manager.ExpireDuePeers(s.nowUTC())
+		for _, peer := range peers {
+			slog.Info("AWG peer expired", "service", "amneziawg-service", "component", "peer", "event", "peer_expired", "peer_name", peer.Name)
+		}
+		if err != nil {
+			slog.Warn("AWG peer expiry enforcement will retry", "service", "amneziawg-service", "component", "peer", "event", "peer_expiry_retry", "error", err)
+		}
+	}
+	sweep()
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			sweep()
+		}
+	}
+}
+
+// nowUTC returns the service clock in UTC, using the injected clock in tests.
+func (s *Service) nowUTC() time.Time {
+	if s != nil && s.telemetryNow != nil {
+		return s.telemetryNow().UTC()
+	}
+	return time.Now().UTC()
+}
+
+// expiryFromProto validates a protobuf deadline and returns its UTC instant.
+func expiryFromProto(value *timestamppb.Timestamp, now time.Time) (*time.Time, error) {
+	if value == nil {
+		return nil, nil
+	}
+	if err := value.CheckValid(); err != nil {
+		return nil, fmt.Errorf("expires_at must be a valid timestamp: %w", err)
+	}
+	deadline := value.AsTime().UTC()
+	if !deadline.After(now) {
+		return nil, errors.New("expires_at must be in the future")
+	}
+	return &deadline, nil
 }
 
 // persistPeerProfile performs the operation represented by its name.
@@ -475,10 +584,14 @@ func (s *Service) RenderClientConfig(_ context.Context, request *awgapi.RenderCl
 // peerMessage performs the operation represented by its name.
 func peerMessage(peer Peer) *awgapi.Peer {
 	var createdAt *timestamppb.Timestamp
+	var expiresAt *timestamppb.Timestamp
 	if !peer.CreatedAt.IsZero() {
 		createdAt = timestamppb.New(peer.CreatedAt.UTC())
 	}
-	return &awgapi.Peer{Name: peer.Name, PublicKey: peer.PublicKey, Ipv4: peer.IPv4, Ipv6: peer.IPv6, CreatedAt: createdAt}
+	if peer.ExpiresAt != nil {
+		expiresAt = timestamppb.New(peer.ExpiresAt.UTC())
+	}
+	return &awgapi.Peer{Name: peer.Name, PublicKey: peer.PublicKey, Ipv4: peer.IPv4, Ipv6: peer.IPv6, CreatedAt: createdAt, ExpiresAt: expiresAt, Disabled: peer.Disabled}
 }
 
 var _ API = (*Service)(nil)

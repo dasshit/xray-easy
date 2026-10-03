@@ -71,6 +71,7 @@ func ClientFromDomain(value domain.Client) Client {
 		VMessEnabled: value.VMessEnabled, VMessRevoked: value.VMessRevoked,
 		ShadowsocksEnabled: value.ShadowsocksEnabled, ShadowsocksRevoked: value.ShadowsocksRevoked,
 		TrojanEnabled: value.TrojanEnabled, TrojanRevoked: value.TrojanRevoked,
+		ExpiresAt: value.ExpiresAt,
 	}
 }
 

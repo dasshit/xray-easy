@@ -118,6 +118,8 @@ export type CreateClientCommand = {
   protocol: Exclude<ClientProtocol, 'legacy_dual'>
   fingerprint?: string
   auth?: string
+  /** Optional RFC 3339 expiry instant; omitted means unlimited lifetime. */
+  expiresAt?: string
 }
 
 /** Authenticated VLESS delivery with a URI, QR endpoint, and client JSON configuration. */

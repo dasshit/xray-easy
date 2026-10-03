@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestClientLifecycle(t *testing.T) {
@@ -28,6 +29,39 @@ func TestClientLifecycle(t *testing.T) {
 	}
 	if transitioned, err := client.Transition(ActionRevoke); err != nil || !transitioned.Revoked {
 		t.Fatalf("revoke transition = %+v, %v", transitioned, err)
+	}
+}
+
+func TestClientExpiryBlocksConnectionAndEnableUntilExtended(t *testing.T) {
+	deadline := time.Date(2026, time.January, 2, 3, 4, 5, 0, time.FixedZone("UTC+2", 2*60*60))
+	client, err := NewProtocolClient("expiry-client", "phone", ProtocolVLESS, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.ExpiresAt = &deadline
+	before := deadline.Add(-time.Nanosecond)
+	at := deadline
+	if client.IsExpired(before) || !client.IsExpired(at) {
+		t.Fatalf("expiry boundary before=%v at=%v", client.IsExpired(before), client.IsExpired(at))
+	}
+	if err := client.CanEnableAt(at); !errors.Is(err, ErrClientExpired) {
+		t.Fatalf("enable expired profile error = %v", err)
+	}
+	if client.VLESSCanConnect() || client.CanConnect() {
+		t.Fatal("expired profile remained connectable")
+	}
+	client.Enabled, client.VLESSEnabled = false, false
+	if _, err := client.Enable(); !errors.Is(err, ErrClientExpired) {
+		t.Fatalf("Enable() for expired profile error = %v", err)
+	}
+	newDeadline := time.Now().UTC().Add(time.Hour)
+	client.ExpiresAt = &newDeadline
+	if _, err := client.Enable(); err != nil {
+		t.Fatalf("Enable() after expiry extension error = %v", err)
+	}
+	client.Revoked = true
+	if err := client.CanEnableAt(time.Now()); !errors.Is(err, ErrClientRevoked) {
+		t.Fatalf("permanently revoked profile error = %v, want revoke precedence", err)
 	}
 }
 

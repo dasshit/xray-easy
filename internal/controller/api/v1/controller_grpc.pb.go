@@ -39,6 +39,8 @@ const (
 	Controller_GetAmneziaWGStatus_FullMethodName       = "/xrayeasy.controller.v1.Controller/GetAmneziaWGStatus"
 	Controller_ListAmneziaWGPeers_FullMethodName       = "/xrayeasy.controller.v1.Controller/ListAmneziaWGPeers"
 	Controller_CreateAmneziaWGPeer_FullMethodName      = "/xrayeasy.controller.v1.Controller/CreateAmneziaWGPeer"
+	Controller_SetAmneziaWGPeerEnabled_FullMethodName  = "/xrayeasy.controller.v1.Controller/SetAmneziaWGPeerEnabled"
+	Controller_SetAmneziaWGPeerExpiry_FullMethodName   = "/xrayeasy.controller.v1.Controller/SetAmneziaWGPeerExpiry"
 	Controller_RemoveAmneziaWGPeer_FullMethodName      = "/xrayeasy.controller.v1.Controller/RemoveAmneziaWGPeer"
 	Controller_GetAmneziaWGPeerStats_FullMethodName    = "/xrayeasy.controller.v1.Controller/GetAmneziaWGPeerStats"
 	Controller_GetAmneziaWGClientConfig_FullMethodName = "/xrayeasy.controller.v1.Controller/GetAmneziaWGClientConfig"
@@ -72,6 +74,8 @@ type ControllerClient interface {
 	GetAmneziaWGStatus(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*AmneziaWGStatusResponse, error)
 	ListAmneziaWGPeers(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*ListAmneziaWGPeersResponse, error)
 	CreateAmneziaWGPeer(ctx context.Context, in *CreateAmneziaWGPeerRequest, opts ...grpc.CallOption) (*AmneziaWGPeer, error)
+	SetAmneziaWGPeerEnabled(ctx context.Context, in *SetAmneziaWGPeerEnabledRequest, opts ...grpc.CallOption) (*AmneziaWGPeer, error)
+	SetAmneziaWGPeerExpiry(ctx context.Context, in *SetAmneziaWGPeerExpiryRequest, opts ...grpc.CallOption) (*AmneziaWGPeer, error)
 	RemoveAmneziaWGPeer(ctx context.Context, in *RemoveAmneziaWGPeerRequest, opts ...grpc.CallOption) (*OperationResponse, error)
 	GetAmneziaWGPeerStats(ctx context.Context, in *EmptyRequest, opts ...grpc.CallOption) (*AmneziaWGPeerStatsResponse, error)
 	GetAmneziaWGClientConfig(ctx context.Context, in *GetAmneziaWGClientConfigRequest, opts ...grpc.CallOption) (*AmneziaWGClientConfigResponse, error)
@@ -305,6 +309,26 @@ func (c *controllerClient) CreateAmneziaWGPeer(ctx context.Context, in *CreateAm
 	return out, nil
 }
 
+func (c *controllerClient) SetAmneziaWGPeerEnabled(ctx context.Context, in *SetAmneziaWGPeerEnabledRequest, opts ...grpc.CallOption) (*AmneziaWGPeer, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AmneziaWGPeer)
+	err := c.cc.Invoke(ctx, Controller_SetAmneziaWGPeerEnabled_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controllerClient) SetAmneziaWGPeerExpiry(ctx context.Context, in *SetAmneziaWGPeerExpiryRequest, opts ...grpc.CallOption) (*AmneziaWGPeer, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(AmneziaWGPeer)
+	err := c.cc.Invoke(ctx, Controller_SetAmneziaWGPeerExpiry_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controllerClient) RemoveAmneziaWGPeer(ctx context.Context, in *RemoveAmneziaWGPeerRequest, opts ...grpc.CallOption) (*OperationResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(OperationResponse)
@@ -381,6 +405,8 @@ type ControllerServer interface {
 	GetAmneziaWGStatus(context.Context, *EmptyRequest) (*AmneziaWGStatusResponse, error)
 	ListAmneziaWGPeers(context.Context, *EmptyRequest) (*ListAmneziaWGPeersResponse, error)
 	CreateAmneziaWGPeer(context.Context, *CreateAmneziaWGPeerRequest) (*AmneziaWGPeer, error)
+	SetAmneziaWGPeerEnabled(context.Context, *SetAmneziaWGPeerEnabledRequest) (*AmneziaWGPeer, error)
+	SetAmneziaWGPeerExpiry(context.Context, *SetAmneziaWGPeerExpiryRequest) (*AmneziaWGPeer, error)
 	RemoveAmneziaWGPeer(context.Context, *RemoveAmneziaWGPeerRequest) (*OperationResponse, error)
 	GetAmneziaWGPeerStats(context.Context, *EmptyRequest) (*AmneziaWGPeerStatsResponse, error)
 	GetAmneziaWGClientConfig(context.Context, *GetAmneziaWGClientConfigRequest) (*AmneziaWGClientConfigResponse, error)
@@ -455,6 +481,12 @@ func (UnimplementedControllerServer) ListAmneziaWGPeers(context.Context, *EmptyR
 }
 func (UnimplementedControllerServer) CreateAmneziaWGPeer(context.Context, *CreateAmneziaWGPeerRequest) (*AmneziaWGPeer, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method CreateAmneziaWGPeer not implemented")
+}
+func (UnimplementedControllerServer) SetAmneziaWGPeerEnabled(context.Context, *SetAmneziaWGPeerEnabledRequest) (*AmneziaWGPeer, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetAmneziaWGPeerEnabled not implemented")
+}
+func (UnimplementedControllerServer) SetAmneziaWGPeerExpiry(context.Context, *SetAmneziaWGPeerExpiryRequest) (*AmneziaWGPeer, error) {
+	return nil, status.Errorf(codes.Unimplemented, "method SetAmneziaWGPeerExpiry not implemented")
 }
 func (UnimplementedControllerServer) RemoveAmneziaWGPeer(context.Context, *RemoveAmneziaWGPeerRequest) (*OperationResponse, error) {
 	return nil, status.Errorf(codes.Unimplemented, "method RemoveAmneziaWGPeer not implemented")
@@ -838,6 +870,42 @@ func _Controller_CreateAmneziaWGPeer_Handler(srv interface{}, ctx context.Contex
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Controller_SetAmneziaWGPeerEnabled_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetAmneziaWGPeerEnabledRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControllerServer).SetAmneziaWGPeerEnabled(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Controller_SetAmneziaWGPeerEnabled_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControllerServer).SetAmneziaWGPeerEnabled(ctx, req.(*SetAmneziaWGPeerEnabledRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Controller_SetAmneziaWGPeerExpiry_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetAmneziaWGPeerExpiryRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControllerServer).SetAmneziaWGPeerExpiry(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Controller_SetAmneziaWGPeerExpiry_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControllerServer).SetAmneziaWGPeerExpiry(ctx, req.(*SetAmneziaWGPeerExpiryRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Controller_RemoveAmneziaWGPeer_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RemoveAmneziaWGPeerRequest)
 	if err := dec(in); err != nil {
@@ -1006,6 +1074,14 @@ var Controller_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateAmneziaWGPeer",
 			Handler:    _Controller_CreateAmneziaWGPeer_Handler,
+		},
+		{
+			MethodName: "SetAmneziaWGPeerEnabled",
+			Handler:    _Controller_SetAmneziaWGPeerEnabled_Handler,
+		},
+		{
+			MethodName: "SetAmneziaWGPeerExpiry",
+			Handler:    _Controller_SetAmneziaWGPeerExpiry_Handler,
 		},
 		{
 			MethodName: "RemoveAmneziaWGPeer",

@@ -77,7 +77,7 @@ func fakeResponseMessage(method string) (proto.Message, error) {
 		return new(awgapi.ListPeersResponse), nil
 	case serviceName + "GetPeerStats":
 		return new(awgapi.GetPeerStatsResponse), nil
-	case serviceName + "CreatePeer", serviceName + "AddPeer":
+	case serviceName + "CreatePeer", serviceName + "AddPeer", serviceName + "SetPeerEnabled", serviceName + "SetPeerExpiry":
 		return new(awgapi.Peer), nil
 	case serviceName + "RemovePeer":
 		return new(awgapi.RemovePeerResponse), nil
@@ -141,6 +141,8 @@ func TestClientStatusAndPeerLifecycleCallsAuthenticatedAPI(t *testing.T) {
 			"uploadBytes": "9007199254740993", "downloadBytes": "45",
 		}}},
 		serviceName + "CreatePeer":      peer,
+		serviceName + "SetPeerEnabled":  peer,
+		serviceName + "SetPeerExpiry":   peer,
 		serviceName + "GetClientConfig": {"config": "[Interface]\nPrivateKey = private-key\n"},
 	})
 
@@ -152,13 +154,19 @@ func TestClientStatusAndPeerLifecycleCallsAuthenticatedAPI(t *testing.T) {
 	if err != nil || len(peers) != 1 || peers[0].Name != "iphone" || !peers[0].CreatedAt.Equal(time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)) {
 		t.Fatalf("ListPeers() = %+v, %v", peers, err)
 	}
-	created, err := client.CreatePeer(context.Background(), "iphone")
+	created, err := client.CreatePeer(context.Background(), "iphone", nil)
 	if err != nil || created.Name != "iphone" {
 		t.Fatalf("CreatePeer() = %+v, %v", created, err)
 	}
 	createRequest := connection.requests[serviceName+"CreatePeer"]
 	if createRequest.(*awgapi.CreatePeerRequest).GetName() != "iphone" {
 		t.Fatalf("CreatePeer request = %v", createRequest)
+	}
+	if _, err := client.SetPeerEnabled(context.Background(), "iphone", false); err != nil {
+		t.Fatalf("SetPeerEnabled() = %v", err)
+	}
+	if _, err := client.SetPeerExpiry(context.Background(), "iphone", nil); err != nil {
+		t.Fatalf("SetPeerExpiry() = %v", err)
 	}
 	config, err := client.ClientConfig(context.Background(), "iphone")
 	if err != nil || !strings.Contains(config, "private-key") {
@@ -172,7 +180,7 @@ func TestClientStatusAndPeerLifecycleCallsAuthenticatedAPI(t *testing.T) {
 		t.Fatalf("PeerStats() = %+v, %v", peerStats, err)
 	}
 	if got := strings.Join(connection.calls, ","); got != strings.Join([]string{
-		serviceName + "GetStatus", serviceName + "ListPeers", serviceName + "CreatePeer", serviceName + "GetClientConfig", serviceName + "RemovePeer", serviceName + "GetPeerStats",
+		serviceName + "GetStatus", serviceName + "ListPeers", serviceName + "CreatePeer", serviceName + "SetPeerEnabled", serviceName + "SetPeerExpiry", serviceName + "GetClientConfig", serviceName + "RemovePeer", serviceName + "GetPeerStats",
 	}, ",") {
 		t.Fatalf("AWG RPC calls = %s", got)
 	}
@@ -235,6 +243,33 @@ func TestClientPropagatesRPCAndConnectionCloseErrors(t *testing.T) {
 	connection.closeErr = errors.New("close failed")
 	if err := client.Close(); err == nil || err.Error() != "close failed" {
 		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestParsePeerRejectsMissingAndInvalidTimestamps(t *testing.T) {
+	valid := &awgapi.Peer{
+		Name: "phone", PublicKey: "peer-key", Ipv4: "10.88.0.2", Ipv6: "fd88:88:88::2",
+		CreatedAt: timestamppb.Now(),
+	}
+	if _, err := parsePeer(nil); err == nil {
+		t.Fatal("parsePeer accepted a nil peer")
+	}
+	if _, err := parsePeer(&awgapi.Peer{Name: "phone", PublicKey: "key", Ipv4: "10.0.0.2", Ipv6: "fd00::2"}); err == nil || !strings.Contains(err.Error(), "createdAt is missing") {
+		t.Fatalf("parsePeer missing createdAt error = %v", err)
+	}
+	invalidCreatedAt := proto.Clone(valid).(*awgapi.Peer)
+	invalidCreatedAt.CreatedAt = &timestamppb.Timestamp{Seconds: -62135596801}
+	if _, err := parsePeer(invalidCreatedAt); err == nil || !strings.Contains(err.Error(), "createdAt is invalid") {
+		t.Fatalf("parsePeer invalid createdAt error = %v", err)
+	}
+	invalidExpiry := proto.Clone(valid).(*awgapi.Peer)
+	invalidExpiry.ExpiresAt = &timestamppb.Timestamp{Seconds: 253402300800}
+	if _, err := parsePeer(invalidExpiry); err == nil || !strings.Contains(err.Error(), "expiresAt is invalid") {
+		t.Fatalf("parsePeer invalid expiresAt error = %v", err)
+	}
+	parsed, err := parsePeer(valid)
+	if err != nil || parsed.ExpiresAt != nil || parsed.Disabled {
+		t.Fatalf("parsePeer unlimited enabled peer = %+v, %v", parsed, err)
 	}
 }
 
@@ -315,8 +350,11 @@ func TestClientRejectsMalformedStatusHandshakeAndCreatedPeerResponses(t *testing
 		},
 		{
 			name: "created peer invalid timestamp", method: "CreatePeer",
-			response:  map[string]any{"name": "phone", "publicKey": "key", "ipv4": "10.0.0.2", "ipv6": "fd00::2", "createdAt": "invalid"},
-			operation: func(client *Client) error { _, err := client.CreatePeer(context.Background(), "phone"); return err },
+			response: map[string]any{"name": "phone", "publicKey": "key", "ipv4": "10.0.0.2", "ipv6": "fd00::2", "createdAt": "invalid"},
+			operation: func(client *Client) error {
+				_, err := client.CreatePeer(context.Background(), "phone", nil)
+				return err
+			},
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {

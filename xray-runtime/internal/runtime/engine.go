@@ -341,12 +341,18 @@ func (e *Engine) AddUserWithMethod(ctx context.Context, protocolType xrayruntime
 			continue
 		}
 		if sameAccount(existing.Account, account) {
+			if e.leases != nil {
+				e.leases.allowProfile(leaseProfileKey{protocol: protocolType, email: email})
+			}
 			return true, nil
 		}
 		return false, errors.New("Xray user email already exists with a different credential")
 	}
 	if err := manager.AddUser(ctx, &protocol.MemoryUser{Email: email, Account: account}); err != nil {
 		return false, err
+	}
+	if e.leases != nil {
+		e.leases.allowProfile(leaseProfileKey{protocol: protocolType, email: email})
 	}
 	return false, nil
 }

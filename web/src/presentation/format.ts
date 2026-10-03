@@ -38,3 +38,31 @@ export function formatTimestamp(value: string | undefined, language: UILanguage)
   }
   return new Date(value).toLocaleString(locales[language])
 }
+
+/**
+ * Format an expiry date together with its remaining duration.
+ * @param value - The RFC 3339 expiry timestamp.
+ * @param language - The selected interface language.
+ * @param now - The reference instant, injectable to keep tests deterministic.
+ * @returns The localized date and relative time, or the original value if invalid.
+ */
+export function formatExpiry(value: string, language: UILanguage, now = Date.now()): string {
+  const expiry = new Date(value)
+  if (Number.isNaN(expiry.getTime())) return value
+  const locales: Record<UILanguage, string> = {
+    ru: 'ru-RU', en: 'en-US', de: 'de-DE', es: 'es-ES', 'pt-BR': 'pt-BR', fr: 'fr-FR', tr: 'tr-TR', fa: 'fa-IR', ar: 'ar', 'zh-CN': 'zh-CN', uk: 'uk-UA', pl: 'pl-PL',
+  }
+  const remaining = expiry.getTime() - now
+  const units = [
+    { name: 'day' as const, milliseconds: 86_400_000 },
+    { name: 'hour' as const, milliseconds: 3_600_000 },
+    { name: 'minute' as const, milliseconds: 60_000 },
+  ]
+  const unit = units.find(candidate => Math.abs(remaining) >= candidate.milliseconds) ?? { name: 'minute' as const, milliseconds: 60_000 }
+  const valueInUnits = remaining > 0
+    ? Math.ceil(remaining / unit.milliseconds)
+    : Math.floor(remaining / unit.milliseconds)
+  const relative = new Intl.RelativeTimeFormat(locales[language], { numeric: 'always' })
+    .format(valueInUnits, unit.name)
+  return `${expiry.toLocaleString(locales[language])} (${relative})`
+}

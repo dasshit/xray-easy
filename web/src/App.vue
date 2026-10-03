@@ -6,7 +6,7 @@ import { clientActionFor } from './domain/models'
 import type { AmneziaWGStatus, Client, ClientAction, ClientActionType, Settings, SettingsChange, XrayLogLevel } from './domain/models'
 import type { Admin, CreateClientCommand, DiagnosticEntry, HysteriaSettings, NodeStatus, ProfileDelivery, SetupStatus, TOTPSetup, TOTPStatus } from './application/models'
 import { loadAuthenticatedDashboard, loadDiagnosticsSnapshot, loadNodeStatusSnapshot } from './application/services/dashboard'
-import { formatBytes, formatRate, formatTimestamp } from './presentation/format'
+import { formatBytes, formatExpiry, formatRate, formatTimestamp } from './presentation/format'
 import { isUILanguage, useI18n } from './presentation/i18n'
 import { readTheme, persistTheme } from './presentation/theme'
 import { xrayEasyGatewayKey } from './presentation/api'
@@ -14,6 +14,7 @@ import type { Section, Theme } from './presentation/models'
 import HysteriaSettingsPanel from './presentation/HysteriaSettingsPanel.vue'
 import CreateProfileModal from './presentation/CreateProfileModal.vue'
 import ProfileDeliveryModal from './presentation/ProfileDeliveryModal.vue'
+import ProfileExpiryModal from './presentation/ProfileExpiryModal.vue'
 
 const setup = ref<SetupStatus | null>(null)
 const admin = ref<Admin | null>(null)
@@ -36,6 +37,7 @@ const createModalOpen = ref(false)
 const hysteriaStatus = ref<HysteriaSettings | null>(null)
 const amneziaWGStatus = ref<AmneziaWGStatus | null>(null)
 const clientAction = ref<ClientAction>(null)
+const expiryClient = ref<Client | null>(null)
 const setupForm = ref({ username: 'admin', password: '', publicHost: '', publicPort: 443, realityTarget: 'www.cloudflare.com:443', realitySNI: 'www.cloudflare.com' })
 const loginForm = ref({ username: 'admin', password: '', totpCode: '', recoveryCode: '' })
 const totpStatus = ref<TOTPStatus | null>(null)
@@ -403,6 +405,36 @@ async function createDevice(input: CreateClientCommand) {
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 /**
+ * Open expiry editing for a single non-revoked profile.
+ * @param client - The profile whose deadline is being changed.
+ */
+function openExpiryEditor(client: Client): void {
+  if (client.revoked) return
+  error.value = ''
+  expiryClient.value = client
+}
+/**
+ * Save a profile expiry and update the local row without changing access state.
+ * @param expiresAt - The future RFC 3339 deadline, or undefined to remove expiry.
+ */
+async function saveClientExpiry(expiresAt?: string): Promise<void> {
+  const target = expiryClient.value
+  if (!target) return
+  busy.value = true
+  error.value = ''
+  try {
+    const updated = await api.clients.setExpiry(target.id, expiresAt)
+    const index = clients.value.findIndex(client => client.id === target.id)
+    if (index >= 0) clients.value[index] = updated
+    expiryClient.value = null
+    showSuccess(t().expirySaved)
+  } catch (cause) {
+    showError(cause instanceof APIError && cause.code === 'expiration_pending' ? new Error(t().expiryPendingError) : cause)
+  } finally {
+    busy.value = false
+  }
+}
+/**
  * Load and display the connection profile for a device.
  * @param client - The device whose profile should be displayed.
  * @returns A promise that resolves after the profile has been loaded or an error is shown.
@@ -637,9 +669,9 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
         <div v-if="!clients.length" class="empty-state"><span class="empty-icon" aria-hidden="true">⌁</span><strong>{{ t().emptyProfiles }}</strong><button @click="openCreateModal">{{ t().createProfile }}</button></div>
         <ul v-else class="devices">
           <li v-for="client in clients" :key="client.id" class="device-card">
-            <div class="device-card-header"><div class="device-identity"><span class="device-status" :class="{ online: client.online, disabled: !client.enabled || client.revoked }"><span class="status-dot" :class="{ online: client.online }"></span></span><div class="device-main"><strong>{{ client.name }}</strong><span class="protocol-badge">{{ clientProtocolLabel(client) }}</span><span class="device-meta">{{ clientAccessSummary(client) }} · {{ client.online ? t().online : t().offline }}<template v-if="client.protocol === 'vless'"> · {{ client.fingerprint || settings?.clientFingerprint || 'chrome' }}</template><template v-if="client.sourceIPs?.length"> · {{ t().sourceIp }}: {{ client.sourceIPs.join(', ') }}</template></span></div></div><span class="status-badge" :class="{ positive: client.enabled && !client.revoked, muted: !client.enabled, negative: client.revoked }">{{ client.revoked ? t().revoked : client.enabled ? t().enabled : t().disabled }}</span></div>
-            <div class="device-stats"><div class="device-stat"><span>{{ t().upload }}</span><strong>{{ formatBytes(client.uploadBytes) }}</strong></div><div class="device-stat"><span>{{ t().downloadTraffic }}</span><strong>{{ formatBytes(client.downloadBytes) }}</strong></div><div class="device-stat"><span>{{ t().currentUpload }}</span><strong>{{ formatRate(client.uploadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().currentDownload }}</span><strong>{{ formatRate(client.downloadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat device-stat-wide"><span>{{ t().lastSeen }}</span><strong>{{ client.lastSeen ? formatTimestamp(client.lastSeen, language) : '—' }}</strong></div></div>
-            <div class="device-card-footer"><span class="device-id">ID {{ client.id.slice(0, 8) }}</span><div class="device-actions"><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked && client.protocol !== 'amneziawg'" class="secondary" @click="openClientAction(client, clientActionFor(client))">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ client.protocol === 'amneziawg' ? t().awgRevoke : t().remove }}</button></div></div>
+            <div class="device-card-header"><div class="device-identity"><span class="device-status" :class="{ online: client.online, disabled: !client.enabled || client.revoked }"><span class="status-dot" :class="{ online: client.online }"></span></span><div class="device-main"><strong>{{ client.name }}</strong><span class="protocol-badge">{{ clientProtocolLabel(client) }}</span><span class="device-meta">{{ clientAccessSummary(client) }} · {{ client.online ? t().online : t().offline }}<template v-if="client.protocol === 'vless'"> · {{ client.fingerprint || settings?.clientFingerprint || 'chrome' }}</template><template v-if="client.sourceIPs?.length"> · {{ t().sourceIp }}: {{ client.sourceIPs.join(', ') }}</template></span></div></div><span class="status-badge" :class="{ positive: client.enabled && !client.revoked && !client.expired, muted: !client.enabled && !client.revoked && !client.expired, negative: client.revoked || (client.expired && !client.expirationPending), warning: client.expirationPending }">{{ client.revoked ? t().revoked : client.expirationPending ? t().expiryPending : client.expired ? t().expired : client.enabled ? t().enabled : t().disabled }}</span></div>
+            <div class="device-stats"><div class="device-stat"><span>{{ t().upload }}</span><strong>{{ formatBytes(client.uploadBytes) }}</strong></div><div class="device-stat"><span>{{ t().downloadTraffic }}</span><strong>{{ formatBytes(client.downloadBytes) }}</strong></div><div class="device-stat"><span>{{ t().currentUpload }}</span><strong>{{ formatRate(client.uploadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().currentDownload }}</span><strong>{{ formatRate(client.downloadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().expiry }}</span><strong>{{ client.expiresAt ? formatExpiry(client.expiresAt, language) : t().expiryNever }}</strong></div><div class="device-stat device-stat-wide"><span>{{ t().lastSeen }}</span><strong>{{ client.lastSeen ? formatTimestamp(client.lastSeen, language) : '—' }}</strong></div></div>
+            <div class="device-card-footer"><span class="device-id">ID {{ client.id.slice(0, 8) }}</span><div class="device-actions"><button v-if="!client.revoked" class="secondary expiry-button" @click="openExpiryEditor(client)">{{ t().editExpiry }}</button><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked && clientActionFor(client) !== null" class="secondary" @click="openClientAction(client, clientActionFor(client))">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ client.protocol === 'amneziawg' ? t().awgRevoke : t().remove }}</button></div></div>
           </li>
         </ul>
       </section>
@@ -805,6 +837,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       </section>
 
       <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" :vmess-available="vmessAvailable" :shadowsocks-available="shadowsocksAvailable" :trojan-available="trojanAvailable" :awg-available="amneziaWGAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
+      <ProfileExpiryModal v-if="expiryClient" :client="expiryClient" :language="language" :busy="busy" @close="expiryClient = null" @save="saveClientExpiry" />
       <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p><p v-if="clientAction.action === 'revoke' && clientAction.client.protocol === 'amneziawg'" class="hint">{{ t().awgConfirmRevoke }}</p><p v-else-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ clientAction.client.protocol === 'amneziawg' ? t().awgRevoke : actionLabel(clientAction.action) }}</button></div></div></div>
       <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :vmess-qr-url="api.clients.profileVMessQrUrl(selectedProfile.clientId)" :shadowsocks-qr-url="api.clients.profileShadowsocksQrUrl(selectedProfile.clientId)" :trojan-qr-url="api.clients.profileTrojanQrUrl(selectedProfile.clientId)" :awg-qr-url="api.clients.profileAmneziaWGQrUrl(selectedProfile.clientId)" :awg-profile-url="api.clients.profileAmneziaWGUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" :copied-vmess="copiedVMess" :copied-shadowsocks="copiedShadowsocks" :copied-trojan="copiedTrojan" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" @copy-vmess="copyVMessUri" @copy-shadowsocks="copyShadowsocksUri" @copy-trojan="copyTrojanUri" />
       <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>

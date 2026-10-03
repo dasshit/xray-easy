@@ -76,7 +76,7 @@ func (s *server) amneziaWGStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 // createAWGClient creates the requested value.
-func (s *server) createAWGClient(w http.ResponseWriter, r *http.Request, admin store.Admin, name, fingerprint, authValue string) {
+func (s *server) createAWGClient(w http.ResponseWriter, r *http.Request, admin store.Admin, name, fingerprint, authValue string, expiresAt *time.Time) {
 	if fingerprint != "" || authValue != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "fingerprint and auth are not valid for AmneziaWG profiles"})
 		return
@@ -106,7 +106,7 @@ func (s *server) createAWGClient(w http.ResponseWriter, r *http.Request, admin s
 		return
 	}
 	defer lock.Close()
-	peer, err := s.awg.CreatePeer(ctx, name)
+	peer, err := s.awg.CreatePeer(ctx, name, expiresAt)
 	if err != nil {
 		writeAWGError(w, err)
 		return
@@ -124,12 +124,23 @@ func (s *server) withAWGStats(peers []domain.AmneziaWGPeer) []clientResponse {
 	result := make([]clientResponse, 0, len(peers))
 	for _, peer := range peers {
 		current := snapshot["awg:"+peer.Name]
+		now := time.Now().UTC()
+		expired := peer.IsExpired(now)
+		enabled := !peer.Disabled && !expired
+		sourceIPs := current.SourceIPs
+		uploadRate, downloadRate := current.UploadBytesPerSecond, current.DownloadBytesPerSecond
+		if !enabled {
+			sourceIPs = nil
+			uploadRate, downloadRate = 0, 0
+		}
 		result = append(result, clientResponse{
 			Protocol: domain.ProtocolAmneziaWG, Protocols: []string{string(domain.ProtocolAmneziaWG)},
-			ID: "awg:" + peer.Name, Name: peer.Name, Enabled: true, CreatedAt: peer.CreatedAt, UpdatedAt: peer.CreatedAt,
-			Online: current.Online, LastSeen: current.LastSeen, SourceIPs: current.SourceIPs,
+			ID: "awg:" + peer.Name, Name: peer.Name, Enabled: enabled,
+			Expired: expired, ExpirationPending: expired && !peer.Disabled,
+			ExpiresAt: peer.ExpiresAt, CreatedAt: peer.CreatedAt, UpdatedAt: peer.CreatedAt,
+			Online: enabled && current.Online, LastSeen: current.LastSeen, SourceIPs: sourceIPs,
 			UploadBytes: current.UploadBytes, DownloadBytes: current.DownloadBytes,
-			UploadRate: current.UploadBytesPerSecond, DownloadRate: current.DownloadBytesPerSecond,
+			UploadRate: uploadRate, DownloadRate: downloadRate,
 		})
 	}
 	return result
@@ -149,6 +160,18 @@ func (s *server) amneziaWGClientRoute(w http.ResponseWriter, r *http.Request, ad
 	}
 	if len(parts) == 2 && parts[1] == "revoke" && r.Method == http.MethodPost {
 		s.revokeAmneziaWGPeer(w, r, admin, name)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "enable" && r.Method == http.MethodPost {
+		s.changeAWGPeerState(w, r, admin, name, true)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "disable" && r.Method == http.MethodPost {
+		s.changeAWGPeerState(w, r, admin, name, false)
+		return
+	}
+	if len(parts) == 2 && parts[1] == "expiry" && r.Method == http.MethodPut {
+		s.updateAWGPeerExpiry(w, r, admin, name)
 		return
 	}
 	if len(parts) != 2 || parts[1] != "profile" || r.Method != http.MethodGet {
@@ -201,6 +224,53 @@ func (s *server) amneziaWGClientRoute(w http.ResponseWriter, r *http.Request, ad
 	w.Header().Set("Content-Type", "image/png")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(image)
+}
+
+// changeAWGPeerState enables or reversibly disables an AmneziaWG profile.
+func (s *server) changeAWGPeerState(w http.ResponseWriter, r *http.Request, admin store.Admin, name string, enabled bool) {
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	peer, err := s.awg.SetPeerEnabled(ctx, name, enabled)
+	if err != nil {
+		writeAWGError(w, err)
+		return
+	}
+	action, detail := "awg.peer.disable", "AmneziaWG peer disabled; credentials and profile retained"
+	if enabled {
+		action, detail = "awg.peer.enable", "AmneziaWG peer enabled"
+	}
+	_ = s.store.AddAudit(ctx, admin.ID, action, "awg_peer", name, detail)
+	writeJSON(w, http.StatusOK, s.withAWGStats([]domain.AmneziaWGPeer{peer})[0])
+}
+
+// updateAWGPeerExpiry changes or clears an AmneziaWG profile deadline.
+func (s *server) updateAWGPeerExpiry(w http.ResponseWriter, r *http.Request, admin store.Admin, name string) {
+	var request clientExpiryRequest
+	if err := decodeJSON(r, &request); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
+	}
+	if request.ExpiresAt != nil {
+		if request.ExpiresAt.IsZero() || !request.ExpiresAt.After(time.Now()) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": "expires_at must be a future RFC3339 timestamp or null"})
+			return
+		}
+		expiry := request.ExpiresAt.UTC()
+		request.ExpiresAt = &expiry
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
+	defer cancel()
+	peer, err := s.awg.SetPeerExpiry(ctx, name, request.ExpiresAt)
+	if err != nil {
+		writeAWGError(w, err)
+		return
+	}
+	detail := "AmneziaWG peer expiry cleared"
+	if request.ExpiresAt != nil {
+		detail = "AmneziaWG peer expiry changed to " + request.ExpiresAt.Format(time.RFC3339)
+	}
+	_ = s.store.AddAudit(ctx, admin.ID, "awg.peer.expiry.update", "awg_peer", name, detail)
+	writeJSON(w, http.StatusOK, s.withAWGStats([]domain.AmneziaWGPeer{peer})[0])
 }
 
 // revokeAmneziaWGPeer performs the operation represented by its name.
@@ -257,6 +327,8 @@ func writeAWGError(w http.ResponseWriter, err error) {
 		writeJSON(w, http.StatusNotFound, map[string]any{"code": "not_found", "error": "AmneziaWG peer not found"})
 	case codes.AlreadyExists:
 		writeJSON(w, http.StatusConflict, map[string]any{"code": "already_exists", "error": "an AmneziaWG peer with this name already exists"})
+	case codes.FailedPrecondition:
+		writeJSON(w, http.StatusConflict, map[string]any{"code": "profile_expired", "error": "extend the expired profile before enabling it"})
 	case codes.Unavailable, codes.DeadlineExceeded:
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"code": "service_unavailable", "error": "AmneziaWG service is not running"})
 	default:

@@ -20,6 +20,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // serviceName is an internal package constant.
@@ -32,7 +33,11 @@ type Gateway interface {
 	// ListPeers returns the requested collection.
 	ListPeers(context.Context) ([]domain.AmneziaWGPeer, error)
 	// CreatePeer creates the requested value.
-	CreatePeer(context.Context, string) (domain.AmneziaWGPeer, error)
+	CreatePeer(context.Context, string, *time.Time) (domain.AmneziaWGPeer, error)
+	// SetPeerEnabled changes active state without removing peer identity or profile material.
+	SetPeerEnabled(context.Context, string, bool) (domain.AmneziaWGPeer, error)
+	// SetPeerExpiry updates or clears the peer's expiration deadline.
+	SetPeerExpiry(context.Context, string, *time.Time) (domain.AmneziaWGPeer, error)
 	// RemovePeer removes the supplied value.
 	RemovePeer(context.Context, string) error
 	// ClientConfig returns the requested state.
@@ -205,11 +210,45 @@ func (s *loggedPeerStatsStream) Recv() (*awgapi.PeerStatsUpdate, error) {
 }
 
 // CreatePeer generates the device keypair and registers a persistent peer.
-func (c *Client) CreatePeer(ctx context.Context, name string) (domain.AmneziaWGPeer, error) {
+func (c *Client) CreatePeer(ctx context.Context, name string, expiresAt *time.Time) (domain.AmneziaWGPeer, error) {
 	var response *awgapi.Peer
 	if err := c.call(ctx, "CreatePeer", func(ctx context.Context) error {
 		var err error
-		response, err = c.client.CreatePeer(ctx, &awgapi.CreatePeerRequest{Name: name})
+		request := &awgapi.CreatePeerRequest{Name: name}
+		if expiresAt != nil {
+			request.ExpiresAt = timestamppb.New(expiresAt.UTC())
+		}
+		response, err = c.client.CreatePeer(ctx, request)
+		return err
+	}); err != nil {
+		return domain.AmneziaWGPeer{}, err
+	}
+	return parsePeer(response)
+}
+
+// SetPeerEnabled changes active state through the private AWG service API.
+func (c *Client) SetPeerEnabled(ctx context.Context, name string, enabled bool) (domain.AmneziaWGPeer, error) {
+	var response *awgapi.Peer
+	if err := c.call(ctx, "SetPeerEnabled", func(ctx context.Context) error {
+		var err error
+		response, err = c.client.SetPeerEnabled(ctx, &awgapi.SetPeerEnabledRequest{Name: name, Enabled: enabled})
+		return err
+	}); err != nil {
+		return domain.AmneziaWGPeer{}, err
+	}
+	return parsePeer(response)
+}
+
+// SetPeerExpiry changes or clears the peer expiry through the private AWG service API.
+func (c *Client) SetPeerExpiry(ctx context.Context, name string, expiresAt *time.Time) (domain.AmneziaWGPeer, error) {
+	var response *awgapi.Peer
+	if err := c.call(ctx, "SetPeerExpiry", func(ctx context.Context) error {
+		var err error
+		request := &awgapi.SetPeerExpiryRequest{Name: name, ClearExpiry: expiresAt == nil}
+		if expiresAt != nil {
+			request.ExpiresAt = timestamppb.New(expiresAt.UTC())
+		}
+		response, err = c.client.SetPeerExpiry(ctx, request)
 		return err
 	}); err != nil {
 		return domain.AmneziaWGPeer{}, err
@@ -298,9 +337,17 @@ func parsePeer(peer *awgapi.Peer) (domain.AmneziaWGPeer, error) {
 	if err := peer.GetCreatedAt().CheckValid(); err != nil {
 		return domain.AmneziaWGPeer{}, fmt.Errorf("AWG response field createdAt is invalid: %w", err)
 	}
+	var expiresAt *time.Time
+	if peer.GetExpiresAt() != nil {
+		if err := peer.GetExpiresAt().CheckValid(); err != nil {
+			return domain.AmneziaWGPeer{}, fmt.Errorf("AWG response field expiresAt is invalid: %w", err)
+		}
+		deadline := peer.GetExpiresAt().AsTime().UTC()
+		expiresAt = &deadline
+	}
 	return domain.AmneziaWGPeer{
 		Name: peer.GetName(), PublicKey: peer.GetPublicKey(), IPv4: peer.GetIpv4(), IPv6: peer.GetIpv6(),
-		CreatedAt: peer.GetCreatedAt().AsTime(),
+		CreatedAt: peer.GetCreatedAt().AsTime(), ExpiresAt: expiresAt, Disabled: peer.GetDisabled(),
 	}, nil
 }
 

@@ -655,7 +655,7 @@ func TestShadowsocksProfileCreationReportsEncryptionSetupErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	app.server.masterKey = []byte("too-short")
-	if _, err := app.server.createProtocolClient(t.Context(), settings, domain.ProtocolShadowsocks, "phone", "", "", app.admin.ID); err == nil || !strings.Contains(err.Error(), "master key") {
+	if _, err := app.server.createProtocolClient(t.Context(), settings, domain.ProtocolShadowsocks, "phone", "", "", nil, app.admin.ID); err == nil || !strings.Contains(err.Error(), "master key") {
 		t.Fatalf("invalid master key create error = %v", err)
 	}
 }

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { formatBytes, formatRate, formatTimestamp } from './format'
+import { formatBytes, formatExpiry, formatRate, formatTimestamp } from './format'
 import { persistLanguage, readLanguage, useI18n } from './i18n'
 import { persistTheme, readTheme } from './theme'
 import { isUILanguage, languageOptions, translations } from './i18n/messages'
@@ -116,5 +116,18 @@ describe('formatTimestamp', () => {
     const format = vi.spyOn(Date.prototype, 'toLocaleString').mockReturnValue('formatted date')
     expect(formatTimestamp('2026-09-28T12:00:00.000Z', language)).toBe('formatted date')
     expect(format).toHaveBeenCalledWith(expectedLocale)
+  })
+})
+
+describe('formatExpiry', () => {
+  it('shows an absolute date and localized remaining time', () => {
+    const now = Date.parse('2026-10-01T12:00:00Z')
+    expect(formatExpiry('2026-10-03T12:00:00Z', 'en', now)).toContain('(in 2 days)')
+    expect(formatExpiry('2026-09-30T12:00:00Z', 'en', now)).toContain('(1 day ago)')
+    expect(formatExpiry('2026-10-03T12:00:00Z', 'ru', now)).toContain('через 2 дня')
+  })
+
+  it('preserves invalid timestamps for troubleshooting instead of hiding them', () => {
+    expect(formatExpiry('invalid date', 'en', 0)).toBe('invalid date')
   })
 })

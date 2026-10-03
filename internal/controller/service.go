@@ -536,7 +536,75 @@ func (s *Service) CreateAmneziaWGPeer(ctx context.Context, request *controllerv1
 	if err != nil {
 		return nil, err
 	}
-	peer, err := awg.CreatePeer(ctx, request.Name)
+	var expiresAt *time.Time
+	if request.ExpiresAt != nil {
+		if err := request.ExpiresAt.CheckValid(); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "expires_at must be a valid timestamp")
+		}
+		deadline := request.ExpiresAt.AsTime().UTC()
+		now := time.Now().UTC()
+		if s != nil && s.now != nil {
+			now = s.now().UTC()
+		}
+		if !deadline.After(now) {
+			return nil, status.Error(codes.InvalidArgument, "expires_at must be in the future")
+		}
+		expiresAt = &deadline
+	}
+	peer, err := awg.CreatePeer(ctx, request.Name, expiresAt)
+	if err != nil {
+		return nil, err
+	}
+	return toProtoPeer(peer), nil
+}
+
+// SetAmneziaWGPeerEnabled enables or reversibly disables a retained peer.
+func (s *Service) SetAmneziaWGPeerEnabled(ctx context.Context, request *controllerv1.SetAmneziaWGPeerEnabledRequest) (*controllerv1.AmneziaWGPeer, error) {
+	if request == nil || request.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	awg, err := s.awgRuntime()
+	if err != nil {
+		return nil, err
+	}
+	peer, err := awg.SetPeerEnabled(ctx, request.Name, request.Enabled)
+	if err != nil {
+		return nil, err
+	}
+	return toProtoPeer(peer), nil
+}
+
+// SetAmneziaWGPeerExpiry sets or clears a retained peer's deadline without enabling it.
+func (s *Service) SetAmneziaWGPeerExpiry(ctx context.Context, request *controllerv1.SetAmneziaWGPeerExpiryRequest) (*controllerv1.AmneziaWGPeer, error) {
+	if request == nil || request.Name == "" {
+		return nil, status.Error(codes.InvalidArgument, "name is required")
+	}
+	if request.ClearExpiry && request.ExpiresAt != nil {
+		return nil, status.Error(codes.InvalidArgument, "clear_expiry and expires_at are mutually exclusive")
+	}
+	if !request.ClearExpiry && request.ExpiresAt == nil {
+		return nil, status.Error(codes.InvalidArgument, "expires_at or clear_expiry is required")
+	}
+	var expiresAt *time.Time
+	if !request.ClearExpiry {
+		if err := request.ExpiresAt.CheckValid(); err != nil {
+			return nil, status.Error(codes.InvalidArgument, "expires_at must be a valid timestamp")
+		}
+		deadline := request.ExpiresAt.AsTime().UTC()
+		now := time.Now().UTC()
+		if s != nil && s.now != nil {
+			now = s.now().UTC()
+		}
+		if !deadline.After(now) {
+			return nil, status.Error(codes.InvalidArgument, "expires_at must be in the future")
+		}
+		expiresAt = &deadline
+	}
+	awg, err := s.awgRuntime()
+	if err != nil {
+		return nil, err
+	}
+	peer, err := awg.SetPeerExpiry(ctx, request.Name, expiresAt)
 	if err != nil {
 		return nil, err
 	}
@@ -655,7 +723,11 @@ func protobufTime(value time.Time) *timestamppb.Timestamp {
 
 // toProtoPeer performs the operation represented by its name.
 func toProtoPeer(peer domain.AmneziaWGPeer) *controllerv1.AmneziaWGPeer {
-	return &controllerv1.AmneziaWGPeer{Name: peer.Name, PublicKey: peer.PublicKey, Ipv4: peer.IPv4, Ipv6: peer.IPv6, CreatedAt: protobufTime(peer.CreatedAt)}
+	var expiresAt *timestamppb.Timestamp
+	if peer.ExpiresAt != nil {
+		expiresAt = protobufTime(*peer.ExpiresAt)
+	}
+	return &controllerv1.AmneziaWGPeer{Name: peer.Name, PublicKey: peer.PublicKey, Ipv4: peer.IPv4, Ipv6: peer.IPv6, CreatedAt: protobufTime(peer.CreatedAt), ExpiresAt: expiresAt, Disabled: peer.Disabled}
 }
 
 // runtime runs the requested operation.

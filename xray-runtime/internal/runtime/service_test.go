@@ -45,27 +45,29 @@ func (l *fakeLoader) Validate(_ context.Context, data []byte) error {
 }
 
 type fakeEngine struct {
-	startErr          error
-	closeErr          error
-	replaceErr        error
-	addErr            error
-	removeErr         error
-	listErr           error
-	telemetryErr      error
-	stats             bool
-	telemetry         []RuntimeUserTelemetry
-	telemetrySequence [][]RuntimeUserTelemetry
-	telemetryCalls    int
-	starts            int
-	closes            int
-	replacements      int
-	users             map[string]string
-	leaseProtocols    map[xrayruntimev1.Protocol]bool
-	leaseDisconnectErr error
-	leaseDisconnectCalls int
-	leaseDisconnectClosed int
-	leaseDisconnectAlready bool
-	leaseDisconnectInput *xrayruntimev1.DisconnectLeaseRequest
+	startErr                 error
+	closeErr                 error
+	replaceErr               error
+	addErr                   error
+	removeErr                error
+	listErr                  error
+	telemetryErr             error
+	stats                    bool
+	telemetry                []RuntimeUserTelemetry
+	telemetrySequence        [][]RuntimeUserTelemetry
+	telemetryCalls           int
+	starts                   int
+	closes                   int
+	replacements             int
+	users                    map[string]string
+	leaseProtocols           map[xrayruntimev1.Protocol]bool
+	leaseDisconnectErr       error
+	leaseDisconnectCalls     int
+	leaseDisconnectClosed    int
+	leaseDisconnectAlready   bool
+	leaseDisconnectInput     *xrayruntimev1.DisconnectLeaseRequest
+	profileClosedConnections int
+	profileCloseProtocol     xrayruntimev1.Protocol
 }
 
 func (e *fakeEngine) Start() error         { e.starts++; return e.startErr }
@@ -115,6 +117,11 @@ func (e *fakeEngine) RemoveUser(_ context.Context, _ string, email string) (bool
 	}
 	delete(e.users, email)
 	return false, nil
+}
+func (e *fakeEngine) RemoveUserWithProtocol(ctx context.Context, protocol xrayruntimev1.Protocol, tag, email string) (bool, int, int, error) {
+	e.profileCloseProtocol = protocol
+	wasAbsent, err := e.RemoveUser(ctx, tag, email)
+	return wasAbsent, e.profileClosedConnections, 2, err
 }
 func (e *fakeEngine) ListUsers(_ context.Context, _ string) ([]string, error) {
 	if e.listErr != nil {
@@ -828,7 +835,7 @@ func TestReplaceInboundRequestsProcessRestartWhenRollbackFails(t *testing.T) {
 
 func TestUserManagementUsesProtocolInboundAndRevisionFence(t *testing.T) {
 	configuration := []byte(`{"inbounds":[{"tag":"vless-reality","protocol":"vless"},{"tag":"vmess-tls","protocol":"vmess"},{"tag":"hysteria2","protocol":"hysteria"}]}`)
-	engine := &fakeEngine{users: map[string]string{}}
+	engine := &fakeEngine{users: map[string]string{}, leaseProtocols: map[xrayruntimev1.Protocol]bool{xrayruntimev1.Protocol_PROTOCOL_VLESS: true}, profileClosedConnections: 2}
 	service, err := NewService(&fakeLoader{engine: engine}, "v", configuration, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -854,6 +861,13 @@ func TestUserManagementUsesProtocolInboundAndRevisionFence(t *testing.T) {
 	response, err = service.RemoveUser(context.Background(), remove)
 	if err != nil || response.GetAlreadyApplied() || len(engine.users) != 0 {
 		t.Fatalf("remove user=%+v users=%v error=%v", response, engine.users, err)
+	}
+	if engine.profileCloseProtocol != xrayruntimev1.Protocol_PROTOCOL_VLESS {
+		t.Fatalf("removal protocol passed to connection closer = %s", engine.profileCloseProtocol)
+	}
+	logs, err := service.GetRecentLogs(context.Background(), new(xrayruntimev1.EmptyRequest))
+	if err != nil || len(logs.GetEntries()) == 0 || !strings.Contains(logs.GetEntries()[len(logs.GetEntries())-1].GetMessage(), "active_tcp_connections_closed=2") {
+		t.Fatalf("profile removal log=%+v error=%v", logs, err)
 	}
 	if _, err := service.AddUser(context.Background(), &xrayruntimev1.AddUserRequest{Protocol: xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, Email: "e", Credential: "c", OperationId: "bad", Revision: 3}); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("unsupported protocol status=%v", err)

@@ -83,6 +83,36 @@ func TestDoctorOmitsAmneziaWGChecksWhenDisabled(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsPendingProfileExpirationForXrayAndAmneziaWG(t *testing.T) {
+	dataDir, configDir, _ := prepareDoctorState(t, true)
+	expiresAt := time.Now().UTC().Add(-time.Minute)
+	db, err := store.Open(context.Background(), filepath.Join(dataDir, "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := domain.Client{ID: "expired-client", Name: "expired-phone", Email: "expired@xray-easy", Enabled: true, ExpiresAt: &expiresAt}
+	if err := db.CreateClient(context.Background(), client, "uuid-expired", client.Email, "short-expired"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_EASY_MASTER_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=")
+	checks := collectDoctorChecks(context.Background(), dataDir, configDir, &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
+	if check := findDoctorCheck(checks, "Profile expiry"); check == nil || check.level != doctorWarn || !strings.Contains(check.detail, "1 expired Xray profile") {
+		t.Fatalf("pending Xray expiry diagnostic = %+v", check)
+	}
+
+	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
+	checks = collectDoctorChecksWithAWG(context.Background(), dataDir, configDir, &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{}, &doctorAWGStub{
+		status: domain.AmneziaWGStatus{Running: true},
+		peers:  []domain.AmneziaWGPeer{{Name: "awg-phone", ExpiresAt: &expiresAt}},
+	}, nil)
+	if check := findDoctorCheck(checks, "AmneziaWG profile expiry"); check == nil || check.level != doctorWarn || !strings.Contains(check.detail, "1 expired peer") {
+		t.Fatalf("pending AWG expiry diagnostic = %+v", check)
+	}
+}
+
 func TestDoctorLeaseServiceChecksAreConditionalAndReportHealth(t *testing.T) {
 	t.Setenv("XRAY_LEASE_SERVICE_ENABLED", "false")
 	t.Setenv("COMPOSE_PROFILES", "")

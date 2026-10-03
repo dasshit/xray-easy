@@ -420,6 +420,16 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 	}
 	if !databaseReady {
 		appendCheck(doctorWarn, "Application setup", "database state could not be inspected", "Start xray-easy and inspect its startup logs.")
+	} else {
+		pending, err := store.CountExpiredEnabledClientsFromDatabase(ctx, filepath.Join(dataDir, "state.db"), time.Now().UTC())
+		switch {
+		case err != nil:
+			appendCheck(doctorWarn, "Profile expiry", "pending enforcement state could not be inspected", "Check the SQLite schema and xray-easy startup logs, then rerun doctor.")
+		case pending > 0:
+			appendCheck(doctorWarn, "Profile expiry", fmt.Sprintf("%d expired Xray profile(s) remain enabled while enforcement is pending", pending), "Keep xray-easy and Controller running; inspect diagnostics and logs if the expiry worker does not clear this warning.")
+		default:
+			appendCheck(doctorPass, "Profile expiry", "no overdue enabled Xray profiles", "")
+		}
 	}
 
 	controllerConfigured := strings.TrimSpace(os.Getenv("XRAY_CONTROLLER_ADDR")) != ""
@@ -629,6 +639,17 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 					appendCheck(doctorFail, "AmneziaWG peers", "peer state could not be read", "Inspect awg service logs and its persistent awg_data volume.")
 				} else {
 					appendCheck(doctorPass, "AmneziaWG service", fmt.Sprintf("interface is running; %d peer(s) are configured", len(peers)), "")
+					pending := 0
+					for _, peer := range peers {
+						if !peer.Disabled && peer.IsExpired(time.Now().UTC()) {
+							pending++
+						}
+					}
+					if pending > 0 {
+						appendCheck(doctorWarn, "AmneziaWG profile expiry", fmt.Sprintf("%d expired peer(s) remain enabled while enforcement is pending", pending), "Keep the awg service running and inspect its logs if the expiry worker does not clear this warning.")
+					} else {
+						appendCheck(doctorPass, "AmneziaWG profile expiry", "no overdue enabled peers", "")
+					}
 				}
 			}
 		}

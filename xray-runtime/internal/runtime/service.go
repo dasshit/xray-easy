@@ -75,6 +75,13 @@ type EngineHandle interface {
 	ListUsers(context.Context, string) ([]string, error)
 }
 
+// ProfileSessionCloser removes a user's credential and interrupts tracked
+// active client sessions.
+type ProfileSessionCloser interface {
+	// RemoveUserWithProtocol removes one user, closes tracked client connections, and cancels its active dispatch flows.
+	RemoveUserWithProtocol(context.Context, xrayruntimev1.Protocol, string, string) (bool, int, int, error)
+}
+
 // LeaseDisconnectEngine closes a selected authenticated user connection when the
 // implementation has verified connection tracking for that protocol.
 type LeaseDisconnectEngine interface {
@@ -774,7 +781,14 @@ func (s *Service) RemoveUser(ctx context.Context, request *xrayruntimev1.RemoveU
 			return operationResponse(request.GetOperationId(), request.GetRevision(), true), nil
 		}
 	}
-	wasAbsent, err := engine.RemoveUser(ctx, tag, request.GetEmail())
+	var wasAbsent bool
+	closedConnections := 0
+	cancelledFlows := 0
+	if closer, ok := engine.(ProfileSessionCloser); ok {
+		wasAbsent, closedConnections, cancelledFlows, err = closer.RemoveUserWithProtocol(ctx, request.GetProtocol(), tag, request.GetEmail())
+	} else {
+		wasAbsent, err = engine.RemoveUser(ctx, tag, request.GetEmail())
+	}
 	if err != nil {
 		return nil, status.Error(codes.FailedPrecondition, "Xray user could not be removed")
 	}
@@ -785,7 +799,15 @@ func (s *Service) RemoveUser(ctx context.Context, request *xrayruntimev1.RemoveU
 			return nil, status.Error(codes.Unavailable, "Xray revision state could not be committed; runtime is restarting")
 		}
 	}
-	s.emitEvent("info", "user", "user_removed", request.GetProtocol(), request.GetEmail(), "", "Xray user was removed")
+	message := fmt.Sprintf("Xray user removed; protocol=%s", request.GetProtocol())
+	if supported, supportsClose := engine.(LeaseDisconnectEngine); supportsClose && supported.LeaseDisconnectSupported(request.GetProtocol()) {
+		message = fmt.Sprintf("%s active_tcp_connections_closed=%d", message, closedConnections)
+	}
+	if _, supportsProfileClose := engine.(ProfileSessionCloser); supportsProfileClose {
+		message = fmt.Sprintf("%s active_dispatch_flows_interrupted=%d", message, cancelledFlows)
+	}
+	s.addLog("info", "user", message)
+	s.emitEvent("info", "user", "user_removed", request.GetProtocol(), request.GetEmail(), "", message)
 	return operationResponse(request.GetOperationId(), request.GetRevision(), wasAbsent), nil
 }
 

@@ -36,7 +36,7 @@ describe('Xray-easy API adapter', () => {
     await expect(api.setup.status()).resolves.toEqual({ initialized: true })
     await expect(api.auth.current()).resolves.toEqual({ username: 'admin' })
     await expect(api.clients.list()).resolves.toEqual([{
-      id: 'client-1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, online: false, uploadBytes: 0, downloadBytes: 0, uploadBytesPerSecond: 0, downloadBytesPerSecond: 0,
+      id: 'client-1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, expired: false, expirationPending: false, online: false, uploadBytes: 0, downloadBytes: 0, uploadBytesPerSecond: 0, downloadBytesPerSecond: 0,
     }])
     await expect(api.auth.beginTOTPSetup()).resolves.toEqual({
       setupToken: 'setup-token', secret: 'secret', otpauthUri: 'otpauth://totp/test', recoveryCodes: [], expiresIn: 300,
@@ -104,7 +104,7 @@ describe('Xray-easy API adapter', () => {
     const api = createXrayEasyApi(send)
     const expected = {
       id: 'device/1', name: 'phone', protocol: 'vless', protocols: ['vless'], vless: { enabled: true, revoked: false }, enabled: true, revoked: false, fingerprint: 'safari', online: false,
-      lastSeen: '2026-09-28T12:00:00Z', uploadBytes: 22, downloadBytes: 33, uploadBytesPerSecond: 0, downloadBytesPerSecond: 0,
+      lastSeen: '2026-09-28T12:00:00Z', uploadBytes: 22, downloadBytes: 33, uploadBytesPerSecond: 0, downloadBytesPerSecond: 0, expired: false, expirationPending: false,
     }
 
     await expect(api.clients.list()).resolves.toEqual([expected])
@@ -135,6 +135,30 @@ describe('Xray-easy API adapter', () => {
     await expect(api.clients.profile('hyst-1')).resolves.toEqual({
       clientId: 'hyst-1', protocol: 'hysteria2', hysteriaUri: 'hysteria2://password@vpn.test:443',
     })
+  })
+
+  it('serializes an expiry on profile creation and supports setting or clearing expiry', async () => {
+    const expiresAt = '2026-10-03T12:00:00Z'
+    const dto = {
+      id: 'expired-profile', name: 'iphone', protocol: 'vless', protocols: ['vless'],
+      vless: { enabled: false, revoked: false }, enabled: false, revoked: false,
+      expires_at: expiresAt, expired: true, expiration_pending: false, online: false,
+      upload_bytes: 12, download_bytes: 34,
+    }
+    const { send, calls } = requester({
+      '/api/clients': sequence(dto, dto),
+      '/api/clients/expired-profile/expiry': sequence(dto, { ...dto, expires_at: undefined, expired: false }),
+    })
+    const api = createXrayEasyApi(send)
+
+    await expect(api.clients.create({ name: 'iphone', protocol: 'vless', expiresAt })).resolves.toMatchObject({ expiresAt, expired: true, expirationPending: false })
+    await expect(api.clients.setExpiry('expired-profile', expiresAt)).resolves.toMatchObject({ expiresAt, expired: true })
+    const cleared = await api.clients.setExpiry('expired-profile')
+    expect(cleared).toMatchObject({ expired: false, expirationPending: false })
+    expect(cleared.expiresAt).toBeUndefined()
+    expect(calls[0]?.options?.body).toBe(JSON.stringify({ name: 'iphone', protocol: 'vless', expires_at: expiresAt }))
+    expect(calls[1]).toEqual({ url: '/api/clients/expired-profile/expiry', options: { method: 'PUT', body: JSON.stringify({ expires_at: expiresAt }) } })
+    expect(calls[2]).toEqual({ url: '/api/clients/expired-profile/expiry', options: { method: 'PUT', body: JSON.stringify({ expires_at: null }) } })
   })
 
   it('creates, delivers, and revokes AmneziaWG profiles through the shared client gateway', async () => {

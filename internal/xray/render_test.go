@@ -3,6 +3,7 @@ package xray
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"xray-easy/internal/domain"
 )
@@ -51,6 +52,34 @@ func TestRenderServerConfigKeepsRealityShortIDsInSyncWithActiveClients(t *testin
 	}
 	if got := inbound.StreamSettings.RealitySettings.MinClientVer; got != "1.0.0" {
 		t.Fatalf("REALITY minClientVer contract changed: %q", got)
+	}
+}
+
+func TestRenderServerConfigOmitsExpiredProfileCredentials(t *testing.T) {
+	deadline := time.Now().UTC().Add(-time.Second)
+	client := Client{
+		ID: "expired", Protocol: domain.ProtocolVLESS, UUID: "uuid-expired",
+		Email: "expired@example.test", ShortID: "0123456789abcdef",
+		Enabled: true, VLESSEnabled: true, ExpiresAt: &deadline,
+	}
+	config, err := RenderServerConfig(validTestSettings(), []Client{client})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded struct {
+		Inbounds []struct {
+			Settings struct {
+				Clients []struct {
+					ID string `json:"id"`
+				} `json:"clients"`
+			} `json:"settings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(config, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if len(decoded.Inbounds) != 1 || len(decoded.Inbounds[0].Settings.Clients) != 0 {
+		t.Fatalf("expired profile remained in rendered config: %+v", decoded.Inbounds)
 	}
 }
 
