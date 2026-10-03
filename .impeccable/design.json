@@ -1,0 +1,766 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-03T23:29:01Z",
+  "title": "Design System: Xray-easy",
+  "extensions": {
+    "colorMeta": {
+      "primary": {
+        "role": "primary",
+        "displayName": "Clear Blue",
+        "tonalRamp": [
+          "#1a0070",
+          "#120091",
+          "#0e00b3",
+          "#1939d6",
+          "#305df9",
+          "#4a7eff",
+          "#66a0ff",
+          "#a3e4ff"
+        ]
+      },
+      "primary-hover": {
+        "role": "primary",
+        "displayName": "Clear Blue Hover",
+        "tonalRamp": [
+          "#130063",
+          "#0b0084",
+          "#0b1ba5",
+          "#1d41c7",
+          "#3663ea",
+          "#5183ff",
+          "#6ea4ff",
+          "#abe7ff"
+        ]
+      },
+      "page-bg": {
+        "role": "neutral",
+        "displayName": "Cool Mist",
+        "tonalRamp": [
+          "#0a0b0e",
+          "#202224",
+          "#393a3e",
+          "#545559",
+          "#707275",
+          "#8d8f93",
+          "#acaeb2",
+          "#eceef2"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "tonalRamp": [
+          "#0b0b0b",
+          "#222222",
+          "#3a3a3a",
+          "#555555",
+          "#717171",
+          "#8f8f8f",
+          "#aeaeae",
+          "#eeeeee"
+        ]
+      },
+      "surface-muted": {
+        "role": "neutral",
+        "displayName": "Muted Mist",
+        "tonalRamp": [
+          "#0a0b0e",
+          "#202224",
+          "#393a3e",
+          "#545559",
+          "#707275",
+          "#8d8f93",
+          "#acaeb2",
+          "#eceef2"
+        ]
+      },
+      "text": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "tonalRamp": [
+          "#040a1b",
+          "#182134",
+          "#303a4f",
+          "#4a556b",
+          "#667289",
+          "#838fa8",
+          "#a2aec7",
+          "#e2efff"
+        ]
+      },
+      "label": {
+        "role": "neutral",
+        "displayName": "Slate Label",
+        "tonalRamp": [
+          "#040b1b",
+          "#182233",
+          "#303b4e",
+          "#4a566a",
+          "#667288",
+          "#8390a6",
+          "#a1afc6",
+          "#e1efff"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Slate",
+        "tonalRamp": [
+          "#040b1a",
+          "#182233",
+          "#303b4d",
+          "#4a5669",
+          "#667287",
+          "#8390a6",
+          "#a2afc5",
+          "#e2efff"
+        ]
+      },
+      "border": {
+        "role": "neutral",
+        "displayName": "Quiet Border",
+        "tonalRamp": [
+          "#080b11",
+          "#1e2228",
+          "#373b42",
+          "#51555d",
+          "#6d727a",
+          "#8b8f98",
+          "#a9aeb7",
+          "#eaeff8"
+        ]
+      },
+      "border-strong": {
+        "role": "neutral",
+        "displayName": "Strong Border",
+        "tonalRamp": [
+          "#070b13",
+          "#1c222b",
+          "#353b44",
+          "#4f5660",
+          "#6b727d",
+          "#88909b",
+          "#a7afba",
+          "#e7effb"
+        ]
+      },
+      "focus": {
+        "role": "primary",
+        "displayName": "Blue Focus Ring",
+        "tonalRamp": [
+          "#070a19",
+          "#1c2131",
+          "#353a4c",
+          "#4f5468",
+          "#6b7185",
+          "#888ea4",
+          "#a7adc3",
+          "#e7eeff"
+        ]
+      },
+      "error-surface": {
+        "role": "error",
+        "displayName": "Soft Error Surface",
+        "tonalRamp": [
+          "#0f0a09",
+          "#26201f",
+          "#3f3938",
+          "#5a5353",
+          "#77706f",
+          "#948d8c",
+          "#b3acab",
+          "#f4eceb"
+        ]
+      },
+      "error-border": {
+        "role": "error",
+        "displayName": "Error Border",
+        "tonalRamp": [
+          "#200001",
+          "#3c1112",
+          "#592b2a",
+          "#774644",
+          "#956260",
+          "#b57f7d",
+          "#d69d9b",
+          "#ffddda"
+        ]
+      },
+      "error": {
+        "role": "error",
+        "displayName": "Error Red",
+        "tonalRamp": [
+          "#3b0000",
+          "#5e0000",
+          "#800000",
+          "#a20501",
+          "#c53629",
+          "#e95948",
+          "#ff7966",
+          "#ffbba5"
+        ]
+      },
+      "danger-hover": {
+        "role": "error",
+        "displayName": "Deep Error Red",
+        "tonalRamp": [
+          "#340000",
+          "#550000",
+          "#760000",
+          "#97261e",
+          "#b9473b",
+          "#dc6658",
+          "#ff8575",
+          "#ffc6b4"
+        ]
+      },
+      "success": {
+        "role": "success",
+        "displayName": "Success Green",
+        "tonalRamp": [
+          "#001700",
+          "#003200",
+          "#004e0d",
+          "#006b2b",
+          "#008947",
+          "#2fa864",
+          "#56c882",
+          "#9affc1"
+        ]
+      },
+      "status": {
+        "role": "neutral",
+        "displayName": "Inactive Status Gray",
+        "tonalRamp": [
+          "#050b15",
+          "#1b222d",
+          "#333b47",
+          "#4d5662",
+          "#69727f",
+          "#86909e",
+          "#a5afbd",
+          "#e5effe"
+        ]
+      },
+      "warning": {
+        "role": "warning",
+        "displayName": "Warning Amber",
+        "tonalRamp": [
+          "#2c0000",
+          "#4b0000",
+          "#692000",
+          "#883f00",
+          "#a85d00",
+          "#c97b00",
+          "#eb9b00",
+          "#ffdc63"
+        ]
+      },
+      "warning-text": {
+        "role": "warning",
+        "displayName": "Warning Text",
+        "tonalRamp": [
+          "#240000",
+          "#401000",
+          "#5d2c00",
+          "#7b4800",
+          "#9a6500",
+          "#ba8331",
+          "#daa253",
+          "#ffe394"
+        ]
+      },
+      "warning-text-strong": {
+        "role": "warning",
+        "displayName": "Strong Warning Text",
+        "tonalRamp": [
+          "#2a0000",
+          "#470300",
+          "#652400",
+          "#844100",
+          "#a45e00",
+          "#c57c24",
+          "#e69b49",
+          "#ffdc8b"
+        ]
+      },
+      "overlay": {
+        "role": "neutral",
+        "displayName": "Overlay Ink",
+        "tonalRamp": [
+          "#080b12",
+          "#1e2229",
+          "#373b43",
+          "#51555e",
+          "#6d727b",
+          "#8b8f99",
+          "#a9aeb8",
+          "#e9eff9"
+        ]
+      },
+      "shadow": {
+        "role": "neutral",
+        "displayName": "Ambient Shadow",
+        "tonalRamp": [
+          "#0b0b0c",
+          "#212222",
+          "#3a3a3b",
+          "#555556",
+          "#717172",
+          "#8f8f90",
+          "#adaeaf",
+          "#eeeeef"
+        ]
+      },
+      "modal-shadow": {
+        "role": "neutral",
+        "displayName": "Dialog Shadow",
+        "tonalRamp": [
+          "#0a0b0e",
+          "#202224",
+          "#393a3d",
+          "#545558",
+          "#707175",
+          "#8d8f93",
+          "#acaeb2",
+          "#edeef2"
+        ]
+      },
+      "dark-page-bg": {
+        "role": "neutral",
+        "displayName": "Night Canvas",
+        "tonalRamp": [
+          "#070b15",
+          "#1c222d",
+          "#353a47",
+          "#4f5563",
+          "#6b7280",
+          "#888f9e",
+          "#a7aebe",
+          "#e7efff"
+        ]
+      },
+      "dark-surface": {
+        "role": "neutral",
+        "displayName": "Night Surface",
+        "tonalRamp": [
+          "#050b18",
+          "#1a2230",
+          "#323b4a",
+          "#4c5666",
+          "#687283",
+          "#8590a2",
+          "#a4afc1",
+          "#e4efff"
+        ]
+      },
+      "dark-surface-muted": {
+        "role": "neutral",
+        "displayName": "Night Slate",
+        "tonalRamp": [
+          "#040b19",
+          "#182231",
+          "#303b4c",
+          "#4b5668",
+          "#667285",
+          "#8490a4",
+          "#a2afc3",
+          "#e2f0ff"
+        ]
+      },
+      "dark-text": {
+        "role": "neutral",
+        "displayName": "Moon Ink",
+        "tonalRamp": [
+          "#080b13",
+          "#1e212b",
+          "#373a44",
+          "#515560",
+          "#6d717d",
+          "#8a8f9b",
+          "#a9aeba",
+          "#e9eefb"
+        ]
+      },
+      "dark-label": {
+        "role": "neutral",
+        "displayName": "Pale Label",
+        "tonalRamp": [
+          "#050b16",
+          "#1a222e",
+          "#333b49",
+          "#4d5664",
+          "#697281",
+          "#8690a0",
+          "#a5aebf",
+          "#e5efff"
+        ]
+      },
+      "dark-muted": {
+        "role": "neutral",
+        "displayName": "Silver Slate",
+        "tonalRamp": [
+          "#040b18",
+          "#192231",
+          "#313b4b",
+          "#4b5667",
+          "#677285",
+          "#8490a3",
+          "#a3afc3",
+          "#e3efff"
+        ]
+      },
+      "dark-border": {
+        "role": "neutral",
+        "displayName": "Night Border",
+        "tonalRamp": [
+          "#030b1b",
+          "#172234",
+          "#2f3b4e",
+          "#49566a",
+          "#657288",
+          "#8290a7",
+          "#a0afc6",
+          "#e0f0ff"
+        ]
+      },
+      "dark-border-strong": {
+        "role": "neutral",
+        "displayName": "Strong Night Border",
+        "tonalRamp": [
+          "#030a1e",
+          "#152137",
+          "#2d3b52",
+          "#47566f",
+          "#63728d",
+          "#8090ab",
+          "#9eafcb",
+          "#deefff"
+        ]
+      },
+      "dark-primary": {
+        "role": "primary",
+        "displayName": "Clear Blue in Dark Theme",
+        "tonalRamp": [
+          "#090047",
+          "#110966",
+          "#242c85",
+          "#3b4aa5",
+          "#5568c6",
+          "#7187e8",
+          "#8ea6ff",
+          "#cce8ff"
+        ]
+      },
+      "dark-primary-hover": {
+        "role": "primary",
+        "displayName": "Bright Clear Blue",
+        "tonalRamp": [
+          "#060037",
+          "#141754",
+          "#2a3372",
+          "#424f90",
+          "#5d6cb0",
+          "#7a8ad1",
+          "#98a9f2",
+          "#d7eaff"
+        ]
+      },
+      "dark-focus": {
+        "role": "primary",
+        "displayName": "Dark Blue Focus Ring",
+        "tonalRamp": [
+          "#030725",
+          "#151f40",
+          "#2d395c",
+          "#475479",
+          "#627097",
+          "#7f8eb7",
+          "#9dadd7",
+          "#ddeeff"
+        ]
+      },
+      "dark-error-surface": {
+        "role": "error",
+        "displayName": "Night Error Surface",
+        "tonalRamp": [
+          "#17050c",
+          "#301a23",
+          "#4a323c",
+          "#664d57",
+          "#846973",
+          "#a38691",
+          "#c2a5af",
+          "#ffe5f0"
+        ]
+      },
+      "dark-error-border": {
+        "role": "error",
+        "displayName": "Night Error Border",
+        "tonalRamp": [
+          "#230007",
+          "#3f0a1d",
+          "#5d2535",
+          "#7b404f",
+          "#9a5d6b",
+          "#ba7a89",
+          "#db98a7",
+          "#ffd8e7"
+        ]
+      },
+      "dark-error": {
+        "role": "error",
+        "displayName": "Soft Error Red",
+        "tonalRamp": [
+          "#2c0002",
+          "#4b0013",
+          "#6b122b",
+          "#8b3245",
+          "#ac5060",
+          "#cd6e7d",
+          "#f08c9b",
+          "#ffccdb"
+        ]
+      },
+      "dark-danger-hover": {
+        "role": "error",
+        "displayName": "Pale Danger Red",
+        "tonalRamp": [
+          "#260004",
+          "#430418",
+          "#612230",
+          "#803d4a",
+          "#9f5a66",
+          "#c07783",
+          "#e195a2",
+          "#ffd5e1"
+        ]
+      },
+      "dark-success": {
+        "role": "success",
+        "displayName": "Night Success Green",
+        "tonalRamp": [
+          "#001800",
+          "#003200",
+          "#004e12",
+          "#006b2e",
+          "#008a4a",
+          "#25a967",
+          "#4fc985",
+          "#95ffc4"
+        ]
+      },
+      "dark-status": {
+        "role": "neutral",
+        "displayName": "Night Status Gray",
+        "tonalRamp": [
+          "#040a1c",
+          "#182135",
+          "#303a50",
+          "#4a556c",
+          "#667289",
+          "#838fa8",
+          "#a1aec8",
+          "#e1efff"
+        ]
+      },
+      "dark-warning-text": {
+        "role": "warning",
+        "displayName": "Amber on Night",
+        "tonalRamp": [
+          "#230000",
+          "#3f1300",
+          "#5b2f00",
+          "#784b00",
+          "#976800",
+          "#b7860c",
+          "#d7a53d",
+          "#ffe682"
+        ]
+      },
+      "dark-overlay": {
+        "role": "neutral",
+        "displayName": "Night Overlay",
+        "tonalRamp": [
+          "#090b10",
+          "#1f2227",
+          "#383b40",
+          "#52555b",
+          "#6e7278",
+          "#8c8f96",
+          "#aaaeb5",
+          "#ebeff5"
+        ]
+      },
+      "dark-shadow": {
+        "role": "neutral",
+        "displayName": "Night Ambient Shadow",
+        "tonalRamp": [
+          "#060b16",
+          "#1b222e",
+          "#333b48",
+          "#4e5663",
+          "#6a7281",
+          "#87909f",
+          "#a5aebe",
+          "#e5efff"
+        ]
+      },
+      "dark-modal-shadow": {
+        "role": "neutral",
+        "displayName": "Night Dialog Shadow",
+        "tonalRamp": [
+          "#070b13",
+          "#1d222a",
+          "#353b44",
+          "#505660",
+          "#6c727c",
+          "#898f9a",
+          "#a8aeba",
+          "#e8effb"
+        ]
+      }
+    },
+    "shadows": [
+      {
+        "name": "outer-card",
+        "value": "0 14px 34px var(--shadow)",
+        "purpose": "Lift the main content card from the page canvas."
+      },
+      {
+        "name": "dashboard",
+        "value": "0 18px 48px var(--shadow)",
+        "purpose": "Give the dashboard shell its page-level elevation."
+      },
+      {
+        "name": "dialog",
+        "value": "0 20px 60px var(--modal-shadow)",
+        "purpose": "Separate modal work from the dimmed page."
+      },
+      {
+        "name": "device-hover",
+        "value": "0 8px 22px var(--shadow)",
+        "purpose": "Add a restrained response when a device card is hovered."
+      }
+    ],
+    "motion": [
+      {
+        "name": "control-feedback",
+        "value": ".15s ease",
+        "purpose": "Button and device-card state changes."
+      },
+      {
+        "name": "diagnostics-refresh",
+        "value": ".8s linear",
+        "purpose": "Refresh indicator rotation; disabled when reduced motion is requested."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "tablet-and-small",
+        "value": "700px"
+      },
+      {
+        "name": "compact-mobile",
+        "value": "480px"
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The main action for a form or section.",
+      "html": "<button type=\"button\" class=\"ds-button-primary\">Create profile</button>",
+      "css": ".ds-button-primary { min-height: 42px; padding: 10px 16px; border: 0; border-radius: 9px; background: var(--primary); color: var(--page-bg); font: 650 0.9rem Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background .15s ease, color .15s ease, box-shadow .15s ease, opacity .15s ease, transform .15s ease; } .ds-button-primary:hover:not(:disabled) { background: var(--primary-hover); } .ds-button-primary:active:not(:disabled) { transform: translateY(1px); } .ds-button-primary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; } .ds-button-primary:disabled { opacity: .55; cursor: wait; }"
+    },
+    {
+      "name": "Secondary Button",
+      "kind": "button",
+      "refersTo": "button-secondary",
+      "description": "A lower-emphasis action beside a primary action.",
+      "html": "<button type=\"button\" class=\"ds-button-secondary\">Cancel</button>",
+      "css": ".ds-button-secondary { min-height: 42px; padding: 8px 12px; border: 0; border-radius: 9px; background: transparent; color: var(--primary); font: 650 0.9rem Inter, ui-sans-serif, system-ui, sans-serif; cursor: pointer; transition: background .15s ease, color .15s ease, box-shadow .15s ease; } .ds-button-secondary:hover:not(:disabled) { background: var(--surface-muted); color: var(--primary-hover); } .ds-button-secondary:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; } .ds-button-secondary:disabled { opacity: .55; cursor: wait; }"
+    },
+    {
+      "name": "Text Field",
+      "kind": "input",
+      "refersTo": "text-field",
+      "description": "Labeled server configuration or account input.",
+      "html": "<label class=\"ds-field-label\">Public host<input class=\"ds-field\" type=\"text\" placeholder=\"vpn.example.com\"></label>",
+      "css": ".ds-field-label { display: grid; gap: 7px; margin: 16px 0; color: var(--label); font: 400 0.9rem Inter, ui-sans-serif, system-ui, sans-serif; } .ds-field { width: 100%; min-width: 0; min-height: 44px; padding: 10px 12px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--surface); color: var(--text); font: inherit; } .ds-field:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; border-color: var(--primary); }"
+    },
+    {
+      "name": "Content Card",
+      "kind": "card",
+      "refersTo": "card",
+      "description": "A primary grouping surface for setup or dashboard content.",
+      "html": "<section class=\"ds-card\"><h2>Initial setup</h2><p>Configure the server and create its administrator.</p></section>",
+      "css": ".ds-card { padding: 30px; border: 1px solid var(--border); border-radius: 20px; background: var(--surface); color: var(--text); box-shadow: 0 14px 34px var(--shadow); } .ds-card h2 { margin: 0 0 7px; font: 700 1.2rem Inter, ui-sans-serif, system-ui, sans-serif; } .ds-card p { margin: 0; color: var(--muted); font: 400 0.88rem/1.45 Inter, ui-sans-serif, system-ui, sans-serif; }"
+    },
+    {
+      "name": "Navigation Tabs",
+      "kind": "nav",
+      "refersTo": "navigation-tab",
+      "description": "Switch between the Profiles, Settings, Diagnostics, and Security work areas.",
+      "html": "<nav class=\"ds-tabs\" role=\"tablist\" aria-label=\"Xray-easy\"><button role=\"tab\" aria-selected=\"true\" class=\"ds-tab-active\">Profiles</button><button role=\"tab\" aria-selected=\"false\" class=\"ds-tab\">Settings</button></nav>",
+      "css": ".ds-tabs { display: flex; gap: 4px; padding: 0 14px; border-bottom: 1px solid var(--border); overflow-x: auto; } .ds-tabs button { position: relative; flex: 0 0 auto; min-height: 42px; padding: 13px 14px; border: 0; border-radius: 0; background: transparent; color: var(--muted); font: 400 0.9rem Inter, ui-sans-serif, system-ui, sans-serif; white-space: nowrap; cursor: pointer; } .ds-tabs button:hover { background: var(--surface-muted); color: var(--primary); } .ds-tabs .ds-tab-active { color: var(--primary); font-weight: 700; } .ds-tabs .ds-tab-active::after { position: absolute; right: 10px; bottom: -1px; left: 10px; height: 3px; border-radius: 3px 3px 0 0; background: var(--primary); content: ''; } .ds-tabs button:focus-visible { outline: 3px solid var(--focus); outline-offset: 2px; }"
+    },
+    {
+      "name": "Status Badge",
+      "kind": "chip",
+      "refersTo": "status-badge",
+      "description": "A compact status label with matching semantic text and color.",
+      "html": "<span class=\"ds-status ds-status-positive\">Enabled</span>",
+      "css": ".ds-status { display: inline-flex; align-items: center; width: fit-content; max-width: 100%; padding: 5px 9px; border-radius: 999px; background: var(--surface-muted); color: var(--muted); font: 700 0.73rem/1.3 Inter, ui-sans-serif, system-ui, sans-serif; white-space: normal; } .ds-status-positive { background: color-mix(in srgb, var(--success) 15%, var(--surface)); color: var(--success); } .ds-status-negative { background: var(--error-surface); color: var(--error); } .ds-status-warning { background: color-mix(in srgb, var(--warning) 14%, var(--surface)); color: var(--warning-text-strong); }"
+    },
+    {
+      "name": "Device Card",
+      "kind": "custom",
+      "refersTo": "device-card",
+      "description": "A responsive card for one device, its state, traffic, and actions.",
+      "html": "<article class=\"ds-device-card\"><strong>Travel laptop</strong><span class=\"ds-device-status\">Connected</span><small>Last seen just now</small></article>",
+      "css": ".ds-device-card { display: grid; gap: 12px; min-width: 0; padding: 19px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--text); transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; } .ds-device-card:hover { border-color: var(--border-strong); box-shadow: 0 8px 22px var(--shadow); transform: translateY(-1px); } .ds-device-card strong { overflow-wrap: anywhere; } .ds-device-status { color: var(--success); font-size: 0.82rem; } .ds-device-card small { color: var(--muted); font: 400 0.72rem ui-monospace, monospace; overflow-wrap: anywhere; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "Private VPN Server panel",
+    "overview": "The interface is a calm, open control surface for one private VPN server. It favors clear labels, direct actions, and cool neutral space over dense enterprise-dashboard styling. The four-point brand mark is a small anchor in the header; the interface itself stays focused on the administrator's work.\n\nClear Blue marks primary actions, active navigation, and links. Light and dark themes keep the same role hierarchy while shifting the canvas, text, surfaces, and accent values together. Cards and borders group operational details without making every control compete for attention.",
+    "keyCharacteristics": [
+      "Calm and open, with compact, legible operational content.",
+      "Clear Blue accents against cool, low-chroma surfaces.",
+      "Layered panels with soft shadows and simple status treatments."
+    ],
+    "rules": [
+      {
+        "name": "The One Accent Rule",
+        "body": "Keep Clear Blue as the interface's only saturated accent; reserve green, red, and amber for their status meanings.",
+        "section": "colors"
+      },
+      {
+        "name": "The Quiet Elevation Rule",
+        "body": "Keep the strongest shadows on the main work surface and dialogs; inner cards use borders and tonal fills.",
+        "section": "elevation"
+      },
+      {
+        "name": "The Visible State Rule",
+        "body": "Pair status color with text, and preserve a visible offset keyboard focus ring.",
+        "section": "components"
+      }
+    ],
+    "dos": [
+      "Do use Clear Blue for the main action and active navigation state.",
+      "Do keep light and dark themes aligned by semantic role.",
+      "Do group controls with spacing, subtle borders, and muted surfaces before adding stronger shadows.",
+      "Do preserve visible keyboard focus and pair status colors with text.",
+      "Do let technical values wrap within their card or field."
+    ],
+    "donts": [
+      "Don't add a second saturated accent without a product reason.",
+      "Don't turn the panel into a dense enterprise dashboard; keep its groups open and easy to scan.",
+      "Don't use heavy shadows on every nested card.",
+      "Don't communicate enabled, disabled, warning, or error state through color alone."
+    ]
+  }
+}
