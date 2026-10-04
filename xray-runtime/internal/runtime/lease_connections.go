@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xtls/xray-core/common"
+	"github.com/xtls/xray-core/common/serial"
 	"github.com/xtls/xray-core/common/session"
 	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/outbound"
@@ -120,7 +121,7 @@ func installLeaseTracking(instance *core.Instance, registry *leaseConnectionRegi
 		}
 	}
 	for _, handler := range ordered {
-		if err := manager.AddHandler(context.Background(), &leaseTrackedOutbound{Handler: handler, registry: registry}); err != nil {
+		if err := manager.AddHandler(context.Background(), &leaseTrackedOutbound{handler: handler, registry: registry}); err != nil {
 			return false, fmt.Errorf("wrap outbound %q for lease tracking: %w", handler.Tag(), err)
 		}
 	}
@@ -130,13 +131,38 @@ func installLeaseTracking(instance *core.Instance, registry *leaseConnectionRegi
 // leaseTrackedOutbound registers authenticated client connections before delegating to the original
 // outbound handler. It intentionally leaves unsupported or incomplete observations untouched.
 type leaseTrackedOutbound struct {
-	outbound.Handler
+	handler  outbound.Handler
 	registry *leaseConnectionRegistry
+}
+
+// Start starts the wrapped outbound handler.
+func (h *leaseTrackedOutbound) Start() error {
+	return h.handler.Start()
+}
+
+// Close closes the wrapped outbound handler.
+func (h *leaseTrackedOutbound) Close() error {
+	return h.handler.Close()
+}
+
+// Tag returns the wrapped outbound handler's tag.
+func (h *leaseTrackedOutbound) Tag() string {
+	return h.handler.Tag()
+}
+
+// SenderSettings returns the wrapped outbound handler's sender settings.
+func (h *leaseTrackedOutbound) SenderSettings() *serial.TypedMessage {
+	return h.handler.SenderSettings()
+}
+
+// ProxySettings returns the wrapped outbound handler's proxy settings.
+func (h *leaseTrackedOutbound) ProxySettings() *serial.TypedMessage {
+	return h.handler.ProxySettings()
 }
 
 // Dispatch intercepts authenticated sessions, then delegates traffic to the original handler.
 func (h *leaseTrackedOutbound) Dispatch(ctx context.Context, link *transport.Link) {
-	if h == nil || h.Handler == nil {
+	if h == nil || h.handler == nil {
 		return
 	}
 	inbound := session.InboundFromContext(ctx)
@@ -171,7 +197,7 @@ func (h *leaseTrackedOutbound) Dispatch(ctx context.Context, link *transport.Lin
 			}
 		}
 	}
-	h.Handler.Dispatch(ctx, link)
+	h.handler.Dispatch(ctx, link)
 }
 
 // leaseProfileFromInbound converts authenticated inbound metadata to a profile key.

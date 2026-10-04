@@ -223,7 +223,7 @@ func TestLeaseTrackedOutboundCancelsAndBlocksRemovedProfileFlows(t *testing.T) {
 	started := make(chan struct{})
 	finished := make(chan struct{})
 	handler := &blockingLeaseOutbound{started: started, finished: finished}
-	tracked := &leaseTrackedOutbound{Handler: handler, registry: registry}
+	tracked := &leaseTrackedOutbound{handler: handler, registry: registry}
 	inbound := &session.Inbound{Name: "shadowsocks-2022", User: &protocol.MemoryUser{Email: profile.email}}
 	ctx := session.ContextWithInbound(context.Background(), inbound)
 	reader := &leaseInterruptReader{}
@@ -250,7 +250,7 @@ func TestLeaseTrackedOutboundCancelsAndBlocksRemovedProfileFlows(t *testing.T) {
 	}
 
 	blockedStarted := make(chan struct{})
-	blocked := &leaseTrackedOutbound{Handler: &blockingLeaseOutbound{started: blockedStarted, finished: make(chan struct{})}, registry: registry}
+	blocked := &leaseTrackedOutbound{handler: &blockingLeaseOutbound{started: blockedStarted, finished: make(chan struct{})}, registry: registry}
 	blocked.Dispatch(ctx, &transport.Link{})
 	select {
 	case <-blockedStarted:
@@ -261,7 +261,7 @@ func TestLeaseTrackedOutboundCancelsAndBlocksRemovedProfileFlows(t *testing.T) {
 	registry.allowProfile(profile)
 	reenabledStarted := make(chan struct{})
 	reenabledFinished := make(chan struct{})
-	reenabled := &leaseTrackedOutbound{Handler: &blockingLeaseOutbound{started: reenabledStarted, finished: reenabledFinished}, registry: registry}
+	reenabled := &leaseTrackedOutbound{handler: &blockingLeaseOutbound{started: reenabledStarted, finished: reenabledFinished}, registry: registry}
 	reenabledCtx, cancel := context.WithCancel(ctx)
 	go reenabled.Dispatch(reenabledCtx, &transport.Link{})
 	select {
@@ -282,7 +282,7 @@ func TestLeaseTrackedOutboundCancelsHysteriaUDPFlows(t *testing.T) {
 	started := make(chan struct{})
 	finished := make(chan struct{})
 	tracked := &leaseTrackedOutbound{
-		Handler:  &blockingLeaseOutbound{started: started, finished: finished},
+		handler:  &blockingLeaseOutbound{started: started, finished: finished},
 		registry: registry,
 	}
 	ctx := session.ContextWithInbound(context.Background(), &session.Inbound{

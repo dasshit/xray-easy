@@ -72,6 +72,7 @@ func TestEmbeddedRuntimeDisconnectsOnlySelectedVLESSSourceLease(t *testing.T) {
 	assertLeaseEcho(t, first, "first-before-close")
 	assertLeaseEcho(t, second, "second-before-close")
 	waitForLeaseConnections(t, engine, 2)
+	waitForLeaseFlows(t, engine, 2)
 	telemetry, err := engine.GetTelemetry(context.Background(), map[xrayruntimev1.Protocol]string{xrayruntimev1.Protocol_PROTOCOL_VLESS: "vless"})
 	if err != nil || len(telemetry) != 1 {
 		t.Fatalf("read lease connection telemetry = %+v, error = %v", telemetry, err)
@@ -95,6 +96,7 @@ func TestEmbeddedRuntimeDisconnectsOnlySelectedVLESSSourceLease(t *testing.T) {
 		t.Fatal("operation ID reuse for another source lease was accepted")
 	}
 	assertConnectionClosed(t, first)
+	waitForLeaseFlows(t, engine, 1)
 	assertLeaseEcho(t, second, "second-remains-active")
 
 	absent, closed, flows, err := engine.RemoveUserWithProtocol(context.Background(), xrayruntimev1.Protocol_PROTOCOL_VLESS, "vless", profile)
@@ -197,4 +199,22 @@ func waitForLeaseConnections(t *testing.T, engine *Engine, count int) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatalf("runtime lease registry did not reach %d active connections", count)
+}
+
+func waitForLeaseFlows(t *testing.T, engine *Engine, count int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		engine.leases.mu.Lock()
+		observed := len(engine.leases.flows[leaseProfileKey{
+			protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS,
+			email:    "lease-profile",
+		}])
+		engine.leases.mu.Unlock()
+		if observed == count {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("runtime lease registry did not reach %d active flows", count)
 }
