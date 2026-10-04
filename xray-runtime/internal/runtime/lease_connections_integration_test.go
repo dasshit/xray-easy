@@ -24,21 +24,29 @@ func TestEmbeddedRuntimeDisconnectsOnlySelectedVLESSSourceLease(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen backend echo server: %v", err)
 	}
-	defer backend.Close()
 	var backendConnections sync.WaitGroup
-	defer backendConnections.Wait()
+	backendAcceptorDone := make(chan struct{})
+	defer func() {
+		// Stop and join the accept loop before waiting for handlers. This prevents
+		// WaitGroup.Add from racing with Wait and keeps this test's fixture goroutines
+		// from overlapping the next run of this test under -count.
+		_ = backend.Close()
+		<-backendAcceptorDone
+		backendConnections.Wait()
+	}()
 	go func() {
+		defer close(backendAcceptorDone)
 		for {
 			connection, acceptErr := backend.Accept()
 			if acceptErr != nil {
 				return
 			}
 			backendConnections.Add(1)
-			go func() {
+			go func(connection net.Conn) {
 				defer backendConnections.Done()
 				defer connection.Close()
 				_, _ = io.Copy(connection, connection)
-			}()
+			}(connection)
 		}
 	}()
 
