@@ -149,8 +149,8 @@ textarea { min-height: 96px; resize: vertical; font: 12px ui-monospace, monospac
 .device-stat span { color: var(--muted); font-size: .72rem; }
 .device-stat strong { overflow-wrap: anywhere; font-size: .85rem; font-weight: 650; }
 .device-stat-wide { grid-column: span 2; }
-.device-id { color: var(--muted); font: .72rem ui-monospace, monospace; overflow-wrap: anywhere; }
-.device-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 14px; }
+.device-id { flex: 0 0 auto; color: var(--muted); font: .72rem ui-monospace, monospace; white-space: nowrap; }
+.device-actions { display: flex; flex: 1 1 0; min-width: 0; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 .expiry-selector { min-width: 0; margin: 18px 0; padding: 12px 16px 8px; border: 1px solid var(--border); border-radius: 12px; }
 .expiry-selector legend { padding: 0 6px; color: var(--text); font-size: .92rem; font-weight: 700; }
 .expiry-selector label { margin: 8px 0 12px; }
