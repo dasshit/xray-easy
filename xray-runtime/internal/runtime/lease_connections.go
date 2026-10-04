@@ -374,15 +374,17 @@ func (r *leaseConnectionRegistry) removeProfileSessions(protocol xrayruntimev1.P
 
 	closed := 0
 	var closeErr error
+	// Stop outbound dispatches while their parent contexts are live. Closing the
+	// inbound sockets first can cancel those parents concurrently with flow cleanup.
+	for _, closeFlow := range flows {
+		closeFlow()
+	}
 	for _, connection := range connections {
 		if err := connection.Close(); err != nil {
 			closeErr = errors.Join(closeErr, err)
 			continue
 		}
 		closed++
-	}
-	for _, closeFlow := range flows {
-		closeFlow()
 	}
 	r.mu.Lock()
 	delete(r.closingProfiles, profile)
