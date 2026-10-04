@@ -1,6 +1,7 @@
 import { ref } from 'vue'
 import { isUILanguage, languageOptions, translations } from './messages'
 import type { UILanguage } from './messages'
+import { diagnosticsMessages } from './diagnosticsMessages'
 
 export type { UILanguage } from './messages'
 export { isUILanguage } from './messages'
@@ -53,7 +54,7 @@ export function useI18n() {
    * @returns The localized message dictionary.
    */
   function t() {
-    return translations[language.value]
+    return { ...translations[language.value], ...diagnosticsMessages[language.value] }
   }
 
   /**

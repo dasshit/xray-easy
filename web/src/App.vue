@@ -36,6 +36,8 @@ const theme = ref<Theme>(readTheme())
 const activeSection = ref<Section>('profiles')
 const activeDiagnosticsSection = ref<'xray' | 'amneziawg' | 'control-plane'>('xray')
 const refreshingDiagnostics = ref(false)
+const diagnosticsRefreshState = ref<'idle' | 'refreshing' | 'complete' | 'failed'>('idle')
+const diagnosticsLastUpdatedAt = ref<string | null>(null)
 const createModalOpen = ref(false)
 const hysteriaStatus = ref<HysteriaSettings | null>(null)
 const amneziaWGStatus = ref<AmneziaWGStatus | null>(null)
@@ -58,6 +60,12 @@ const nodeStatus = ref<NodeStatus | null>(null)
 const diagnostics = ref<DiagnosticEntry[]>([])
 const xrayDiagnostics = computed(() => diagnostics.value.filter(entry => entry.component === 'xray'))
 const appDiagnostics = computed(() => diagnostics.value.filter(entry => entry.component === 'app'))
+const diagnosticsRefreshAnnouncement = computed(() => {
+  if (diagnosticsRefreshState.value === 'refreshing') return t().diagnosticsRefreshing
+  if (diagnosticsRefreshState.value === 'complete') return t().diagnosticsRefreshComplete
+  if (diagnosticsRefreshState.value === 'failed') return t().diagnosticsRefreshFailed
+  return ''
+})
 const loginNeedsTOTP = ref(false)
 const loginUsesRecovery = ref(false)
 const successMessage = ref('')
@@ -90,7 +98,7 @@ const amneziaWGDiagnosticTone = computed(() => {
   if (amneziaWGDiagnosticState.value === 'disabled') return 'neutral'
   return 'negative'
 })
-const amneziaWGDiagnosticLabel = computed(() => amneziaWGDiagnosticState.value === 'disabled' ? t().awgNotEnabled : statusLabel(amneziaWGDiagnosticState.value))
+const amneziaWGDiagnosticLabel = computed(() => amneziaWGDiagnosticState.value === 'disabled' ? t().diagnosticsDisabled : statusLabel(amneziaWGDiagnosticState.value))
 const vlessSettingsChanged = computed(() => settings.value !== null && (
   settingsForm.value.publicHost !== settings.value.publicHost
   || settingsForm.value.realityTarget !== settings.value.realityTarget
@@ -234,6 +242,7 @@ async function loadAuthenticated() {
   logLevelForm.value = dashboard.settings.logLevel
   nodeStatus.value = dashboard.nodeStatus
   diagnostics.value = dashboard.diagnostics
+  diagnosticsLastUpdatedAt.value = new Date().toISOString()
   await Promise.all([refreshHysteriaStatus(), refreshAmneziaWGStatus()])
 }
 
@@ -245,9 +254,14 @@ async function refreshHysteriaStatus() {
 
 /** Refresh the optional AmneziaWG service state used by profile creation and settings. */
 async function refreshAmneziaWGStatus() {
-  try { amneziaWGStatus.value = await api.amneziawg.status() }
+  try { await loadAmneziaWGStatus() }
   catch { amneziaWGStatus.value = null }
 }
+/**
+ * Load AmneziaWG service state and propagate request errors to the caller.
+ * @rejects {Error} When the status request fails.
+ */
+async function loadAmneziaWGStatus() { amneziaWGStatus.value = await api.amneziawg.status() }
 
 /** Refresh the profile-creation availability after Hysteria settings are applied. */
 async function handleHysteriaSettingsSaved() {
@@ -273,18 +287,29 @@ async function loadStatus() { nodeStatus.value = await loadNodeStatusSnapshot(ap
  * Refresh the recent diagnostic entries.
  * @rejects {Error} When the diagnostics request fails.
  */
-async function loadDiagnostics() { diagnostics.value = await loadDiagnosticsSnapshot(api) }
+async function loadDiagnostics() {
+  diagnostics.value = await loadDiagnosticsSnapshot(api)
+  diagnosticsLastUpdatedAt.value = new Date().toISOString()
+}
 /** Refresh Xray status, recent events, and AmneziaWG service status together. */
 async function refreshDiagnostics() {
   if (refreshingDiagnostics.value) return
   const startedAt = Date.now()
+  let failed = false
   refreshingDiagnostics.value = true
+  diagnosticsRefreshState.value = 'refreshing'
   try {
-    await Promise.all([loadStatus(), loadDiagnostics(), refreshAmneziaWGStatus()])
+    const results = await Promise.allSettled([loadStatus(), loadDiagnostics(), loadAmneziaWGStatus()])
+    const rejected = results.find(result => result.status === 'rejected')
+    if (rejected?.status === 'rejected') {
+      failed = true
+      showError(rejected.reason)
+    }
   } finally {
     const remainingDuration = Math.max(0, 2500 - (Date.now() - startedAt))
     if (remainingDuration > 0) await new Promise<void>(resolve => window.setTimeout(resolve, remainingDuration))
     refreshingDiagnostics.value = false
+    diagnosticsRefreshState.value = failed ? 'failed' : 'complete'
   }
 }
 /**
@@ -766,7 +791,21 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
             </article>
           </div>
         </section>
-        <section v-if="activeSection === 'diagnostics'" class="section-panel">
+        <section v-if="activeSection === 'diagnostics'" class="section-panel diagnostics-panel" :aria-busy="refreshingDiagnostics">
+          <div class="diagnostics-health-heading">
+            <h2>{{ t().diagnosticsServiceHealth }}</h2>
+            <p v-if="diagnosticsLastUpdatedAt" class="muted diagnostics-updated-at">{{ t().diagnosticsLastUpdatedAt }} · {{ formatTimestamp(diagnosticsLastUpdatedAt, language) }}</p>
+          </div>
+          <div class="diagnostics-service-overview">
+            <article class="diagnostic-status-card" :class="`diagnostic-${statusTone(nodeStatus?.state)}`">
+              <span class="status-icon" aria-hidden="true">{{ nodeStatus?.state === 'running' ? '✓' : statusTone(nodeStatus?.state) === 'negative' ? '!' : '○' }}</span>
+              <div><span class="stat-label">{{ t().xrayDiagnostics }}</span><strong>{{ statusLabel(nodeStatus?.state) }}</strong></div>
+            </article>
+            <article class="diagnostic-status-card" :class="`diagnostic-${amneziaWGDiagnosticTone}`">
+              <span class="status-icon" aria-hidden="true">{{ amneziaWGDiagnosticTone === 'positive' ? '✓' : amneziaWGDiagnosticTone === 'neutral' ? '○' : '!' }}</span>
+              <div><span class="stat-label">{{ t().amneziawg }}</span><strong>{{ amneziaWGDiagnosticLabel }}</strong></div>
+            </article>
+          </div>
           <div class="diagnostics-toolbar">
             <!-- Each tab is the single keyboard stop; focus moves with the tablist arrows. -->
             <!-- eslint-disable-next-line vuejs-accessibility/interactive-supports-focus -->
@@ -779,30 +818,44 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
               <svg class="diagnostics-refresh-icon" :class="{ spinning: refreshingDiagnostics }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5" /><path d="M4 17v-5h5" /><path d="M5.5 8A7 7 0 0 1 18 6l2 6" /><path d="M18.5 16A7 7 0 0 1 6 18l-2-6" /></svg>
             </button>
           </div>
+          <p class="sr-only" role="status" aria-live="polite">{{ diagnosticsRefreshAnnouncement }}</p>
           <section v-show="activeDiagnosticsSection === 'xray'" id="diagnostics-panel-xray" class="diagnostics-subsection diagnostics-xray" data-testid="xray-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-xray">
-            <p class="muted diagnostics-xray-version">{{ t().configuredXrayVersion }}: {{ nodeStatus?.configuredXrayVersion || '—' }} · {{ t().runtimeXrayVersion }}: {{ nodeStatus?.xrayVersion || '—' }}</p>
+            <header class="diagnostics-pane-heading">
+              <div><h3>{{ t().xrayDiagnostics }}</h3><p class="hint diagnostics-xray-version">{{ t().configuredXrayVersion }}: {{ nodeStatus?.configuredXrayVersion || '—' }} · {{ t().runtimeXrayVersion }}: {{ nodeStatus?.xrayVersion || '—' }}</p></div>
+              <span class="status-badge" :class="statusTone(nodeStatus?.state)">{{ statusLabel(nodeStatus?.state) }}</span>
+            </header>
             <p v-if="nodeStatus?.state === 'running' && nodeStatus.xrayVersion && nodeStatus.xrayVersionVerified === false" class="diagnostic-version-warning" role="status">{{ t().xrayVersionUnverified }}</p>
             <div class="diagnostics-overview">
-              <article class="diagnostic-status-card" :class="`diagnostic-${statusTone(nodeStatus?.state)}`"><span class="status-icon" aria-hidden="true">{{ nodeStatus?.state === 'running' ? '✓' : '!' }}</span><div><span class="stat-label">{{ t().xrayState }}</span><strong>{{ statusLabel(nodeStatus?.state) }}</strong></div></article>
-              <div class="diagnostic-summary"><span class="diagnostic-counter diagnostic-warning">{{ diagnosticCount('warn', xrayDiagnostics) }} {{ t().warnings }}</span><span class="diagnostic-counter diagnostic-negative">{{ diagnosticCount('error', xrayDiagnostics) }} {{ t().errors }}</span></div>
+              <div class="diagnostic-summary"><span class="diagnostic-counter" :class="{ 'diagnostic-warning': diagnosticCount('warn', xrayDiagnostics) > 0 }">{{ diagnosticCount('warn', xrayDiagnostics) }} {{ t().warnings }}</span><span class="diagnostic-counter" :class="{ 'diagnostic-negative': diagnosticCount('error', xrayDiagnostics) > 0 }">{{ diagnosticCount('error', xrayDiagnostics) }} {{ t().errors }}</span></div>
             </div>
-            <div v-if="nodeStatus?.lastError || nodeStatus?.statsLastError" class="diagnostic-alerts"><p v-if="nodeStatus?.lastError" class="error">{{ nodeStatus.lastError }}</p><p v-if="nodeStatus?.statsLastError" class="error">{{ nodeStatus.statsLastError }}</p></div>
+            <div v-if="nodeStatus?.lastError || nodeStatus?.statsLastError || diagnosticCount('error', xrayDiagnostics)" class="diagnostic-alerts">
+              <div v-if="nodeStatus?.lastError" class="diagnostic-error-item"><p class="error">{{ nodeStatus.lastError }}</p><p class="diagnostics-guidance">{{ t().diagnosticsErrorGuidance }}</p></div>
+              <div v-if="nodeStatus?.statsLastError" class="diagnostic-error-item"><p class="error">{{ nodeStatus.statsLastError }}</p><p class="diagnostics-guidance">{{ nodeStatus.state === 'running' ? t().diagnosticsStatsGuidance : t().diagnosticsErrorGuidance }}</p></div>
+              <p v-if="!nodeStatus?.lastError && !nodeStatus?.statsLastError && diagnosticCount('error', xrayDiagnostics)" class="diagnostics-guidance">{{ t().diagnosticsErrorGuidance }}</p>
+            </div>
             <div class="diagnostics-feed"><div class="feed-heading"><h4>{{ t().xrayEvents }}</h4><span class="muted">{{ xrayDiagnostics.length }}</span></div><ul v-if="xrayDiagnostics.length" class="diagnostics-list"><li v-for="entry in xrayDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul><p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p></div>
           </section>
           <section v-show="activeDiagnosticsSection === 'amneziawg'" id="diagnostics-panel-awg" class="diagnostics-subsection diagnostics-amneziawg" data-testid="awg-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-awg">
-            <article class="settings-card diagnostics-awg-card">
-              <p class="hint diagnostics-awg-help">{{ t().awgDiagnosticsHelp }}</p>
-              <p class="status-badge" :class="amneziaWGDiagnosticTone">{{ amneziaWGDiagnosticLabel }}</p>
-              <dl v-if="amneziaWGStatus?.available" class="vmess-settings-list">
-                <div><dt>{{ t().awgListener }}</dt><dd>{{ amneziaWGStatus.publicHost || '—' }}:{{ amneziaWGStatus.publicPort || '—' }}/UDP</dd></div>
-                <div><dt>{{ t().awgPeers }}</dt><dd>{{ amneziaWGStatus.peerCount ?? '—' }}</dd></div>
-                <div><dt>{{ t().awgOnlinePeers }}</dt><dd>{{ onlineAmneziaWGClients.length }}</dd></div>
-                <div><dt>{{ t().awgNetworks }}</dt><dd>{{ amneziaWGStatus.ipv4Network || '—' }} · {{ amneziaWGStatus.ipv6Network || '—' }}</dd></div>
-                <div><dt>{{ t().awgServiceVersion }}</dt><dd>{{ amneziaWGStatus.serviceVersion || '—' }}</dd></div>
-              </dl>
-              <p v-else class="hint">{{ !amneziaWGStatus || amneziaWGStatus.enabled ? t().awgUnavailable : t().awgNotEnabled }}</p>
-              <div v-if="amneziaWGStatus?.available" class="diagnostics-awg-connections">
-                <h4>{{ t().awgActiveConnections }}</h4>
+            <header class="diagnostics-pane-heading">
+              <div><h3>{{ t().amneziawg }}</h3><p class="hint diagnostics-awg-help">{{ t().awgDiagnosticsHelp }}</p></div>
+              <span class="status-badge" :class="amneziaWGDiagnosticTone">{{ amneziaWGDiagnosticLabel }}</span>
+            </header>
+            <div v-if="amneziaWGStatus?.available" class="diagnostics-detail-groups">
+              <section class="diagnostics-detail-group">
+                <h4>{{ t().diagnosticsConnectionDetails }}</h4>
+                <dl class="vmess-settings-list">
+                  <div><dt>{{ t().awgListener }}</dt><dd>{{ amneziaWGStatus.publicHost || '—' }}:{{ amneziaWGStatus.publicPort || '—' }}/UDP</dd></div>
+                  <div><dt>{{ t().awgNetworks }}</dt><dd>{{ amneziaWGStatus.ipv4Network || '—' }} · {{ amneziaWGStatus.ipv6Network || '—' }}</dd></div>
+                  <div><dt>{{ t().awgServiceVersion }}</dt><dd>{{ amneziaWGStatus.serviceVersion || '—' }}</dd></div>
+                </dl>
+              </section>
+              <section class="diagnostics-detail-group diagnostics-awg-connections">
+                <h4>{{ t().diagnosticsPeerActivity }}</h4>
+                <dl class="vmess-settings-list diagnostics-awg-peer-counts">
+                  <div><dt>{{ t().awgPeers }}</dt><dd>{{ amneziaWGStatus.peerCount ?? '—' }}</dd></div>
+                  <div><dt>{{ t().awgOnlinePeers }}</dt><dd>{{ onlineAmneziaWGClients.length }}</dd></div>
+                </dl>
+                <h5>{{ t().awgActiveConnections }}</h5>
                 <ul v-if="onlineAmneziaWGClients.length" class="diagnostics-list">
                   <li v-for="client in onlineAmneziaWGClients" :key="client.id">
                     <strong>{{ client.name }}</strong>
@@ -810,12 +863,19 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
                   </li>
                 </ul>
                 <p v-else class="muted">{{ t().awgNoActiveConnections }}</p>
-              </div>
-            </article>
+              </section>
+            </div>
+            <p v-else class="hint diagnostics-unavailable-guidance">{{ !amneziaWGStatus || amneziaWGStatus.enabled ? t().awgUnavailable : t().awgNotEnabled }}</p>
           </section>
           <section v-show="activeDiagnosticsSection === 'control-plane'" id="diagnostics-panel-control-plane" class="diagnostics-subsection diagnostics-control-plane" data-testid="control-plane-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-control-plane">
-            <ul v-if="appDiagnostics.length" class="diagnostics-list"><li v-for="entry in appDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul>
-            <p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p>
+            <header class="diagnostics-pane-heading"><h3>{{ t().controlPlaneDiagnostics }}</h3></header>
+            <div class="diagnostic-summary"><span class="diagnostic-counter" :class="{ 'diagnostic-warning': diagnosticCount('warn', appDiagnostics) > 0 }">{{ diagnosticCount('warn', appDiagnostics) }} {{ t().warnings }}</span><span class="diagnostic-counter" :class="{ 'diagnostic-negative': diagnosticCount('error', appDiagnostics) > 0 }">{{ diagnosticCount('error', appDiagnostics) }} {{ t().errors }}</span></div>
+            <div v-if="diagnosticCount('error', appDiagnostics)" class="diagnostic-alerts"><p class="diagnostics-guidance">{{ t().diagnosticsControlPlaneGuidance }}</p></div>
+            <div class="diagnostics-feed">
+              <div class="feed-heading"><h4>{{ t().recentEvents }}</h4><span class="muted">{{ appDiagnostics.length }}</span></div>
+              <ul v-if="appDiagnostics.length" class="diagnostics-list"><li v-for="entry in appDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul>
+              <p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p>
+            </div>
           </section>
         </section>
         <section v-if="activeSection === 'security'" class="section-panel security-panel">
