@@ -6,6 +6,7 @@ import { translations } from './i18n/messages'
 import type { UILanguage } from './i18n'
 import { requireValue } from '../application/requireValue'
 import { formatCertificateExpiry, selectedCertificateFile } from './hysteriaCertificate'
+import { vModalFocus } from './modalFocus'
 
 type PendingHysteriaChange = Extract<HysteriaSettingsPreview, { changed: true }> & { confirmation: string }
 
@@ -227,7 +228,7 @@ onMounted(() => { void loadSettings() })
   </article>
 
   <div v-if="pending" class="modal-backdrop" role="presentation" @click.self="pending = null">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="hysteria-confirmation-title" tabindex="-1">
+    <div v-modal-focus class="modal" role="dialog" aria-modal="true" aria-labelledby="hysteria-confirmation-title" tabindex="-1">
       <div class="modal-header"><div><p class="eyebrow">{{ text.hysteriaTitle }}</p><h2 id="hysteria-confirmation-title">{{ text.confirmation }}</h2></div><button class="icon-button" :aria-label="text.close" @click="pending = null">×</button></div>
       <h3>{{ text.settingsDiff }}</h3>
       <ul class="review-list"><li v-for="item in pending.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul>

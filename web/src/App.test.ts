@@ -5,6 +5,7 @@ import type { ProfileDelivery } from './application/models'
 import type { Client, Settings } from './domain/models'
 import App from './App.vue'
 import { xrayEasyGatewayKey } from './presentation/api'
+import { APIError } from './application/errors'
 
 const settings: Settings = {
   publicHost: 'vpn.example.test', publicPort: 443, vmessPublicPort: 9443,
@@ -155,6 +156,55 @@ describe('App profile delivery actions', () => {
 
   it('requires an application gateway to render', () => {
     expect(() => mount(App)).toThrow('XrayEasyGateway was not provided')
+  })
+
+  it('localizes an invalid API response error in the selected language', async () => {
+    const previousLanguage = localStorage.getItem('xray-easy-language')
+    localStorage.setItem('xray-easy-language', 'ru')
+    const gateway = createGateway()
+    vi.mocked(gateway.setup.status).mockRejectedValue(new APIError('The server returned an invalid response', 'invalid_response'))
+    const wrapper = mount(App, { global: { provide: { [xrayEasyGatewayKey as symbol]: gateway } } })
+
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toBe('Сервер вернул ответ в неверном формате.')
+
+    wrapper.unmount()
+    if (previousLanguage === null) localStorage.removeItem('xray-easy-language')
+    else localStorage.setItem('xray-easy-language', previousLanguage)
+  })
+
+  it('supports keyboard navigation and ARIA relationships for dashboard tabs', async () => {
+    const gateway = createGateway()
+    const wrapper = mount(App, {
+      global: {
+        provide: { [xrayEasyGatewayKey as symbol]: gateway },
+        stubs: { HysteriaSettingsPanel: { template: '<div />' } },
+      },
+    })
+    await flushPromises()
+
+    const mainTabs = wrapper.findAll('[role="tablist"]')[0]
+    if (!mainTabs) throw new Error('The dashboard tablist was not rendered')
+    const mainButtons = mainTabs.findAll('[role="tab"]')
+    await mainButtons[0]?.trigger('keydown', { key: 'ArrowRight' })
+    expect(mainButtons[1]?.attributes('aria-selected')).toBe('true')
+    expect(wrapper.get('#dashboard-panel').attributes('aria-labelledby')).toBe('section-tab-settings')
+    expect(mainButtons[0]?.attributes('tabindex')).toBe('-1')
+    expect(mainButtons[1]?.attributes('tabindex')).toBe('0')
+
+    await mainButtons[1]?.trigger('keydown', { key: 'Home' })
+    expect(mainButtons[0]?.attributes('aria-selected')).toBe('true')
+    await mainButtons[0]?.trigger('keydown', { key: 'End' })
+    expect(mainButtons[3]?.attributes('aria-selected')).toBe('true')
+    await mainButtons[2]?.trigger('click')
+
+    const diagnosticTabs = wrapper.get('.diagnostics-tabs')
+    const xrayTab = diagnosticTabs.get('[data-testid="diagnostics-tab-xray"]')
+    await xrayTab.trigger('keydown', { key: 'ArrowRight' })
+    expect(diagnosticTabs.get('[data-testid="diagnostics-tab-awg"]').attributes('aria-selected')).toBe('true')
+    expect(diagnosticTabs.get('[data-testid="diagnostics-tab-awg"]').attributes('tabindex')).toBe('0')
+
+    wrapper.unmount()
   })
 
   it('does not open a duplicate event stream when startup authentication finishes late', async () => {

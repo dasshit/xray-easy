@@ -9,19 +9,17 @@ colors:
   surface-muted: "#f4f6fa"
   text: "#172033"
   label: "#556176"
-  muted: "#6b778c"
+  muted: "#5b667a"
   border: "#e1e6ef"
-  border-strong: "#cbd3df"
-  focus: "#315efb26"
+  border-strong: "#737f91"
+  focus: "#315efb"
   error-surface: "#fff7f6"
   error-border: "#f2b8b5"
   error: "#b42318"
   danger-hover: "#8f1d16"
-  success: "#1a9b58"
+  success: "#126b3a"
   status: "#a3adbb"
-  warning: "#f0a000"
-  warning-text: "#9a6500"
-  warning-text-strong: "#b26b00"
+  warning: "#854600"
   overlay: "#17203366"
   shadow: "#1720330d"
   modal-shadow: "#17203333"
@@ -32,44 +30,44 @@ colors:
   dark-label: "#b9c3d4"
   dark-muted: "#a3afc3"
   dark-border: "#2b374a"
-  dark-border-strong: "#43516a"
+  dark-border-strong: "#65748c"
   dark-primary: "#849cff"
   dark-primary-hover: "#a3b5ff"
-  dark-focus: "#849cff40"
+  dark-focus: "#849cff"
   dark-error-surface: "#321c25"
   dark-error-border: "#763c4b"
   dark-error: "#ff9aa9"
   dark-danger-hover: "#ffb1bd"
   dark-success: "#61d994"
   dark-status: "#6c7890"
-  dark-warning-text: "#f0bd58"
+  dark-warning: "#f0bd58"
   dark-overlay: "#000000a8"
   dark-shadow: "#00000030"
   dark-modal-shadow: "#00000070"
 typography:
   body:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "16px"
     fontWeight: 400
   page-title:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "1.55rem"
     fontWeight: 700
   section-title:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "1.45rem"
     fontWeight: 700
   subsection-title:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "1.2rem"
     fontWeight: 700
   eyebrow:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "0.75rem"
     fontWeight: 700
     letterSpacing: "0.08em"
   label:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "0.9rem"
     fontWeight: 400
   technical:
@@ -77,7 +75,7 @@ typography:
     fontSize: "0.72rem"
     fontWeight: 400
   action:
-    fontFamily: "Inter, ui-sans-serif, system-ui, sans-serif"
+    fontFamily: "ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, Segoe UI, sans-serif"
     fontSize: "0.9rem"
     fontWeight: 650
 rounded:
@@ -165,8 +163,8 @@ The palette uses one direct blue accent with cool blue-gray neutrals. Light and 
 
 ## Typography
 
-**Display Font:** Inter (with the system sans-serif stack). The interface has no separate display face.
-**Body Font:** Inter, falling back through ui-sans-serif and system-ui.
+**Display Font:** The native system sans-serif stack (`ui-sans-serif`, `system-ui`, and platform fallbacks). The interface has no separate display face or remote font dependency.
+**Body Font:** The native system sans-serif stack; it keeps the private panel available offline and uses the platform's familiar interface typeface.
 **Label/Mono Font:** The body stack for labels; ui-monospace for IDs, fingerprints, recovery codes, and technical values.
 
 **Character:** The type is compact and direct, with weight and color doing more work than decorative treatments. Labels remain readable beside precise network and security values.

@@ -5,6 +5,7 @@ import type { Client } from '../domain/models'
 import { formatTimestamp } from './format'
 import { translations } from './i18n/messages'
 import type { UILanguage } from './i18n'
+import { vModalFocus } from './modalFocus'
 
 const props = defineProps<{
   profile: ProfileDelivery
@@ -51,7 +52,7 @@ function profileLabel(): string {
 
 <template>
   <div class="modal-backdrop" role="presentation" @click.self="emit('close')">
-    <div class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-delivery-title" tabindex="-1">
+    <div v-modal-focus class="modal profile-modal" role="dialog" aria-modal="true" aria-labelledby="profile-delivery-title" tabindex="-1">
       <div class="modal-header">
         <div><p class="eyebrow">{{ profileLabel() }}</p><h2 id="profile-delivery-title">{{ text.profileFor }} {{ client?.name || '' }}</h2></div>
         <button class="icon-button" type="button" :aria-label="text.close" @click="emit('close')">×</button>

@@ -12,10 +12,12 @@ import { isUILanguage, useI18n } from './presentation/i18n'
 import { readTheme, persistTheme } from './presentation/theme'
 import { xrayEasyGatewayKey } from './presentation/api'
 import type { Section, Theme } from './presentation/models'
+import { handleTabListKeydown } from './presentation/tabKeyboard'
 import HysteriaSettingsPanel from './presentation/HysteriaSettingsPanel.vue'
 import CreateProfileModal from './presentation/CreateProfileModal.vue'
 import ProfileDeliveryModal from './presentation/ProfileDeliveryModal.vue'
 import ProfileExpiryModal from './presentation/ProfileExpiryModal.vue'
+import { vModalFocus } from './presentation/modalFocus'
 
 const setup = ref<SetupStatus | null>(null)
 const admin = ref<Admin | null>(null)
@@ -186,7 +188,12 @@ function diagnosticTone(level: string) {
  * Replace any success notice with an error message.
  * @param cause - The failure to display.
  */
-function showError(cause: unknown) { successMessage.value = ''; error.value = cause instanceof Error ? cause.message : 'Request failed' }
+function showError(cause: unknown) {
+  successMessage.value = ''
+  error.value = cause instanceof APIError && cause.code === 'invalid_response'
+    ? t().invalidServerResponse
+    : cause instanceof Error ? cause.message : t().requestFailed
+}
 /**
  * Replace any error with a temporary success notice.
  * @param message - The localized success message.
@@ -660,184 +667,195 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       <h1>{{ t().login }}</h1><label>{{ t().username }}<input v-model="loginForm.username" autocomplete="username" required /></label><label>{{ t().password }}<input v-model="loginForm.password" type="password" autocomplete="current-password" required /></label><template v-if="loginNeedsTOTP"><label v-if="!loginUsesRecovery">{{ t().loginCode }}<input v-model="loginForm.totpCode" inputmode="numeric" autocomplete="one-time-code" required /></label><label v-else>{{ t().recoveryCode }}<input v-model="loginForm.recoveryCode" autocomplete="one-time-code" required /></label><button type="submit" :disabled="busy">{{ t().signIn }}</button><button type="button" class="secondary" @click="loginUsesRecovery = !loginUsesRecovery">{{ loginUsesRecovery ? t().useTOTP : t().useRecovery }}</button></template><button v-else type="submit" :disabled="busy">{{ t().signIn }}</button>
     </form>
     <section class="card dashboard" v-else>
-      <nav class="tabs" role="tablist" :aria-label="t().title"><button role="tab" :aria-selected="activeSection === 'profiles'" :class="{ active: activeSection === 'profiles' }" @click="activeSection = 'profiles'">{{ t().profiles }}</button><button role="tab" :aria-selected="activeSection === 'settings'" :class="{ active: activeSection === 'settings' }" @click="activeSection = 'settings'">{{ t().settings }}</button><button role="tab" :aria-selected="activeSection === 'diagnostics'" :class="{ active: activeSection === 'diagnostics' }" @click="activeSection = 'diagnostics'">{{ t().diagnostics }}</button><button role="tab" :aria-selected="activeSection === 'security'" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">{{ t().security }}</button></nav>
-      <section v-if="activeSection === 'profiles'" class="section-panel">
-        <div class="section-heading"><div><p class="eyebrow">{{ t().profiles }}</p><h2>{{ clients.length }} {{ t().profileCount }}</h2><p class="muted">{{ t().traffic }} · {{ clients.filter(client => client.online).length }} {{ t().online }}</p><p class="hint">{{ t().rateSamplingHelp }}</p></div><button @click="openCreateModal"><span class="button-icon" aria-hidden="true">+</span>{{ t().createProfile }}</button></div>
-        <div v-if="!clients.length" class="empty-state"><span class="empty-icon" aria-hidden="true">⌁</span><strong>{{ t().emptyProfiles }}</strong><button @click="openCreateModal">{{ t().createProfile }}</button></div>
-        <ul v-else class="devices">
-          <li v-for="client in clients" :key="client.id" class="device-card">
-            <div class="device-card-header"><div class="device-identity"><span class="device-status" :class="{ online: client.online, disabled: !client.enabled || client.revoked }"><span class="status-dot" :class="{ online: client.online }"></span></span><div class="device-main"><strong>{{ client.name }}</strong><span class="protocol-badge">{{ clientProtocolLabel(client) }}</span><span class="device-meta">{{ clientAccessSummary(client) }} · {{ client.online ? t().online : t().offline }}<template v-if="client.protocol === 'vless'"> · {{ client.fingerprint || settings?.clientFingerprint || 'chrome' }}</template><template v-if="client.sourceIPs?.length"> · {{ t().sourceIp }}: {{ client.sourceIPs.join(', ') }}</template></span></div></div><span class="status-badge" :class="{ positive: client.enabled && !client.revoked && !client.expired, muted: !client.enabled && !client.revoked && !client.expired, negative: client.revoked || (client.expired && !client.expirationPending), warning: client.expirationPending }">{{ client.revoked ? t().revoked : client.expirationPending ? t().expiryPending : client.expired ? t().expired : client.enabled ? t().enabled : t().disabled }}</span></div>
-            <div class="device-stats"><div class="device-stat"><span>{{ t().upload }}</span><strong>{{ formatBytes(client.uploadBytes) }}</strong></div><div class="device-stat"><span>{{ t().downloadTraffic }}</span><strong>{{ formatBytes(client.downloadBytes) }}</strong></div><div class="device-stat"><span>{{ t().currentUpload }}</span><strong>{{ formatRate(client.uploadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().currentDownload }}</span><strong>{{ formatRate(client.downloadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().expiry }}</span><strong>{{ client.expiresAt ? formatExpiry(client.expiresAt, language) : t().expiryNever }}</strong></div><div class="device-stat device-stat-wide"><span>{{ t().lastSeen }}</span><strong>{{ client.lastSeen ? formatTimestamp(client.lastSeen, language) : '—' }}</strong></div></div>
-            <div class="device-card-footer"><span class="device-id">ID {{ client.id.slice(0, 8) }}</span><div class="device-actions"><button v-if="!client.revoked" class="secondary expiry-button" @click="openExpiryEditor(client)">{{ t().editExpiry }}</button><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked && clientActionFor(client) !== null" class="secondary" @click="openClientAction(client, clientActionFor(client)!)">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ client.protocol === 'amneziawg' ? t().awgRevoke : t().remove }}</button></div></div>
-          </li>
-        </ul>
-      </section>
-      <section v-if="activeSection === 'settings' && settings" class="section-panel">
-        <p class="muted section-intro">{{ t().settingsPageHelp }}</p>
-        <div class="settings-stack">
-          <article class="settings-card settings-vless-card">
-            <div class="card-heading"><div><h3>{{ t().vlessSettingsTitle }}</h3><p class="hint">{{ t().vlessSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌁</span></div>
-            <p class="status-badge" :class="statusTone(nodeStatus?.state) === 'positive' ? 'positive' : statusTone(nodeStatus?.state) === 'negative' ? 'negative' : 'muted'">{{ statusLabel(nodeStatus?.state) }}</p>
-            <div class="settings-fields-grid">
-              <label>{{ t().host }}<input v-model="settingsForm.publicHost" /><small class="hint">{{ t().hostHint }}</small></label>
-              <label>{{ t().target }}<input v-model="settingsForm.realityTarget" /></label>
-              <label>{{ t().sni }}<input v-model="settingsForm.realitySNI" /></label>
-              <label>{{ t().fingerprint }}<select v-model="settingsForm.clientFingerprint"><option value="chrome">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option><option value="android">android</option><option value="random">random</option></select></label>
-            </div>
-            <div class="settings-card-danger settings-danger-inline">
-              <div class="card-heading"><div><h4>{{ t().dangerousSettings }}</h4><p class="hint">{{ t().rotationHelp }}</p></div><span class="settings-icon" aria-hidden="true">!</span></div>
-              <label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label>
-              <p class="hint">{{ t().settingsWarning }}</p>
-            </div>
-            <div class="section-actions"><button :disabled="busy || !vlessSettingsChanged" @click="reviewSettings('vless')">{{ t().reviewVlessChanges }}</button></div>
-          </article>
+      <!-- Tab children provide the tablist's keyboard focus in accordance with the ARIA tabs pattern. -->
+      <!-- eslint-disable-next-line vuejs-accessibility/interactive-supports-focus -->
+      <nav class="tabs" role="tablist" :aria-label="t().title" @keydown="handleTabListKeydown">
+        <button id="section-tab-profiles" role="tab" aria-controls="dashboard-panel" :aria-selected="activeSection === 'profiles'" :tabindex="activeSection === 'profiles' ? 0 : -1" :class="{ active: activeSection === 'profiles' }" @click="activeSection = 'profiles'">{{ t().profiles }}</button>
+        <button id="section-tab-settings" role="tab" aria-controls="dashboard-panel" :aria-selected="activeSection === 'settings'" :tabindex="activeSection === 'settings' ? 0 : -1" :class="{ active: activeSection === 'settings' }" @click="activeSection = 'settings'">{{ t().settings }}</button>
+        <button id="section-tab-diagnostics" role="tab" aria-controls="dashboard-panel" :aria-selected="activeSection === 'diagnostics'" :tabindex="activeSection === 'diagnostics' ? 0 : -1" :class="{ active: activeSection === 'diagnostics' }" @click="activeSection = 'diagnostics'">{{ t().diagnostics }}</button>
+        <button id="section-tab-security" role="tab" aria-controls="dashboard-panel" :aria-selected="activeSection === 'security'" :tabindex="activeSection === 'security' ? 0 : -1" :class="{ active: activeSection === 'security' }" @click="activeSection = 'security'">{{ t().security }}</button>
+      </nav>
+      <div id="dashboard-panel" class="dashboard-tabpanel" role="tabpanel" :aria-labelledby="`section-tab-${activeSection}`" tabindex="0">
+        <section v-if="activeSection === 'profiles'" class="section-panel">
+          <div class="section-heading"><div><p class="eyebrow">{{ t().profiles }}</p><h2>{{ clients.length }} {{ t().profileCount }}</h2><p class="muted">{{ t().traffic }} · {{ clients.filter(client => client.online).length }} {{ t().online }}</p><p class="hint">{{ t().rateSamplingHelp }}</p></div><button @click="openCreateModal"><span class="button-icon" aria-hidden="true">+</span>{{ t().createProfile }}</button></div>
+          <div v-if="!clients.length" class="empty-state"><span class="empty-icon" aria-hidden="true">⌁</span><strong>{{ t().emptyProfiles }}</strong><button @click="openCreateModal">{{ t().createProfile }}</button></div>
+          <ul v-else class="devices">
+            <li v-for="client in clients" :key="client.id" class="device-card">
+              <div class="device-card-header"><div class="device-identity"><span class="device-status" :class="{ online: client.online, disabled: !client.enabled || client.revoked }"><span class="status-dot" :class="{ online: client.online }"></span></span><div class="device-main"><strong>{{ client.name }}</strong><span class="protocol-badge">{{ clientProtocolLabel(client) }}</span><span class="device-meta">{{ clientAccessSummary(client) }} · {{ client.online ? t().online : t().offline }}<template v-if="client.protocol === 'vless'"> · {{ client.fingerprint || settings?.clientFingerprint || 'chrome' }}</template><template v-if="client.sourceIPs?.length"> · {{ t().sourceIp }}: {{ client.sourceIPs.join(', ') }}</template></span></div></div><span class="status-badge" :class="{ positive: client.enabled && !client.revoked && !client.expired, muted: !client.enabled && !client.revoked && !client.expired, negative: client.revoked || (client.expired && !client.expirationPending), warning: client.expirationPending }">{{ client.revoked ? t().revoked : client.expirationPending ? t().expiryPending : client.expired ? t().expired : client.enabled ? t().enabled : t().disabled }}</span></div>
+              <div class="device-stats"><div class="device-stat"><span>{{ t().upload }}</span><strong>{{ formatBytes(client.uploadBytes) }}</strong></div><div class="device-stat"><span>{{ t().downloadTraffic }}</span><strong>{{ formatBytes(client.downloadBytes) }}</strong></div><div class="device-stat"><span>{{ t().currentUpload }}</span><strong>{{ formatRate(client.uploadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().currentDownload }}</span><strong>{{ formatRate(client.downloadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().expiry }}</span><strong>{{ client.expiresAt ? formatExpiry(client.expiresAt, language) : t().expiryNever }}</strong></div><div class="device-stat device-stat-wide"><span>{{ t().lastSeen }}</span><strong>{{ client.lastSeen ? formatTimestamp(client.lastSeen, language) : '—' }}</strong></div></div>
+              <div class="device-card-footer"><span class="device-id">ID {{ client.id.slice(0, 8) }}</span><div class="device-actions"><button v-if="!client.revoked" class="secondary expiry-button" @click="openExpiryEditor(client)">{{ t().editExpiry }}</button><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked && clientActionFor(client) !== null" class="secondary" @click="openClientAction(client, clientActionFor(client)!)">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ client.protocol === 'amneziawg' ? t().awgRevoke : t().remove }}</button></div></div>
+            </li>
+          </ul>
+        </section>
+        <section v-if="activeSection === 'settings' && settings" class="section-panel">
+          <p class="muted section-intro">{{ t().settingsPageHelp }}</p>
+          <div class="settings-stack">
+            <article class="settings-card settings-vless-card">
+              <div class="card-heading"><div><h3>{{ t().vlessSettingsTitle }}</h3><p class="hint">{{ t().vlessSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌁</span></div>
+              <p class="status-badge" :class="statusTone(nodeStatus?.state) === 'positive' ? 'positive' : statusTone(nodeStatus?.state) === 'negative' ? 'negative' : 'muted'">{{ statusLabel(nodeStatus?.state) }}</p>
+              <div class="settings-fields-grid">
+                <label>{{ t().host }}<input v-model="settingsForm.publicHost" /><small class="hint">{{ t().hostHint }}</small></label>
+                <label>{{ t().target }}<input v-model="settingsForm.realityTarget" /></label>
+                <label>{{ t().sni }}<input v-model="settingsForm.realitySNI" /></label>
+                <label>{{ t().fingerprint }}<select v-model="settingsForm.clientFingerprint"><option value="chrome">chrome</option><option value="safari">safari</option><option value="ios">ios</option><option value="firefox">firefox</option><option value="edge">edge</option><option value="android">android</option><option value="random">random</option></select></label>
+              </div>
+              <div class="settings-card-danger settings-danger-inline">
+                <div class="card-heading"><div><h4>{{ t().dangerousSettings }}</h4><p class="hint">{{ t().rotationHelp }}</p></div><span class="settings-icon" aria-hidden="true">!</span></div>
+                <label class="checkbox"><input v-model="settingsForm.rotatePrivateKey" type="checkbox" /> {{ t().rotateKey }}</label>
+                <p class="hint">{{ t().settingsWarning }}</p>
+              </div>
+              <div class="section-actions"><button :disabled="busy || !vlessSettingsChanged" @click="reviewSettings('vless')">{{ t().reviewVlessChanges }}</button></div>
+            </article>
 
-          <article class="settings-card settings-vmess-card">
-            <div class="card-heading"><div><h3>{{ t().vmessSettingsTitle }}</h3><p class="hint">{{ t().vmessSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
-            <p class="status-badge" :class="vmessAvailable ? 'positive' : 'muted'">{{ vmessAvailable ? t().vmessReady : t().vmessNeedsCertificate }}</p>
-            <dl class="vmess-settings-list">
-              <div><dt>{{ t().vmessHost }}</dt><dd>{{ settings.publicHost }}</dd></div>
-              <div><dt>{{ t().vmessPort }}</dt><dd>{{ settings.vmessPublicPort }}/TCP</dd></div>
-              <div><dt>{{ t().vmessServerName }}</dt><dd>{{ hysteriaStatus?.tlsServerName || '—' }}</dd></div>
-              <div><dt>{{ t().vmessCertificate }}</dt><dd class="hysteria-fingerprint">{{ hysteriaStatus?.certificate?.fingerprint || '—' }}</dd></div>
-            </dl>
-            <p class="hint">{{ t().vmessPortHelp }}</p>
-            <a class="settings-inline-link" href="#hysteria-settings">{{ t().vmessCertificateLink }}</a>
-          </article>
+            <article class="settings-card settings-vmess-card">
+              <div class="card-heading"><div><h3>{{ t().vmessSettingsTitle }}</h3><p class="hint">{{ t().vmessSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
+              <p class="status-badge" :class="vmessAvailable ? 'positive' : 'muted'">{{ vmessAvailable ? t().vmessReady : t().vmessNeedsCertificate }}</p>
+              <dl class="vmess-settings-list">
+                <div><dt>{{ t().vmessHost }}</dt><dd>{{ settings.publicHost }}</dd></div>
+                <div><dt>{{ t().vmessPort }}</dt><dd>{{ settings.vmessPublicPort }}/TCP</dd></div>
+                <div><dt>{{ t().vmessServerName }}</dt><dd>{{ hysteriaStatus?.tlsServerName || '—' }}</dd></div>
+                <div><dt>{{ t().vmessCertificate }}</dt><dd class="hysteria-fingerprint">{{ hysteriaStatus?.certificate?.fingerprint || '—' }}</dd></div>
+              </dl>
+              <p class="hint">{{ t().vmessPortHelp }}</p>
+              <a class="settings-inline-link" href="#hysteria-settings">{{ t().vmessCertificateLink }}</a>
+            </article>
 
-          <article class="settings-card settings-shadowsocks-card">
-            <div class="card-heading"><div><h3>{{ t().shadowsocksSettingsTitle }}</h3><p class="hint">{{ t().shadowsocksSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
-            <p class="status-badge" :class="settings.shadowsocksEnabled ? 'positive' : 'muted'">{{ settings.shadowsocksEnabled ? t().shadowsocksReady : t().shadowsocksOff }}</p>
-            <dl class="vmess-settings-list">
-              <div><dt>{{ t().host }}</dt><dd>{{ settings.publicHost }}</dd></div>
-              <div><dt>{{ t().shadowsocksPort }}</dt><dd>{{ settings.shadowsocksPublicPort }}/{{ settings.shadowsocksNetwork }}</dd></div>
-              <div><dt>{{ t().shadowsocksMethod }}</dt><dd>{{ settings.shadowsocksMethod }}</dd></div>
-              <div><dt>{{ t().shadowsocksNetwork }}</dt><dd>{{ settings.shadowsocksNetwork }}</dd></div>
-            </dl>
-          </article>
+            <article class="settings-card settings-shadowsocks-card">
+              <div class="card-heading"><div><h3>{{ t().shadowsocksSettingsTitle }}</h3><p class="hint">{{ t().shadowsocksSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
+              <p class="status-badge" :class="settings.shadowsocksEnabled ? 'positive' : 'muted'">{{ settings.shadowsocksEnabled ? t().shadowsocksReady : t().shadowsocksOff }}</p>
+              <dl class="vmess-settings-list">
+                <div><dt>{{ t().host }}</dt><dd>{{ settings.publicHost }}</dd></div>
+                <div><dt>{{ t().shadowsocksPort }}</dt><dd>{{ settings.shadowsocksPublicPort }}/{{ settings.shadowsocksNetwork }}</dd></div>
+                <div><dt>{{ t().shadowsocksMethod }}</dt><dd>{{ settings.shadowsocksMethod }}</dd></div>
+                <div><dt>{{ t().shadowsocksNetwork }}</dt><dd>{{ settings.shadowsocksNetwork }}</dd></div>
+              </dl>
+            </article>
 
-          <article class="settings-card settings-trojan-card">
-            <div class="card-heading"><div><h3>{{ t().trojanSettingsTitle }}</h3><p class="hint">{{ t().trojanSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
-            <p class="status-badge" :class="trojanRuntimeReady ? 'positive' : 'muted'">{{ trojanRuntimeReady ? t().running : settings.trojanEnabled ? t().unavailable : t().trojanUnavailable }}</p>
-            <dl class="vmess-settings-list">
-              <div><dt>{{ t().host }}</dt><dd>{{ settings.publicHost }}</dd></div>
-              <div><dt>{{ t().trojanPort }}</dt><dd>{{ settings.trojanPublicPort || '—' }}/TCP</dd></div>
-              <div><dt>{{ t().vmessServerName }}</dt><dd>{{ hysteriaStatus?.tlsServerName || '—' }}</dd></div>
-              <div><dt>{{ t().vmessCertificate }}</dt><dd class="hysteria-fingerprint">{{ hysteriaStatus?.certificate?.fingerprint || '—' }}</dd></div>
-            </dl>
-          </article>
+            <article class="settings-card settings-trojan-card">
+              <div class="card-heading"><div><h3>{{ t().trojanSettingsTitle }}</h3><p class="hint">{{ t().trojanSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
+              <p class="status-badge" :class="trojanRuntimeReady ? 'positive' : 'muted'">{{ trojanRuntimeReady ? t().running : settings.trojanEnabled ? t().unavailable : t().trojanUnavailable }}</p>
+              <dl class="vmess-settings-list">
+                <div><dt>{{ t().host }}</dt><dd>{{ settings.publicHost }}</dd></div>
+                <div><dt>{{ t().trojanPort }}</dt><dd>{{ settings.trojanPublicPort || '—' }}/TCP</dd></div>
+                <div><dt>{{ t().vmessServerName }}</dt><dd>{{ hysteriaStatus?.tlsServerName || '—' }}</dd></div>
+                <div><dt>{{ t().vmessCertificate }}</dt><dd class="hysteria-fingerprint">{{ hysteriaStatus?.certificate?.fingerprint || '—' }}</dd></div>
+              </dl>
+            </article>
 
-          <article class="settings-card settings-awg-card">
-            <div class="card-heading"><div><h3>{{ t().amneziawg }}</h3><p class="hint">{{ t().awgSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
-            <p class="status-badge" :class="amneziaWGAvailable ? 'positive' : 'muted'">{{ amneziaWGAvailable ? t().running : amneziaWGStatus?.enabled ? t().unavailable : t().awgNotEnabled }}</p>
-            <dl v-if="amneziaWGStatus?.available" class="vmess-settings-list">
-              <div><dt>{{ t().awgListener }}</dt><dd>{{ amneziaWGStatus.publicHost || '—' }}:{{ amneziaWGStatus.publicPort || '—' }}/UDP</dd></div>
-              <div><dt>{{ t().awgListenPort }}</dt><dd>{{ amneziaWGStatus.listenPort || '—' }}/UDP</dd></div>
-              <div><dt>{{ t().awgNetworks }}</dt><dd>{{ amneziaWGStatus.ipv4Network || '—' }} · {{ amneziaWGStatus.ipv6Network || '—' }}</dd></div>
-              <div><dt>{{ t().awgPeers }}</dt><dd>{{ amneziaWGStatus.peerCount ?? '—' }}</dd></div>
-              <div><dt>{{ t().awgServerPublicKey }}</dt><dd class="hysteria-fingerprint">{{ amneziaWGStatus.publicKey || '—' }}</dd></div>
-              <div><dt>{{ t().awgServiceVersion }}</dt><dd>{{ amneziaWGStatus.serviceVersion || '—' }}</dd></div>
-            </dl>
-            <p v-else class="hint">{{ t().awgUnavailable }}</p>
-            <button class="secondary" :disabled="busy" @click="refreshAmneziaWGStatus">{{ t().awgRefresh }}</button>
-          </article>
+            <article class="settings-card settings-awg-card">
+              <div class="card-heading"><div><h3>{{ t().amneziawg }}</h3><p class="hint">{{ t().awgSettingsHelp }}</p></div><span class="settings-icon" aria-hidden="true">⇄</span></div>
+              <p class="status-badge" :class="amneziaWGAvailable ? 'positive' : 'muted'">{{ amneziaWGAvailable ? t().running : amneziaWGStatus?.enabled ? t().unavailable : t().awgNotEnabled }}</p>
+              <dl v-if="amneziaWGStatus?.available" class="vmess-settings-list">
+                <div><dt>{{ t().awgListener }}</dt><dd>{{ amneziaWGStatus.publicHost || '—' }}:{{ amneziaWGStatus.publicPort || '—' }}/UDP</dd></div>
+                <div><dt>{{ t().awgListenPort }}</dt><dd>{{ amneziaWGStatus.listenPort || '—' }}/UDP</dd></div>
+                <div><dt>{{ t().awgNetworks }}</dt><dd>{{ amneziaWGStatus.ipv4Network || '—' }} · {{ amneziaWGStatus.ipv6Network || '—' }}</dd></div>
+                <div><dt>{{ t().awgPeers }}</dt><dd>{{ amneziaWGStatus.peerCount ?? '—' }}</dd></div>
+                <div><dt>{{ t().awgServerPublicKey }}</dt><dd class="hysteria-fingerprint">{{ amneziaWGStatus.publicKey || '—' }}</dd></div>
+                <div><dt>{{ t().awgServiceVersion }}</dt><dd>{{ amneziaWGStatus.serviceVersion || '—' }}</dd></div>
+              </dl>
+              <p v-else class="hint">{{ t().awgUnavailable }}</p>
+              <button class="secondary" :disabled="busy" @click="refreshAmneziaWGStatus">{{ t().awgRefresh }}</button>
+            </article>
 
-          <HysteriaSettingsPanel :api="api" :language="language" @error="showError" @saved="handleHysteriaSettingsSaved" />
+            <HysteriaSettingsPanel :api="api" :language="language" @error="showError" @saved="handleHysteriaSettingsSaved" />
 
-          <article class="settings-card settings-logging-card">
-            <div class="card-heading"><div><h3>{{ t().xrayLogging }}</h3><p class="hint">{{ t().loggingHelp }}</p></div><span class="settings-icon" aria-hidden="true">≋</span></div>
-            <label>{{ t().logLevel }}<select v-model="logLevelForm"><option value="debug">{{ t().logLevelDebug }}</option><option value="info">{{ t().logLevelInfo }}</option><option value="warning">{{ t().logLevelWarning }}</option><option value="error">{{ t().logLevelError }}</option><option value="none">{{ t().logLevelNone }}</option></select></label>
-            <div class="section-actions"><button :disabled="busy || !loggingSettingsChanged" @click="reviewSettings('logging')">{{ t().reviewLoggingChanges }}</button></div>
-          </article>
-        </div>
-      </section>
-      <section v-if="activeSection === 'diagnostics'" class="section-panel">
-        <div class="diagnostics-toolbar">
-          <nav class="tabs diagnostics-tabs" role="tablist" :aria-label="t().diagnosticsComponents">
-            <button data-testid="diagnostics-tab-xray" role="tab" :aria-selected="activeDiagnosticsSection === 'xray'" :class="{ active: activeDiagnosticsSection === 'xray' }" aria-controls="diagnostics-panel-xray" @click="activeDiagnosticsSection = 'xray'">{{ t().xrayDiagnostics }}</button>
-            <button data-testid="diagnostics-tab-awg" role="tab" :aria-selected="activeDiagnosticsSection === 'amneziawg'" :class="{ active: activeDiagnosticsSection === 'amneziawg' }" aria-controls="diagnostics-panel-awg" @click="activeDiagnosticsSection = 'amneziawg'">{{ t().amneziawg }}</button>
-            <button data-testid="diagnostics-tab-control-plane" role="tab" :aria-selected="activeDiagnosticsSection === 'control-plane'" :class="{ active: activeDiagnosticsSection === 'control-plane' }" aria-controls="diagnostics-panel-control-plane" @click="activeDiagnosticsSection = 'control-plane'">{{ t().controlPlaneDiagnostics }}</button>
-          </nav>
-          <button class="icon-button diagnostics-refresh-button" type="button" :disabled="busy || refreshingDiagnostics" :aria-label="t().refreshDiagnostics" :title="t().refreshDiagnostics" @click="refreshDiagnostics">
-            <svg class="diagnostics-refresh-icon" :class="{ spinning: refreshingDiagnostics }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5" /><path d="M4 17v-5h5" /><path d="M5.5 8A7 7 0 0 1 18 6l2 6" /><path d="M18.5 16A7 7 0 0 1 6 18l-2-6" /></svg>
-          </button>
-        </div>
-        <section v-show="activeDiagnosticsSection === 'xray'" id="diagnostics-panel-xray" class="diagnostics-subsection diagnostics-xray" data-testid="xray-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-xray">
-          <p class="muted diagnostics-xray-version">{{ t().configuredXrayVersion }}: {{ nodeStatus?.configuredXrayVersion || '—' }} · {{ t().runtimeXrayVersion }}: {{ nodeStatus?.xrayVersion || '—' }}</p>
-          <p v-if="nodeStatus?.state === 'running' && nodeStatus.xrayVersion && nodeStatus.xrayVersionVerified === false" class="diagnostic-version-warning" role="status">{{ t().xrayVersionUnverified }}</p>
-          <div class="diagnostics-overview">
-            <article class="diagnostic-status-card" :class="`diagnostic-${statusTone(nodeStatus?.state)}`"><span class="status-icon" aria-hidden="true">{{ nodeStatus?.state === 'running' ? '✓' : '!' }}</span><div><span class="stat-label">{{ t().xrayState }}</span><strong>{{ statusLabel(nodeStatus?.state) }}</strong></div></article>
-            <div class="diagnostic-summary"><span class="diagnostic-counter diagnostic-warning">{{ diagnosticCount('warn', xrayDiagnostics) }} {{ t().warnings }}</span><span class="diagnostic-counter diagnostic-negative">{{ diagnosticCount('error', xrayDiagnostics) }} {{ t().errors }}</span></div>
+            <article class="settings-card settings-logging-card">
+              <div class="card-heading"><div><h3>{{ t().xrayLogging }}</h3><p class="hint">{{ t().loggingHelp }}</p></div><span class="settings-icon" aria-hidden="true">≋</span></div>
+              <label>{{ t().logLevel }}<select v-model="logLevelForm"><option value="debug">{{ t().logLevelDebug }}</option><option value="info">{{ t().logLevelInfo }}</option><option value="warning">{{ t().logLevelWarning }}</option><option value="error">{{ t().logLevelError }}</option><option value="none">{{ t().logLevelNone }}</option></select></label>
+              <div class="section-actions"><button :disabled="busy || !loggingSettingsChanged" @click="reviewSettings('logging')">{{ t().reviewLoggingChanges }}</button></div>
+            </article>
           </div>
-          <div v-if="nodeStatus?.lastError || nodeStatus?.statsLastError" class="diagnostic-alerts"><p v-if="nodeStatus?.lastError" class="error">{{ nodeStatus.lastError }}</p><p v-if="nodeStatus?.statsLastError" class="error">{{ nodeStatus.statsLastError }}</p></div>
-          <div class="diagnostics-feed"><div class="feed-heading"><h4>{{ t().xrayEvents }}</h4><span class="muted">{{ xrayDiagnostics.length }}</span></div><ul v-if="xrayDiagnostics.length" class="diagnostics-list"><li v-for="entry in xrayDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul><p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p></div>
         </section>
-        <section v-show="activeDiagnosticsSection === 'amneziawg'" id="diagnostics-panel-awg" class="diagnostics-subsection diagnostics-amneziawg" data-testid="awg-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-awg">
-          <article class="settings-card diagnostics-awg-card">
-            <p class="hint diagnostics-awg-help">{{ t().awgDiagnosticsHelp }}</p>
-            <p class="status-badge" :class="amneziaWGDiagnosticTone">{{ amneziaWGDiagnosticLabel }}</p>
-            <dl v-if="amneziaWGStatus?.available" class="vmess-settings-list">
-              <div><dt>{{ t().awgListener }}</dt><dd>{{ amneziaWGStatus.publicHost || '—' }}:{{ amneziaWGStatus.publicPort || '—' }}/UDP</dd></div>
-              <div><dt>{{ t().awgPeers }}</dt><dd>{{ amneziaWGStatus.peerCount ?? '—' }}</dd></div>
-              <div><dt>{{ t().awgOnlinePeers }}</dt><dd>{{ onlineAmneziaWGClients.length }}</dd></div>
-              <div><dt>{{ t().awgNetworks }}</dt><dd>{{ amneziaWGStatus.ipv4Network || '—' }} · {{ amneziaWGStatus.ipv6Network || '—' }}</dd></div>
-              <div><dt>{{ t().awgServiceVersion }}</dt><dd>{{ amneziaWGStatus.serviceVersion || '—' }}</dd></div>
-            </dl>
-            <p v-else class="hint">{{ !amneziaWGStatus || amneziaWGStatus.enabled ? t().awgUnavailable : t().awgNotEnabled }}</p>
-            <div v-if="amneziaWGStatus?.available" class="diagnostics-awg-connections">
-              <h4>{{ t().awgActiveConnections }}</h4>
-              <ul v-if="onlineAmneziaWGClients.length" class="diagnostics-list">
-                <li v-for="client in onlineAmneziaWGClients" :key="client.id">
-                  <strong>{{ client.name }}</strong>
-                  <span>{{ t().sourceIp }}: {{ client.sourceIPs?.join(', ') || '—' }} · {{ t().lastSeen }}: {{ client.lastSeen ? formatTimestamp(client.lastSeen, language) : '—' }}</span>
-                </li>
-              </ul>
-              <p v-else class="muted">{{ t().awgNoActiveConnections }}</p>
+        <section v-if="activeSection === 'diagnostics'" class="section-panel">
+          <div class="diagnostics-toolbar">
+            <!-- Each tab is the single keyboard stop; focus moves with the tablist arrows. -->
+            <!-- eslint-disable-next-line vuejs-accessibility/interactive-supports-focus -->
+            <nav class="tabs diagnostics-tabs" role="tablist" :aria-label="t().diagnosticsComponents" @keydown="handleTabListKeydown">
+              <button id="diagnostics-tab-xray" data-testid="diagnostics-tab-xray" role="tab" :tabindex="activeDiagnosticsSection === 'xray' ? 0 : -1" :aria-selected="activeDiagnosticsSection === 'xray'" :class="{ active: activeDiagnosticsSection === 'xray' }" aria-controls="diagnostics-panel-xray" @click="activeDiagnosticsSection = 'xray'">{{ t().xrayDiagnostics }}</button>
+              <button id="diagnostics-tab-awg" data-testid="diagnostics-tab-awg" role="tab" :tabindex="activeDiagnosticsSection === 'amneziawg' ? 0 : -1" :aria-selected="activeDiagnosticsSection === 'amneziawg'" :class="{ active: activeDiagnosticsSection === 'amneziawg' }" aria-controls="diagnostics-panel-awg" @click="activeDiagnosticsSection = 'amneziawg'">{{ t().amneziawg }}</button>
+              <button id="diagnostics-tab-control-plane" data-testid="diagnostics-tab-control-plane" role="tab" :tabindex="activeDiagnosticsSection === 'control-plane' ? 0 : -1" :aria-selected="activeDiagnosticsSection === 'control-plane'" :class="{ active: activeDiagnosticsSection === 'control-plane' }" aria-controls="diagnostics-panel-control-plane" @click="activeDiagnosticsSection = 'control-plane'">{{ t().controlPlaneDiagnostics }}</button>
+            </nav>
+            <button class="icon-button diagnostics-refresh-button" type="button" :disabled="busy || refreshingDiagnostics" :aria-label="t().refreshDiagnostics" :title="t().refreshDiagnostics" @click="refreshDiagnostics">
+              <svg class="diagnostics-refresh-icon" :class="{ spinning: refreshingDiagnostics }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5" /><path d="M4 17v-5h5" /><path d="M5.5 8A7 7 0 0 1 18 6l2 6" /><path d="M18.5 16A7 7 0 0 1 6 18l-2-6" /></svg>
+            </button>
+          </div>
+          <section v-show="activeDiagnosticsSection === 'xray'" id="diagnostics-panel-xray" class="diagnostics-subsection diagnostics-xray" data-testid="xray-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-xray">
+            <p class="muted diagnostics-xray-version">{{ t().configuredXrayVersion }}: {{ nodeStatus?.configuredXrayVersion || '—' }} · {{ t().runtimeXrayVersion }}: {{ nodeStatus?.xrayVersion || '—' }}</p>
+            <p v-if="nodeStatus?.state === 'running' && nodeStatus.xrayVersion && nodeStatus.xrayVersionVerified === false" class="diagnostic-version-warning" role="status">{{ t().xrayVersionUnverified }}</p>
+            <div class="diagnostics-overview">
+              <article class="diagnostic-status-card" :class="`diagnostic-${statusTone(nodeStatus?.state)}`"><span class="status-icon" aria-hidden="true">{{ nodeStatus?.state === 'running' ? '✓' : '!' }}</span><div><span class="stat-label">{{ t().xrayState }}</span><strong>{{ statusLabel(nodeStatus?.state) }}</strong></div></article>
+              <div class="diagnostic-summary"><span class="diagnostic-counter diagnostic-warning">{{ diagnosticCount('warn', xrayDiagnostics) }} {{ t().warnings }}</span><span class="diagnostic-counter diagnostic-negative">{{ diagnosticCount('error', xrayDiagnostics) }} {{ t().errors }}</span></div>
             </div>
-          </article>
+            <div v-if="nodeStatus?.lastError || nodeStatus?.statsLastError" class="diagnostic-alerts"><p v-if="nodeStatus?.lastError" class="error">{{ nodeStatus.lastError }}</p><p v-if="nodeStatus?.statsLastError" class="error">{{ nodeStatus.statsLastError }}</p></div>
+            <div class="diagnostics-feed"><div class="feed-heading"><h4>{{ t().xrayEvents }}</h4><span class="muted">{{ xrayDiagnostics.length }}</span></div><ul v-if="xrayDiagnostics.length" class="diagnostics-list"><li v-for="entry in xrayDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul><p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p></div>
+          </section>
+          <section v-show="activeDiagnosticsSection === 'amneziawg'" id="diagnostics-panel-awg" class="diagnostics-subsection diagnostics-amneziawg" data-testid="awg-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-awg">
+            <article class="settings-card diagnostics-awg-card">
+              <p class="hint diagnostics-awg-help">{{ t().awgDiagnosticsHelp }}</p>
+              <p class="status-badge" :class="amneziaWGDiagnosticTone">{{ amneziaWGDiagnosticLabel }}</p>
+              <dl v-if="amneziaWGStatus?.available" class="vmess-settings-list">
+                <div><dt>{{ t().awgListener }}</dt><dd>{{ amneziaWGStatus.publicHost || '—' }}:{{ amneziaWGStatus.publicPort || '—' }}/UDP</dd></div>
+                <div><dt>{{ t().awgPeers }}</dt><dd>{{ amneziaWGStatus.peerCount ?? '—' }}</dd></div>
+                <div><dt>{{ t().awgOnlinePeers }}</dt><dd>{{ onlineAmneziaWGClients.length }}</dd></div>
+                <div><dt>{{ t().awgNetworks }}</dt><dd>{{ amneziaWGStatus.ipv4Network || '—' }} · {{ amneziaWGStatus.ipv6Network || '—' }}</dd></div>
+                <div><dt>{{ t().awgServiceVersion }}</dt><dd>{{ amneziaWGStatus.serviceVersion || '—' }}</dd></div>
+              </dl>
+              <p v-else class="hint">{{ !amneziaWGStatus || amneziaWGStatus.enabled ? t().awgUnavailable : t().awgNotEnabled }}</p>
+              <div v-if="amneziaWGStatus?.available" class="diagnostics-awg-connections">
+                <h4>{{ t().awgActiveConnections }}</h4>
+                <ul v-if="onlineAmneziaWGClients.length" class="diagnostics-list">
+                  <li v-for="client in onlineAmneziaWGClients" :key="client.id">
+                    <strong>{{ client.name }}</strong>
+                    <span>{{ t().sourceIp }}: {{ client.sourceIPs?.join(', ') || '—' }} · {{ t().lastSeen }}: {{ client.lastSeen ? formatTimestamp(client.lastSeen, language) : '—' }}</span>
+                  </li>
+                </ul>
+                <p v-else class="muted">{{ t().awgNoActiveConnections }}</p>
+              </div>
+            </article>
+          </section>
+          <section v-show="activeDiagnosticsSection === 'control-plane'" id="diagnostics-panel-control-plane" class="diagnostics-subsection diagnostics-control-plane" data-testid="control-plane-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-control-plane">
+            <ul v-if="appDiagnostics.length" class="diagnostics-list"><li v-for="entry in appDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul>
+            <p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p>
+          </section>
         </section>
-        <section v-show="activeDiagnosticsSection === 'control-plane'" id="diagnostics-panel-control-plane" class="diagnostics-subsection diagnostics-control-plane" data-testid="control-plane-diagnostics" role="tabpanel" aria-labelledby="diagnostics-tab-control-plane">
-          <ul v-if="appDiagnostics.length" class="diagnostics-list"><li v-for="entry in appDiagnostics" :key="`${entry.at}-${entry.component}-${entry.message}`" class="diagnostic-event"><div class="diagnostic-event-meta"><span class="diagnostic-level" :class="`diagnostic-level-${diagnosticTone(entry.level)}`">{{ entry.level }}</span><small>{{ formatTimestamp(entry.at, language) }}</small></div><span>{{ entry.message }}</span></li></ul>
-          <p v-else class="empty-state compact-empty">{{ t().noDiagnostics }}</p>
+        <section v-if="activeSection === 'security'" class="section-panel security-panel">
+          <p class="muted section-intro">{{ t().totp }}: <strong>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</strong></p>
+          <div class="security-grid">
+            <article class="security-card">
+              <div class="card-heading"><div><h3>{{ t().passwordSecurityTitle }}</h3><p class="hint">{{ t().passwordSecurityHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌑</span></div>
+              <form @submit.prevent="changePassword">
+                <label>{{ t().currentPassword }}<input v-model="changePasswordForm.currentPassword" type="password" autocomplete="current-password" required /></label>
+                <label>{{ t().newPassword }}<input v-model="changePasswordForm.newPassword" type="password" autocomplete="new-password" minlength="12" required /></label>
+                <label>{{ t().confirmNewPassword }}<input v-model="changePasswordForm.confirmation" type="password" autocomplete="new-password" minlength="12" required /></label>
+                <p v-if="changePasswordForm.confirmation && changePasswordForm.newPassword !== changePasswordForm.confirmation" class="hint">{{ t().passwordMismatch }}</p>
+                <button class="secondary security-action-button" type="submit" :disabled="busy || changePasswordForm.newPassword.length < 12 || changePasswordForm.newPassword !== changePasswordForm.confirmation">{{ t().changePassword }}</button>
+              </form>
+            </article>
+            <article class="security-card">
+              <div class="card-heading"><div><h3>{{ t().backupTitle }}</h3><p class="hint">{{ t().backupHelp }}</p></div><span class="settings-icon" aria-hidden="true">▣</span></div>
+              <button class="secondary" :disabled="busy" @click="createBackup">{{ t().backup }}</button>
+              <p v-if="lastBackup" class="backup-name">{{ t().backupCreated }}: {{ lastBackup }}</p>
+            </article>
+            <article class="security-card">
+              <div class="card-heading"><div><h3>{{ t().totpTitle }}</h3><p class="hint">{{ t().totpHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌑</span></div>
+              <p class="security-status" :class="{ enabled: totpStatus?.enabled }"><span class="status-dot" :class="{ online: totpStatus?.enabled }"></span>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</p>
+              <template v-if="!totpStatus?.enabled && !totpSetup"><button class="secondary security-action-button" :disabled="busy" @click="startTOTPSetup">{{ t().enableTOTP }}</button></template>
+              <template v-if="totpSetup"><p>{{ t().setupTOTP }}</p><div class="totp-setup-grid"><div v-if="totpSetup.qrPng" class="qr-panel totp-qr-panel"><span class="qr-label">{{ t().qr }}</span><img class="qr totp-qr" :src="`data:image/png;base64,${totpSetup.qrPng}`" :alt="t().qr" /></div><div class="totp-setup-fields"><label>{{ t().secret }}<input readonly :value="totpSetup.secret" /></label><label>otpauth URI<textarea readonly :value="totpSetup.otpauthUri"></textarea></label></div></div><p><strong>{{ t().recovery }}</strong></p><pre class="recovery-codes">{{ totpSetup.recoveryCodes.join('\n') }}</pre><label>{{ t().loginCode }}<input v-model="totpConfirmCode" inputmode="numeric" autocomplete="one-time-code" /></label><button :disabled="busy || !totpConfirmCode" @click="confirmTOTP">{{ t().confirmTOTP }}</button></template>
+              <template v-if="totpStatus?.enabled"><p>{{ totpStatus.recoveryCodesRemaining }} {{ t().recoveryLeft }}</p><p>{{ t().disableTOTPHint }}</p><label>{{ t().password }}<input v-model="disableTOTPForm.password" type="password" autocomplete="current-password" /></label><label>{{ t().loginCode }}<input v-model="disableTOTPForm.code" inputmode="numeric" autocomplete="one-time-code" /></label><button class="danger" :disabled="busy" @click="disableTOTP">{{ t().disableTOTP }}</button></template>
+            </article>
+            <article class="security-card">
+              <div class="card-heading"><div><h3>{{ t().sessionsTitle }}</h3><p class="hint">{{ t().sessionsHelp }}</p></div><span class="settings-icon" aria-hidden="true">↻</span></div>
+              <button class="secondary security-action-button" type="button" :disabled="busy" @click="logoutAll">{{ t().logoutAll }}</button>
+            </article>
+          </div>
         </section>
-      </section>
-      <section v-if="activeSection === 'security'" class="section-panel security-panel">
-        <p class="muted section-intro">{{ t().totp }}: <strong>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</strong></p>
-        <div class="security-grid">
-          <article class="security-card">
-            <div class="card-heading"><div><h3>{{ t().passwordSecurityTitle }}</h3><p class="hint">{{ t().passwordSecurityHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌑</span></div>
-            <form @submit.prevent="changePassword">
-              <label>{{ t().currentPassword }}<input v-model="changePasswordForm.currentPassword" type="password" autocomplete="current-password" required /></label>
-              <label>{{ t().newPassword }}<input v-model="changePasswordForm.newPassword" type="password" autocomplete="new-password" minlength="12" required /></label>
-              <label>{{ t().confirmNewPassword }}<input v-model="changePasswordForm.confirmation" type="password" autocomplete="new-password" minlength="12" required /></label>
-              <p v-if="changePasswordForm.confirmation && changePasswordForm.newPassword !== changePasswordForm.confirmation" class="hint">{{ t().passwordMismatch }}</p>
-              <button class="secondary security-action-button" type="submit" :disabled="busy || changePasswordForm.newPassword.length < 12 || changePasswordForm.newPassword !== changePasswordForm.confirmation">{{ t().changePassword }}</button>
-            </form>
-          </article>
-          <article class="security-card">
-            <div class="card-heading"><div><h3>{{ t().backupTitle }}</h3><p class="hint">{{ t().backupHelp }}</p></div><span class="settings-icon" aria-hidden="true">▣</span></div>
-            <button class="secondary" :disabled="busy" @click="createBackup">{{ t().backup }}</button>
-            <p v-if="lastBackup" class="backup-name">{{ t().backupCreated }}: {{ lastBackup }}</p>
-          </article>
-          <article class="security-card">
-            <div class="card-heading"><div><h3>{{ t().totpTitle }}</h3><p class="hint">{{ t().totpHelp }}</p></div><span class="settings-icon" aria-hidden="true">⌑</span></div>
-            <p class="security-status" :class="{ enabled: totpStatus?.enabled }"><span class="status-dot" :class="{ online: totpStatus?.enabled }"></span>{{ totpStatus?.enabled ? t().totpEnabled : t().totpDisabled }}</p>
-            <template v-if="!totpStatus?.enabled && !totpSetup"><button class="secondary security-action-button" :disabled="busy" @click="startTOTPSetup">{{ t().enableTOTP }}</button></template>
-            <template v-if="totpSetup"><p>{{ t().setupTOTP }}</p><div class="totp-setup-grid"><div v-if="totpSetup.qrPng" class="qr-panel totp-qr-panel"><span class="qr-label">{{ t().qr }}</span><img class="qr totp-qr" :src="`data:image/png;base64,${totpSetup.qrPng}`" :alt="t().qr" /></div><div class="totp-setup-fields"><label>{{ t().secret }}<input readonly :value="totpSetup.secret" /></label><label>otpauth URI<textarea readonly :value="totpSetup.otpauthUri"></textarea></label></div></div><p><strong>{{ t().recovery }}</strong></p><pre class="recovery-codes">{{ totpSetup.recoveryCodes.join('\n') }}</pre><label>{{ t().loginCode }}<input v-model="totpConfirmCode" inputmode="numeric" autocomplete="one-time-code" /></label><button :disabled="busy || !totpConfirmCode" @click="confirmTOTP">{{ t().confirmTOTP }}</button></template>
-            <template v-if="totpStatus?.enabled"><p>{{ totpStatus.recoveryCodesRemaining }} {{ t().recoveryLeft }}</p><p>{{ t().disableTOTPHint }}</p><label>{{ t().password }}<input v-model="disableTOTPForm.password" type="password" autocomplete="current-password" /></label><label>{{ t().loginCode }}<input v-model="disableTOTPForm.code" inputmode="numeric" autocomplete="one-time-code" /></label><button class="danger" :disabled="busy" @click="disableTOTP">{{ t().disableTOTP }}</button></template>
-          </article>
-          <article class="security-card">
-            <div class="card-heading"><div><h3>{{ t().sessionsTitle }}</h3><p class="hint">{{ t().sessionsHelp }}</p></div><span class="settings-icon" aria-hidden="true">↻</span></div>
-            <button class="secondary security-action-button" type="button" :disabled="busy" @click="logoutAll">{{ t().logoutAll }}</button>
-          </article>
-        </div>
-      </section>
+      </div>
 
       <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" :vmess-available="vmessAvailable" :shadowsocks-available="shadowsocksAvailable" :trojan-available="trojanAvailable" :awg-available="amneziaWGAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
       <ProfileExpiryModal v-if="expiryClient" :client="expiryClient" :language="language" :busy="busy" @close="expiryClient = null" @save="saveClientExpiry" />
-      <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p><p v-if="clientAction.action === 'revoke' && clientAction.client.protocol === 'amneziawg'" class="hint">{{ t().awgConfirmRevoke }}</p><p v-else-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ clientAction.client.protocol === 'amneziawg' ? t().awgRevoke : actionLabel(clientAction.action) }}</button></div></div></div>
+      <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div v-modal-focus class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p><p v-if="clientAction.action === 'revoke' && clientAction.client.protocol === 'amneziawg'" class="hint">{{ t().awgConfirmRevoke }}</p><p v-else-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ clientAction.client.protocol === 'amneziawg' ? t().awgRevoke : actionLabel(clientAction.action) }}</button></div></div></div>
       <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :vmess-qr-url="api.clients.profileVMessQrUrl(selectedProfile.clientId)" :shadowsocks-qr-url="api.clients.profileShadowsocksQrUrl(selectedProfile.clientId)" :trojan-qr-url="api.clients.profileTrojanQrUrl(selectedProfile.clientId)" :awg-qr-url="api.clients.profileAmneziaWGQrUrl(selectedProfile.clientId)" :awg-profile-url="api.clients.profileAmneziaWGUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" :copied-vmess="copiedVMess" :copied-shadowsocks="copiedShadowsocks" :copied-trojan="copiedTrojan" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" @copy-vmess="copyVMessUri" @copy-shadowsocks="copyShadowsocksUri" @copy-trojan="copyTrojanUri" />
-      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
+      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div v-modal-focus class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
     </section>
   </main>
 </template>

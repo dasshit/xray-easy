@@ -4,6 +4,7 @@ import type { Client } from '../domain/models'
 import { translations } from './i18n/messages'
 import type { UILanguage } from './i18n'
 import ExpirySelector from './ExpirySelector.vue'
+import { vModalFocus } from './modalFocus'
 
 const props = defineProps<{ client: Client; language: UILanguage; busy: boolean }>()
 const emit = defineEmits<{
@@ -23,7 +24,7 @@ function submit(): void {
 
 <template>
   <div class="modal-backdrop" role="presentation" @click.self="emit('close')">
-    <div class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="expiry-modal-title" tabindex="-1">
+    <div v-modal-focus class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="expiry-modal-title" tabindex="-1">
       <div class="modal-header">
         <div><p class="eyebrow">{{ client.name }}</p><h2 id="expiry-modal-title">{{ text.expiryDialogTitle }}</h2></div>
         <button class="icon-button" type="button" :aria-label="text.close" @click="emit('close')">×</button>

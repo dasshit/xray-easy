@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, ref } from 'vue'
 import type { CreateClientCommand } from '../application/models'
 import { translations } from './i18n/messages'
 import type { UILanguage } from './i18n'
 import ExpirySelector from './ExpirySelector.vue'
+import { vModalFocus } from './modalFocus'
 
 const props = defineProps<{ language: UILanguage; hysteriaAvailable: boolean; vmessAvailable: boolean; shadowsocksAvailable?: boolean; trojanAvailable?: boolean; awgAvailable?: boolean; busy: boolean }>()
 const emit = defineEmits<{
@@ -12,12 +13,8 @@ const emit = defineEmits<{
   openSettings: []
 }>()
 const text = computed(() => translations[props.language])
-const nameInput = ref<HTMLInputElement | null>(null)
 const form = ref<{ name: string; protocol: 'vless' | 'vmess' | 'hysteria2' | 'shadowsocks' | 'trojan' | 'amneziawg'; fingerprint: string; auth: string; expiresAt?: string }>({ name: '', protocol: 'vless', fingerprint: '', auth: '' })
 const expiryIsValid = ref(true)
-
-/** Focus the device name field when the dialog appears. */
-onMounted(() => { void nextTick(() => nameInput.value?.focus()) })
 
 /** Submit only the options belonging to the selected transport. */
 function submit(): void {
@@ -48,7 +45,7 @@ function submit(): void {
 
 <template>
   <div class="modal-backdrop" role="presentation" @click.self="emit('cancel')">
-    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="create-profile-title" tabindex="-1">
+    <div v-modal-focus class="modal" role="dialog" aria-modal="true" aria-labelledby="create-profile-title" tabindex="-1">
       <div class="modal-header">
         <div><p class="eyebrow">{{ text.profiles }}</p><h2 id="create-profile-title">{{ text.createProfile }}</h2></div>
         <button class="icon-button" type="button" :aria-label="text.close" @click="emit('cancel')">×</button>
@@ -56,7 +53,7 @@ function submit(): void {
       <form @submit.prevent="submit">
         <label>
           {{ text.newDevice }}
-          <input ref="nameInput" v-model="form.name" class="device-name-input" :placeholder="text.newDevice" required maxlength="64" pattern="[A-Za-z0-9-]{1,64}" autocomplete="off" />
+          <input data-modal-autofocus v-model="form.name" class="device-name-input" :placeholder="text.newDevice" required maxlength="64" pattern="[A-Za-z0-9-]{1,64}" autocomplete="off" />
         </label>
         <label>
           {{ text.profileProtocol }}
