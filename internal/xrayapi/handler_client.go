@@ -87,6 +87,7 @@ func (c *HandlerClient) RemoveVMessUser(ctx context.Context, email string) error
 	return c.alterMessage(ctx, "vmess-tls", "xray.app.proxyman.command.RemoveUserOperation", operation)
 }
 
+// alterMessage marshals a typed Xray operation and applies it to the tagged inbound.
 func (c *HandlerClient) alterMessage(ctx context.Context, inboundTag, operationType string, message proto.Message) error {
 	value, err := proto.Marshal(message)
 	if err != nil {
@@ -95,6 +96,7 @@ func (c *HandlerClient) alterMessage(ctx context.Context, inboundTag, operationT
 	return c.alter(ctx, inboundTag, &serial.TypedMessage{Type: operationType, Value: value})
 }
 
+// outgoing adds request tracing metadata through the injected or standard interaction helper.
 func (c *HandlerClient) outgoing(ctx context.Context) (context.Context, string, error) {
 	if c.outgoingContext != nil {
 		return c.outgoingContext(ctx)

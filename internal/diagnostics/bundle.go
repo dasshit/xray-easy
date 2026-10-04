@@ -20,12 +20,14 @@ func CreateBundle(dataDir string, files map[string][]byte, now time.Time) (strin
 	}, os.Remove, os.Rename)
 }
 
+// bundleFilesystem provides injectable path and permission operations for diagnostic archives.
 type bundleFilesystem struct {
 	absolute func(string) (string, error)
 	mkdirAll func(string, os.FileMode) error
 	chmod    func(string, os.FileMode) error
 }
 
+// systemBundleFilesystem returns the filesystem operations used in production.
 func systemBundleFilesystem() bundleFilesystem {
 	return bundleFilesystem{absolute: filepath.Abs, mkdirAll: os.MkdirAll, chmod: os.Chmod}
 }
@@ -44,6 +46,7 @@ type bundleFile interface {
 	Close() error
 }
 
+// bundleCloser is the close operation shared by nested archive writers.
 type bundleCloser interface {
 	// Close releases the resource.
 	Close() error
@@ -54,6 +57,7 @@ func createBundleWith(dataDir string, files map[string][]byte, now time.Time, cr
 	return createBundleWithFilesystem(dataDir, files, now, systemBundleFilesystem(), createTemp, remove, rename)
 }
 
+// createBundleWithFilesystem writes a private archive using the supplied filesystem operations.
 func createBundleWithFilesystem(dataDir string, files map[string][]byte, now time.Time, filesystem bundleFilesystem, createTemp func(string, string) (bundleFile, error), remove func(string) error, rename func(string, string) error) (string, error) {
 	if len(files) == 0 {
 		return "", errors.New("doctor bundle is empty")
@@ -124,6 +128,7 @@ func createBundleWithFilesystem(dataDir string, files map[string][]byte, now tim
 	return path, nil
 }
 
+// closeArchiveWriters closes archive layers in order and cleans up after a close failure.
 func closeArchiveWriters(archive, zipper, temporary bundleCloser) error {
 	if err := archive.Close(); err != nil {
 		_ = zipper.Close()

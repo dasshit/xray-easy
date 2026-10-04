@@ -1263,10 +1263,12 @@ func buildClientJSON(settings Settings, client Client, fingerprint string) ([]by
 	return encodeIndentedJSON(value)
 }
 
+// encodeIndentedJSON encodes a value as two-space-indented JSON without HTML escaping.
 func encodeIndentedJSON(value any) ([]byte, error) {
 	return encodeIndentedJSONWith(value, encodeIndentedJSONTo)
 }
 
+// encodeIndentedJSONWith captures output from an injectable JSON encoder.
 func encodeIndentedJSONWith(value any, encode func(any, io.Writer) error) ([]byte, error) {
 	var out bytes.Buffer
 	if err := encode(value, &out); err != nil {
@@ -1275,6 +1277,7 @@ func encodeIndentedJSONWith(value any, encode func(any, io.Writer) error) ([]byt
 	return out.Bytes(), nil
 }
 
+// encodeIndentedJSONTo writes two-space-indented JSON without HTML escaping.
 func encodeIndentedJSONTo(value any, writer io.Writer) error {
 	encoder := json.NewEncoder(writer)
 	encoder.SetEscapeHTML(false)

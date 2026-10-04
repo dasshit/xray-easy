@@ -16,6 +16,7 @@ func NewUUID() (string, error) {
 	return newUUID(rand.Reader)
 }
 
+// newUUID creates a random RFC 4122 version 4 UUID using the supplied entropy source.
 func newUUID(source io.Reader) (string, error) {
 	b := make([]byte, 16)
 	if _, err := io.ReadFull(source, b); err != nil {
@@ -31,6 +32,7 @@ func NewRealityKeyPair() (privateKey, publicKey string, err error) {
 	return newRealityKeyPair(ecdh.X25519().GenerateKey)
 }
 
+// newRealityKeyPair generates and URL-base64 encodes an X25519 REALITY keypair.
 func newRealityKeyPair(generate func(io.Reader) (*ecdh.PrivateKey, error)) (privateKey, publicKey string, err error) {
 	key, err := generate(rand.Reader)
 	if err != nil {
@@ -47,6 +49,7 @@ func NewShortID() (string, error) {
 	return newShortID(rand.Reader)
 }
 
+// newShortID reads a nonzero eight-byte identifier from the supplied entropy source.
 func newShortID(source io.Reader) (string, error) {
 	for {
 		b := make([]byte, 8)

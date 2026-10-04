@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 )
 
@@ -120,17 +121,17 @@ func TestAddUserRejectsInvalidCanceledUnconfiguredAndConflictingRequests(t *test
 	if _, err := service.AddUser(canceled, valid); status.Code(err) != codes.Canceled {
 		t.Fatalf("AddUser() with canceled context error = %v", err)
 	}
-	unconfigured := *valid
+	unconfigured := proto.Clone(valid).(*xrayruntimev1.AddUserRequest)
 	unconfigured.Protocol = xrayruntimev1.Protocol_PROTOCOL_VMESS
-	if _, err := service.AddUser(context.Background(), &unconfigured); status.Code(err) != codes.FailedPrecondition {
+	if _, err := service.AddUser(context.Background(), unconfigured); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("AddUser() for an unconfigured protocol error = %v", err)
 	}
 	if _, err := service.AddUser(context.Background(), valid); err != nil {
 		t.Fatalf("AddUser() initial call: %v", err)
 	}
-	conflict := *valid
+	conflict := proto.Clone(valid).(*xrayruntimev1.AddUserRequest)
 	conflict.Credential = "different-credential"
-	if _, err := service.AddUser(context.Background(), &conflict); status.Code(err) != codes.FailedPrecondition {
+	if _, err := service.AddUser(context.Background(), conflict); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("AddUser() reused operation with changed payload error = %v", err)
 	}
 }
@@ -151,17 +152,17 @@ func TestRemoveUserRejectsInvalidCanceledUnconfiguredAndConflictingRequests(t *t
 	if _, err := service.RemoveUser(canceled, valid); status.Code(err) != codes.Canceled {
 		t.Fatalf("RemoveUser() with canceled context error = %v", err)
 	}
-	unconfigured := *valid
+	unconfigured := proto.Clone(valid).(*xrayruntimev1.RemoveUserRequest)
 	unconfigured.Protocol = xrayruntimev1.Protocol_PROTOCOL_VMESS
-	if _, err := service.RemoveUser(context.Background(), &unconfigured); status.Code(err) != codes.FailedPrecondition {
+	if _, err := service.RemoveUser(context.Background(), unconfigured); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("RemoveUser() for an unconfigured protocol error = %v", err)
 	}
 	if _, err := service.RemoveUser(context.Background(), valid); err != nil {
 		t.Fatalf("RemoveUser() initial call: %v", err)
 	}
-	conflict := *valid
+	conflict := proto.Clone(valid).(*xrayruntimev1.RemoveUserRequest)
 	conflict.OperationId = "remove-other-operation"
-	if _, err := service.RemoveUser(context.Background(), &conflict); status.Code(err) != codes.FailedPrecondition {
+	if _, err := service.RemoveUser(context.Background(), conflict); status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("RemoveUser() reused revision for another operation error = %v", err)
 	}
 }

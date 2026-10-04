@@ -845,11 +845,15 @@ func probeWritableDirectory(path string) error {
 		}, os.Remove)
 }
 
+// writableProbeFile exposes the operations needed to test directory write access.
 type writableProbeFile interface {
+	// Name returns the temporary probe file path for cleanup.
 	Name() string
+	// Close releases the probe file before it is removed.
 	Close() error
 }
 
+// probeWritableDirectoryWith creates and removes a temporary file using injectable filesystem operations.
 func probeWritableDirectoryWith(path string, createTemp func(string, string) (writableProbeFile, error), remove func(string) error) error {
 	info, err := os.Stat(path)
 	if err != nil {

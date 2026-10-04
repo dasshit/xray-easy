@@ -25,6 +25,7 @@ func Seal(masterKey []byte, value string, purpose string) (string, error) {
 	return sealWith(masterKey, value, purpose, defaultEnvelopeCrypto())
 }
 
+// envelopeCrypto groups the cryptographic primitives used by the envelope implementation.
 type envelopeCrypto struct {
 	random    io.Reader
 	readFull  func(io.Reader, []byte) (int, error)
@@ -33,6 +34,7 @@ type envelopeCrypto struct {
 	newGCM    func(cipher.Block) (cipher.AEAD, error)
 }
 
+// defaultEnvelopeCrypto returns the standard cryptographic primitives used in production.
 func defaultEnvelopeCrypto() envelopeCrypto {
 	return envelopeCrypto{
 		random: rand.Reader, readFull: io.ReadFull,
@@ -43,6 +45,7 @@ func defaultEnvelopeCrypto() envelopeCrypto {
 	}
 }
 
+// sealWith encrypts a purpose-bound value using injectable cryptographic primitives.
 func sealWith(masterKey []byte, value string, purpose string, crypto envelopeCrypto) (string, error) {
 	if len(masterKey) < 32 {
 		return "", errors.New("master key must contain at least 32 bytes")
@@ -80,6 +83,7 @@ func Open(masterKey []byte, encoded, purpose string) (string, error) {
 	return openWith(masterKey, encoded, purpose, defaultEnvelopeCrypto())
 }
 
+// openWith authenticates and decrypts a purpose-bound value using injectable primitives.
 func openWith(masterKey []byte, encoded, purpose string, crypto envelopeCrypto) (string, error) {
 	if len(masterKey) < 32 {
 		return "", errors.New("master key must contain at least 32 bytes")
@@ -127,6 +131,7 @@ func Derive(masterKey []byte, purpose string) ([]byte, error) {
 	return deriveKeyWith(masterKey, purpose, io.ReadFull)
 }
 
+// deriveKeyWith derives a stable purpose-specific key using the supplied entropy reader operation.
 func deriveKeyWith(masterKey []byte, purpose string, readFull func(io.Reader, []byte) (int, error)) ([]byte, error) {
 	if len(masterKey) < 32 {
 		return nil, errors.New("master key must contain at least 32 bytes")

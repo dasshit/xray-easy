@@ -55,22 +55,33 @@ type pendingOperation struct {
 	generation string
 }
 
+// leaseSnapshotResult transports one received snapshot or stream error to the service loop.
 type leaseSnapshotResult struct {
 	snapshot *controllerv1.LeaseSnapshot
 	err      error
 }
 
+// leaseTimer is the timer contract used to schedule the next lease enforcement deadline.
 type leaseTimer interface {
+	// Stop prevents the timer from firing and reports whether it stopped it.
 	Stop() bool
+	// Reset schedules the timer to fire after the supplied delay.
 	Reset(time.Duration) bool
+	// Channel returns the timer's event channel.
 	Channel() <-chan time.Time
 }
 
+// standardLeaseTimer adapts time.Timer to the service's injectable timer contract.
 type standardLeaseTimer struct{ timer *time.Timer }
 
-func (t standardLeaseTimer) Stop() bool                     { return t.timer.Stop() }
+// Stop stops the underlying timer.
+func (t standardLeaseTimer) Stop() bool { return t.timer.Stop() }
+
+// Reset schedules the underlying timer to fire after delay.
 func (t standardLeaseTimer) Reset(delay time.Duration) bool { return t.timer.Reset(delay) }
-func (t standardLeaseTimer) Channel() <-chan time.Time      { return t.timer.C }
+
+// Channel returns the underlying timer's event channel.
+func (t standardLeaseTimer) Channel() <-chan time.Time { return t.timer.C }
 
 // NewService creates a lease policy worker using the supplied restricted Controller client.
 func NewService(controller Controller, config Config, logger *slog.Logger) (*Service, error) {
@@ -123,6 +134,7 @@ func (s *Service) Run(ctx context.Context) error {
 	return ctx.Err()
 }
 
+// waitForRetry waits for a retry delay through the injected or standard timer implementation.
 func (s *Service) waitForRetry(ctx context.Context, delay time.Duration) bool {
 	if s.retryWait != nil {
 		return s.retryWait(ctx, delay)
@@ -130,6 +142,7 @@ func (s *Service) waitForRetry(ctx context.Context, delay time.Duration) bool {
 	return waitRetry(ctx, delay)
 }
 
+// retryDelay applies injected or standard jitter to a retry backoff.
 func (s *Service) retryDelay(delay time.Duration) time.Duration {
 	if s.retryJitter != nil {
 		return s.retryJitter(delay)
@@ -200,6 +213,7 @@ func (s *Service) consume(ctx context.Context, stream controllerv1.Controller_Wa
 	}
 }
 
+// pumpLeaseSnapshots forwards stream snapshots and errors until the stream or context ends.
 func pumpLeaseSnapshots(ctx context.Context, stream controllerv1.Controller_WatchLeaseSnapshotsClient, updates chan<- leaseSnapshotResult) {
 	for {
 		snapshot, err := stream.Recv()
@@ -247,6 +261,7 @@ func (s *Service) resetTimer(timer *leaseTimer, channel *<-chan time.Time) {
 	*channel = (*timer).Channel()
 }
 
+// queueSnapshotResult sends one stream result unless the receiving service has stopped.
 func queueSnapshotResult(ctx context.Context, updates chan<- leaseSnapshotResult, result leaseSnapshotResult) bool {
 	select {
 	case updates <- result:
@@ -365,6 +380,7 @@ func randomOperationID() (string, error) {
 	return randomOperationIDFrom(rand.Reader)
 }
 
+// randomOperationIDFrom reads 16 bytes of entropy and encodes them as a lease-operation ID.
 func randomOperationIDFrom(source io.Reader) (string, error) {
 	var value [16]byte
 	if _, err := io.ReadFull(source, value[:]); err != nil {

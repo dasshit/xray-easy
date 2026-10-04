@@ -658,12 +658,17 @@ func writePendingOperationKey(dataDir, operationID, privateKey string) error {
 	return persistPendingOperationKey(file, path, privateKey, os.Remove)
 }
 
+// pendingOperationFile is the durable writer used to stage an encrypted operation key.
 type pendingOperationFile interface {
+	// WriteString writes the complete key representation to the staged file.
 	WriteString(string) (int, error)
+	// Sync flushes staged key bytes before the file is published.
 	Sync() error
+	// Close releases the staged key file.
 	Close() error
 }
 
+// persistPendingOperationKey writes, syncs, and closes a pending key, removing it on failure.
 func persistPendingOperationKey(file pendingOperationFile, path, privateKey string, remove func(string) error) error {
 	if _, err := file.WriteString(privateKey); err != nil {
 		_ = file.Close()

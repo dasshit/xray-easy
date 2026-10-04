@@ -67,6 +67,7 @@ func Dial(address, tokenPath string) (*Client, error) {
 	})
 }
 
+// dialWith reads and validates the service token before creating an injectable gRPC connection.
 func dialWith(address, tokenPath string, newConnection func(string, ...grpc.DialOption) (connection, error)) (*Client, error) {
 	data, err := os.ReadFile(tokenPath)
 	if err != nil {
@@ -333,6 +334,7 @@ func (c *Client) call(ctx context.Context, method string, invoke func(context.Co
 	return nil
 }
 
+// outgoingContext adds interaction metadata to a request sent to the AWG service.
 func (c *Client) outgoingContext(ctx context.Context) (context.Context, string, error) {
 	if c.makeOutgoingCtx != nil {
 		return c.makeOutgoingCtx(ctx)

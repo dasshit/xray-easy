@@ -49,6 +49,7 @@ func importWithVerifier(root string, certPEM, keyPEM []byte, serverName string, 
 	return importWithVerifierAndID(root, certPEM, keyPEM, serverName, verify, newID)
 }
 
+// importWithVerifierAndID validates and verifies a certificate before storing it under a generated version ID.
 func importWithVerifierAndID(root string, certPEM, keyPEM []byte, serverName string, verify func([]byte, *x509.Certificate, string) error, generateID func() (string, error)) (string, CertificateInfo, error) {
 	parsed, info, err := validatePair(certPEM, keyPEM, serverName)
 	if err != nil {
@@ -73,10 +74,12 @@ func GenerateMkcert(ctx context.Context, root, publicIPv4 string) (string, Certi
 	return generateMkcertWithID(ctx, root, publicIPv4, newID)
 }
 
+// generateMkcertWithID creates a mkcert certificate using an injectable version ID generator.
 func generateMkcertWithID(ctx context.Context, root, publicIPv4 string, generateID func() (string, error)) (string, CertificateInfo, error) {
 	return generateMkcertWithIDAndTempDirs(ctx, root, publicIPv4, generateID, os.MkdirTemp)
 }
 
+// generateMkcertWithIDAndTempDirs creates a certificate with injectable version and temporary-directory operations.
 func generateMkcertWithIDAndTempDirs(ctx context.Context, root, publicIPv4 string, generateID func() (string, error), mkdirTemp func(string, string) (string, error)) (string, CertificateInfo, error) {
 	if strings.TrimSpace(publicIPv4) == "" {
 		return "", CertificateInfo{}, errors.New("public IPv4 is required")
@@ -167,6 +170,7 @@ func validatePair(certPEM, keyPEM []byte, serverName string) (*x509.Certificate,
 	return validatePairWithMarshaller(certPEM, keyPEM, serverName, x509.MarshalPKIXPublicKey)
 }
 
+// validatePairWithMarshaller parses a matching certificate and key using the supplied public-key encoder.
 func validatePairWithMarshaller(certPEM, keyPEM []byte, serverName string, marshalPublicKey func(any) ([]byte, error)) (*x509.Certificate, CertificateInfo, error) {
 	block, _ := pem.Decode(certPEM)
 	if block == nil || block.Type != "CERTIFICATE" {
@@ -218,6 +222,7 @@ func verifyTrusted(chainPEM []byte, cert *x509.Certificate, serverName string) e
 	return verifyTrustedWithSystemPool(chainPEM, cert, serverName, x509.SystemCertPool)
 }
 
+// verifyTrustedWithSystemPool verifies a certificate chain against an injectable system root pool.
 func verifyTrustedWithSystemPool(chainPEM []byte, cert *x509.Certificate, serverName string, systemPool func() (*x509.CertPool, error)) error {
 	roots, err := systemPool()
 	if err != nil || roots == nil {
@@ -278,6 +283,7 @@ func writeVersion(root, id string, cert, key []byte) error {
 	})
 }
 
+// versionFileOperations groups filesystem operations used to publish a certificate version atomically.
 type versionFileOperations struct {
 	mkdirAll     func(string, os.FileMode) error
 	mkdirTemp    func(string, string) (string, error)
@@ -286,6 +292,7 @@ type versionFileOperations struct {
 	rename       func(string, string) error
 }
 
+// writeVersionWith stages private certificate files and publishes the version directory after success.
 func writeVersionWith(root, id string, cert, key []byte, ops versionFileOperations) error {
 	if err := ops.mkdirAll(root, 0o700); err != nil {
 		return err
@@ -315,12 +322,16 @@ func writePrivate(path string, data []byte, mode os.FileMode) error {
 		}, io.Copy)
 }
 
+// privateCertificateFile is the writer contract for a staged private certificate file.
 type privateCertificateFile interface {
 	io.Writer
+	// Sync flushes certificate data to storage before the file is closed.
 	Sync() error
+	// Close releases the staged certificate file.
 	Close() error
 }
 
+// writePrivateWith creates a private file and copies certificate bytes using injectable I/O operations.
 func writePrivateWith(path string, data []byte, mode os.FileMode, open func(string, int, os.FileMode) (privateCertificateFile, error), copyData func(io.Writer, io.Reader) (int64, error)) error {
 	file, err := open(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {

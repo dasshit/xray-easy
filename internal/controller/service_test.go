@@ -214,14 +214,18 @@ func TestServiceDisconnectLeaseValidationAndNormalization(t *testing.T) {
 	if err != nil || response.GetClosedConnections() != 1 || runtime.leaseRequest.GetSourceIp() != "192.0.2.10" || runtime.leaseRequest.GetProtocol() != xrayruntimev1.Protocol_PROTOCOL_VLESS {
 		t.Fatalf("DisconnectLease() = %+v, runtime request=%+v, err=%v", response, runtime.leaseRequest, err)
 	}
-	invalid := *request
-	invalid.OperationId = "bad"
-	if _, err := service.DisconnectLease(context.Background(), &invalid); status.Code(err) != codes.InvalidArgument {
+	invalid := &controllerv1.DisconnectLeaseRequest{
+		Protocol: request.GetProtocol(), ProfileEmail: request.GetProfileEmail(), SourceIp: request.GetSourceIp(),
+		OperationId: "bad", SourceGeneration: request.GetSourceGeneration(),
+	}
+	if _, err := service.DisconnectLease(context.Background(), invalid); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("invalid lease operation error = %v", err)
 	}
-	unsupported := *request
-	unsupported.Protocol = "hysteria2"
-	if _, err := service.DisconnectLease(context.Background(), &unsupported); status.Code(err) != codes.Unimplemented {
+	unsupported := &controllerv1.DisconnectLeaseRequest{
+		Protocol: "hysteria2", ProfileEmail: request.GetProfileEmail(), SourceIp: request.GetSourceIp(),
+		OperationId: request.GetOperationId(), SourceGeneration: request.GetSourceGeneration(),
+	}
+	if _, err := service.DisconnectLease(context.Background(), unsupported); status.Code(err) != codes.Unimplemented {
 		t.Fatalf("unsupported lease protocol error = %v", err)
 	}
 }
@@ -249,9 +253,12 @@ func TestServiceDisconnectLeaseRejectsInvalidIdentityAndUnsupportedRuntime(t *te
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			request := *valid
-			test.change(&request)
-			if _, err := service.DisconnectLease(context.Background(), &request); status.Code(err) != codes.InvalidArgument {
+			request := &controllerv1.DisconnectLeaseRequest{
+				Protocol: valid.GetProtocol(), ProfileEmail: valid.GetProfileEmail(), SourceIp: valid.GetSourceIp(),
+				OperationId: valid.GetOperationId(), SourceGeneration: valid.GetSourceGeneration(),
+			}
+			test.change(request)
+			if _, err := service.DisconnectLease(context.Background(), request); status.Code(err) != codes.InvalidArgument {
 				t.Fatalf("invalid lease identity error=%v", err)
 			}
 		})

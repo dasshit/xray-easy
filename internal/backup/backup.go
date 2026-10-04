@@ -629,6 +629,7 @@ func copyTLSDirectory(source, destination string) (bool, error) {
 	return fileCount > 0, nil
 }
 
+// copyAndCloseTLSFile copies certificate bytes and reports copy or close failures in order.
 func copyAndCloseTLSFile(input io.ReadCloser, output io.WriteCloser) error {
 	_, copyErr := io.Copy(output, input)
 	inputErr := input.Close()

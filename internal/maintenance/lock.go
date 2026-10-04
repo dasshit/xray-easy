@@ -23,6 +23,7 @@ func Acquire(ctx context.Context, path string) (*Lock, error) {
 	return acquire(ctx, path, unix.Flock)
 }
 
+// acquire polls an injectable flock operation until it obtains the lock or the context ends.
 func acquire(ctx context.Context, path string, flock func(fd int, how int) error) (*Lock, error) {
 	if path == "" {
 		return &Lock{}, nil

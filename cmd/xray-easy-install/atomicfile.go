@@ -7,11 +7,17 @@ import (
 	"path/filepath"
 )
 
+// installerTempFile is the minimal temporary-file API used by atomic installer writes.
 type installerTempFile interface {
+	// Name returns the path that must be removed or published after writing.
 	Name() string
+	// Chmod secures the staged file before it is populated.
 	Chmod(os.FileMode) error
+	// Write appends bytes to the staged file.
 	Write([]byte) (int, error)
+	// Sync flushes staged bytes to storage before publication.
 	Sync() error
+	// Close releases the staged file descriptor.
 	Close() error
 }
 
@@ -23,6 +29,7 @@ func writePrivateAtomic(path, pattern string, content []byte, mode os.FileMode, 
 		os.Remove, publish)
 }
 
+// writePrivateAtomicWith creates and secures a temporary file before syncing and publishing it.
 func writePrivateAtomicWith(path, pattern string, content []byte, mode os.FileMode,
 	createTemp func(string, string) (installerTempFile, error), remove func(string) error,
 	publish func(string, string) error,

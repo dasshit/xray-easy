@@ -627,6 +627,7 @@ func (m *Manager) consumeTelemetryStream(ctx context.Context) {
 	}
 }
 
+// waitForRetry delegates a stream retry wait to the injected or standard timer implementation.
 func (m *Manager) waitForRetry(ctx context.Context, delay time.Duration) bool {
 	if m.retryWait != nil {
 		return m.retryWait(ctx, delay)
@@ -634,6 +635,7 @@ func (m *Manager) waitForRetry(ctx context.Context, delay time.Duration) bool {
 	return waitTelemetryRetry(ctx, delay)
 }
 
+// waitTelemetryRetry waits for delay unless the telemetry context is canceled first.
 func waitTelemetryRetry(ctx context.Context, delay time.Duration) bool {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()

@@ -144,18 +144,22 @@ func (h *leaseTrackedOutbound) Dispatch(ctx context.Context, link *transport.Lin
 		profile, ok := leaseProfileFromInbound(inbound)
 		if ok {
 			flowCtx, cancel := context.WithCancel(ctx)
-			release, registered := h.registry.registerFlow(profile, func() {
-				cancel()
-				if link != nil {
-					_ = common.Interrupt(link.Reader)
-					_ = common.Interrupt(link.Writer)
-				}
-			})
+			var closeOnce sync.Once
+			closeFlow := func() {
+				closeOnce.Do(func() {
+					cancel()
+					if link != nil {
+						_ = common.Interrupt(link.Reader)
+						_ = common.Interrupt(link.Writer)
+					}
+				})
+			}
+			release, registered := h.registry.registerFlow(profile, closeFlow)
 			if !registered {
-				cancel()
+				closeFlow()
 				return
 			}
-			defer cancel()
+			defer closeFlow()
 			defer release()
 			ctx = flowCtx
 		}

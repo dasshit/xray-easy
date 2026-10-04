@@ -471,7 +471,9 @@ func main() {
 }
 
 var (
-	exitProcess       = os.Exit
+	// exitProcess terminates the process after command initialization fails.
+	exitProcess = os.Exit
+	// startControlPlane initializes and serves the authenticated control plane.
 	startControlPlane = func() error {
 		return runControlPlane(context.Background(), initializeControlPlane, func(serverHTTP *http.Server) error {
 			return serverHTTP.ListenAndServe()
@@ -4004,7 +4006,9 @@ func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Set
 
 // reservedShortIDPool provides the durable reserve needed to render an Xray candidate.
 type reservedShortIDPool interface {
+	// SeedReservedShortIDs fills an uninitialized reserve with generated unique IDs.
 	SeedReservedShortIDs(context.Context, int, func() (string, error)) error
+	// ListReservedShortIDs returns the IDs that have not been assigned to clients.
 	ListReservedShortIDs(context.Context) ([]string, error)
 }
 

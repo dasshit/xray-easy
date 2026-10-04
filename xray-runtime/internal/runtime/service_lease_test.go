@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 )
 
@@ -155,7 +156,7 @@ func copyLeaseRequest(source *xrayruntimev1.DisconnectLeaseRequest, mutate func(
 	if source == nil {
 		return nil
 	}
-	copy := *source
-	mutate(&copy)
-	return &copy
+	copy := proto.Clone(source).(*xrayruntimev1.DisconnectLeaseRequest)
+	mutate(copy)
+	return copy
 }

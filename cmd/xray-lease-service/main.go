@@ -37,6 +37,7 @@ var leaseHealthCheck = checkHealth
 // leaseServiceWorker is the worker contract needed by the process entrypoint.
 type leaseServiceWorker interface {
 	healthProvider
+	// Run starts lease enforcement until its context is canceled or an error occurs.
 	Run(context.Context) error
 }
 

@@ -498,7 +498,9 @@ func TestAdminCLIReportsPasswordAndTOTPFailurePaths(t *testing.T) {
 			t.Fatal(err)
 		}
 		defer lock.Close()
-		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+		// runAdminCLI opens and migrates the store before it reaches the lock.
+		// Leave enough time for that work, then let the contested lock time out.
+		ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 		defer cancel()
 		if err := runAdminCLI(ctx, app.server.dataDir, []string{"reset-password"}); err == nil || !strings.Contains(err.Error(), "acquire maintenance lock") {
 			t.Fatalf("admin password reset while locked = %v", err)

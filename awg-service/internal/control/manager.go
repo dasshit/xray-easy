@@ -311,6 +311,7 @@ func GenerateKeypair() (privateKey, publicKey string, err error) {
 	return generateKeypairWith(rand.Reader, curve25519.X25519)
 }
 
+// generateKeypairWith creates a clamped X25519 keypair using injectable entropy and curve operations.
 func generateKeypairWith(source io.Reader, x25519 func([]byte, []byte) ([]byte, error)) (privateKey, publicKey string, err error) {
 	var private [32]byte
 	if _, err := io.ReadFull(source, private[:]); err != nil {
@@ -1131,6 +1132,7 @@ func derivePublicKey(privateKey string) ([]byte, string, error) {
 	return derivePublicKeyWith(privateKey, curve25519.X25519)
 }
 
+// derivePublicKeyWith decodes a private key and derives its X25519 public key.
 func derivePublicKeyWith(privateKey string, x25519 func([]byte, []byte) ([]byte, error)) ([]byte, string, error) {
 	private, err := decodeKey(privateKey)
 	if err != nil {
