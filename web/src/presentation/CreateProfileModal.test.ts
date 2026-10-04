@@ -90,4 +90,79 @@ describe('CreateProfileModal', () => {
       vi.useRealTimers()
     }
   })
+
+  it('creates Trojan with an optional deadline and no Hysteria password field', async () => {
+    const wrapper = mount(CreateProfileModal, { props: {
+      language: 'en', hysteriaAvailable: false, vmessAvailable: false, trojanAvailable: true, busy: false,
+    } })
+    await wrapper.get('input[autocomplete="off"]').setValue('work-laptop')
+    await wrapper.get('[data-testid="profile-protocol"]').setValue('trojan')
+    expect(wrapper.text()).toContain('Creates a Trojan TCP/TLS profile')
+    expect(wrapper.find('input[autocomplete="new-password"]').exists()).toBe(false)
+    await wrapper.get('form').trigger('submit')
+
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual({ name: 'work-laptop', protocol: 'trojan' })
+  })
+
+  it('generates a Hysteria password when the advanced password is left blank', async () => {
+    const wrapper = mount(CreateProfileModal, { props: {
+      language: 'en', hysteriaAvailable: true, vmessAvailable: true, busy: false,
+    } })
+    await wrapper.get('input[autocomplete="off"]').setValue('phone')
+    await wrapper.get('[data-testid="profile-protocol"]').setValue('hysteria2')
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('submit')?.[0]?.[0]).toEqual({ name: 'phone', protocol: 'hysteria2' })
+  })
+
+  it('links from an unavailable VMess choice to the certificate settings', async () => {
+    const wrapper = mount(CreateProfileModal, { props: {
+      language: 'en', hysteriaAvailable: false, vmessAvailable: false, busy: false,
+    } })
+    await wrapper.get('[data-testid="profile-protocol"]').setValue('vmess')
+    expect(wrapper.text()).toContain('VMess needs a valid TLS certificate')
+    await wrapper.findAll('button').find(button => button.text() === 'Open Hysteria 2 settings')?.trigger('click')
+    expect(wrapper.emitted('openSettings')).toHaveLength(1)
+  })
+
+  it('does not emit a profile for a blank device name or an invalid expiry', async () => {
+    const wrapper = mount(CreateProfileModal, { props: {
+      language: 'en', hysteriaAvailable: true, vmessAvailable: true, busy: false,
+    } })
+    await wrapper.get('form').trigger('submit')
+    await wrapper.get('[data-testid="expiry-preset"]').setValue('custom')
+    await wrapper.get('[data-testid="expiry-custom"]').setValue('2000-01-01T00:00')
+    await wrapper.get('input[autocomplete="off"]').setValue('phone')
+    await wrapper.get('form').trigger('submit')
+
+    expect(wrapper.emitted('submit')).toBeUndefined()
+  })
+
+  it('keeps unavailable optional protocols blocked and links back to their settings', async () => {
+    for (const [protocol, message] of [
+      ['shadowsocks', 'Shadowsocks is disabled'],
+      ['trojan', 'Trojan is disabled'],
+      ['amneziawg', 'AmneziaWG container cannot be reached'],
+    ] as const) {
+      const wrapper = mount(CreateProfileModal, { props: {
+        language: 'en', hysteriaAvailable: true, vmessAvailable: true, busy: false,
+      } })
+      await wrapper.get('input[autocomplete="off"]').setValue('phone')
+      await wrapper.get('[data-testid="profile-protocol"]').setValue(protocol)
+      expect(wrapper.text()).toContain(message)
+      await wrapper.get('form').trigger('submit')
+      expect(wrapper.emitted('submit')).toBeUndefined()
+      if (protocol !== 'amneziawg') {
+        await wrapper.findAll('button').find(button => button.text().startsWith('Open'))?.trigger('click')
+        expect(wrapper.emitted('openSettings')).toHaveLength(1)
+      }
+      wrapper.unmount()
+    }
+  })
+
+  it('emits cancellation from both modal controls', async () => {
+    const wrapper = mount(CreateProfileModal, { props: { language: 'en', hysteriaAvailable: true, vmessAvailable: true, busy: false } })
+    await wrapper.get('.icon-button').trigger('click')
+    await wrapper.findAll('.modal-actions button')[0]?.trigger('click')
+    expect(wrapper.emitted('cancel')).toHaveLength(2)
+  })
 })

@@ -41,9 +41,16 @@ describe('browser preferences', () => {
     vi.stubGlobal('navigator', { language: 'fr-FR' })
     expect(readLanguage()).toBe('fr')
 
+    vi.stubGlobal('navigator', { language: 'ja-JP' })
+    expect(readLanguage()).toBe('en')
+
+    vi.stubGlobal('navigator', { language: 'en' })
+    expect(readLanguage()).toBe('en')
+
     window.localStorage.setItem('xray-easy-language', 'ru')
     expect(readLanguage()).toBe('ru')
     window.localStorage.setItem('xray-easy-language', 'invalid')
+    vi.stubGlobal('navigator', { language: 'fr-FR' })
     expect(readLanguage()).toBe('fr')
   })
 
@@ -64,6 +71,9 @@ describe('browser preferences', () => {
     expect(i18n.language.value).toBe('ru')
     expect(i18n.t().title).toBe('Xray-easy')
     expect(window.localStorage.getItem('xray-easy-language')).toBe('ru')
+
+    i18n.toggleLanguage()
+    expect(i18n.language.value).toBe('en')
   })
 
   it('keeps translation keys aligned between supported languages', () => {
@@ -129,5 +139,11 @@ describe('formatExpiry', () => {
 
   it('preserves invalid timestamps for troubleshooting instead of hiding them', () => {
     expect(formatExpiry('invalid date', 'en', 0)).toBe('invalid date')
+  })
+
+  it('rounds expiries shorter than a minute into minute units in either direction', () => {
+    const now = Date.UTC(2026, 9, 1, 12)
+    expect(formatExpiry(new Date(now + 20_000).toISOString(), 'en', now)).toContain('(in 1 minute)')
+    expect(formatExpiry(new Date(now - 20_000).toISOString(), 'en', now)).toContain('(1 minute ago)')
   })
 })

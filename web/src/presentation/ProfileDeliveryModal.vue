@@ -32,7 +32,7 @@ const vmessUri = computed(() => props.profile.protocol === 'vmess' ? props.profi
 const shadowsocksUri = computed(() => props.profile.protocol === 'shadowsocks' ? props.profile.ssUri : undefined)
 const trojanUri = computed(() => props.profile.protocol === 'trojan' ? props.profile.trojanUri : undefined)
 const isAmneziaWG = computed(() => props.profile.protocol === 'amneziawg')
-const hasJsonProfile = computed(() => props.profile.protocol === 'vless' || props.profile.protocol === 'vmess' || (props.profile.protocol === 'legacy_dual' && props.profile.json !== undefined))
+const hasJsonProfile = computed(() => props.profile.protocol === 'vless' || ((props.profile.protocol === 'vmess' || props.profile.protocol === 'legacy_dual') && props.profile.json !== undefined))
 
 /**
  * Return the display label for a legacy or protocol-specific profile.

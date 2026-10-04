@@ -13,7 +13,8 @@ describe('ProfileExpiryModal', () => {
     const wrapper = mount(ProfileExpiryModal, { props: { client: { ...client, expired: false }, language: 'en', busy: false } })
     await wrapper.get('.icon-button').trigger('click')
     await wrapper.get('.modal-actions .secondary').trigger('click')
-    expect(wrapper.emitted('close')).toHaveLength(2)
+    await wrapper.get('.modal-backdrop').trigger('click.self')
+    expect(wrapper.emitted('close')).toHaveLength(3)
 
     await wrapper.setProps({ busy: true })
     expect((wrapper.get('.modal-actions .secondary').element as HTMLButtonElement).disabled).toBe(true)
@@ -24,6 +25,8 @@ describe('ProfileExpiryModal', () => {
     const wrapper = mount(ProfileExpiryModal, { props: { client, language: 'en', busy: false } })
     await flushPromises()
     expect((wrapper.get('button[type="submit"]').element as HTMLButtonElement).disabled).toBe(true)
+    await wrapper.get('form').trigger('submit')
+    expect(wrapper.emitted('save')).toBeUndefined()
     await wrapper.get('[data-testid="expiry-custom"]').setValue('2099-02-03T12:00')
     expect((wrapper.get('button[type="submit"]').element as HTMLButtonElement).disabled).toBe(false)
     await wrapper.get('form').trigger('submit')

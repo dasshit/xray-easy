@@ -14,7 +14,6 @@ const localDateTime = ref('')
 const minimumDateTime = computed(() => toLocalDateTime(new Date()))
 const customDateIsValid = computed(() => {
   if (preset.value !== 'custom') return true
-  if (!localDateTime.value) return false
   const value = new Date(localDateTime.value)
   return !Number.isNaN(value.getTime()) && value.getTime() > Date.now()
 })

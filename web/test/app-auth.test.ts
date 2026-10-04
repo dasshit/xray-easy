@@ -23,6 +23,8 @@ describe('setup and authentication screens', () => {
     expect((form.get('input[placeholder="vpn.example.com"]').element as HTMLInputElement).value).toBe('89.169.13.234')
     await form.get('input[autocomplete="username"]').setValue('admin')
     await form.get('input[autocomplete="new-password"]').setValue('long-password')
+    await form.get('input[placeholder="vpn.example.com"]').setValue('panel.example.com')
+    await form.get('input[type="number"]').setValue('18443')
     await form.get('input[placeholder="www.cloudflare.com:443"]').setValue('www.cloudflare.com:443')
     await form.get('input[placeholder="www.cloudflare.com"]').setValue('www.cloudflare.com')
     await form.trigger('submit')
@@ -31,7 +33,7 @@ describe('setup and authentication screens', () => {
     expect(requests.find(request => request.url === '/api/setup/initialize')?.body).toEqual({
       username: 'admin',
       password: 'long-password',
-      public_host: '89.169.13.234',
+      public_host: 'panel.example.com',
       public_port: 18443,
       reality_target: 'www.cloudflare.com:443',
       reality_sni: 'www.cloudflare.com',
@@ -150,6 +152,21 @@ describe('setup and authentication screens', () => {
       username: 'admin', password: 'correct-password', recovery_code: 'ABCD-EFGH',
     })
     expect(wrapper.text()).toContain('Profiles')
+  })
+
+  it('shows a recovery-code login error and keeps the recovery form available', async () => {
+    const { wrapper } = await mountApp(request => {
+      if (request.url === '/api/auth/login') return { status: 401, body: { error: 'TOTP required', code: 'totp_required' } }
+      if (request.url === '/api/auth/login/recovery') return { status: 401, body: { error: 'Recovery code expired' } }
+      return defaultHandler()(request)
+    })
+    await submitLogin(wrapper)
+    await wrapper.get('button.secondary').trigger('click')
+    await wrapper.get('input[autocomplete="one-time-code"]').setValue('OLD-CODE')
+    await wrapper.get('form.auth-card').trigger('submit')
+    await flushPromises()
+    expect(wrapper.get('[role="alert"]').text()).toContain('Recovery code expired')
+    expect(wrapper.text()).toContain('Recovery code')
   })
 
   it('releases the busy state when post-login dashboard loading fails', async () => {

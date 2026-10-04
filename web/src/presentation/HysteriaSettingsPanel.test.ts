@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { describe, expect, it, vi } from 'vitest'
 import type { HysteriaCertificateInfo, HysteriaSettings } from '../application/models'
 import type { XrayEasyGateway } from '../application/ports/xrayEasyGateway'
+import { formatCertificateExpiry, selectedCertificateFile } from './hysteriaCertificate'
 import HysteriaSettingsPanel from './HysteriaSettingsPanel.vue'
 
 const certificate: HysteriaCertificateInfo = {
@@ -28,6 +29,21 @@ function makeApi(status = baseStatus) {
 }
 
 describe('HysteriaSettingsPanel', () => {
+  it('reads selected files only from native file inputs', () => {
+    const file = new File(['pem'], 'chain.pem')
+    const input = document.createElement('input')
+    input.type = 'file'
+    Object.defineProperty(input, 'files', { configurable: true, value: { item: (index: number) => index === 0 ? file : null } })
+    const emptyInput = document.createElement('input')
+    emptyInput.type = 'file'
+    Object.defineProperty(emptyInput, 'files', { configurable: true, value: { item: () => null } })
+
+    expect(selectedCertificateFile(input)).toBe(file)
+    expect(selectedCertificateFile(emptyInput)).toBeNull()
+    expect(selectedCertificateFile(document.createElement('div'))).toBeNull()
+    expect(selectedCertificateFile(null)).toBeNull()
+  })
+
   it('loads current settings and stages a mkcert certificate for IPv4', async () => {
     const api = makeApi()
     const wrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
@@ -42,6 +58,7 @@ describe('HysteriaSettingsPanel', () => {
 
     await wrapper.get('select').setValue('self-signed')
     await wrapper.get('input[inputmode="decimal"]').setValue('89.169.13.234')
+    await wrapper.get('input[readonly]').setValue('89.169.13.234')
     expect((wrapper.get('input[readonly]').element as HTMLInputElement).value).toBe('89.169.13.234')
     await wrapper.findAll('button').find(button => button.text() === 'Generate certificate')?.trigger('click')
     await flushPromises()
@@ -63,7 +80,18 @@ describe('HysteriaSettingsPanel', () => {
       .mockResolvedValueOnce({ ...baseStatus, enabled: true, state: 'on' })
     const wrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
     await flushPromises()
+    const uploadButton = wrapper.findAll('button').find(button => button.text() === 'Validate and stage certificate')
+    await uploadButton?.trigger('click')
+    expect(api.hysteria.uploadCertificate).not.toHaveBeenCalled()
     const inputs = wrapper.findAll('input[type="file"]')
+    const emptyFileInput = inputs[0]
+    if (!emptyFileInput) throw new Error('Expected the certificate chain file input')
+    Object.defineProperty(emptyFileInput.element, 'files', { configurable: true, value: { item: () => null } })
+    await emptyFileInput.trigger('change')
+    await wrapper.get('input[autocomplete="url"]').setValue('vpn.example.test')
+    const tlsServerName = wrapper.findAll('input').find(input => input.attributes('placeholder') === 'vpn.example.test')
+    await tlsServerName?.setValue('vpn.example.test')
+    await wrapper.get('.hysteria-advanced input[type="number"]').setValue('120')
     const fullchain = new File(['chain'], 'fullchain.pem')
     const privateKey = new File(['key'], 'privkey.pem')
     for (const [input, file] of [[inputs[0], fullchain], [inputs[1], privateKey]] as const) {
@@ -167,5 +195,66 @@ describe('HysteriaSettingsPanel', () => {
       expect(wrapper.find('.hysteria-certificate-meta').exists()).toBe(false)
       wrapper.unmount()
     }
+  })
+
+  it('shows the custom masquerade body and runtime error without a certificate', async () => {
+    const status: HysteriaSettings = { ...baseStatus, certificateError: 'certificate is missing', runtimeError: 'listener failed to start' }
+    delete status.certificate
+    const api = makeApi(status)
+    const wrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('listener failed to start')
+    expect(wrapper.text()).toContain('certificate is missing')
+    expect(wrapper.find('.hysteria-certificate-meta').exists()).toBe(false)
+    await wrapper.get('.hysteria-advanced select').setValue('string')
+    expect(wrapper.find('textarea').exists()).toBe(true)
+    await wrapper.get('textarea').setValue('A small landing page')
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('A small landing page')
+  })
+
+  it('uses the host as a fallback TLS server name and renders legacy certificate settings', async () => {
+    const status: HysteriaSettings = { ...baseStatus, tlsMode: 'legacy', tlsServerName: '' }
+    const api = makeApi(status)
+    api.hysteria.uploadCertificate = vi.fn().mockResolvedValue({ certificateId: 'new-certificate', certificate })
+    const wrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
+    await flushPromises()
+    expect(wrapper.find('option[value="legacy"]').exists()).toBe(true)
+
+    const inputs = wrapper.findAll('input[type="file"]')
+    for (const [input, file] of [[inputs[0], new File(['chain'], 'chain.pem')], [inputs[1], new File(['key'], 'key.pem')]] as const) {
+      if (!input) throw new Error('Expected both certificate file inputs')
+      Object.defineProperty(input.element, 'files', { configurable: true, value: { item: () => file } })
+      await input.trigger('change')
+    }
+    await wrapper.findAll('button').find(button => button.text() === 'Validate and stage certificate')?.trigger('click')
+    await flushPromises()
+
+    expect(api.hysteria.uploadCertificate).toHaveBeenCalledWith(expect.any(File), expect.any(File), 'vpn.example.test')
+    expect(wrapper.text()).toContain('Certificate staged')
+  })
+
+  it('closes a reviewed Hysteria change from its close button, backdrop, or Escape-independent cancel action', async () => {
+    const api = makeApi()
+    api.hysteria.preview = vi.fn().mockResolvedValue({
+      changed: true as const, changeId: 'change-close', expiresIn: 60, expectedConfirmation: 'APPLY', requiresConfirmation: true,
+      diff: [], consequences: [], settings: baseStatus,
+    })
+    const wrapper = mount(HysteriaSettingsPanel, { props: { api, language: 'en' } })
+
+    for (const close of ['button', 'backdrop', 'cancel'] as const) {
+      await flushPromises()
+      await wrapper.findAll('button').find(button => button.text() === 'Review Hysteria 2 changes')?.trigger('click')
+      await flushPromises()
+      if (close === 'button') await wrapper.get('[role="dialog"] .icon-button').trigger('click')
+      if (close === 'backdrop') await wrapper.get('.modal-backdrop').trigger('click.self')
+      if (close === 'cancel') await wrapper.get('[role="dialog"] .modal-actions .secondary').trigger('click')
+      expect(wrapper.find('[role="dialog"]').exists()).toBe(false)
+    }
+  })
+
+  it('formats missing and present Hysteria certificate expiries', () => {
+    expect(formatCertificateExpiry(undefined, 'en')).toBe('—')
+    expect(formatCertificateExpiry(certificate, 'en')).not.toBe('—')
   })
 })

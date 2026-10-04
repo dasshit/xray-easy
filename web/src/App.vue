@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, onBeforeUnmount, onMounted, ref } from 'vue'
 import { APIError } from './application/errors'
+import { requireValue } from './application/requireValue'
 import type { EventSubscription, XrayEasyGateway } from './application/ports/xrayEasyGateway'
 import { clientActionFor } from './domain/models'
 import type { AmneziaWGStatus, Client, ClientAction, ClientActionType, Settings, SettingsChange, XrayLogLevel } from './domain/models'
@@ -130,8 +131,7 @@ function toggleTheme() { applyTheme(theme.value === 'dark' ? 'light' : 'dark') }
  * @param event - The change event emitted by the language select.
  */
 function selectLanguage(event: Event): void {
-  if (!(event.target instanceof HTMLSelectElement)) return
-  const value = event.target.value
+  const value = String(Reflect.get(Object(event.currentTarget), 'value'))
   if (isUILanguage(value)) changeLanguage(value)
 }
 
@@ -409,7 +409,6 @@ async function createDevice(input: CreateClientCommand) {
  * @param client - The profile whose deadline is being changed.
  */
 function openExpiryEditor(client: Client): void {
-  if (client.revoked) return
   error.value = ''
   expiryClient.value = client
 }
@@ -418,8 +417,7 @@ function openExpiryEditor(client: Client): void {
  * @param expiresAt - The future RFC 3339 deadline, or undefined to remove expiry.
  */
 async function saveClientExpiry(expiresAt?: string): Promise<void> {
-  const target = expiryClient.value
-  if (!target) return
+  const target = requireValue(expiryClient.value, 'Expiry client')
   busy.value = true
   error.value = ''
   try {
@@ -525,7 +523,7 @@ async function copyTrojanUri() {
  * @param client - The device to update.
  * @param action - The requested action, or null when no action is allowed.
  */
-function openClientAction(client: Client, action: ClientActionType | null) { if (!action) return; error.value = ''; clientAction.value = { client, action } }
+function openClientAction(client: Client, action: ClientActionType) { error.value = ''; clientAction.value = { client, action } }
 /**
  * Close the device-action dialog when no operation is in progress.
  */
@@ -534,8 +532,7 @@ function closeClientAction() { if (!busy.value) clientAction.value = null }
  * Apply the confirmed device action and update the device list.
  */
 async function confirmClientAction() {
-  if (!clientAction.value) return
-  const { client, action } = clientAction.value
+  const { client, action } = requireValue(clientAction.value, 'Client action')
   busy.value = true; error.value = ''
   try {
     const updated = await api.clients.setAction(client.id, action)
@@ -556,16 +553,16 @@ async function createBackup() { busy.value = true; error.value = ''; try { const
  * @param kind - The settings group being reviewed.
  */
 async function reviewSettings(kind: 'vless' | 'logging') {
-  if (!settings.value) return
+  const currentSettings = requireValue(settings.value, 'Settings')
   busy.value = true; error.value = ''; pendingSettings.value = null
   const isVless = kind === 'vless'
   try {
     const result = await api.settings.preview({
-      publicHost: isVless ? settingsForm.value.publicHost : settings.value.publicHost,
-      realityTarget: isVless ? settingsForm.value.realityTarget : settings.value.realityTarget,
-      realitySni: isVless ? settingsForm.value.realitySNI : settings.value.realitySni,
-      clientFingerprint: isVless ? settingsForm.value.clientFingerprint : settings.value.clientFingerprint,
-      logLevel: isVless ? settings.value.logLevel : logLevelForm.value,
+      publicHost: isVless ? settingsForm.value.publicHost : currentSettings.publicHost,
+      realityTarget: isVless ? settingsForm.value.realityTarget : currentSettings.realityTarget,
+      realitySni: isVless ? settingsForm.value.realitySNI : currentSettings.realitySni,
+      clientFingerprint: isVless ? settingsForm.value.clientFingerprint : currentSettings.clientFingerprint,
+      logLevel: isVless ? currentSettings.logLevel : logLevelForm.value,
       rotatePrivateKey: isVless && settingsForm.value.rotatePrivateKey,
     })
     pendingSettingsKind.value = kind
@@ -577,13 +574,13 @@ async function reviewSettings(kind: 'vless' | 'logging') {
  * Apply the confirmed settings and refresh affected dashboard data.
  */
 async function applySettings() {
-  if (!pendingSettings.value) return
+  const pending = requireValue(pendingSettings.value, 'Settings preview')
   const appliedKind = pendingSettingsKind.value
   const otherVlessDraft = appliedKind === 'logging' ? { ...settingsForm.value } : null
   const otherLoggingDraft = appliedKind === 'vless' ? logLevelForm.value : null
   busy.value = true; error.value = ''
   try {
-    await api.settings.apply(pendingSettings.value.changeId, pendingSettings.value.confirmation)
+    await api.settings.apply(pending.changeId, pending.confirmation)
     pendingSettings.value = null
     await loadSettings()
     if (otherVlessDraft) settingsForm.value = otherVlessDraft
@@ -601,9 +598,9 @@ async function startTOTPSetup() { busy.value = true; error.value = ''; try { tot
  * Confirm TOTP enrollment with the code entered by the administrator.
  */
 async function confirmTOTP() {
-  if (!totpSetup.value) return
+  const setup = requireValue(totpSetup.value, 'TOTP setup')
   busy.value = true; error.value = ''
-  try { await api.auth.enableTOTP(totpSetup.value.setupToken, totpConfirmCode.value); totpSetup.value = null; totpConfirmCode.value = ''; await loadTOTPStatus() }
+  try { await api.auth.enableTOTP(setup.setupToken, totpConfirmCode.value); totpSetup.value = null; totpConfirmCode.value = ''; await loadTOTPStatus() }
   catch (cause) { showError(cause) } finally { busy.value = false }
 }
 /**
@@ -671,7 +668,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
           <li v-for="client in clients" :key="client.id" class="device-card">
             <div class="device-card-header"><div class="device-identity"><span class="device-status" :class="{ online: client.online, disabled: !client.enabled || client.revoked }"><span class="status-dot" :class="{ online: client.online }"></span></span><div class="device-main"><strong>{{ client.name }}</strong><span class="protocol-badge">{{ clientProtocolLabel(client) }}</span><span class="device-meta">{{ clientAccessSummary(client) }} · {{ client.online ? t().online : t().offline }}<template v-if="client.protocol === 'vless'"> · {{ client.fingerprint || settings?.clientFingerprint || 'chrome' }}</template><template v-if="client.sourceIPs?.length"> · {{ t().sourceIp }}: {{ client.sourceIPs.join(', ') }}</template></span></div></div><span class="status-badge" :class="{ positive: client.enabled && !client.revoked && !client.expired, muted: !client.enabled && !client.revoked && !client.expired, negative: client.revoked || (client.expired && !client.expirationPending), warning: client.expirationPending }">{{ client.revoked ? t().revoked : client.expirationPending ? t().expiryPending : client.expired ? t().expired : client.enabled ? t().enabled : t().disabled }}</span></div>
             <div class="device-stats"><div class="device-stat"><span>{{ t().upload }}</span><strong>{{ formatBytes(client.uploadBytes) }}</strong></div><div class="device-stat"><span>{{ t().downloadTraffic }}</span><strong>{{ formatBytes(client.downloadBytes) }}</strong></div><div class="device-stat"><span>{{ t().currentUpload }}</span><strong>{{ formatRate(client.uploadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().currentDownload }}</span><strong>{{ formatRate(client.downloadBytesPerSecond ?? 0) }}</strong></div><div class="device-stat"><span>{{ t().expiry }}</span><strong>{{ client.expiresAt ? formatExpiry(client.expiresAt, language) : t().expiryNever }}</strong></div><div class="device-stat device-stat-wide"><span>{{ t().lastSeen }}</span><strong>{{ client.lastSeen ? formatTimestamp(client.lastSeen, language) : '—' }}</strong></div></div>
-            <div class="device-card-footer"><span class="device-id">ID {{ client.id.slice(0, 8) }}</span><div class="device-actions"><button v-if="!client.revoked" class="secondary expiry-button" @click="openExpiryEditor(client)">{{ t().editExpiry }}</button><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked && clientActionFor(client) !== null" class="secondary" @click="openClientAction(client, clientActionFor(client))">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ client.protocol === 'amneziawg' ? t().awgRevoke : t().remove }}</button></div></div>
+            <div class="device-card-footer"><span class="device-id">ID {{ client.id.slice(0, 8) }}</span><div class="device-actions"><button v-if="!client.revoked" class="secondary expiry-button" @click="openExpiryEditor(client)">{{ t().editExpiry }}</button><button v-if="!client.revoked" class="secondary" @click="showProfile(client)">{{ t().profile }}</button><button v-if="!client.revoked && clientActionFor(client) !== null" class="secondary" @click="openClientAction(client, clientActionFor(client)!)">{{ client.enabled ? t().disable : t().enable }}</button><button v-if="!client.revoked" class="danger" @click="openClientAction(client, 'revoke')">{{ client.protocol === 'amneziawg' ? t().awgRevoke : t().remove }}</button></div></div>
           </li>
         </ul>
       </section>

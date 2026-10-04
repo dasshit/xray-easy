@@ -377,4 +377,58 @@ describe('Xray-easy API adapter', () => {
     expect(calls.find(call => call.url === '/api/logs?component=xray&limit=50')).toBeDefined()
     expect(calls.filter(call => call.options?.method === 'POST')).toHaveLength(6)
   })
+
+  it('maps optional runtime fields, creates legacy profile deliveries, and falls back from AmneziaWG actions', async () => {
+    const { send, calls } = requester({
+      '/api/transports/hysteria2': {
+        enabled: true, state: 'on', host: 'vpn.example.test', udp_port: 443, tls_mode: 'self-signed', tls_server_name: 'vpn.example.test',
+        tls_cert_ip: '192.0.2.1', certificate_id: 'cert-1', certificate: {
+          subject: 'CN=vpn.example.test', issuer: 'CN=Example CA', dns_names: ['vpn.example.test'], ip_addresses: ['192.0.2.1'],
+          not_before: '2026-09-01T00:00:00Z', not_after: '2027-09-01T00:00:00Z', fingerprint: 'ABCD',
+        },
+        certificate_error: 'renewal required', runtime_error: 'runtime warning', udp_idle_timeout: 60,
+        masquerade_type: 'string', masquerade_string: 'hello', insecure_uri: true,
+      },
+      '/api/status': {
+        state: 'running', xray_version: '26.7', inbound_tags: ['vless-reality'], configured_xray_version: '26.7.1',
+        xray_version_verified: false, last_error: 'last', stats_last_error: 'stats', xray_runtime_error: 'runtime',
+      },
+      '/api/clients/legacy-1/profile?format=uri': { client_id: 'legacy-1', protocol: 'legacy_dual' },
+      '/api/clients/legacy-full/profile?format=uri': {
+        client_id: 'legacy-full', protocol: 'legacy_dual', uri: 'vless://legacy', hysteria_uri: 'hysteria2://legacy', json: { outbound: true },
+      },
+      '/api/clients/trojan-1/profile?format=uri': { client_id: 'trojan-1', protocol: 'trojan', trojan_uri: 'trojan://secret', json: { outbound: true } },
+      '/api/clients/awg%3Alegacy/disable': {
+        id: 'awg:legacy', name: 'legacy', protocol: 'amneziawg', protocols: ['amneziawg'],
+        enabled: false, revoked: false, online: false, upload_bytes: 0, download_bytes: 0,
+      },
+      '/api/clients': {
+        id: 'new-client', name: 'phone', protocol: 'vless', protocols: ['vless'], enabled: true, revoked: false,
+        online: false, upload_bytes: 0, download_bytes: 0,
+        vless: { enabled: true, revoked: false }, hysteria2: { enabled: true, revoked: false },
+        vmess: { enabled: true, revoked: false }, shadowsocks: { enabled: true, revoked: false }, trojan: { enabled: true, revoked: false },
+      },
+    })
+    const api = createXrayEasyApi(send)
+
+    await expect(api.hysteria.status()).resolves.toMatchObject({
+      tlsCertIp: '192.0.2.1', certificateError: 'renewal required', runtimeError: 'runtime warning',
+      masqueradeString: 'hello', certificate: { ipAddresses: ['192.0.2.1'] },
+    })
+    await expect(api.diagnostics.status()).resolves.toEqual({
+      state: 'running', xrayVersion: '26.7', inboundTags: ['vless-reality'], configuredXrayVersion: '26.7.1',
+      xrayVersionVerified: false, lastError: 'last', statsLastError: 'stats', xrayRuntimeError: 'runtime',
+    })
+    await expect(api.clients.profile('legacy-1')).resolves.toEqual({ clientId: 'legacy-1', protocol: 'legacy_dual' })
+    await expect(api.clients.profile('legacy-full')).resolves.toEqual({
+      clientId: 'legacy-full', protocol: 'legacy_dual', uri: 'vless://legacy', hysteriaUri: 'hysteria2://legacy', json: { outbound: true },
+    })
+    await expect(api.clients.profile('trojan-1')).resolves.toEqual({ clientId: 'trojan-1', protocol: 'trojan', trojanUri: 'trojan://secret', json: { outbound: true } })
+    await expect(api.clients.setAction('awg:legacy', 'disable')).resolves.toMatchObject({ enabled: false })
+    await api.clients.create({ name: 'phone', protocol: 'vless', fingerprint: '', auth: '', expiresAt: '' })
+
+    expect(calls.find(call => call.url === '/api/clients')?.options?.body).toBe(JSON.stringify({
+      name: 'phone', protocol: 'vless', expires_at: '',
+    }))
+  })
 })

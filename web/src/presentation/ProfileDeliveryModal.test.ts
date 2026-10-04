@@ -56,6 +56,17 @@ describe('ProfileDeliveryModal', () => {
     expect(wrapper.emitted('copyVmess')).toHaveLength(1)
   })
 
+  it('omits the VMess JSON download when the profile has no JSON payload', () => {
+    const wrapper = mount(ProfileDeliveryModal, { props: {
+      profile: { clientId: client.id, protocol: 'vmess', vmessUri: 'vmess://without-json', json: undefined },
+      client: { ...client, protocol: 'vmess', protocols: ['vmess'], vmess: { enabled: true, revoked: false } },
+      language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr', jsonUrl: '/json', copiedVless: false, copiedHysteria: false, copiedVmess: false,
+    } })
+
+    expect((wrapper.get('textarea').element as HTMLTextAreaElement).value).toBe('vmess://without-json')
+    expect(wrapper.find('a.download-link').exists()).toBe(false)
+  })
+
   it('shows the Shadowsocks URI, QR, and JSON export', async () => {
     const wrapper = mount(ProfileDeliveryModal, { props: {
       profile: { clientId: client.id, protocol: 'shadowsocks', ssUri: 'ss://encoded#tablet', json: { server: 'vpn.test' } },
@@ -83,5 +94,46 @@ describe('ProfileDeliveryModal', () => {
     expect(wrapper.find('img').attributes('src')).toBe('/awg-qr')
     expect(wrapper.get('a.download-link').attributes('href')).toBe('/awg-profile.conf')
     expect(wrapper.text()).not.toContain('JSON file')
+  })
+
+  it('uses the VLESS fallback label and pending state when the client has disappeared', async () => {
+    const wrapper = mount(ProfileDeliveryModal, { props: {
+      profile: { clientId: client.id, protocol: 'vless', uri: 'vless://id', json: {} },
+      client: undefined, language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr', jsonUrl: '/json',
+      copiedVless: false, copiedHysteria: false, copiedVmess: false,
+    } })
+
+    expect(wrapper.text()).toContain('VLESS + REALITY')
+    expect(wrapper.text()).toContain('Not connected yet')
+    expect(wrapper.text()).toContain('Profile for')
+    expect(wrapper.find('a.download-link').exists()).toBe(true)
+    await wrapper.get('.modal-backdrop').trigger('click.self')
+    expect(wrapper.emitted('close')).toHaveLength(1)
+  })
+
+  it('shows the Trojan profile with its online client state and copy action', async () => {
+    const wrapper = mount(ProfileDeliveryModal, { props: {
+      profile: { clientId: client.id, protocol: 'trojan', trojanUri: 'trojan://secret@vpn.test:443', json: {} },
+      client: { ...client, online: true }, language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr',
+      trojanQrUrl: '/trojan-qr', jsonUrl: '/json', copiedVless: false, copiedHysteria: false, copiedVmess: false,
+    } })
+
+    expect(wrapper.text()).toContain('Trojan profile')
+    expect(wrapper.text()).toContain('Device is connected now')
+    expect(wrapper.find('img').attributes('src')).toBe('/trojan-qr')
+    expect(wrapper.find('a.download-link').attributes('href')).toBe('/json')
+    await wrapper.findAll('button').find(button => button.text().includes('Copy Trojan link'))?.trigger('click')
+    expect(wrapper.emitted('copyTrojan')).toHaveLength(1)
+  })
+
+  it('does not offer JSON export for a legacy profile without embedded JSON', () => {
+    const wrapper = mount(ProfileDeliveryModal, { props: {
+      profile: { clientId: client.id, protocol: 'legacy_dual', uri: 'vless://legacy' },
+      client: { ...client, protocol: 'legacy_dual', protocols: ['vless', 'hysteria2'] },
+      language: 'en', vlessQrUrl: '/vless-qr', hysteriaQrUrl: '/hysteria-qr', vmessQrUrl: '/vmess-qr', jsonUrl: '/json',
+      copiedVless: false, copiedHysteria: false, copiedVmess: false,
+    } })
+
+    expect(wrapper.find('a.download-link').exists()).toBe(false)
   })
 })

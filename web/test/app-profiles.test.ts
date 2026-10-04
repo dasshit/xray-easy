@@ -233,11 +233,17 @@ describe('profile delivery', () => {
     const { wrapper } = await mountApp(defaultHandler({ authenticated: true, clients: [sampleClient] }))
     await findButton(wrapper, 'Profile').trigger('click')
     await flushPromises()
+    vi.useFakeTimers()
     await wrapper.get('.profile-modal .copy-button').trigger('click')
     await flushPromises()
     expect(navigator.clipboard.writeText).toHaveBeenCalledWith(`vless://${sampleClient.id}@vpn.example.com:443?security=reality#phone`)
     expect(wrapper.text()).toContain('Copied')
     expect(wrapper.get('[role="status"]').text()).toContain('Profile link copied')
+    await vi.advanceTimersByTimeAsync(2200)
+    expect(wrapper.get('.profile-modal .copy-button').text()).not.toContain('Copied')
+    await vi.advanceTimersByTimeAsync(1300)
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
+    vi.useRealTimers()
   })
 
   it('shows an error if clipboard access fails', async () => {

@@ -41,4 +41,15 @@ describe('ExpirySelector', () => {
     expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBeUndefined()
     expect(wrapper.emitted('validChange')?.at(-1)?.[0]).toBe(true)
   })
+
+  it('chooses a default day when custom expiry is selected without a date', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-01T12:00:00Z'))
+    const wrapper = mount(ExpirySelector, { props: { language: 'en' } })
+    await wrapper.get('[data-testid="expiry-preset"]').setValue('custom')
+
+    expect(wrapper.find('[data-testid="expiry-custom"]').exists()).toBe(true)
+    expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBe('2026-10-02T12:00:00.000Z')
+    expect(wrapper.emitted('validChange')?.at(-1)?.[0]).toBe(true)
+  })
 })

@@ -4,6 +4,8 @@ import type { HysteriaCertificateInfo, HysteriaSettings, HysteriaSettingsCommand
 import type { XrayEasyGateway } from '../application/ports/xrayEasyGateway'
 import { translations } from './i18n/messages'
 import type { UILanguage } from './i18n'
+import { requireValue } from '../application/requireValue'
+import { formatCertificateExpiry, selectedCertificateFile } from './hysteriaCertificate'
 
 type PendingHysteriaChange = Extract<HysteriaSettingsPreview, { changed: true }> & { confirmation: string }
 
@@ -62,9 +64,7 @@ async function loadSettings(): Promise<void> {
  * @param event - The file input change event.
  */
 function selectCertificateFile(field: 'fullchain' | 'privateKey', event: Event): void {
-  const target = event.target
-  if (!(target instanceof HTMLInputElement)) return
-  const file = target.files?.item(0) ?? null
+  const file = selectedCertificateFile(event.currentTarget)
   if (field === 'fullchain') fullchainFile.value = file
   else privateKeyFile.value = file
 }
@@ -73,11 +73,14 @@ function selectCertificateFile(field: 'fullchain' | 'privateKey', event: Event):
  * Import a trusted PEM chain and its matching key as an immutable certificate version.
  */
 async function uploadCertificate(): Promise<void> {
-  if (!fullchainFile.value || !privateKeyFile.value) return
   const serverName = form.value.tlsServerName.trim() || form.value.host.trim()
   busy.value = true
   try {
-    const result = await props.api.hysteria.uploadCertificate(fullchainFile.value, privateKeyFile.value, serverName)
+    const result = await props.api.hysteria.uploadCertificate(
+      requireValue(fullchainFile.value, 'Certificate chain file'),
+      requireValue(privateKeyFile.value, 'Certificate private key'),
+      serverName,
+    )
     form.value.certificateId = result.certificateId
     stagedCertificate.value = result.certificate
     fullchainFile.value = null
@@ -131,10 +134,10 @@ async function reviewSettings(): Promise<void> {
  * Apply the reviewed inbound update, then refresh the displayed status.
  */
 async function applySettings(): Promise<void> {
-  if (!pending.value) return
+  const staged = requireValue(pending.value, 'Hysteria settings preview')
   busy.value = true
   try {
-    await props.api.hysteria.apply(pending.value.changeId, pending.value.confirmation)
+    await props.api.hysteria.apply(staged.changeId, staged.confirmation)
     pending.value = null
     await loadSettings()
     emit('saved')
@@ -159,16 +162,6 @@ function stateLabel(): string {
     case 'error': return text.value.hysteriaStateError
     default: return text.value.hysteriaStateOff
   }
-}
-
-/**
- * Format the active certificate expiry using the selected interface language.
- * @param certificate - The certificate whose expiration is displayed.
- * @returns A localized date or an em dash when no certificate exists.
- */
-function certificateExpiry(certificate: HysteriaCertificateInfo | null | undefined): string {
-  if (!certificate) return '—'
-  return new Intl.DateTimeFormat(props.language, { dateStyle: 'medium' }).format(new Date(certificate.notAfter))
 }
 
 onMounted(() => { void loadSettings() })
@@ -213,14 +206,14 @@ onMounted(() => { void loadSettings() })
         <label>{{ text.hysteriaFullchain }}<input type="file" accept=".pem,.crt,application/x-pem-file" @change="selectCertificateFile('fullchain', $event)" /><small v-if="fullchainFile" class="hint">{{ fullchainFile.name }}</small></label>
         <label>{{ text.hysteriaPrivateKey }}<input type="file" accept=".pem,.key,application/x-pem-file" @change="selectCertificateFile('privateKey', $event)" /><small v-if="privateKeyFile" class="hint">{{ privateKeyFile.name }}</small></label>
       </div>
-      <button class="secondary hysteria-action" :disabled="busy || !fullchainFile || !privateKeyFile || !form.tlsServerName.trim()" @click="uploadCertificate">{{ text.hysteriaUploadCertificate }}</button>
+      <button class="secondary hysteria-action" :disabled="busy || !fullchainFile || !privateKeyFile || !(form.tlsServerName.trim() || form.host.trim())" @click="uploadCertificate">{{ text.hysteriaUploadCertificate }}</button>
       <p class="hint">{{ text.hysteriaCertificateTrustHelp }}</p>
     </template>
 
     <div v-if="stagedCertificate || status?.certificate" class="hysteria-certificate-meta">
       <strong>{{ text.hysteriaCertificateReady }}</strong>
       <span>{{ (stagedCertificate ?? status?.certificate)?.subject }}</span>
-      <span>{{ text.hysteriaCertificateExpires }}: {{ certificateExpiry(stagedCertificate ?? status?.certificate) }}</span>
+      <span>{{ text.hysteriaCertificateExpires }}: {{ formatCertificateExpiry(stagedCertificate ?? status?.certificate, language) }}</span>
       <span class="hysteria-fingerprint">SHA-256: {{ (stagedCertificate ?? status?.certificate)?.fingerprint }}</span>
     </div>
 
