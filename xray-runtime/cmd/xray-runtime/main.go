@@ -201,9 +201,11 @@ func validateCandidate(path string) error {
 
 // runtimeLoggingInterceptor runs the requested operation.
 func runtimeLoggingInterceptor(ctx context.Context, request any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	originalContext := ctx
 	ctx, requestID, traceErr := interaction.EnsureIncoming(ctx)
 	if traceErr != nil {
 		slog.Warn("could not create runtime request ID", "service", "xray-runtime")
+		ctx = originalContext
 	}
 	started := time.Now()
 	response, err := handler(ctx, request)

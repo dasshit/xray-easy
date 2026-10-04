@@ -102,6 +102,24 @@ func TestEmbeddedXrayCallReportsLocalAuthenticationAndResponseFailures(t *testin
 	})
 }
 
+func TestEmbeddedSnapshotDigestAndTimestampHelpers(t *testing.T) {
+	digest := snapshotDigest([]byte("active configuration"))
+	if digest == "" || digest != snapshotDigest([]byte("active configuration")) {
+		t.Fatalf("snapshot digest is empty or unstable: %q", digest)
+	}
+	if value, err := embeddedTimestamp("optional", nil); err != nil || !value.IsZero() {
+		t.Fatalf("nil embedded timestamp = %v, %v", value, err)
+	}
+	want := time.Date(2026, time.October, 4, 0, 0, 0, 0, time.UTC)
+	if value, err := embeddedTimestamp("sampled_at", timestamppb.New(want)); err != nil || !value.Equal(want) {
+		t.Fatalf("valid embedded timestamp = %v, %v", value, err)
+	}
+	invalid := &timestamppb.Timestamp{Seconds: 1<<63 - 1}
+	if _, err := embeddedTimestamp("sampled_at", invalid); err == nil || !strings.Contains(err.Error(), "decode embedded Xray sampled_at") {
+		t.Fatalf("invalid embedded timestamp error = %v", err)
+	}
+}
+
 type embeddedRuntimeStub struct {
 	xrayruntimev1.UnimplementedRuntimeServer
 	failMethod          string
@@ -123,6 +141,15 @@ type embeddedRuntimeStub struct {
 	seenLogLevel        string
 	seenDisconnect      *xrayruntimev1.DisconnectLeaseRequest
 	invalidDisconnect   bool
+}
+
+type telemetryResponseRuntimeClient struct {
+	xrayruntimev1.RuntimeClient
+	response *xrayruntimev1.TelemetryResponse
+}
+
+func (c telemetryResponseRuntimeClient) GetTelemetry(context.Context, *xrayruntimev1.EmptyRequest, ...grpc.CallOption) (*xrayruntimev1.TelemetryResponse, error) {
+	return c.response, nil
 }
 
 func (s *embeddedRuntimeStub) fail(method string) error {
@@ -654,6 +681,27 @@ func TestEmbeddedXraySnapshotReaderRestrictsMountedFiles(t *testing.T) {
 	}
 }
 
+func TestReadSnapshotFileWrapsStatAndReadFailures(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "candidate.json")
+	if err := os.WriteFile(path, []byte(`{"ok":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	statFailure := errors.New("injected stat failure")
+	if _, err := readSnapshotFile(path, snapshotFileOperations{
+		stat:     func(string) (os.FileInfo, error) { return nil, statFailure },
+		readFile: os.ReadFile,
+	}); !errors.Is(err, statFailure) || !strings.Contains(err.Error(), "stat embedded Xray configuration snapshot") {
+		t.Fatalf("readSnapshotFile stat error = %v", err)
+	}
+	readFailure := errors.New("injected read failure")
+	if _, err := readSnapshotFile(path, snapshotFileOperations{
+		stat:     os.Stat,
+		readFile: func(string) ([]byte, error) { return nil, readFailure },
+	}); !errors.Is(err, readFailure) || !strings.Contains(err.Error(), "read embedded Xray configuration snapshot") {
+		t.Fatalf("readSnapshotFile read error = %v", err)
+	}
+}
+
 func TestDialEmbeddedXrayValidatesConfiguration(t *testing.T) {
 	for _, address := range []string{"invalid", "localhost:0", "localhost:65536", "localhost:port"} {
 		if _, err := DialEmbeddedXray(address, "token", "/etc/xray"); err == nil {
@@ -673,6 +721,9 @@ func TestDialEmbeddedXrayValidatesConfiguration(t *testing.T) {
 	if err := client.Close(); err != nil {
 		t.Fatalf("close gRPC client: %v", err)
 	}
+	if _, err := DialEmbeddedXray("bad%:1234", "token", "/etc/xray"); err == nil || !strings.Contains(err.Error(), "create embedded Xray gRPC connection") {
+		t.Fatalf("DialEmbeddedXray malformed target error = %v", err)
+	}
 	client = &EmbeddedXrayClient{TokenFile: filepath.Join(t.TempDir(), "missing")}
 	if _, err := client.readToken(); err == nil {
 		t.Fatal("missing runtime token was accepted")
@@ -688,6 +739,19 @@ func TestDialEmbeddedXrayValidatesConfiguration(t *testing.T) {
 	client.TokenFile = ""
 	if _, err := client.readToken(); err == nil {
 		t.Fatal("empty runtime token path was accepted")
+	}
+}
+
+func TestEmbeddedXrayPollRejectsNilSourceObservation(t *testing.T) {
+	client, _, _ := newEmbeddedClientTest(t)
+	client.rpc = telemetryResponseRuntimeClient{
+		RuntimeClient: client.rpc,
+		response: &xrayruntimev1.TelemetryResponse{Users: []*xrayruntimev1.UserTelemetry{{
+			Email: "device-1@xray-easy", LastSeen: timestamppb.Now(), SourceIps: []*xrayruntimev1.IPObservation{nil},
+		}}},
+	}
+	if _, err := client.Poll(context.Background()); err == nil || !strings.Contains(err.Error(), "source IP 0 for user 0 is invalid") {
+		t.Fatalf("Poll() accepted nil source observation: %v", err)
 	}
 }
 

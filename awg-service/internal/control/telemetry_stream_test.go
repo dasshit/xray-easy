@@ -22,9 +22,11 @@ import (
 )
 
 type telemetryTestDevice struct {
-	mu          sync.Mutex
-	snapshot    string
-	snapshotErr error
+	mu            sync.Mutex
+	snapshot      string
+	snapshots     []string
+	snapshotErr   error
+	snapshotCalls int
 }
 
 type telemetryTestFactory struct{ device Device }
@@ -37,11 +39,31 @@ func (d *telemetryTestDevice) Close()           {}
 func (d *telemetryTestDevice) Snapshot() (string, error) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	d.snapshotCalls++
+	if len(d.snapshots) > 0 {
+		index := d.snapshotCalls - 1
+		if index >= len(d.snapshots) {
+			index = len(d.snapshots) - 1
+		}
+		return d.snapshots[index], d.snapshotErr
+	}
 	return d.snapshot, d.snapshotErr
+}
+func (d *telemetryTestDevice) snapshotCallCount() int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.snapshotCalls
 }
 func (d *telemetryTestDevice) setSnapshot(value string) {
 	d.mu.Lock()
 	d.snapshot = value
+	d.snapshots = nil
+	d.snapshotErr = nil
+	d.mu.Unlock()
+}
+func (d *telemetryTestDevice) setSnapshotSequence(values ...string) {
+	d.mu.Lock()
+	d.snapshots = append([]string(nil), values...)
 	d.snapshotErr = nil
 	d.mu.Unlock()
 }

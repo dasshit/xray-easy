@@ -131,3 +131,41 @@ func TestWatchTelemetryMarksUserOnlineAfterObservedCounterIncrease(t *testing.T)
 		t.Fatal("runtime stream did not stop after cancellation")
 	}
 }
+
+func TestWatchTelemetryClampsSampleIntervalBounds(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		interval uint32
+	}{{name: "below minimum", interval: 1}, {name: "above maximum", interval: 6000}} {
+		t.Run(test.name, func(t *testing.T) {
+			configuration := []byte(`{"stats":{},"inbounds":[]}`)
+			service, err := NewService(&fakeLoader{engine: &fakeEngine{stats: true}}, "test", configuration, 1)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			stream := &captureTelemetryServerStream{ctx: ctx, updates: make(chan *xrayruntimev1.TelemetryResponse, 1)}
+			done := make(chan error, 1)
+			go func() {
+				done <- service.WatchTelemetry(&xrayruntimev1.WatchTelemetryRequest{SampleIntervalMs: test.interval}, stream)
+			}()
+			select {
+			case update := <-stream.updates:
+				if !update.GetFullSnapshot() {
+					t.Fatalf("initial snapshot = %+v", update)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("runtime did not send the initial telemetry snapshot")
+			}
+			cancel()
+			select {
+			case err := <-done:
+				if err != context.Canceled {
+					t.Fatalf("WatchTelemetry() cancellation = %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("runtime telemetry stream did not stop after cancellation")
+			}
+		})
+	}
+}

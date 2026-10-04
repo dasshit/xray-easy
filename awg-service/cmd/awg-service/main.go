@@ -58,6 +58,9 @@ type controlRPC interface {
 // dialControlRPC is an internal package variable.
 var dialControlRPC = func() (controlRPC, error) { return dialControl() }
 
+// exitProcess is the process termination function used by main.
+var exitProcess = os.Exit
+
 // openControlManager is an internal package variable.
 var openControlManager = control.Open
 
@@ -69,7 +72,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := run(os.Args[1:], os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		exitProcess(1)
 	}
 }
 
@@ -572,7 +575,7 @@ func splitNonEmpty(value string) []string {
 	return items
 }
 
-// signalNotify performs the operation represented by its name.
-func signalNotify(channel chan<- os.Signal) {
+// signalNotify registers the process shutdown signals.
+var signalNotify = func(channel chan<- os.Signal) {
 	signal.Notify(channel, syscall.SIGINT, syscall.SIGTERM)
 }

@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -37,6 +38,38 @@ func TestMainRunsKeygenCommand(t *testing.T) {
 	}
 	if keypair["privateKey"] == "" || keypair["publicKey"] == "" {
 		t.Fatalf("keygen output is missing keys: %v", keypair)
+	}
+}
+
+func TestMainReportsCommandErrorAndRequestsExit(t *testing.T) {
+	previousArgs, previousStderr, previousExit := os.Args, os.Stderr, exitProcess
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var exitCode int
+	exitProcess = func(code int) { exitCode = code }
+	os.Args = []string{"awg-service", "invalid-command"}
+	os.Stderr = writer
+	t.Cleanup(func() {
+		os.Args, os.Stderr, exitProcess = previousArgs, previousStderr, previousExit
+		_ = reader.Close()
+		_ = writer.Close()
+	})
+
+	main()
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exitCode != 1 {
+		t.Fatalf("exit code = %d, want 1", exitCode)
+	}
+	if !strings.Contains(string(output), `unknown command "invalid-command"`) {
+		t.Fatalf("stderr = %q, want command error", output)
 	}
 }
 

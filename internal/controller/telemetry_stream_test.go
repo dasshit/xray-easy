@@ -132,6 +132,46 @@ func (s *terminatingAWGTelemetryStream) Recv() (*awgapi.PeerStatsUpdate, error) 
 	return nil, errors.New("temporary stream receive failure")
 }
 
+type retryAfterXrayStreamEnd struct {
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (r *retryAfterXrayStreamEnd) WatchTelemetry(context.Context, time.Duration) (xrayruntimev1.Runtime_WatchTelemetryClient, error) {
+	r.calls++
+	if r.calls == 1 {
+		return &endedXrayTelemetryStream{}, nil
+	}
+	r.cancel()
+	return nil, errors.New("stream reopen failed")
+}
+
+type endedXrayTelemetryStream struct {
+	xrayruntimev1.Runtime_WatchTelemetryClient
+}
+
+func (endedXrayTelemetryStream) Recv() (*xrayruntimev1.TelemetryResponse, error) { return nil, io.EOF }
+
+type retryAfterAWGStreamEnd struct {
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (r *retryAfterAWGStreamEnd) WatchPeerStats(context.Context, time.Duration) (awgapi.Control_WatchPeerStatsClient, error) {
+	r.calls++
+	if r.calls == 1 {
+		return &endedAWGTelemetryStream{}, nil
+	}
+	r.cancel()
+	return nil, errors.New("stream reopen failed")
+}
+
+type endedAWGTelemetryStream struct {
+	awgapi.Control_WatchPeerStatsClient
+}
+
+func (endedAWGTelemetryStream) Recv() (*awgapi.PeerStatsUpdate, error) { return nil, io.EOF }
+
 func (a *oneSnapshotAWG) WatchPeerStats(ctx context.Context, _ time.Duration) (awgapi.Control_WatchPeerStatsClient, error) {
 	a.ctx <- ctx
 	return &oneSnapshotAWGStream{ctx: ctx, update: a.update}, nil
@@ -230,6 +270,36 @@ func TestTelemetryPumpsRetryOpenFailuresAndReportReceiveFailures(t *testing.T) {
 		default:
 			t.Errorf("%s telemetry stream failure was not reported", protocol)
 		}
+	}
+}
+
+func TestTelemetryPumpsRetryAfterEstablishedStreamsEnd(t *testing.T) {
+	xrayCtx, cancelXray := context.WithCancel(context.Background())
+	defer cancelXray()
+	awgCtx, cancelAWG := context.WithCancel(context.Background())
+	defer cancelAWG()
+	xray := &retryAfterXrayStreamEnd{cancel: cancelXray}
+	awg := &retryAfterAWGStreamEnd{cancel: cancelAWG}
+	done := make(chan struct{}, 2)
+	go func() {
+		pumpXrayTelemetry(xrayCtx, xray, time.Second, make(chan telemetrySourceEvent, 1))
+		done <- struct{}{}
+	}()
+	go func() {
+		pumpAWGTelemetry(awgCtx, awg, time.Second, make(chan telemetrySourceEvent, 1))
+		done <- struct{}{}
+	}()
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(4 * time.Second):
+			cancelXray()
+			cancelAWG()
+			t.Fatal("telemetry pumps did not retry an ended stream and then stop")
+		}
+	}
+	if xray.calls != 2 || awg.calls != 2 {
+		t.Fatalf("stream reopen attempts = xray %d, AWG %d; want two per protocol", xray.calls, awg.calls)
 	}
 }
 

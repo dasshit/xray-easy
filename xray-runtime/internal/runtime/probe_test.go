@@ -94,6 +94,13 @@ func TestProbeRealityTargetWithValidatesAndUsesLiteralAddress(t *testing.T) {
 	}
 }
 
+func TestProbeRealityTargetRejectsMalformedTargetBeforeNetworkAccess(t *testing.T) {
+	err := probeRealityTarget(context.Background(), "not-a-host-port", "")
+	if !errors.Is(err, errInvalidProbeTarget) {
+		t.Fatalf("probeRealityTarget() error = %v, want invalid target", err)
+	}
+}
+
 func TestProbeRealityTargetWithHandlesResolutionAndAddressFailures(t *testing.T) {
 	lookupError := errors.New("DNS unavailable")
 	if err := probeRealityTargetWith(context.Background(), "front.example:443", "", func(context.Context, string, string) ([]net.IP, error) { return nil, lookupError }, nil); !errors.Is(err, lookupError) {

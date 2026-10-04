@@ -581,14 +581,25 @@ func (c *EmbeddedXrayClient) readSnapshot(path string) ([]byte, error) {
 	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
 		return nil, errors.New("Xray configuration snapshot is outside the mounted config directory")
 	}
-	info, err := os.Stat(resolved)
+	return readSnapshotFile(resolved, snapshotFileOperations{stat: os.Stat, readFile: os.ReadFile})
+}
+
+// snapshotFileOperations provides filesystem reads used after snapshot path validation.
+type snapshotFileOperations struct {
+	stat     func(string) (os.FileInfo, error)
+	readFile func(string) ([]byte, error)
+}
+
+// readSnapshotFile validates and reads an already-resolved snapshot path.
+func readSnapshotFile(path string, files snapshotFileOperations) ([]byte, error) {
+	info, err := files.stat(path)
 	if err != nil {
 		return nil, fmt.Errorf("stat embedded Xray configuration snapshot: %w", err)
 	}
 	if !info.Mode().IsRegular() || info.Size() < 1 || info.Size() > maxRuntimeConfigSnapshot {
 		return nil, errors.New("Xray configuration snapshot is empty or exceeds the size limit")
 	}
-	data, err := os.ReadFile(resolved)
+	data, err := files.readFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read embedded Xray configuration snapshot: %w", err)
 	}

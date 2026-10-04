@@ -42,6 +42,30 @@ func TestEnsureIncomingTraceReturnsRandomSourceFailure(t *testing.T) {
 	}
 }
 
+func TestLoggingInterceptorsRejectUnavailableRequestIDEntropy(t *testing.T) {
+	original := cryptorand.Reader
+	cryptorand.Reader = unavailableRandomSource{}
+	t.Cleanup(func() { cryptorand.Reader = original })
+
+	called := false
+	response, err := LoggingInterceptor()(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/test/Unary"}, func(context.Context, any) (any, error) {
+		called = true
+		return nil, nil
+	})
+	if status.Code(err) != codes.Internal || response != nil || called {
+		t.Fatalf("unary logging interceptor = (%v, %v), handler called=%t; want internal error before handler", response, err, called)
+	}
+
+	stream := &capturePeerStatsStream{ctx: context.Background(), updates: make(chan *awgapi.PeerStatsUpdate, 1)}
+	err = LoggingStreamInterceptor()(nil, stream, &grpc.StreamServerInfo{FullMethod: "/test/Stream"}, func(any, grpc.ServerStream) error {
+		called = true
+		return nil
+	})
+	if status.Code(err) != codes.Internal || called {
+		t.Fatalf("stream logging interceptor = %v, handler called=%t; want internal error before handler", err, called)
+	}
+}
+
 func TestLoggingInterceptorCorrelatesWithoutLoggingPayloads(t *testing.T) {
 	previous := slog.Default()
 	var output bytes.Buffer

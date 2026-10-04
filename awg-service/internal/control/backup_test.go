@@ -79,6 +79,54 @@ func TestExtractAWGBackupRejectsUnsafeArchives(t *testing.T) {
 	}
 }
 
+func TestExtractAWGBackupRejectsEmptyMalformedAndOversizedArchives(t *testing.T) {
+	t.Run("empty state", func(t *testing.T) {
+		_, err := extractAWGBackup(t.TempDir(), makeTestAWGArchive(t, archiveItem{name: "state.json"}))
+		if err == nil || !strings.Contains(err.Error(), "no state.json") {
+			t.Fatalf("empty state archive error = %v", err)
+		}
+	})
+
+	t.Run("malformed tar header", func(t *testing.T) {
+		var compressed bytes.Buffer
+		gz := gzip.NewWriter(&compressed)
+		if _, err := gz.Write(bytes.Repeat([]byte("x"), 512)); err != nil {
+			t.Fatal(err)
+		}
+		if err := gz.Close(); err != nil {
+			t.Fatal(err)
+		}
+		_, err := extractAWGBackup(t.TempDir(), compressed.Bytes())
+		if err == nil || !strings.Contains(err.Error(), "read archive") {
+			t.Fatalf("malformed tar error = %v", err)
+		}
+	})
+
+	t.Run("unexpected profile name", func(t *testing.T) {
+		archive := makeTestAWGArchive(t, archiveItem{name: "state.json", data: "state"}, archiveItem{name: "profiles/.conf", data: "profile"})
+		if _, err := extractAWGBackup(t.TempDir(), archive); err == nil || !strings.Contains(err.Error(), "unexpected file") {
+			t.Fatalf("invalid profile name error = %v", err)
+		}
+	})
+
+	t.Run("single entry exceeds expanded size limit", func(t *testing.T) {
+		archive := makeTestAWGArchive(t, archiveItem{name: "state.json", data: strings.Repeat("x", maxAWGBackupSize+1)})
+		if _, err := extractAWGBackup(t.TempDir(), archive); err == nil || !strings.Contains(err.Error(), "unsupported entry") {
+			t.Fatalf("oversized entry error = %v", err)
+		}
+	})
+
+	t.Run("combined expanded entries exceed size limit", func(t *testing.T) {
+		archive := makeTestAWGArchive(t,
+			archiveItem{name: "state.json", data: strings.Repeat("s", 9<<20)},
+			archiveItem{name: "profiles/phone.conf", data: strings.Repeat("p", 9<<20)},
+		)
+		if _, err := extractAWGBackup(t.TempDir(), archive); err == nil || !strings.Contains(err.Error(), "expanded size limit") {
+			t.Fatalf("expanded archive size error = %v", err)
+		}
+	})
+}
+
 func TestExtractAWGBackupWritesOnlyValidStateAndProfiles(t *testing.T) {
 	root := t.TempDir()
 	archive := makeTestAWGArchive(t,

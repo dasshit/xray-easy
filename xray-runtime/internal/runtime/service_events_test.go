@@ -173,3 +173,86 @@ func TestWatchEventsReturnsReadyAndEventSendFailures(t *testing.T) {
 		t.Fatalf("event subscribers leaked after send failure: %d", len(service.eventSubscribers))
 	}
 }
+
+func TestWatchEventsStopsOnClosedSubscriberChannelAndClampsHeartbeat(t *testing.T) {
+	service, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "test", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &captureRuntimeEventStream{ctx: ctx, events: make(chan *xrayruntimev1.RuntimeEvent, 2)}
+	done := make(chan error, 1)
+	go func() {
+		done <- service.WatchEvents(&xrayruntimev1.WatchEventsRequest{HeartbeatIntervalMs: 120_000}, stream)
+	}()
+	select {
+	case ready := <-stream.events:
+		if ready.GetEvent() != "event_stream_ready" {
+			t.Fatalf("event stream ready message = %+v", ready)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event stream did not become ready")
+	}
+	service.eventMu.Lock()
+	var subscriber chan *xrayruntimev1.RuntimeEvent
+	for _, candidate := range service.eventSubscribers {
+		subscriber = candidate
+		break
+	}
+	if subscriber == nil {
+		service.eventMu.Unlock()
+		t.Fatal("event stream did not register a subscriber")
+	}
+	subscriber <- nil
+	service.eventMu.Unlock()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WatchEvents() after a closed subscriber channel = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("event stream did not stop after receiving a nil event")
+	}
+}
+
+func TestMarkFatalDropsRepeatedSignalAndPreservesFailedState(t *testing.T) {
+	service, err := NewService(&fakeLoader{engine: &fakeEngine{}}, "test", nil, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.markFatal(errors.New("first fatal error"))
+	service.markFatal(errors.New("repeated fatal error"))
+	if service.state != xrayruntimev1.RuntimeState_RUNTIME_STATE_FAILED {
+		t.Fatalf("fatal state = %v", service.state)
+	}
+	select {
+	case err := <-service.Fatal():
+		if err == nil || err.Error() != "first fatal error" {
+			t.Fatalf("first fatal signal = %v", err)
+		}
+	default:
+		t.Fatal("fatal signal was not queued")
+	}
+}
+
+func TestFirstSourceIPSkipsNilAndBlankAddresses(t *testing.T) {
+	got := firstSourceIP([]*xrayruntimev1.IPObservation{
+		nil,
+		{Address: " "},
+		{Address: "192.0.2.99"},
+		{Address: "198.51.100.1"},
+	})
+	if got != "192.0.2.99" {
+		t.Fatalf("firstSourceIP() = %q", got)
+	}
+	if got := firstSourceIP([]*xrayruntimev1.IPObservation{nil, {Address: " "}}); got != "" {
+		t.Fatalf("firstSourceIP() with no usable addresses = %q", got)
+	}
+}
+
+func TestProtocolFromNameRejectsUnsupportedRuntimeProtocol(t *testing.T) {
+	if protocol, ok := protocolFromName("unknown"); ok || protocol != xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED {
+		t.Fatalf("protocolFromName(unknown) = (%v, %t), want unspecified and false", protocol, ok)
+	}
+}

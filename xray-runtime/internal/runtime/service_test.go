@@ -210,6 +210,20 @@ func TestNewServiceNoConfigAndCloseActive(t *testing.T) {
 	}
 }
 
+func TestNewServiceDefaultsVersionAndCoreLoader(t *testing.T) {
+	service, err := NewService(nil, " ", nil, 0)
+	if err != nil {
+		t.Fatalf("NewService() without a loader or configuration: %v", err)
+	}
+	defer service.Close()
+	if service.serviceVersion != "dev" {
+		t.Fatalf("default service version = %q", service.serviceVersion)
+	}
+	if _, ok := service.loader.(coreLoader); !ok {
+		t.Fatalf("default loader type = %T, want coreLoader", service.loader)
+	}
+}
+
 func TestNewServiceReturnsLoadAndStartFailures(t *testing.T) {
 	loader := &fakeLoader{err: errors.New("bad config")}
 	if _, err := NewService(loader, "v", []byte("{}"), 1); err == nil || !strings.Contains(err.Error(), "load active") {

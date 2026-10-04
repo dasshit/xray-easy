@@ -103,7 +103,8 @@ func run(args []string) error {
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- runLeaseHealthServer(server) }()
+	serveHealth := runLeaseHealthServer
+	go func() { serverErr <- serveHealth(server) }()
 	workerErr := make(chan error, 1)
 	go func() { workerErr <- worker.Run(ctx) }()
 	slog.Info("lease service started", "service", "xray-lease-service", "health_address", server.Addr, "max_active_leases", config.MaxActiveLeases, "grace_period", config.GracePeriod.String())

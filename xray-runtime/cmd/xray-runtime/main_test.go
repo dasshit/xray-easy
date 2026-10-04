@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"log/slog"
 	"net"
@@ -22,6 +23,69 @@ import (
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 	runtime "xray-easy/xray-runtime/internal/runtime"
 )
+
+// runtimeEntropyFailure provides deterministic entropy errors to interceptor tests.
+type runtimeEntropyFailure struct{}
+
+// Read reports a test-controlled entropy failure.
+func (runtimeEntropyFailure) Read([]byte) (int, error) {
+	return 0, errors.New("runtime entropy unavailable")
+}
+
+func TestRunDispatchesDefaultServeCommandAndHealthClientFactory(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "missing-token")
+	if err := run([]string{"--listen", "127.0.0.1:0", "--token-file", tokenPath, "--config", filepath.Join(t.TempDir(), "missing-config")}); err == nil || !strings.Contains(err.Error(), "authentication token") {
+		t.Fatalf("run() default serve command error = %v", err)
+	}
+	connection, err := newHealthConnection("passthrough:///unused")
+	if err != nil {
+		t.Fatalf("newHealthConnection() = %v", err)
+	}
+	if err := connection.Close(); err != nil {
+		t.Fatalf("close default health client: %v", err)
+	}
+}
+
+func TestRuntimeInterceptorsHandleRequestIDEntropyFailure(t *testing.T) {
+	previous := cryptorand.Reader
+	cryptorand.Reader = runtimeEntropyFailure{}
+	t.Cleanup(func() { cryptorand.Reader = previous })
+	stream := &runtimeLoggingTestStream{ctx: context.Background()}
+	if err := runtimeStreamLoggingInterceptor(nil, stream, &grpc.StreamServerInfo{FullMethod: "/runtime/Watch"}, func(_ any, wrapped grpc.ServerStream) error {
+		if wrapped.Context() == nil {
+			t.Fatal("stream interceptor passed a nil context")
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("runtime stream interceptor error = %v", err)
+	}
+	if _, err := runtimeLoggingInterceptor(context.Background(), nil, &grpc.UnaryServerInfo{FullMethod: "/runtime/Call"}, func(ctx context.Context, _ any) (any, error) {
+		if ctx == nil {
+			t.Fatal("unary interceptor passed a nil context")
+		}
+		return nil, nil
+	}); err != nil {
+		t.Fatalf("runtime unary interceptor error = %v", err)
+	}
+}
+
+func TestHealthcheckReportsRequestSigningFailure(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte(strings.Repeat("t", 32)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	previousDial := newHealthConnection
+	newHealthConnection = func(string) (*grpc.ClientConn, error) {
+		return grpc.NewClient("passthrough:///unused", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	}
+	t.Cleanup(func() { newHealthConnection = previousDial })
+	previousRandom := cryptorand.Reader
+	cryptorand.Reader = runtimeEntropyFailure{}
+	t.Cleanup(func() { cryptorand.Reader = previousRandom })
+	if err := healthcheck("unused", tokenPath); err == nil || !strings.Contains(err.Error(), "runtime authentication nonce") {
+		t.Fatalf("healthcheck() signing error = %v", err)
+	}
+}
 
 func TestRunRejectsUnexpectedArguments(t *testing.T) {
 	if err := run([]string{"unexpected"}); err == nil {

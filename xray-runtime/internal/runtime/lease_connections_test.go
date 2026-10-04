@@ -14,6 +14,7 @@ import (
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/protocol"
 	"github.com/xtls/xray-core/common/session"
+	"github.com/xtls/xray-core/core"
 	"github.com/xtls/xray-core/features/outbound"
 	"github.com/xtls/xray-core/transport"
 	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
@@ -25,6 +26,46 @@ type leaseTestConnection struct {
 	closed   int
 	entered  chan struct{}
 	proceed  chan struct{}
+}
+
+func TestInstallLeaseTrackingRejectsMissingInstanceRegistryAndManager(t *testing.T) {
+	if _, err := installLeaseTracking(nil, newLeaseConnectionRegistry()); err == nil {
+		t.Fatal("lease tracking accepted a nil Xray instance")
+	}
+	if _, err := installLeaseTracking(&core.Instance{}, nil); err == nil {
+		t.Fatal("lease tracking accepted a nil registry")
+	}
+	if _, err := installLeaseTracking(&core.Instance{}, newLeaseConnectionRegistry()); err == nil || !strings.Contains(err.Error(), "outbound manager is unavailable") {
+		t.Fatalf("lease tracking without an outbound manager error = %v", err)
+	}
+}
+
+func TestLeaseRegistryNilAndFilteredQueries(t *testing.T) {
+	var nilRegistry *leaseConnectionRegistry
+	if _, ok := nilRegistry.connectionStart(leaseConnectionKey{}); ok {
+		t.Fatal("nil registry reported a connection start")
+	}
+	if got := nilRegistry.observations(xrayruntimev1.Protocol_PROTOCOL_VLESS, "profile"); got != nil {
+		t.Fatalf("nil registry observations = %#v, want nil", got)
+	}
+	nilRegistry.allowProfile(leaseProfileKey{})
+	nilRegistry.release(leaseConnectionKey{}, 1)
+
+	registry := newLeaseConnectionRegistry()
+	profile := leaseProfileKey{protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, email: "profile"}
+	key := leaseConnectionKey{protocol: profile.protocol, email: profile.email, sourceIP: netip.MustParseAddr("192.0.2.10")}
+	registry.connections[key] = map[uintptr]*leaseConnection{1: {}}
+	registry.connectedAt[key] = time.Now()
+	if got := registry.observations(xrayruntimev1.Protocol_PROTOCOL_VMESS, profile.email); len(got) != 0 {
+		t.Fatalf("other-protocol observations = %#v, want none", got)
+	}
+	if got := registry.observations(profile.protocol, profile.email); len(got) != 1 || got[0].Address != key.sourceIP.String() {
+		t.Fatalf("matching observations = %#v", got)
+	}
+	registry.connections[key] = map[uintptr]*leaseConnection{}
+	if got := registry.observations(profile.protocol, profile.email); len(got) != 0 {
+		t.Fatalf("empty-connection observations = %#v, want none", got)
+	}
 }
 
 func (c *leaseTestConnection) Close() error {

@@ -308,14 +308,18 @@ func DefaultObfuscation(masterKey []byte) map[string]string {
 
 // GenerateKeypair creates a standard base64 AmneziaWG/WireGuard key pair.
 func GenerateKeypair() (privateKey, publicKey string, err error) {
+	return generateKeypairWith(rand.Reader, curve25519.X25519)
+}
+
+func generateKeypairWith(source io.Reader, x25519 func([]byte, []byte) ([]byte, error)) (privateKey, publicKey string, err error) {
 	var private [32]byte
-	if _, err := io.ReadFull(rand.Reader, private[:]); err != nil {
+	if _, err := io.ReadFull(source, private[:]); err != nil {
 		return "", "", err
 	}
 	private[0] &= 248
 	private[31] &= 127
 	private[31] |= 64
-	public, err := curve25519.X25519(private[:], curve25519.Basepoint)
+	public, err := x25519(private[:], curve25519.Basepoint)
 	if err != nil {
 		return "", "", err
 	}
@@ -421,10 +425,6 @@ func (m *Manager) SetPeerEnabled(name string, enabled bool) (Peer, error) {
 	}
 	if index < 0 {
 		return Peer{}, ErrNotFound
-	}
-	peer := m.state.Peers[index]
-	if enabled && peer.IsExpired(time.Now().UTC()) {
-		return Peer{}, ErrPeerExpired
 	}
 	return m.setPeerEnabledLocked(index, enabled)
 }
@@ -1128,11 +1128,15 @@ func deriveEncryptionKey(masterKey []byte) []byte {
 
 // derivePublicKey performs the operation represented by its name.
 func derivePublicKey(privateKey string) ([]byte, string, error) {
+	return derivePublicKeyWith(privateKey, curve25519.X25519)
+}
+
+func derivePublicKeyWith(privateKey string, x25519 func([]byte, []byte) ([]byte, error)) ([]byte, string, error) {
 	private, err := decodeKey(privateKey)
 	if err != nil {
 		return nil, "", err
 	}
-	public, err := curve25519.X25519(private, curve25519.Basepoint)
+	public, err := x25519(private, curve25519.Basepoint)
 	if err != nil {
 		return nil, "", err
 	}

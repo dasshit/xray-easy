@@ -10,6 +10,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xtls/xray-core/core"
+	xrayruntimev1 "xray-easy/internal/xrayruntime/api/v1"
 )
 
 const validValidatorConfig = `{"log":{"loglevel":"warning"},"inbounds":[],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`
@@ -114,6 +117,59 @@ func TestEngineStartReturnsListenerBindFailure(t *testing.T) {
 	}
 }
 
+func TestEngineReplaceAbsentInboundIsIdempotent(t *testing.T) {
+	engine, err := LoadEngine([]byte(validValidatorConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+
+	changed, err := engine.ReplaceInbound(context.Background(), "missing-inbound", nil)
+	if err != nil || !changed {
+		t.Fatalf("ReplaceInbound() for absent inbound = (%t, %v), want (true, nil)", changed, err)
+	}
+}
+
+func TestEngineReportsMissingFeatureManagersAndInvalidReplacementSnapshots(t *testing.T) {
+	withoutFeatures := &Engine{instance: &core.Instance{}}
+	if _, err := withoutFeatures.userManager(context.Background(), "vless"); err == nil || !strings.Contains(err.Error(), "inbound manager is unavailable") {
+		t.Fatalf("userManager() without Xray features error = %v", err)
+	}
+	if withoutFeatures.StatsAvailable() {
+		t.Fatal("engine without a stats feature reported statistics support")
+	}
+	if _, err := withoutFeatures.GetTelemetry(context.Background(), nil); err == nil || !strings.Contains(err.Error(), "stats manager is unavailable") {
+		t.Fatalf("GetTelemetry() without Xray features error = %v", err)
+	}
+	if _, err := withoutFeatures.ReplaceInbound(context.Background(), "vless", nil); err == nil || !strings.Contains(err.Error(), "inbound manager is unavailable") {
+		t.Fatalf("ReplaceInbound() without Xray features error = %v", err)
+	}
+
+	engine, err := LoadEngine([]byte(`{"stats":{},"inbounds":[],"outbounds":[{"protocol":"freedom"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close()
+	if _, err := engine.GetTelemetry(context.Background(), map[xrayruntimev1.Protocol]string{xrayruntimev1.Protocol_PROTOCOL_VLESS: "missing"}); err == nil || !strings.Contains(err.Error(), "read configured inbound users") {
+		t.Fatalf("GetTelemetry() with an absent inbound error = %v", err)
+	}
+	if _, err := engine.ReplaceInbound(context.Background(), "vless", []byte("not-json")); err == nil {
+		t.Fatal("ReplaceInbound() accepted a malformed snapshot")
+	}
+}
+
+func TestEngineRejectsInboundWithoutUserManager(t *testing.T) {
+	configuration := []byte(`{"inbounds":[{"tag":"no-users","listen":"127.0.0.1","port":18491,"protocol":"dokodemo-door","settings":{"network":"tcp","address":"127.0.0.1","port":80}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`)
+	engine, err := LoadEngine(configuration)
+	if err != nil {
+		t.Fatalf("load non-user inbound: %v", err)
+	}
+	defer engine.Close()
+	if _, err := engine.userManager(context.Background(), "no-users"); err == nil || !strings.Contains(err.Error(), "does not manage users") {
+		t.Fatalf("userManager() for a non-user inbound error = %v", err)
+	}
+}
+
 func TestStripExternalAPIServer(t *testing.T) {
 	configuration := []byte(`{"api":{"listen":"192.0.2.123:10085"},"inbounds":[{"tag":"client-inbound"}],"outbounds":[{"protocol":"freedom"}]}`)
 	stripped, err := stripExternalAPIServer(configuration)
@@ -141,6 +197,46 @@ func TestStripExternalAPIServer(t *testing.T) {
 		if err != nil || string(unchanged) != string(malformed) {
 			t.Errorf("malformed/non-object config changed: %s error=%v", unchanged, err)
 		}
+	}
+}
+
+func TestLoadEngineLeaseTrackingForEmptyUntaggedAndAdditionalOutbounds(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		configuration string
+		wantTracking  bool
+	}{
+		{
+			name:          "no outbound handlers",
+			configuration: `{"inbounds":[],"outbounds":[]}`,
+		},
+		{
+			name:          "untagged default outbound",
+			configuration: `{"inbounds":[],"outbounds":[{"protocol":"freedom"}]}`,
+		},
+		{
+			name:          "wrap default and tagged outbounds",
+			configuration: `{"inbounds":[],"outbounds":[{"protocol":"freedom","tag":"direct"},{"protocol":"freedom","tag":"alternate"}]}`,
+			wantTracking:  true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			engine, err := LoadEngine([]byte(test.configuration))
+			if err != nil {
+				t.Fatalf("load Xray config: %v", err)
+			}
+			defer engine.Close()
+			if engine.leaseTracking != test.wantTracking {
+				t.Fatalf("lease tracking = %t, want %t", engine.leaseTracking, test.wantTracking)
+			}
+		})
+	}
+}
+
+func TestLoadEngineReturnsCoreConstructionFailure(t *testing.T) {
+	duplicateTags := []byte(`{"inbounds":[],"outbounds":[{"protocol":"freedom","tag":"duplicate"},{"protocol":"freedom","tag":"duplicate"}]}`)
+	if _, err := LoadEngine(duplicateTags); err == nil || !strings.Contains(err.Error(), "construct Xray instance") {
+		t.Fatalf("LoadEngine() error = %v, want Xray core construction failure", err)
 	}
 }
 

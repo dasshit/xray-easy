@@ -172,6 +172,12 @@ func TestClientDialAndClose(t *testing.T) {
 	if _, err := Dial("127.0.0.1:1", path); err == nil {
 		t.Fatal("Dial with empty token succeeded")
 	}
+	if err := os.WriteFile(path, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Dial("bad%:1234", path); err == nil || !strings.Contains(err.Error(), "create Controller gRPC client") {
+		t.Fatalf("Dial with malformed gRPC target error = %v", err)
+	}
 }
 
 func TestClientUnauthorizedAndMalformedTypedResponses(t *testing.T) {

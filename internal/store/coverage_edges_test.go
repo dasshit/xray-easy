@@ -28,6 +28,35 @@ func TestValidateDatabaseAllowsMissingOptionalTables(t *testing.T) {
 	}
 }
 
+func TestReadSettingsFromDatabaseDefaultsLogLevelForLegacySchema(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy-settings.db")
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = db.Exec(`CREATE TABLE settings (
+		id INTEGER PRIMARY KEY, public_host TEXT NOT NULL, public_port INTEGER NOT NULL,
+		xray_api_listen TEXT NOT NULL, internal_inbound_port INTEGER NOT NULL,
+		reality_target TEXT NOT NULL, reality_sni TEXT NOT NULL,
+		reality_private_key_enc TEXT NOT NULL, reality_public_key TEXT NOT NULL,
+		client_fingerprint TEXT NOT NULL
+	)`)
+	if err == nil {
+		_, err = db.Exec(`INSERT INTO settings VALUES(1,'vpn.example.test',443,'127.0.0.1:10085',8443,'front.example:443','front.example','encrypted','public','chrome')`)
+	}
+	closeErr := db.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
+	}
+	settings, err := ReadSettingsFromDatabase(path)
+	if err != nil || settings.LogLevel != "warning" || settings.PublicHost != "vpn.example.test" {
+		t.Fatalf("ReadSettingsFromDatabase() = %+v, %v; want legacy warning default", settings, err)
+	}
+}
+
 func TestRestoreFromSupportsProtocollessLegacyClients(t *testing.T) {
 	snapshot := makeRestoreSnapshot(t, func(db *sql.DB) error {
 		for _, column := range []string{
