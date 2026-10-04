@@ -1,0 +1,61 @@
+services:
+  data-init:
+    logging: !override
+      driver: json-file
+  runtime-auth-init:
+    logging: !override
+      driver: json-file
+  runtime-state-init:
+    logging: !override
+      driver: json-file
+  controller-auth-init:
+    logging: !override
+      driver: json-file
+  lease-auth-init:
+    logging: !override
+      driver: json-file
+  awg-auth-init:
+    logging: !override
+      driver: json-file
+  hysteria-tls-init:
+    logging: !override
+      driver: json-file
+  xray-core-service:
+    logging: !override
+      driver: json-file
+  controller:
+    logging: !override
+      driver: json-file
+  xray-lease-service:
+    logging: !override
+      driver: json-file
+  control-plane:
+    logging: !override
+      driver: json-file
+  awg-data-init:
+    logging: !override
+      driver: json-file
+  amneziawg-service:
+    logging: !override
+      driver: json-file
+  integration-echo:
+    image: node:24-alpine
+    logging:
+      driver: json-file
+    user: "10001:10001"
+    command:
+      - node
+      - -e
+      - require('node:http').createServer((_request,response)=>response.end('xray-easy-integration-ok\n')).listen(8081,'0.0.0.0')
+    read_only: true
+    networks:
+      - egress
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - fetch('http://127.0.0.1:8081/health').then(response=>process.exit(response.ok?0:1)).catch(()=>process.exit(1))
+      interval: 2s
+      timeout: 2s
+      retries: 10

@@ -1,0 +1,81 @@
+name: Compose integration smoke
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/integration-smoke.yml
+      - compose.yaml
+      - Dockerfile*
+      - cmd/**
+      - internal/**
+      - awg-contract/**
+      - third_party/**
+      - web/**
+      - xray-runtime/**
+      - prototype/config-stage1/**
+      - scripts/compose-integration-smoke.override.yaml
+      - integration/compose/**
+      - go.mod
+      - go.sum
+  pull_request:
+    paths:
+      - .github/workflows/integration-smoke.yml
+      - compose.yaml
+      - Dockerfile*
+      - cmd/**
+      - internal/**
+      - awg-contract/**
+      - third_party/**
+      - web/**
+      - xray-runtime/**
+      - prototype/config-stage1/**
+      - scripts/compose-integration-smoke.override.yaml
+      - integration/compose/**
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compose-smoke:
+    name: Compose startup and doctor
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Build, start, and diagnose an isolated Compose stack
+        run: go test -tags=composeintegration -count=1 -v -timeout=40m ./integration/compose
+        env:
+          XRAY_EASY_RUNTIME_PROJECT_NAME: xray-easy-ci-${{ github.run_id }}-${{ github.run_attempt }}
+          XRAY_EASY_RUNTIME_ARTIFACT_DIR: ${{ github.workspace }}/reports/compose-smoke
+          XRAY_EASY_RUNTIME_PUBLIC_PORT: "28443"
+          XRAY_EASY_RUNTIME_VMESS_PORT: "29443"
+          XRAY_EASY_RUNTIME_SHADOWSOCKS_PORT: "38388"
+          XRAY_EASY_RUNTIME_TROJAN_PORT: "30443"
+          XRAY_EASY_RUNTIME_UI_PORT: "28080"
+          XRAY_EASY_RUNTIME_CONTROL_SUBNET: 172.31.253.0/24
+          XRAY_EASY_RUNTIME_BACKEND_SUBNET: 172.31.254.0/24
+          XRAY_EASY_RUNTIME_XRAY_IP: 172.31.253.2
+          XRAY_EASY_RUNTIME_AWG_IP: 172.31.253.4
+          XRAY_EASY_RUNTIME_CONTROLLER_CONTROL_IP: 172.31.253.5
+          XRAY_EASY_RUNTIME_CONTROLLER_BACKEND_IP: 172.31.254.2
+          XRAY_EASY_RUNTIME_BACKEND_IP: 172.31.254.3
+
+      - name: Upload Compose diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: compose-integration-diagnostics
+          path: reports/compose-smoke/
+          if-no-files-found: ignore
+          retention-days: 7
