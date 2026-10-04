@@ -14,6 +14,14 @@ import (
 	"xray-easy/internal/store"
 )
 
+type doctorProbeFile struct {
+	path     string
+	closeErr error
+}
+
+func (f doctorProbeFile) Name() string { return f.path }
+func (f doctorProbeFile) Close() error { return f.closeErr }
+
 func TestDoctorFormattingHelpersSanitizeVersionsPortsAndOptionalServices(t *testing.T) {
 	t.Setenv("XRAY_EASY_VERSION", "bad version")
 	t.Setenv("XRAY_VERSION", "26.7.28")
@@ -22,6 +30,8 @@ func TestDoctorFormattingHelpersSanitizeVersionsPortsAndOptionalServices(t *test
 	t.Setenv("XRAY_EASY_UI_PORT", "8080")
 	t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
 	t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+	t.Setenv("XRAY_TROJAN_ENABLED", "true")
+	t.Setenv("XRAY_TROJAN_PORT", "10443")
 	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
 	t.Setenv("AWG_PUBLIC_PORT", "1234")
 	if got := safeRuntimeXrayVersion("not an Xray version"); got != "unknown" {
@@ -38,10 +48,24 @@ func TestDoctorFormattingHelpersSanitizeVersionsPortsAndOptionalServices(t *test
 	}
 	var report bytes.Buffer
 	writeDoctorHeader(&report)
-	for _, want := range []string{"Shadowsocks TCP+UDP: 8388", "AmneziaWG public UDP: 1234", "Xray image: 26.7.28"} {
+	for _, want := range []string{"Shadowsocks TCP+UDP: 8388", "Trojan TCP: 10443", "AmneziaWG public UDP: 1234", "Xray image: 26.7.28"} {
 		if !strings.Contains(report.String(), want) {
 			t.Fatalf("doctor header omitted %q: %s", want, report.String())
 		}
+	}
+}
+
+func TestDoctorHysteriaCustomTLSHintRequiresTrustedCertificate(t *testing.T) {
+	dataDir, configDir, key := prepareDoctorState(t, true)
+	setDoctorEnvironment(t, key)
+	t.Setenv("XRAY_HYSTERIA2_ENABLED", "true")
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "custom")
+	checks := collectDoctorChecks(context.Background(), dataDir, configDir,
+		&doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running", XrayVersion: "Xray 26.7.28", ActiveRevision: 1}},
+		&doctorHandlerStub{}, &doctorStatsStub{})
+	check := findDoctorCheck(checks, "Hysteria 2 UDP firewall")
+	if check == nil || !strings.Contains(check.hint, "supplied certificate must be trusted") {
+		t.Fatalf("custom certificate guidance = %+v", check)
 	}
 }
 
@@ -217,5 +241,40 @@ func TestDoctorClassifiesIPv4AndRejectsInvalidWritableDirectory(t *testing.T) {
 	}
 	if err := probeWritableDirectory(file); err == nil || !strings.Contains(err.Error(), "not a directory") {
 		t.Fatalf("regular file writable-directory probe = %v", err)
+	}
+	if _, err := os.Stat("/proc"); err == nil {
+		if err := probeWritableDirectory("/proc"); err == nil {
+			t.Fatal("read-only proc filesystem was reported writable")
+		}
+	}
+}
+
+func TestProbeWritableDirectoryReportsCreateCloseAndRemoveErrors(t *testing.T) {
+	root := t.TempDir()
+	createErr := errors.New("create probe failed")
+	if err := probeWritableDirectoryWith(root, func(string, string) (writableProbeFile, error) {
+		return nil, createErr
+	}, os.Remove); !errors.Is(err, createErr) {
+		t.Fatalf("probe creation error = %v", err)
+	}
+
+	closeErr := errors.New("close probe failed")
+	removedAfterClose := false
+	err := probeWritableDirectoryWith(root, func(_, _ string) (writableProbeFile, error) {
+		return doctorProbeFile{path: filepath.Join(root, "probe"), closeErr: closeErr}, nil
+	}, func(string) error {
+		removedAfterClose = true
+		return nil
+	})
+	if !errors.Is(err, closeErr) || !removedAfterClose {
+		t.Fatalf("probe close error/removal = %v, removed=%t", err, removedAfterClose)
+	}
+
+	removeErr := errors.New("remove probe failed")
+	err = probeWritableDirectoryWith(root, func(_, _ string) (writableProbeFile, error) {
+		return doctorProbeFile{path: filepath.Join(root, "probe")}, nil
+	}, func(string) error { return removeErr })
+	if !errors.Is(err, removeErr) {
+		t.Fatalf("probe removal error = %v", err)
 	}
 }

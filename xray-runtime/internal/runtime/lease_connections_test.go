@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -400,6 +401,167 @@ func TestLeaseProtocolAndPointerIdentity(t *testing.T) {
 		t.Fatal("non-pointer connection was tracked")
 	}
 	release()
+}
+
+func TestLeaseProfileFromInboundValidatesAuthenticatedIdentity(t *testing.T) {
+	valid := &session.Inbound{Name: "vless", User: &protocol.MemoryUser{Email: "device"}}
+	profile, ok := leaseProfileFromInbound(valid)
+	if !ok || profile != (leaseProfileKey{protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, email: "device"}) {
+		t.Fatalf("valid profile identity = %+v, %t", profile, ok)
+	}
+	for _, inbound := range []*session.Inbound{
+		nil,
+		{Name: "vless"},
+		{Name: "vless", User: &protocol.MemoryUser{Email: "  "}},
+		{Name: "unknown", User: &protocol.MemoryUser{Email: "device"}},
+	} {
+		if got, valid := leaseProfileFromInbound(inbound); valid || got != (leaseProfileKey{}) {
+			t.Errorf("invalid inbound profile = %+v, %t; want zero,false", got, valid)
+		}
+	}
+}
+
+func TestLeaseRegistryRejectsInvalidRegistrationsAndRemovedProfiles(t *testing.T) {
+	key := leaseConnectionKey{protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, email: "device", sourceIP: netip.MustParseAddr("192.0.2.9")}
+	profile := leaseProfileKey{protocol: key.protocol, email: key.email}
+	connection := &leaseTestConnection{}
+	for _, testcase := range []struct {
+		name string
+		key  leaseConnectionKey
+		conn interface{ Close() error }
+	}{
+		{name: "nil connection", key: key},
+		{name: "invalid address", key: leaseConnectionKey{protocol: key.protocol, email: key.email}, conn: connection},
+		{name: "unspecified protocol", key: leaseConnectionKey{email: key.email, sourceIP: key.sourceIP}, conn: connection},
+		{name: "empty email", key: leaseConnectionKey{protocol: key.protocol, sourceIP: key.sourceIP}, conn: connection},
+	} {
+		t.Run(testcase.name, func(t *testing.T) {
+			registry := newLeaseConnectionRegistry()
+			release := registry.register(testcase.key, testcase.conn)
+			if release == nil || len(registry.connections) != 0 {
+				t.Fatal("invalid connection was tracked")
+			}
+			release()
+		})
+	}
+
+	for _, blockedByRemoval := range []bool{false, true} {
+		registry := newLeaseConnectionRegistry()
+		registry.mu.Lock()
+		if blockedByRemoval {
+			registry.markProfileRemovedLocked(profile)
+		} else {
+			registry.closingProfiles[profile] = true
+		}
+		registry.mu.Unlock()
+		if release := registry.register(key, connection); release == nil || connection.closeCount() == 0 {
+			t.Fatalf("registration was not rejected while removed=%t", blockedByRemoval)
+		}
+	}
+}
+
+func TestLeaseRegistryValidatesFlowAndProfileRemoval(t *testing.T) {
+	var nilRegistry *leaseConnectionRegistry
+	if release, ok := nilRegistry.registerFlow(leaseProfileKey{}, func() {}); release == nil || ok {
+		t.Fatal("nil registry accepted a flow")
+	}
+	registry := newLeaseConnectionRegistry()
+	profile := leaseProfileKey{protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, email: "device"}
+	for _, invalid := range []leaseProfileKey{{}, {protocol: profile.protocol}, {email: profile.email}} {
+		if release, ok := registry.registerFlow(invalid, func() {}); release == nil || ok {
+			t.Errorf("invalid profile %+v accepted a flow", invalid)
+		}
+	}
+	if release, ok := registry.registerFlow(profile, nil); release == nil || ok {
+		t.Fatal("nil flow callback was accepted")
+	}
+
+	started := 0
+	registry.mu.Lock()
+	registry.closingProfiles[profile] = true
+	registry.mu.Unlock()
+	if release, ok := registry.registerFlow(profile, func() { started++ }); release == nil || ok || started != 1 {
+		t.Fatalf("flow for closing profile = release:%t registered:%t closed:%d", release != nil, ok, started)
+	}
+	registry.mu.Lock()
+	delete(registry.closingProfiles, profile)
+	registry.markProfileRemovedLocked(profile)
+	registry.mu.Unlock()
+	if release, ok := registry.registerFlow(profile, func() { started++ }); release == nil || ok || started != 2 {
+		t.Fatalf("flow for removed profile = release:%t registered:%t closed:%d", release != nil, ok, started)
+	}
+	if _, _, _, err := registry.removeProfileSessions(xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED, "device", func() (bool, error) { return false, nil }); err == nil {
+		t.Fatal("profile removal accepted an unspecified protocol")
+	}
+	if _, _, _, err := registry.removeProfileSessions(profile.protocol, " ", func() (bool, error) { return false, nil }); err == nil {
+		t.Fatal("profile removal accepted an empty email")
+	}
+	if _, _, _, err := registry.removeProfileSessions(profile.protocol, profile.email, nil); err == nil {
+		t.Fatal("profile removal accepted a nil credential removal callback")
+	}
+	if _, _, _, err := nilRegistry.removeProfileSessions(profile.protocol, profile.email, func() (bool, error) { return false, nil }); err == nil {
+		t.Fatal("nil registry removed a profile")
+	}
+}
+
+func TestEngineLeaseSupportAndDisconnectValidation(t *testing.T) {
+	var nilEngine *Engine
+	if nilEngine.LeaseDisconnectSupported(xrayruntimev1.Protocol_PROTOCOL_VLESS) {
+		t.Fatal("nil Engine advertised lease disconnect support")
+	}
+	engine := &Engine{leases: newLeaseConnectionRegistry(), leaseTracking: true}
+	for _, protocolType := range []xrayruntimev1.Protocol{
+		xrayruntimev1.Protocol_PROTOCOL_VLESS,
+		xrayruntimev1.Protocol_PROTOCOL_VMESS,
+		xrayruntimev1.Protocol_PROTOCOL_TROJAN,
+	} {
+		if !engine.LeaseDisconnectSupported(protocolType) {
+			t.Errorf("protocol %s did not advertise lease disconnect", protocolType)
+		}
+	}
+	for _, protocolType := range []xrayruntimev1.Protocol{
+		xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED,
+		xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2,
+		xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS,
+	} {
+		if engine.LeaseDisconnectSupported(protocolType) {
+			t.Errorf("protocol %s unexpectedly advertised lease disconnect", protocolType)
+		}
+	}
+	if (&Engine{leases: engine.leases}).LeaseDisconnectSupported(xrayruntimev1.Protocol_PROTOCOL_VLESS) {
+		t.Fatal("Engine without tracking advertised lease disconnect support")
+	}
+
+	for _, testcase := range []struct {
+		name      string
+		engine    *Engine
+		protocol  xrayruntimev1.Protocol
+		ip        string
+		operation string
+		ctx       context.Context
+		want      string
+	}{
+		{name: "nil engine", engine: nilEngine, protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, ip: "192.0.2.1", operation: "id", ctx: context.Background(), want: "unavailable"},
+		{name: "unsupported", engine: engine, protocol: xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, ip: "192.0.2.1", operation: "id", ctx: context.Background(), want: "not supported"},
+		{name: "canceled", engine: engine, protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, ip: "192.0.2.1", operation: "id", ctx: canceledContext(), want: "context canceled"},
+		{name: "invalid IP", engine: engine, protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, ip: "device.example", operation: "id", ctx: context.Background(), want: "source IP is invalid"},
+	} {
+		t.Run(testcase.name, func(t *testing.T) {
+			_, _, err := testcase.engine.DisconnectLease(testcase.ctx, testcase.protocol, "device", testcase.ip, testcase.operation)
+			if err == nil || !strings.Contains(err.Error(), testcase.want) {
+				t.Fatalf("DisconnectLease error = %v, want %q", err, testcase.want)
+			}
+		})
+	}
+	if _, _, _, err := nilEngine.RemoveUserWithProtocol(context.Background(), xrayruntimev1.Protocol_PROTOCOL_VLESS, "vless", "device"); err == nil {
+		t.Fatal("nil Engine removed a user")
+	}
+}
+
+func canceledContext() context.Context {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	return ctx
 }
 
 type nonPointerLeaseConnection struct{}

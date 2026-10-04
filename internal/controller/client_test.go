@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"io"
 	"net"
@@ -194,7 +195,7 @@ func TestClientUnauthorizedAndMalformedTypedResponses(t *testing.T) {
 	if err := (&Client{}).Health(context.Background()); err == nil {
 		t.Fatal("uninitialized client call succeeded")
 	}
-	if _, err := (&Client{}).call(context.Background(), "bad", &controllerv1.EmptyRequest{}); err == nil {
+	if _, err := NewClientWithConn(&staticInvoker{}, "token").call(context.Background(), "bad", &controllerv1.EmptyRequest{}); err == nil {
 		t.Fatal("unknown RPC method accepted")
 	}
 	if _, err := protobufTimeToTime("timestamp", &timestamppb.Timestamp{Seconds: 999999999999}); err == nil {
@@ -233,6 +234,25 @@ func TestClientStatusValidatesRequiredCountersAndTimestamp(t *testing.T) {
 	if _, err := NewClientWithConn(&staticInvoker{value: response}, "token").Status(context.Background()); err != nil {
 		t.Fatalf("valid status without optional timestamp rejected: %v", err)
 	}
+	if _, err := NewClientWithConn(&staticInvoker{err: status.Error(codes.Unavailable, "status unavailable")}, "token").Status(context.Background()); status.Code(err) != codes.Unavailable {
+		t.Fatalf("Status() RPC failure = %v", err)
+	}
+}
+
+func TestClientPollRejectsInvalidTelemetryTimestamp(t *testing.T) {
+	client := NewClientWithConn(&staticInvoker{value: &controllerv1.XrayTelemetryResponse{
+		Users: []*controllerv1.XrayUserTelemetry{{Email: "phone@xray-easy", LastSeen: &timestamppb.Timestamp{Seconds: 999999999999}}},
+	}}, "token")
+	if _, err := client.Poll(context.Background()); err == nil || !strings.Contains(err.Error(), "last_seen") {
+		t.Fatalf("Poll() accepted invalid user timestamp: %v", err)
+	}
+}
+
+func TestClientCallDefaultsNilRequestToEmptyProtoMessage(t *testing.T) {
+	client := NewClientWithConn(&staticInvoker{value: &controllerv1.HealthResponse{}}, "token")
+	if _, err := client.call(context.Background(), "Health", nil); err != nil {
+		t.Fatalf("call() with nil request = %v", err)
+	}
 }
 
 func TestClientRPCErrorIncludesMethodOnly(t *testing.T) {
@@ -243,6 +263,111 @@ func TestClientRPCErrorIncludesMethodOnly(t *testing.T) {
 	}
 	if strings.Contains(invoker.method, "sensitive") {
 		t.Fatalf("method unexpectedly includes error data: %q", invoker.method)
+	}
+}
+
+func TestClientLogsAndCapabilitiesPropagateControllerErrors(t *testing.T) {
+	wantErr := status.Error(codes.Unavailable, "adapter offline")
+	client := NewClientWithConn(&staticInvoker{err: wantErr}, "token")
+	if lines, err := client.Logs(context.Background()); !errors.Is(err, wantErr) || lines != nil {
+		t.Fatalf("Logs() = %v, %v; want nil and the controller error", lines, err)
+	}
+	if capabilities, err := client.Capabilities(context.Background()); !errors.Is(err, wantErr) || capabilities != nil {
+		t.Fatalf("Capabilities() = %+v, %v; want nil and the controller error", capabilities, err)
+	}
+}
+
+func TestClientOperationAndTelemetryMethodsPropagateRPCFailures(t *testing.T) {
+	wantErr := status.Error(codes.Unavailable, "runtime unavailable")
+	ctx := context.Background()
+	for _, test := range []struct {
+		name string
+		call func(*Client) error
+	}{
+		{name: "disconnect lease", call: func(c *Client) error {
+			_, err := c.DisconnectLease(ctx, &controllerv1.DisconnectLeaseRequest{ProfileEmail: "phone", SourceIp: "192.0.2.2"})
+			return err
+		}},
+		{name: "validate", call: func(c *Client) error { return c.Validate(ctx, "/candidate", "operation") }},
+		{name: "apply", call: func(c *Client) error { return c.Apply(ctx, "/candidate", "operation") }},
+		{name: "replace inbound", call: func(c *Client) error {
+			return c.ReplaceInbound(ctx, "/candidate", "/active", "vless-reality", "operation")
+		}},
+		{name: "users in inbound", call: func(c *Client) error { _, err := c.UsersInInbound(ctx, "vless-reality"); return err }},
+		{name: "poll telemetry", call: func(c *Client) error { _, err := c.Poll(ctx); return err }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			client := NewClientWithConn(&staticInvoker{err: wantErr}, "token")
+			if err := test.call(client); !errors.Is(err, wantErr) {
+				t.Fatalf("RPC error = %v, want original error", err)
+			}
+		})
+	}
+}
+
+func TestVerifyOperationRevisionRejectsUnexpectedResponses(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		response proto.Message
+		revision int64
+	}{
+		{name: "wrong response type", response: &controllerv1.HealthResponse{}, revision: 12},
+		{name: "stale revision", response: &controllerv1.OperationResponse{StateRevision: 11}, revision: 12},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := verifyOperationRevision(test.response, test.revision, "ApplyConfig"); err == nil {
+				t.Fatalf("verifyOperationRevision(%T, %d) succeeded", test.response, test.revision)
+			}
+		})
+	}
+	if err := verifyOperationRevision(&controllerv1.OperationResponse{StateRevision: 12}, 12, "ApplyConfig"); err != nil {
+		t.Fatalf("matching operation revision rejected: %v", err)
+	}
+}
+
+type staticStreamingInvoker struct {
+	staticInvoker
+	streamErr error
+}
+
+func (f *staticStreamingInvoker) NewStream(context.Context, *grpc.StreamDesc, string, ...grpc.CallOption) (grpc.ClientStream, error) {
+	return nil, f.streamErr
+}
+
+func TestClientStreamsReportUnsupportedConnectionsAndOpenFailures(t *testing.T) {
+	if _, err := NewClientWithConn(&staticInvoker{}, "token").WatchTelemetry(context.Background(), time.Second); err == nil || !strings.Contains(err.Error(), "does not support server streams") {
+		t.Fatalf("WatchTelemetry() without stream support = %v", err)
+	}
+	if _, err := NewClientWithConn(&staticInvoker{}, "token").WatchLeaseSnapshots(context.Background()); err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("WatchLeaseSnapshots() without stream support = %v", err)
+	}
+
+	wantErr := status.Error(codes.Unavailable, "stream unavailable")
+	client := NewClientWithConn(&staticStreamingInvoker{streamErr: wantErr}, "token")
+	if _, err := client.WatchTelemetry(context.Background(), time.Second); !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "open Controller telemetry stream") {
+		t.Fatalf("WatchTelemetry() open failure = %v", err)
+	}
+	if _, err := client.WatchLeaseSnapshots(context.Background()); !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "open Controller lease snapshot stream") {
+		t.Fatalf("WatchLeaseSnapshots() open failure = %v", err)
+	}
+}
+
+func TestClientOperationsReportRequestIDGenerationFailures(t *testing.T) {
+	previous := cryptorand.Reader
+	cryptorand.Reader = controllerFailingEntropy{}
+	t.Cleanup(func() { cryptorand.Reader = previous })
+
+	client := NewClientWithConn(&staticInvoker{}, "token")
+	if err := client.Health(context.Background()); err == nil || !strings.Contains(err.Error(), "create Controller request ID") {
+		t.Fatalf("unary request ID failure = %v", err)
+	}
+	streaming := NewClientWithConn(&staticStreamingInvoker{}, "token")
+	if _, err := streaming.WatchTelemetry(context.Background(), time.Second); err == nil || !strings.Contains(err.Error(), "create Controller stream request ID") {
+		t.Fatalf("telemetry stream request ID failure = %v", err)
+	}
+	streaming.streaming = &staticStreamingInvoker{}
+	if _, err := streaming.WatchLeaseSnapshots(context.Background()); err == nil || !strings.Contains(err.Error(), "create Controller lease stream request ID") {
+		t.Fatalf("lease stream request ID failure = %v", err)
 	}
 }
 
@@ -276,6 +401,7 @@ func TestClientOpensAuthenticatedTelemetryStreamAndClampsInterval(t *testing.T) 
 	}
 	t.Cleanup(func() { _ = connection.Close() })
 	client := NewClientWithConn(connection, "stream-token")
+	client.logger = nil // The stream client must still log through the package default.
 
 	for _, interval := range []time.Duration{100 * time.Millisecond, 10 * time.Second} {
 		stream, err := client.WatchTelemetry(context.Background(), interval)

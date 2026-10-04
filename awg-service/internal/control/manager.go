@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/netip"
@@ -308,7 +309,7 @@ func DefaultObfuscation(masterKey []byte) map[string]string {
 // GenerateKeypair creates a standard base64 AmneziaWG/WireGuard key pair.
 func GenerateKeypair() (privateKey, publicKey string, err error) {
 	var private [32]byte
-	if _, err := rand.Read(private[:]); err != nil {
+	if _, err := io.ReadFull(rand.Reader, private[:]); err != nil {
 		return "", "", err
 	}
 	private[0] &= 248
@@ -1084,7 +1085,7 @@ func sealPrivateKey(privateKey string, masterKey []byte) (string, error) {
 		return "", fmt.Errorf("create AWG key envelope: %w", err)
 	}
 	nonce := make([]byte, aead.NonceSize())
-	if _, err := rand.Read(nonce); err != nil {
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
 		return "", fmt.Errorf("generate AWG key nonce: %w", err)
 	}
 	sealed := aead.Seal(nonce, nonce, key, []byte("xray-easy/awg/private-key/v1"))

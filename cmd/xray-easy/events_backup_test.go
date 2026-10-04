@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,6 +36,24 @@ type noFlushWriter struct {
 func (w *noFlushWriter) Header() http.Header            { return w.header }
 func (w *noFlushWriter) Write(data []byte) (int, error) { return len(data), nil }
 func (w *noFlushWriter) WriteHeader(status int)         { w.status = status }
+
+type failingSSEWriter struct {
+	header http.Header
+	writes int
+	failAt int
+	status int
+}
+
+func (w *failingSSEWriter) Header() http.Header    { return w.header }
+func (w *failingSSEWriter) WriteHeader(status int) { w.status = status }
+func (w *failingSSEWriter) Write(data []byte) (int, error) {
+	w.writes++
+	if w.writes == w.failAt {
+		return 0, errors.New("client disconnected")
+	}
+	return len(data), nil
+}
+func (w *failingSSEWriter) Flush() {}
 
 func TestSSEInitialSnapshotStatusEventsAndCancellation(t *testing.T) {
 	t.Parallel()
@@ -74,6 +93,40 @@ func TestSSEInitialSnapshotStatusEventsAndCancellation(t *testing.T) {
 	if noFlush.status != http.StatusInternalServerError {
 		t.Fatalf("non-flushing SSE response status = %d", noFlush.status)
 	}
+}
+
+func TestSSEHeartbeatWritesKeepAliveAndStopsOnWriteFailure(t *testing.T) {
+	t.Run("keep alive", func(t *testing.T) {
+		app := newTestApp(t, true)
+		ctx, cancel := context.WithCancel(context.Background())
+		request := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+		request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+		response := &flushRecorder{ResponseRecorder: httptest.NewRecorder()}
+		response.onFlush = func(count int) {
+			if count == 3 {
+				cancel()
+			}
+		}
+		app.server.eventsWithHeartbeat(response, request, time.Millisecond)
+		defer cancel()
+		if !strings.Contains(response.Body.String(), ": keep-alive\n\n") {
+			t.Fatalf("SSE heartbeat did not write keep-alive: %s", response.Body.String())
+		}
+	})
+
+	t.Run("disconnected client", func(t *testing.T) {
+		app := newTestApp(t, true)
+		request := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+		request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+		response := &failingSSEWriter{header: make(http.Header), failAt: 4}
+		app.server.eventsWithHeartbeat(response, request, time.Millisecond)
+		app.server.eventsMu.Lock()
+		remaining := len(app.server.eventSubs)
+		app.server.eventsMu.Unlock()
+		if remaining != 0 {
+			t.Fatalf("disconnected SSE request left %d event subscriptions", remaining)
+		}
+	})
 }
 
 func TestEventSubscriptionsCoalesceAndCanUnsubscribeTwice(t *testing.T) {
@@ -149,6 +202,27 @@ func TestSSEStopsWhenSessionExpiresAndRedactsRuntimeError(t *testing.T) {
 	defer cancel2()
 	if !strings.Contains(response.Body.String(), `"state":"unavailable"`) || strings.Contains(response.Body.String(), "hidden") {
 		t.Fatalf("SSE Xray runtime error not redacted: %s", response.Body.String())
+	}
+}
+
+func TestSSEWriteFailuresEndStreamAndReleaseSubscriptions(t *testing.T) {
+	for _, failAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("write %d", failAt), func(t *testing.T) {
+			app := newTestApp(t, true)
+			request := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+			request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+			writer := &failingSSEWriter{header: make(http.Header), failAt: failAt}
+			newMux(app.server).ServeHTTP(writer, request)
+			if writer.writes != failAt {
+				t.Fatalf("SSE writes = %d, want stream to stop at write %d", writer.writes, failAt)
+			}
+			app.server.eventsMu.Lock()
+			remainingEvents := len(app.server.eventSubs)
+			app.server.eventsMu.Unlock()
+			if remainingEvents != 0 {
+				t.Fatalf("SSE write failure left %d event subscriptions", remainingEvents)
+			}
+		})
 	}
 }
 

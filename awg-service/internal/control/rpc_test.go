@@ -3,6 +3,7 @@ package control
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
@@ -26,6 +27,20 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+func TestEnsureIncomingTraceReturnsRandomSourceFailure(t *testing.T) {
+	original := cryptorand.Reader
+	cryptorand.Reader = unavailableRandomSource{}
+	t.Cleanup(func() { cryptorand.Reader = original })
+	for _, ctx := range []context.Context{
+		context.Background(),
+		metadata.NewIncomingContext(context.Background(), metadata.Pairs("x-request-id", "abcdef0123456789abcdef0123456789")),
+	} {
+		if _, _, _, _, err := ensureIncomingTrace(ctx); err == nil || !strings.Contains(err.Error(), "random source unavailable") {
+			t.Fatalf("ensureIncomingTrace() error = %v; want random-source error", err)
+		}
+	}
+}
 
 func TestLoggingInterceptorCorrelatesWithoutLoggingPayloads(t *testing.T) {
 	previous := slog.Default()
@@ -983,6 +998,51 @@ func TestPendingOperationKeyFilesAreValidatedAndCleaned(t *testing.T) {
 	}
 	if err := removePendingOperationKey(dataDir, badOperationID); err == nil {
 		t.Fatal("remove unexpectedly removed a pending-key directory")
+	}
+}
+
+type pendingOperationFileStub struct {
+	writeErr error
+	syncErr  error
+	closeErr error
+	closed   int
+}
+
+func (f *pendingOperationFileStub) WriteString(string) (int, error) { return 0, f.writeErr }
+func (f *pendingOperationFileStub) Sync() error                     { return f.syncErr }
+func (f *pendingOperationFileStub) Close() error {
+	f.closed++
+	return f.closeErr
+}
+
+func TestPersistPendingOperationKeyCleansFailedWritesAndReturnsCloseFailure(t *testing.T) {
+	for _, testcase := range []struct {
+		name string
+		file pendingOperationFileStub
+		want string
+	}{
+		{name: "write error", file: pendingOperationFileStub{writeErr: errors.New("write failed")}, want: "write failed"},
+		{name: "sync error", file: pendingOperationFileStub{syncErr: errors.New("sync failed")}, want: "sync failed"},
+		{name: "close error", file: pendingOperationFileStub{closeErr: errors.New("close failed")}, want: "close failed"},
+	} {
+		t.Run(testcase.name, func(t *testing.T) {
+			removed := ""
+			file := testcase.file
+			err := persistPendingOperationKey(&file, "pending.key", "private-key", func(path string) error {
+				removed = path
+				return nil
+			})
+			if err == nil || err.Error() != testcase.want {
+				t.Fatalf("persistPendingOperationKey() error = %v, want %q", err, testcase.want)
+			}
+			if testcase.name == "close error" {
+				if removed != "" || file.closed != 1 {
+					t.Fatalf("successful write cleanup/close = %q/%d", removed, file.closed)
+				}
+			} else if removed != "pending.key" || file.closed != 1 {
+				t.Fatalf("failed write cleanup/close = %q/%d", removed, file.closed)
+			}
+		})
 	}
 }
 

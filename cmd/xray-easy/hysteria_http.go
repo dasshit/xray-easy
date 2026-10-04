@@ -237,10 +237,6 @@ func (s *server) hysteriaSettingsPreview(w http.ResponseWriter, r *http.Request)
 		CertificateID: strings.TrimSpace(request.CertificateID), UDPIdleTimeout: request.UDPIdleTimeout,
 		MasqueradeType: strings.TrimSpace(request.MasqueradeType), MasqueradeString: request.MasqueradeString,
 	}
-	if err := candidate.Validate(); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
-		return
-	}
 	if candidate.Host != "" {
 		host, err := domain.NormalizePublicHost(candidate.Host)
 		if err != nil {
@@ -248,6 +244,10 @@ func (s *server) hysteriaSettingsPreview(w http.ResponseWriter, r *http.Request)
 			return
 		}
 		candidate.Host = host
+	}
+	if err := candidate.Validate(); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"code": "validation_error", "error": err.Error()})
+		return
 	}
 	serverName := candidate.EffectiveTLSServerName(node.PublicHost)
 	clients, err := s.store.ListClients(r.Context())

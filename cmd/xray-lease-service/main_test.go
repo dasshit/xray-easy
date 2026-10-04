@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -11,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"xray-easy/internal/lease"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -26,6 +29,16 @@ type fakeHealthProvider struct {
 
 func (f fakeHealthProvider) Ready() bool           { return f.ready }
 func (f fakeHealthProvider) StreamConnected() bool { return f.connected }
+
+type fakeLeaseWorker struct {
+	run func(context.Context) error
+}
+
+func (fakeLeaseWorker) Ready() bool           { return false }
+func (fakeLeaseWorker) StreamConnected() bool { return true }
+func (f fakeLeaseWorker) Run(ctx context.Context) error {
+	return f.run(ctx)
+}
 
 func TestReadConfigDefaultsAndOverrides(t *testing.T) {
 	for _, name := range []string{"XRAY_LEASE_MAX_ACTIVE", "XRAY_LEASE_GRACE", "XRAY_LEASE_RETRY_DELAY"} {
@@ -167,10 +180,12 @@ func TestRunHealthcheckAndMainDispatch(t *testing.T) {
 	previousProbe := leaseHealthCheck
 	previousArgs := os.Args
 	previousLogger := slog.Default()
+	previousExit := exitProcess
 	t.Cleanup(func() {
 		leaseHealthCheck = previousProbe
 		os.Args = previousArgs
 		slog.SetDefault(previousLogger)
+		exitProcess = previousExit
 	})
 	called := ""
 	leaseHealthCheck = func(address string) error {
@@ -186,7 +201,17 @@ func TestRunHealthcheckAndMainDispatch(t *testing.T) {
 	}
 	leaseHealthCheck = func(string) error { return nil }
 	os.Args = []string{"xray-lease-service", "healthcheck"}
+	exitCode := 0
+	exitProcess = func(code int) { exitCode = code }
 	main()
+	if exitCode != 0 {
+		t.Fatalf("successful main exit code = %d", exitCode)
+	}
+	os.Args = []string{"xray-lease-service", "unexpected"}
+	main()
+	if exitCode != 1 {
+		t.Fatalf("failed main exit code = %d", exitCode)
+	}
 }
 
 func TestRunReturnsHealthServerFailureAndCheckHealthUsesHTTP(t *testing.T) {
@@ -206,5 +231,101 @@ func TestRunReturnsHealthServerFailureAndCheckHealthUsesHTTP(t *testing.T) {
 	}
 	if err := checkHealth("127.0.0.1:0"); err == nil || !strings.Contains(err.Error(), "health request failed") {
 		t.Fatalf("unreachable health endpoint error = %v", err)
+	}
+}
+
+func configureLeaseRun(t *testing.T) {
+	t.Helper()
+	tokenPath := filepath.Join(t.TempDir(), "controller.token")
+	if err := os.WriteFile(tokenPath, []byte("lease-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///127.0.0.1:10088")
+	t.Setenv("XRAY_LEASE_TOKEN_FILE", tokenPath)
+	t.Setenv("XRAY_LEASE_HEALTH_ADDR", "127.0.0.1:0")
+	for _, name := range []string{"XRAY_LEASE_MAX_ACTIVE", "XRAY_LEASE_GRACE", "XRAY_LEASE_RETRY_DELAY"} {
+		t.Setenv(name, "")
+	}
+}
+
+func TestRunCoversWorkerFactoryAndWorkerExitResults(t *testing.T) {
+	previousFactory, previousServer := newLeaseWorker, runLeaseHealthServer
+	previousSignal := leaseSignalContext
+	t.Cleanup(func() {
+		newLeaseWorker, runLeaseHealthServer, leaseSignalContext = previousFactory, previousServer, previousSignal
+	})
+	configureLeaseRun(t)
+
+	newLeaseWorker = func(lease.Controller, lease.Config, *slog.Logger) (leaseServiceWorker, error) {
+		return nil, errors.New("worker initialization failed")
+	}
+	if err := run(nil); err == nil || !strings.Contains(err.Error(), "initialize lease policy") {
+		t.Fatalf("worker initialization failure = %v", err)
+	}
+
+	newLeaseWorker = func(lease.Controller, lease.Config, *slog.Logger) (leaseServiceWorker, error) {
+		return fakeLeaseWorker{run: func(context.Context) error { return errors.New("worker crashed") }}, nil
+	}
+	runLeaseHealthServer = func(*http.Server) error {
+		time.Sleep(20 * time.Millisecond)
+		return http.ErrServerClosed
+	}
+	if err := run(nil); err == nil || !strings.Contains(err.Error(), "worker crashed") {
+		t.Fatalf("worker failure = %v", err)
+	}
+
+	newLeaseWorker = func(lease.Controller, lease.Config, *slog.Logger) (leaseServiceWorker, error) {
+		return fakeLeaseWorker{run: func(context.Context) error { return context.Canceled }}, nil
+	}
+	if err := run(nil); err != nil {
+		t.Fatalf("worker cancellation = %v", err)
+	}
+}
+
+func TestRunCoversHealthServerClosedAndSignalShutdown(t *testing.T) {
+	previousFactory, previousServer := newLeaseWorker, runLeaseHealthServer
+	previousSignal := leaseSignalContext
+	t.Cleanup(func() {
+		newLeaseWorker, runLeaseHealthServer, leaseSignalContext = previousFactory, previousServer, previousSignal
+	})
+	configureLeaseRun(t)
+	newLeaseWorker = func(lease.Controller, lease.Config, *slog.Logger) (leaseServiceWorker, error) {
+		return fakeLeaseWorker{run: func(ctx context.Context) error {
+			<-ctx.Done()
+			return ctx.Err()
+		}}, nil
+	}
+	runLeaseHealthServer = func(*http.Server) error { return http.ErrServerClosed }
+	if err := run(nil); err != nil {
+		t.Fatalf("closed health server = %v", err)
+	}
+
+	leaseSignalContext = func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx, cancel
+	}
+	runLeaseHealthServer = func(*http.Server) error {
+		time.Sleep(20 * time.Millisecond)
+		return http.ErrServerClosed
+	}
+	if err := run(nil); err != nil {
+		t.Fatalf("signal shutdown = %v", err)
+	}
+}
+
+func TestDefaultLeaseAdapters(t *testing.T) {
+	if _, err := defaultNewLeaseWorker(nil, lease.DefaultConfig(), slog.Default()); err == nil {
+		t.Fatal("default worker factory accepted a missing Controller client")
+	}
+	ctx, cancel := defaultLeaseSignalContext()
+	cancel()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("signal context did not cancel")
+	}
+	if err := defaultRunLeaseHealthServer(&http.Server{Addr: "invalid address"}); err == nil {
+		t.Fatal("default health server accepted an invalid address")
 	}
 }

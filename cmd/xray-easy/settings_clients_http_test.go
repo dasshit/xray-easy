@@ -216,6 +216,14 @@ func TestSettingsRotationBacksUpAppliesAndRevokesProfiles(t *testing.T) {
 	t.Parallel()
 	app := newTestApp(t, true)
 	client := seedTestClient(t, app, "macbook")
+	hysteriaOnly, err := domain.NewProtocolClient(randomTestID(t), "hysteria-phone", domain.ProtocolHysteria2, "", "hysteria-auth")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hysteriaOnly.Email = hysteriaOnly.ID + "@xray-easy"
+	if err := app.server.store.CreateHysteriaClient(t.Context(), hysteriaOnly); err != nil {
+		t.Fatal(err)
+	}
 	newTarget, newSNI, newHost := "www.google.com:443", "www.google.com", "new-vpn.example.test"
 	prepared := requestJSON(t, app, http.MethodPatch, "/api/settings", settingsPatchRequest{PublicHost: &newHost, RealityTarget: &newTarget, RealitySNI: &newSNI, RotatePrivateKey: true}, true)
 	if prepared.Code != http.StatusOK || !strings.Contains(prepared.Body.String(), `"expected_confirmation":"REVOKE"`) || !strings.Contains(prepared.Body.String(), `"revoked_clients":1`) {
@@ -240,6 +248,10 @@ func TestSettingsRotationBacksUpAppliesAndRevokesProfiles(t *testing.T) {
 	hysteriaState, hysteriaErr := updated.AccessState(domain.ProtocolHysteria2)
 	if err != nil || vlessErr != nil || hysteriaErr != nil || vlessState != (domain.ClientState{Enabled: false, Revoked: true}) || hysteriaState != (domain.ClientState{Enabled: true, Revoked: false}) {
 		t.Fatalf("rotation must revoke only VLESS access; got client=%+v VLESS=%+v/%v Hysteria=%+v/%v err=%v", updated, vlessState, vlessErr, hysteriaState, hysteriaErr, err)
+	}
+	hysteriaAfter, err := app.server.store.GetClient(t.Context(), hysteriaOnly.ID)
+	if err != nil || !hysteriaAfter.Hysteria2CanConnect() {
+		t.Fatalf("key rotation changed Hysteria-only access: %+v, %v", hysteriaAfter, err)
 	}
 	activeConfig, err := os.ReadFile(filepath.Join(app.server.configDir, "active.json"))
 	if err != nil || strings.Contains(string(activeConfig), client.UUID) || !strings.Contains(string(activeConfig), newTarget) {

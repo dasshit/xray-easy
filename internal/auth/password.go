@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 
@@ -32,7 +33,7 @@ func HashPassword(password string) (string, error) {
 		return "", errors.New("password must contain at least 12 characters")
 	}
 	salt := make([]byte, saltBytes)
-	if _, err := rand.Read(salt); err != nil {
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
 		return "", fmt.Errorf("generate password salt: %w", err)
 	}
 	key := argon2.IDKey([]byte(password), salt, argonTime, argonMemory, argonThreads, keyBytes)

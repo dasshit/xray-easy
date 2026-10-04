@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/netip"
 	"net/url"
@@ -728,28 +729,48 @@ func RenderServerConfig(settings Settings, clients []Client) ([]byte, error) {
 		Inbounds:  inbounds,
 		Outbounds: []outbound{{Protocol: "freedom", Tag: "direct"}},
 	}
-	var out bytes.Buffer
-	encoder := json.NewEncoder(&out)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(config); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return encodeIndentedJSON(config)
 }
 
 // BuildProfile builds the requested representation.
 func BuildProfile(settings Settings, client Client) (Profile, error) {
+	return buildProfileWith(settings, client, defaultProfileRenderer())
+}
+
+// defaultProfileRenderer returns the production profile encoders.
+func defaultProfileRenderer() profileRenderer {
+	return profileRenderer{
+		vlessJSON:       buildClientJSON,
+		vmessURI:        BuildVMessURI,
+		vmessJSON:       buildVMessClientJSON,
+		shadowsocksJSON: buildShadowsocksClientJSON,
+		trojanURI:       BuildTrojanURI,
+		trojanJSON:      buildTrojanClientJSON,
+	}
+}
+
+// profileRenderer provides the fallible profile encoders used by buildProfileWith.
+type profileRenderer struct {
+	vlessJSON       func(Settings, Client, string) ([]byte, error)
+	vmessURI        func(Settings, Client) (string, error)
+	vmessJSON       func(Settings, Client) ([]byte, error)
+	shadowsocksJSON func(Settings, Client) ([]byte, error)
+	trojanURI       func(Settings, Client) (string, error)
+	trojanJSON      func(Settings, Client) ([]byte, error)
+}
+
+// buildProfileWith builds a profile while allowing its fallible encoders to be supplied.
+func buildProfileWith(settings Settings, client Client, renderer profileRenderer) (Profile, error) {
 	profile := Profile{Protocol: client.Protocol, Name: client.Name, UUID: client.UUID, ShortID: client.ShortID}
 	if client.HasVLESS() && !client.VLESSIsRevoked() {
-		if err := validateSettings(settings); err != nil {
-			return Profile{}, err
-		}
 		publicHost, err := domain.NormalizePublicHost(settings.PublicHost)
 		if err != nil {
 			return Profile{}, err
 		}
 		settings.PublicHost = publicHost
+		if err := validateSettings(settings); err != nil {
+			return Profile{}, err
+		}
 		if client.UUID == "" || client.ShortID == "" {
 			return Profile{}, errors.New("VLESS profile is unavailable")
 		}
@@ -761,7 +782,7 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 			return Profile{}, errors.New("client fingerprint is required")
 		}
 		profile.URI = BuildVLESSURI(settings, client, fingerprint)
-		profile.JSON, err = buildClientJSON(settings, client, fingerprint)
+		profile.JSON, err = renderer.vlessJSON(settings, client, fingerprint)
 		if err != nil {
 			return Profile{}, err
 		}
@@ -785,11 +806,11 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 			return Profile{}, err
 		}
 		var err error
-		profile.VMessURI, err = BuildVMessURI(settings, client)
+		profile.VMessURI, err = renderer.vmessURI(settings, client)
 		if err != nil {
 			return Profile{}, err
 		}
-		profile.JSON, err = buildVMessClientJSON(settings, client)
+		profile.JSON, err = renderer.vmessJSON(settings, client)
 		if err != nil {
 			return Profile{}, err
 		}
@@ -803,7 +824,7 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 		}
 		profile.ShadowsocksURI = BuildShadowsocksURI(settings, client)
 		var err error
-		profile.ShadowsocksJSON, err = buildShadowsocksClientJSON(settings, client)
+		profile.ShadowsocksJSON, err = renderer.shadowsocksJSON(settings, client)
 		if err != nil {
 			return Profile{}, err
 		}
@@ -816,11 +837,11 @@ func BuildProfile(settings Settings, client Client) (Profile, error) {
 			return Profile{}, errors.New("Trojan profile is unavailable")
 		}
 		var err error
-		profile.TrojanURI, err = BuildTrojanURI(settings, client)
+		profile.TrojanURI, err = renderer.trojanURI(settings, client)
 		if err != nil {
 			return Profile{}, err
 		}
-		profile.TrojanJSON, err = buildTrojanClientJSON(settings, client)
+		profile.TrojanJSON, err = renderer.trojanJSON(settings, client)
 		if err != nil {
 			return Profile{}, err
 		}
@@ -1161,14 +1182,7 @@ func buildTrojanClientJSON(settings Settings, client Client) ([]byte, error) {
 			"streamSettings": map[string]any{"network": "tcp", "security": "tls", "tlsSettings": tlsSettings},
 		}},
 	}
-	var out bytes.Buffer
-	encoder := json.NewEncoder(&out)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return encodeIndentedJSON(value)
 }
 
 // buildShadowsocksClientJSON performs the operation represented by its name.
@@ -1184,14 +1198,7 @@ func buildShadowsocksClientJSON(settings Settings, client Client) ([]byte, error
 			}}},
 		}},
 	}
-	var out bytes.Buffer
-	encoder := json.NewEncoder(&out)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return encodeIndentedJSON(value)
 }
 
 // buildVMessClientJSON performs the operation represented by its name.
@@ -1214,14 +1221,7 @@ func buildVMessClientJSON(settings Settings, client Client) ([]byte, error) {
 			"streamSettings": map[string]any{"network": "tcp", "security": "tls", "tlsSettings": tls},
 		}},
 	}
-	var out bytes.Buffer
-	encoder := json.NewEncoder(&out)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
-		return nil, err
-	}
-	return out.Bytes(), nil
+	return encodeIndentedJSON(value)
 }
 
 // BuildVLESSURI builds the requested representation.
@@ -1260,14 +1260,26 @@ func buildClientJSON(settings Settings, client Client, fingerprint string) ([]by
 			}},
 		}},
 	}
+	return encodeIndentedJSON(value)
+}
+
+func encodeIndentedJSON(value any) ([]byte, error) {
+	return encodeIndentedJSONWith(value, encodeIndentedJSONTo)
+}
+
+func encodeIndentedJSONWith(value any, encode func(any, io.Writer) error) ([]byte, error) {
 	var out bytes.Buffer
-	encoder := json.NewEncoder(&out)
-	encoder.SetEscapeHTML(false)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(value); err != nil {
+	if err := encode(value, &out); err != nil {
 		return nil, err
 	}
 	return out.Bytes(), nil
+}
+
+func encodeIndentedJSONTo(value any, writer io.Writer) error {
+	encoder := json.NewEncoder(writer)
+	encoder.SetEscapeHTML(false)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(value)
 }
 
 // validateSettings validates the supplied value.

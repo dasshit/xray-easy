@@ -26,8 +26,9 @@ const inboundTag = "vless-reality"
 // plane still renders a complete config for durable recovery, while these
 // operations update the running inbound without restarting the data plane.
 type HandlerClient struct {
-	address     string
-	dialOptions []grpc.DialOption
+	address         string
+	dialOptions     []grpc.DialOption
+	outgoingContext func(context.Context) (context.Context, string, error)
 
 	mu     sync.Mutex
 	conn   *grpc.ClientConn
@@ -49,7 +50,7 @@ func (c *HandlerClient) AddUser(ctx context.Context, email, uuid, flow string) e
 		account = protowire.AppendString(account, flow)
 	}
 	operation := &handlercommand.AddUserOperation{User: &protocol.User{Email: email, Account: &serial.TypedMessage{Type: "xray.proxy.vless.Account", Value: account}}}
-	return c.alter(ctx, inboundTag, &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
+	return c.alterMessage(ctx, inboundTag, "xray.app.proxyman.command.AddUserOperation", operation)
 }
 
 // AddHysteriaUser adds a per-device Hysteria 2 credential to the dedicated inbound.
@@ -57,19 +58,19 @@ func (c *HandlerClient) AddHysteriaUser(ctx context.Context, email, auth string)
 	account := protowire.AppendTag(nil, 1, protowire.BytesType)
 	account = protowire.AppendString(account, auth)
 	operation := &handlercommand.AddUserOperation{User: &protocol.User{Email: email, Account: &serial.TypedMessage{Type: "xray.proxy.hysteria.account.Account", Value: account}}}
-	return c.alter(ctx, "hysteria2", &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
+	return c.alterMessage(ctx, "hysteria2", "xray.app.proxyman.command.AddUserOperation", operation)
 }
 
 // RemoveUser removes the requested value.
 func (c *HandlerClient) RemoveUser(ctx context.Context, email string) error {
 	operation := &handlercommand.RemoveUserOperation{Email: email}
-	return c.alter(ctx, inboundTag, &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
+	return c.alterMessage(ctx, inboundTag, "xray.app.proxyman.command.RemoveUserOperation", operation)
 }
 
 // RemoveHysteriaUser revokes the device credential from the Hysteria 2 inbound.
 func (c *HandlerClient) RemoveHysteriaUser(ctx context.Context, email string) error {
 	operation := &handlercommand.RemoveUserOperation{Email: email}
-	return c.alter(ctx, "hysteria2", &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
+	return c.alterMessage(ctx, "hysteria2", "xray.app.proxyman.command.RemoveUserOperation", operation)
 }
 
 // AddVMessUser adds one generated UUID to the dedicated VMess TLS inbound.
@@ -77,13 +78,28 @@ func (c *HandlerClient) AddVMessUser(ctx context.Context, email, uuid string) er
 	account := protowire.AppendTag(nil, 1, protowire.BytesType)
 	account = protowire.AppendString(account, uuid)
 	operation := &handlercommand.AddUserOperation{User: &protocol.User{Email: email, Account: &serial.TypedMessage{Type: "xray.proxy.vmess.Account", Value: account}}}
-	return c.alter(ctx, "vmess-tls", &serial.TypedMessage{Type: "xray.app.proxyman.command.AddUserOperation", Value: mustMarshal(operation)})
+	return c.alterMessage(ctx, "vmess-tls", "xray.app.proxyman.command.AddUserOperation", operation)
 }
 
 // RemoveVMessUser revokes a device credential from the VMess TLS inbound.
 func (c *HandlerClient) RemoveVMessUser(ctx context.Context, email string) error {
 	operation := &handlercommand.RemoveUserOperation{Email: email}
-	return c.alter(ctx, "vmess-tls", &serial.TypedMessage{Type: "xray.app.proxyman.command.RemoveUserOperation", Value: mustMarshal(operation)})
+	return c.alterMessage(ctx, "vmess-tls", "xray.app.proxyman.command.RemoveUserOperation", operation)
+}
+
+func (c *HandlerClient) alterMessage(ctx context.Context, inboundTag, operationType string, message proto.Message) error {
+	value, err := proto.Marshal(message)
+	if err != nil {
+		return fmt.Errorf("marshal Xray Handler operation: %w", err)
+	}
+	return c.alter(ctx, inboundTag, &serial.TypedMessage{Type: operationType, Value: value})
+}
+
+func (c *HandlerClient) outgoing(ctx context.Context) (context.Context, string, error) {
+	if c.outgoingContext != nil {
+		return c.outgoingContext(ctx)
+	}
+	return interaction.OutgoingContext(ctx)
 }
 
 // Users performs the operation represented by its name.
@@ -93,7 +109,7 @@ func (c *HandlerClient) Users(ctx context.Context) ([]string, error) {
 
 // UsersInInbound lists currently loaded account emails for one tagged inbound.
 func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) ([]string, error) {
-	ctx, _, traceErr := interaction.OutgoingContext(ctx)
+	ctx, _, traceErr := c.outgoing(ctx)
 	if traceErr != nil {
 		return nil, fmt.Errorf("create Xray Handler request ID: %w", traceErr)
 	}
@@ -105,7 +121,7 @@ func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) (
 	if err != nil {
 		return nil, err
 	}
-	rpcContext, requestID, err := interaction.OutgoingContext(ctx)
+	rpcContext, requestID, err := c.outgoing(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create Xray Handler request ID: %w", err)
 	}
@@ -127,7 +143,7 @@ func (c *HandlerClient) UsersInInbound(ctx context.Context, inboundTag string) (
 
 // alter performs the operation represented by its name.
 func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation *serial.TypedMessage) error {
-	ctx, _, traceErr := interaction.OutgoingContext(ctx)
+	ctx, _, traceErr := c.outgoing(ctx)
 	if traceErr != nil {
 		return fmt.Errorf("create Xray Handler request ID: %w", traceErr)
 	}
@@ -139,7 +155,7 @@ func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation 
 	if err != nil {
 		return err
 	}
-	rpcContext, requestID, err := interaction.OutgoingContext(ctx)
+	rpcContext, requestID, err := c.outgoing(ctx)
 	if err != nil {
 		return fmt.Errorf("create Xray Handler request ID: %w", err)
 	}
@@ -155,7 +171,7 @@ func (c *HandlerClient) alter(ctx context.Context, inboundTag string, operation 
 
 // resolveInboundTag performs the operation represented by its name.
 func (c *HandlerClient) resolveInboundTag(ctx context.Context, client handlercommand.HandlerServiceClient, preferredTag string) (string, error) {
-	rpcContext, requestID, traceErr := interaction.OutgoingContext(ctx)
+	rpcContext, requestID, traceErr := c.outgoing(ctx)
 	if traceErr != nil {
 		return "", fmt.Errorf("create Xray Handler request ID: %w", traceErr)
 	}
@@ -228,13 +244,4 @@ func (c *HandlerClient) Close() error {
 	err := c.conn.Close()
 	c.conn, c.client = nil, nil
 	return err
-}
-
-// mustMarshal performs the operation represented by its name.
-func mustMarshal(message proto.Message) []byte {
-	value, err := proto.Marshal(message)
-	if err != nil {
-		panic(err)
-	}
-	return value
 }

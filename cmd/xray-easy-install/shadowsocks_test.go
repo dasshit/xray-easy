@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -99,6 +100,47 @@ func TestShadowsocksTUISelection(t *testing.T) {
 			t.Fatal("Shadowsocks settings were not visible in the installer")
 		}
 	})
+	t.Run("preselected enabled", func(t *testing.T) {
+		var output bytes.Buffer
+		w := newWizard(strings.NewReader("\n"), &output)
+		defer w.close()
+		cfg, err := w.shadowsocks(context.Background(), configuration{shadowsocksEnabled: true, public: 443, vmess: 9443, ui: 8080})
+		if err != nil || !cfg.shadowsocksEnabled {
+			t.Fatalf("preselected setting: cfg=%+v err=%v", cfg, err)
+		}
+	})
+	t.Run("numeric choice", func(t *testing.T) {
+		for _, tc := range []struct {
+			input string
+			want  bool
+		}{{"1\n", false}, {"2\n", true}} {
+			w := newWizard(strings.NewReader(tc.input), &bytes.Buffer{})
+			cfg, err := w.shadowsocks(context.Background(), configuration{public: 443, vmess: 9443, ui: 8080})
+			w.close()
+			if err != nil || cfg.shadowsocksEnabled != tc.want {
+				t.Fatalf("choice %q: enabled=%t err=%v want=%t", tc.input, cfg.shadowsocksEnabled, err, tc.want)
+			}
+		}
+	})
+	t.Run("small terminal blocks changes until cancel", func(t *testing.T) {
+		var output bytes.Buffer
+		w := newWizard(strings.NewReader("x\x1b"), &output)
+		defer w.close()
+		w.width, w.height = 50, 18
+		if _, err := w.shadowsocks(context.Background(), configuration{}); !errors.Is(err, errCancelled) {
+			t.Fatalf("small-terminal flow error = %v", err)
+		}
+		if !strings.Contains(output.String(), "Enlarge the terminal before continuing") {
+			t.Fatal("small-terminal guidance was not displayed")
+		}
+	})
+	t.Run("input error propagates", func(t *testing.T) {
+		w := newWizard(strings.NewReader(""), &bytes.Buffer{})
+		defer w.close()
+		if _, err := w.shadowsocks(context.Background(), configuration{}); err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("closed input error = %v", err)
+		}
+	})
 }
 
 func TestValidateShadowsocksConfiguration(t *testing.T) {
@@ -127,5 +169,23 @@ func TestUpdateShadowsocksConfigurationRejectsMissingAndDuplicateEnvironment(t *
 	}
 	if err := updateShadowsocksConfiguration(root, configuration{shadowsocks: 8390}); err == nil || !strings.Contains(err.Error(), "duplicate XRAY_SHADOWSOCKS_PORT") {
 		t.Fatalf("duplicate Shadowsocks setting error = %v", err)
+	}
+}
+
+func TestUpdateShadowsocksConfigurationFillsMissingKeysAndDefaultPort(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".env")
+	if err := os.WriteFile(path, []byte("# existing setting\nOTHER=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateShadowsocksConfiguration(root, configuration{public: 443, vmess: 9443, ui: 8080, shadowsocksEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readEnvironmentFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["XRAY_SHADOWSOCKS_PORT"] != "8388" || values["XRAY_SHADOWSOCKS_ENABLED"] != "true" || values["XRAY_SHADOWSOCKS_METHOD"] != defaultShadowsocksMethod || values["XRAY_SHADOWSOCKS_NETWORK"] != defaultShadowsocksNetwork || values["OTHER"] != "value" {
+		t.Fatalf("updated Shadowsocks values = %#v", values)
 	}
 }

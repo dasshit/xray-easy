@@ -151,8 +151,11 @@ func composeEnvironment() []string {
 
 // main starts the program.
 func main() {
-	os.Exit(runMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
+	exitProcess(runMain(os.Args[1:], os.Stdin, os.Stdout, os.Stderr))
 }
+
+// exitProcess terminates the installer with the requested status.
+var exitProcess = os.Exit
 
 // runMain runs the requested operation.
 func runMain(args []string, input, output *os.File, errorsOut io.Writer) int {
@@ -452,17 +455,11 @@ func parsePort(value string) (int, error) {
 
 // defaultVMessPort performs the operation represented by its name.
 func defaultVMessPort(publicPort, uiPort int) int {
-	for port := 9443; port <= 65535; port++ {
-		if port != publicPort && port != uiPort {
-			return port
-		}
+	port := 9443
+	for port == publicPort || port == uiPort {
+		port++
 	}
-	for port := 1; port < 9443; port++ {
-		if port != publicPort && port != uiPort {
-			return port
-		}
-	}
-	return 0
+	return port
 }
 
 // versionAtLeast performs the operation represented by its name.
@@ -544,7 +541,7 @@ func createConfiguration(root string, cfg configuration) error {
 // randomBase64 performs the operation represented by its name.
 func randomBase64(size int) (string, error) {
 	data := make([]byte, size)
-	if _, err := rand.Read(data); err != nil {
+	if _, err := io.ReadFull(rand.Reader, data); err != nil {
 		return "", fmt.Errorf("generate secret: %w", err)
 	}
 	return base64.StdEncoding.EncodeToString(data), nil
@@ -552,29 +549,9 @@ func randomBase64(size int) (string, error) {
 
 // writeNewPrivateFile writes the supplied value.
 func writeNewPrivateFile(path, content string) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".xray-easy-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		return err
-	}
-	if _, err := io.WriteString(file, content); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
 	// Link only if the destination is absent, so concurrent or repeated runs
 	// cannot overwrite a key that may already protect existing state.
-	return os.Link(file.Name(), path)
+	return writePrivateAtomic(path, ".xray-easy-*", []byte(content), 0o600, os.Link)
 }
 
 // loadConfiguration performs the operation represented by its name.
@@ -672,12 +649,11 @@ func loadConfiguration(root string) (configuration, error) {
 
 // defaultShadowsocksPort performs the operation represented by its name.
 func defaultShadowsocksPort(publicPort, vmessPort, uiPort int) int {
-	for port := 8388; port <= 65535; port++ {
-		if port != publicPort && port != vmessPort && port != uiPort {
-			return port
-		}
+	port := 8388
+	for port == publicPort || port == vmessPort || port == uiPort {
+		port++
 	}
-	return 0
+	return port
 }
 
 // validateShadowsocksConfiguration validates the supplied value.
@@ -692,10 +668,6 @@ func validateShadowsocksConfiguration(cfg configuration) error {
 	if port == cfg.public || port == cfg.vmess || port == cfg.ui {
 		return errors.New("XRAY_SHADOWSOCKS_PORT must differ from Xray, VMess, and Web UI ports")
 	}
-	method := defaultShadowsocksMethod
-	if !domain.SupportsShadowsocksMethod(method) {
-		return errors.New("unsupported XRAY_SHADOWSOCKS_METHOD")
-	}
 	network := valueOr(cfg.shadowsocksNetwork, "tcp,udp")
 	if !domain.SupportsShadowsocksNetwork(network) {
 		return errors.New("unsupported XRAY_SHADOWSOCKS_NETWORK")
@@ -705,12 +677,11 @@ func validateShadowsocksConfiguration(cfg configuration) error {
 
 // defaultTrojanPort performs the operation represented by its name.
 func defaultTrojanPort(publicPort, vmessPort, shadowsocksPort, uiPort int) int {
-	for port := 10443; port <= 65535; port++ {
-		if port != publicPort && port != vmessPort && port != shadowsocksPort && port != uiPort {
-			return port
-		}
+	port := 10443
+	for port == publicPort || port == vmessPort || port == shadowsocksPort || port == uiPort {
+		port++
 	}
-	return 0
+	return port
 }
 
 // validateTrojanConfiguration validates the supplied value.

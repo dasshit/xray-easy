@@ -1,9 +1,15 @@
 package auth
 
 import (
+	"crypto/rand"
+	"errors"
 	"strings"
 	"testing"
 )
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("random source failed") }
 
 func TestHashPasswordAndVerifyPassword(t *testing.T) {
 	password := "correct horse battery staple"
@@ -37,6 +43,15 @@ func TestHashPasswordRejectsShortPassword(t *testing.T) {
 	}
 }
 
+func TestHashPasswordReportsRandomSourceFailure(t *testing.T) {
+	previous := rand.Reader
+	rand.Reader = failingReader{}
+	t.Cleanup(func() { rand.Reader = previous })
+	if encoded, err := HashPassword("correct horse battery staple"); err == nil || encoded != "" || !strings.Contains(err.Error(), "generate password salt") {
+		t.Fatalf("HashPassword() = %q, %v; want salt error", encoded, err)
+	}
+}
+
 func TestVerifyPasswordRejectsMalformedOrUnsafeHashes(t *testing.T) {
 	for _, encoded := range []string{
 		"", "plain-text", "$argon2i$v=19$m=1,t=1,p=1$YWJj$YWJj",
@@ -49,6 +64,8 @@ func TestVerifyPasswordRejectsMalformedOrUnsafeHashes(t *testing.T) {
 		"$argon2id$v=19$m=1,t=1,p=0$YWJj$YWJj",
 		"$argon2id$v=19$m=1,t=1,p=33$YWJj$YWJj",
 		"$argon2id$v=19$m=1,t=1$YWJj$YWJj",
+		"$argon2id$v=19$invalid,m=1,t=1,p=1$YWJj$YWJj",
+		"$argon2id$v=19$m=1,t=1,p=1$YWJjZA$YWJj",
 		"$argon2id$v=19$m=x,t=1,p=1$YWJj$YWJj",
 		"$argon2id$v=19$m=1,t=1,p=1$%%%$YWJj",
 		"$argon2id$v=19$m=1,t=1,p=1$YWJj$%%%",

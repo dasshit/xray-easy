@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"database/sql"
+	"errors"
 	"net/http"
 	"path/filepath"
 	"strings"
@@ -13,6 +16,10 @@ import (
 	"xray-easy/internal/secret"
 	"xray-easy/internal/totp"
 )
+
+type authEntropyReader struct{}
+
+func (authEntropyReader) Read([]byte) (int, error) { return 0, errors.New("injected entropy failure") }
 
 func execSQLiteTestMutation(t *testing.T, app testApp, name, statement string) {
 	t.Helper()
@@ -113,4 +120,28 @@ func TestAuthHandlersReportStorageFailures(t *testing.T) {
 			t.Fatalf("TOTP session revocation error = %d %s", response.Code, response.Body.String())
 		}
 	})
+}
+
+func TestTOTPSetupReportsSecretTokenAndRecoveryEntropyFailures(t *testing.T) {
+	app := newTestApp(t, true)
+	previous := cryptorand.Reader
+	t.Cleanup(func() { cryptorand.Reader = previous })
+
+	cryptorand.Reader = authEntropyReader{}
+	response := requestJSON(t, app, http.MethodPost, "/api/auth/totp/setup", nil, true)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "generate TOTP secret") {
+		t.Fatalf("TOTP secret entropy failure = %d %s", response.Code, response.Body.String())
+	}
+
+	cryptorand.Reader = bytes.NewReader(make([]byte, 20))
+	response = requestJSON(t, app, http.MethodPost, "/api/auth/totp/setup", nil, true)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not create TOTP setup token") {
+		t.Fatalf("TOTP setup token entropy failure = %d %s", response.Code, response.Body.String())
+	}
+
+	cryptorand.Reader = bytes.NewReader(make([]byte, 36))
+	response = requestJSON(t, app, http.MethodPost, "/api/auth/totp/setup", nil, true)
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "generate recovery code") {
+		t.Fatalf("TOTP recovery-code entropy failure = %d %s", response.Code, response.Body.String())
+	}
 }

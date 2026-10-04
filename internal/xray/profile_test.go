@@ -3,6 +3,7 @@ package xray
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -553,6 +554,137 @@ func TestBuildProfileValidatesShadowsocksAndTrojanStateBeforeRendering(t *testin
 				t.Fatal("invalid protocol profile was accepted")
 			}
 		})
+	}
+}
+
+func TestBuildProfileRejectsMissingProtocolCredentialsAndEmptyDelivery(t *testing.T) {
+	settings := validTestSettings()
+	for _, test := range []struct {
+		name   string
+		client Client
+		config Settings
+	}{
+		{"Hysteria credential", Client{Protocol: domain.ProtocolHysteria2, HysteriaEnabled: true}, func() Settings { s := settings; s.Hysteria2Enabled = true; return s }()},
+		{"VMess UUID", Client{Protocol: domain.ProtocolVMess, VMessEnabled: true}, func() Settings { s := settings; s.VMessPublicPort = 9443; return s }()},
+		{"Shadowsocks password", Client{Protocol: domain.ProtocolShadowsocks, ShadowsocksEnabled: true, ShadowsocksPassword: "invalid"}, func() Settings {
+			s := settings
+			s.ShadowsocksEnabled, s.ShadowsocksPublicPort = true, 8388
+			s.ShadowsocksServerKey = testShadowsocks2022Key(1)
+			s.ShadowsocksMethod, s.ShadowsocksNetwork = domain.ShadowsocksMethod2022AES256GCM, domain.ShadowsocksNetworkTCPUDP
+			return s
+		}()},
+		{"Trojan password", Client{Protocol: domain.ProtocolTrojan, TrojanEnabled: true}, func() Settings { s := settings; s.TrojanEnabled = true; s.TrojanPublicPort = 10443; return s }()},
+		{"no enabled protocol", Client{Protocol: "unknown"}, settings},
+		{"Hysteria has no active inbound", Client{Protocol: domain.ProtocolHysteria2, HysteriaEnabled: true, HysteriaAuth: "secret"}, settings},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := BuildProfile(test.config, test.client); err == nil {
+				t.Fatal("unavailable protocol profile was returned")
+			}
+		})
+	}
+}
+
+func TestTLSFingerprintErrorBranchesAndTrojanValidation(t *testing.T) {
+	badFingerprint := strings.Repeat("z", 64)
+	if _, err := normalizeTLSFingerprint(badFingerprint); err == nil || !strings.Contains(err.Error(), "hexadecimal") {
+		t.Fatalf("normalizeTLSFingerprint() error = %v, want invalid-hex error", err)
+	}
+	settings := validTestSettings()
+	settings.HysteriaTLSMode = HysteriaTLSSelfSigned
+	settings.HysteriaTLSFingerprint = badFingerprint
+	vmess := Client{Protocol: domain.ProtocolVMess, UUID: "uuid"}
+	if _, err := BuildVMessURI(settings, vmess); err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("BuildVMessURI() error = %v, want fingerprint error", err)
+	}
+	if _, err := buildVMessClientJSON(settings, vmess); err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("buildVMessClientJSON() error = %v, want fingerprint error", err)
+	}
+	trojan := Client{Protocol: domain.ProtocolTrojan, TrojanPassword: "secret"}
+	if _, err := BuildTrojanURI(settings, trojan); err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("BuildTrojanURI() error = %v, want fingerprint error", err)
+	}
+	if _, err := buildTrojanClientJSON(settings, trojan); err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("buildTrojanClientJSON() error = %v, want fingerprint error", err)
+	}
+	settings.TrojanEnabled, settings.TrojanPublicPort = true, 10443
+	settings.HysteriaTLSMode = HysteriaTLSCustom
+	settings.HysteriaTLSServerName = "bad name"
+	if err := validateTrojanProfileSettings(settings); err == nil || !strings.Contains(err.Error(), "TLS server name") {
+		t.Fatalf("validateTrojanProfileSettings() error = %v, want server-name error", err)
+	}
+	settings.HysteriaTLSMode = HysteriaTLSSelfSigned
+	settings.HysteriaTLSServerName = ""
+	if err := validateTrojanProfileSettings(settings); err == nil || !strings.Contains(err.Error(), "fingerprint") {
+		t.Fatalf("validateTrojanProfileSettings() error = %v, want fingerprint error", err)
+	}
+}
+
+func TestBuildProfilePropagatesEncoderFailures(t *testing.T) {
+	base := validTestSettings()
+	shadowsocksSettings := base
+	shadowsocksSettings.ShadowsocksEnabled = true
+	shadowsocksSettings.ShadowsocksPublicPort = 8388
+	shadowsocksSettings.ShadowsocksMethod = domain.ShadowsocksMethod2022AES256GCM
+	shadowsocksSettings.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
+	shadowsocksSettings.ShadowsocksServerKey = testShadowsocks2022Key(1)
+	trojanSettings := base
+	trojanSettings.TrojanEnabled = true
+	trojanSettings.TrojanPublicPort = 10443
+	vmessSettings := base
+	vmessSettings.VMessPublicPort = 9443
+	shadowsocksClient := Client{Protocol: domain.ProtocolShadowsocks, ShadowsocksEnabled: true, ShadowsocksPassword: testShadowsocks2022Key(2)}
+	trojanClient := Client{Protocol: domain.ProtocolTrojan, TrojanEnabled: true, TrojanPassword: "password"}
+	vmessClient := Client{Protocol: domain.ProtocolVMess, VMessEnabled: true, UUID: "uuid"}
+
+	for _, test := range []struct {
+		name       string
+		settings   Settings
+		client     Client
+		failEncode func(*profileRenderer, error)
+	}{
+		{"VLESS JSON", base, Client{UUID: "uuid", ShortID: "sid"}, func(renderer *profileRenderer, err error) {
+			renderer.vlessJSON = func(Settings, Client, string) ([]byte, error) { return nil, err }
+		}},
+		{"VMess URI", vmessSettings, vmessClient, func(renderer *profileRenderer, err error) {
+			renderer.vmessURI = func(Settings, Client) (string, error) { return "", err }
+		}},
+		{"VMess JSON", vmessSettings, vmessClient, func(renderer *profileRenderer, err error) {
+			renderer.vmessJSON = func(Settings, Client) ([]byte, error) { return nil, err }
+		}},
+		{"Shadowsocks JSON", shadowsocksSettings, shadowsocksClient, func(renderer *profileRenderer, err error) {
+			renderer.shadowsocksJSON = func(Settings, Client) ([]byte, error) { return nil, err }
+		}},
+		{"Trojan URI", trojanSettings, trojanClient, func(renderer *profileRenderer, err error) {
+			renderer.trojanURI = func(Settings, Client) (string, error) { return "", err }
+		}},
+		{"Trojan JSON", trojanSettings, trojanClient, func(renderer *profileRenderer, err error) {
+			renderer.trojanJSON = func(Settings, Client) ([]byte, error) { return nil, err }
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			wantErr := errors.New("simulated encoder failure")
+			renderer := defaultProfileRenderer()
+			test.failEncode(&renderer, wantErr)
+			if _, err := buildProfileWith(test.settings, test.client, renderer); !errors.Is(err, wantErr) {
+				t.Fatalf("buildProfileWith() error = %v, want injected encoder failure", err)
+			}
+		})
+	}
+}
+
+func TestProtocolSettingsValidatorsCoverDisabledAndInvalidKey(t *testing.T) {
+	if err := validateHysteriaProfileSettings(Settings{}); err == nil || !strings.Contains(err.Error(), "not enabled") {
+		t.Fatalf("validateHysteriaProfileSettings() error = %v, want disabled error", err)
+	}
+	settings := validTestSettings()
+	settings.ShadowsocksEnabled = true
+	settings.ShadowsocksPublicPort = 8388
+	settings.ShadowsocksMethod = domain.ShadowsocksMethod2022AES256GCM
+	settings.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
+	settings.ShadowsocksServerKey = "invalid"
+	if err := validateShadowsocksProfileSettings(settings); err == nil || !strings.Contains(err.Error(), "server key") {
+		t.Fatalf("validateShadowsocksProfileSettings() error = %v, want invalid key error", err)
 	}
 }
 

@@ -235,7 +235,7 @@ func TestProtocolAccessHelpersAndHysteriaCredentialFallback(t *testing.T) {
 
 func TestAccessStateRejectsMissingAndUnsupportedProtocols(t *testing.T) {
 	client := Client{Protocol: ProtocolVLESS, VLESSEnabled: true}
-	for _, protocol := range []ClientProtocol{ProtocolHysteria2, ProtocolVMess, ProtocolAmneziaWG, "unknown"} {
+	for _, protocol := range []ClientProtocol{ProtocolHysteria2, ProtocolVMess, ProtocolShadowsocks, ProtocolTrojan, ProtocolAmneziaWG, "unknown"} {
 		if _, err := client.AccessState(protocol); err == nil {
 			t.Errorf("AccessState(%q) unexpectedly succeeded", protocol)
 		}
@@ -262,6 +262,18 @@ func TestNewProtocolClientValidatesHysteriaCredentialsAndProtocolSpecificFields(
 		if _, err := NewProtocolClient("id", "phone", protocol, "", "password"); err == nil {
 			t.Errorf("unsupported new profile protocol %q was accepted", protocol)
 		}
+	}
+}
+
+func TestNewProtocolClientRejectsMissingIdentityAndInvalidNames(t *testing.T) {
+	for _, test := range []struct{ id, name string }{{"", "phone"}, {"id", "two words"}} {
+		if client, err := NewProtocolClient(test.id, test.name, ProtocolVMess, "", ""); err == nil || client.ID != "" {
+			t.Errorf("NewProtocolClient(%q, %q) = %+v, %v; want validation error", test.id, test.name, client, err)
+		}
+	}
+	client, err := NewProtocolClient("ss-id", " phone ", ProtocolShadowsocks, "ignored", "ignored")
+	if err != nil || client.Name != "phone" || client.Protocol != ProtocolShadowsocks || !client.ShadowsocksEnabled {
+		t.Fatalf("Shadowsocks profile = %+v, %v", client, err)
 	}
 }
 

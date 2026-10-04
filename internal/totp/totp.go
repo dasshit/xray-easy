@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"strings"
 	"time"
@@ -26,7 +27,7 @@ const (
 // NewSecret constructs and returns the requested value.
 func NewSecret() (string, error) {
 	raw := make([]byte, secretBytes)
-	if _, err := rand.Read(raw); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
 		return "", fmt.Errorf("generate TOTP secret: %w", err)
 	}
 	return base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw), nil
@@ -80,7 +81,7 @@ func OTPAuthURI(secret, issuer, account string) string {
 // NewRecoveryCode constructs and returns the requested value.
 func NewRecoveryCode() (string, error) {
 	raw := make([]byte, 16)
-	if _, err := rand.Read(raw); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
 		return "", fmt.Errorf("generate recovery code: %w", err)
 	}
 	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(raw)

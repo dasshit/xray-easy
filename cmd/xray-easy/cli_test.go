@@ -2,8 +2,11 @@ package main
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -30,10 +33,11 @@ func configureCLIEnv(t *testing.T, app testApp, masterKey []byte) {
 }
 
 type cliAWGBackup struct {
-	state      []byte
-	restored   [][]byte
-	exportErr  error
-	restoreErr error
+	state         []byte
+	restored      [][]byte
+	exportErr     error
+	restoreErr    error
+	restoreErrors []error
 }
 
 type cliAWGBackupGateway struct {
@@ -50,6 +54,13 @@ func (b *cliAWGBackup) ExportBackup(context.Context) ([]byte, error) {
 
 func (b *cliAWGBackup) RestoreBackup(_ context.Context, state []byte) error {
 	b.restored = append(b.restored, append([]byte(nil), state...))
+	if len(b.restoreErrors) > 0 {
+		err := b.restoreErrors[0]
+		b.restoreErrors = b.restoreErrors[1:]
+		if err != nil {
+			return err
+		}
+	}
 	if b.restoreErr != nil {
 		return b.restoreErr
 	}
@@ -111,6 +122,11 @@ func TestDialConfiguredAWGBackupHonorsOptionalServiceConfiguration(t *testing.T)
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///controller-test")
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-control.token"))
+	if _, err := dialConfiguredAWGBackup(); err == nil || !strings.Contains(err.Error(), "initialize Controller AmneziaWG backup gateway") {
+		t.Fatalf("dialConfiguredAWGBackup with unreadable Controller token = %v", err)
+	}
+
 	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
 	client, err = dialConfiguredAWGBackup()
 	if err != nil || client == nil {
@@ -118,6 +134,13 @@ func TestDialConfiguredAWGBackupHonorsOptionalServiceConfiguration(t *testing.T)
 	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestVerifyBackupMasterKeyReportsUnreadableStateDatabase(t *testing.T) {
+	info := backup.Info{StatePath: filepath.Join(t.TempDir(), "missing-state.db")}
+	if err := verifyBackupMasterKey(info, []byte("0123456789abcdef0123456789abcdef")); err == nil {
+		t.Fatal("verifyBackupMasterKey accepted a backup without readable state database")
 	}
 }
 
@@ -245,6 +268,60 @@ func TestRestoreCLIValidatesConfirmationAndMasterKeyBeforeOpeningDatabase(t *tes
 	if err := runRestoreCLI(context.Background(), root, root, []string{"backup-name", "RESTORE"}); err == nil || !strings.Contains(err.Error(), "XRAY_EASY_MASTER_KEY is required") {
 		t.Fatalf("restore without master key = %v", err)
 	}
+	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
+	t.Setenv("XRAY_CONTROLLER_ADDR", "")
+	if err := runRestoreCLI(context.Background(), root, root, []string{"backup-name", "RESTORE"}); err == nil || !strings.Contains(err.Error(), "XRAY_CONTROLLER_ADDR must be configured") {
+		t.Fatalf("restore with AWG enabled but no Controller address = %v", err)
+	}
+
+	t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+	tokenPath := filepath.Join(root, "controller.token")
+	if err := os.WriteFile(tokenPath, []byte("controller-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///controller-test")
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", tokenPath)
+	if err := runRestoreCLI(context.Background(), root, root, []string{"missing-backup", "RESTORE"}); err == nil || !strings.Contains(err.Error(), "backup") {
+		t.Fatalf("restore with configured AWG gateway should proceed to backup lookup, got %v", err)
+	}
+}
+
+func TestRestoreCLIReportsDatabaseAndMaintenanceLockFailures(t *testing.T) {
+	t.Run("database path is not usable", func(t *testing.T) {
+		root := t.TempDir()
+		dataPath := filepath.Join(root, "data")
+		if err := os.WriteFile(dataPath, []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AWG_PUBLIC_HOST", "")
+		t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+		if err := runRestoreCLI(context.Background(), dataPath, root, []string{"backup-name", "RESTORE"}); err == nil {
+			t.Fatal("restore proceeded without opening its database")
+		}
+	})
+
+	t.Run("maintenance lock path is a directory", func(t *testing.T) {
+		root := t.TempDir()
+		dataDir := filepath.Join(root, "data")
+		if err := os.MkdirAll(dataDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		db, err := store.Open(context.Background(), filepath.Join(dataDir, "state.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Mkdir(filepath.Join(dataDir, "maintenance.lock"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("AWG_PUBLIC_HOST", "")
+		t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+		if err := runRestoreCLI(context.Background(), dataDir, root, []string{"backup-name", "RESTORE"}); err == nil || !strings.Contains(err.Error(), "acquire maintenance lock") {
+			t.Fatalf("restore maintenance lock error = %v", err)
+		}
+	})
 }
 
 func TestBackupManagerIncludesOptionalAWGBackupService(t *testing.T) {
@@ -265,6 +342,83 @@ func TestMainDispatchesValidCLICommand(t *testing.T) {
 	os.Args = []string{"xray-easy", "backup", "list"}
 	t.Cleanup(func() { os.Args = previousArgs })
 	main()
+}
+
+func TestMainReportsCLIAndControlPlaneFailuresWithoutTerminatingTests(t *testing.T) {
+	oldArgs, oldExit, oldStart, oldStderr := os.Args, exitProcess, startControlPlane, os.Stderr
+	oldLogger := slog.Default()
+	t.Cleanup(func() {
+		os.Args, exitProcess, startControlPlane, os.Stderr = oldArgs, oldExit, oldStart, oldStderr
+		slog.SetDefault(oldLogger)
+	})
+	stderr, err := os.CreateTemp(t.TempDir(), "xray-easy-stderr-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = stderr
+	var exitCodes []int
+	exitProcess = func(code int) { exitCodes = append(exitCodes, code) }
+
+	os.Args = []string{"xray-easy", "unknown-command"}
+	main()
+	if len(exitCodes) != 1 || exitCodes[0] != 1 {
+		t.Fatalf("CLI error exit codes = %v, want [1]", exitCodes)
+	}
+
+	os.Args = []string{"xray-easy"}
+	startControlPlane = func() error { return errors.New("injected listener failure") }
+	main()
+	if len(exitCodes) != 2 || exitCodes[1] != 1 {
+		t.Fatalf("control-plane error exit codes = %v, want [1 1]", exitCodes)
+	}
+	startControlPlane = func() error { return nil }
+	main()
+	if len(exitCodes) != 2 {
+		t.Fatalf("successful server startup exited the process: %v", exitCodes)
+	}
+	if err := stderr.Sync(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stderr.Seek(0, 0); err != nil {
+		t.Fatal(err)
+	}
+	output, err := io.ReadAll(stderr)
+	if err != nil || !strings.Contains(string(output), "injected listener failure") {
+		t.Fatalf("main stderr = %q, %v", output, err)
+	}
+}
+
+func TestBackupCLIReportsMasterKeyDatabaseAndAWGGatewayFailures(t *testing.T) {
+	t.Run("master key missing", func(t *testing.T) {
+		t.Setenv("XRAY_EASY_MASTER_KEY", "")
+		root := t.TempDir()
+		if err := runBackupCLI(t.Context(), root, root, []string{"create"}); err == nil || !strings.Contains(err.Error(), "XRAY_EASY_MASTER_KEY is required") {
+			t.Fatalf("backup without master key = %v", err)
+		}
+	})
+
+	t.Run("database path unusable", func(t *testing.T) {
+		root := t.TempDir()
+		dataPath := filepath.Join(root, "data")
+		if err := os.WriteFile(dataPath, []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("XRAY_EASY_MASTER_KEY", base64.StdEncoding.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+		if err := runBackupCLI(t.Context(), dataPath, root, []string{"create"}); err == nil {
+			t.Fatal("backup accepted an unusable database path")
+		}
+	})
+
+	t.Run("AWG controller token unreadable", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
+		t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///controller-test")
+		t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-controller.token"))
+		if err := runBackupCLI(t.Context(), app.server.dataDir, app.server.configDir, []string{"create"}); err == nil || !strings.Contains(err.Error(), "read Controller token") {
+			t.Fatalf("backup with unreadable AWG Controller token = %v", err)
+		}
+	})
 }
 
 func TestAdminAndBackupCLIPropagateStorageAndLockFailures(t *testing.T) {
@@ -323,6 +477,122 @@ func TestAdminAndBackupCLIPropagateStorageAndLockFailures(t *testing.T) {
 			t.Fatal("backup list error was ignored")
 		}
 	})
+}
+
+func TestAdminCLIReportsPasswordAndTOTPFailurePaths(t *testing.T) {
+	t.Run("database path is unusable", func(t *testing.T) {
+		root := t.TempDir()
+		dataPath := filepath.Join(root, "data")
+		if err := os.WriteFile(dataPath, []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := runAdminCLI(t.Context(), dataPath, []string{"logout-all"}); err == nil {
+			t.Fatal("admin CLI accepted an unusable data directory")
+		}
+	})
+
+	t.Run("password reset lock is busy", func(t *testing.T) {
+		app := newTestApp(t, true)
+		lock, err := maintenance.Acquire(t.Context(), app.server.maintenancePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
+		defer cancel()
+		if err := runAdminCLI(ctx, app.server.dataDir, []string{"reset-password"}); err == nil || !strings.Contains(err.Error(), "acquire maintenance lock") {
+			t.Fatalf("admin password reset while locked = %v", err)
+		}
+	})
+
+	t.Run("password input failure", func(t *testing.T) {
+		app := newTestApp(t, true)
+		previous := readCLIPassword
+		readCLIPassword = func(int) ([]byte, error) { return nil, errors.New("terminal unavailable") }
+		t.Cleanup(func() { readCLIPassword = previous })
+		if err := runAdminCLI(t.Context(), app.server.dataDir, []string{"reset-password"}); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
+			t.Fatalf("password reset terminal failure = %v", err)
+		}
+	})
+
+	t.Run("password persistence failure", func(t *testing.T) {
+		app := newTestApp(t, true)
+		execSQLiteTestMutation(t, app, "reject administrator password update", `CREATE TRIGGER reject_password_update BEFORE UPDATE OF password_hash ON admin_users BEGIN SELECT RAISE(ABORT, 'password update blocked'); END`)
+		previous := readCLIPassword
+		readCLIPassword = func(int) ([]byte, error) { return []byte("valid replacement password"), nil }
+		t.Cleanup(func() { readCLIPassword = previous })
+		if err := runAdminCLI(t.Context(), app.server.dataDir, []string{"reset-password"}); err == nil || !strings.Contains(err.Error(), "reset administrator password") {
+			t.Fatalf("password persistence failure = %v", err)
+		}
+	})
+
+	t.Run("password hash entropy failure", func(t *testing.T) {
+		app := newTestApp(t, true)
+		previousPasswordReader := readCLIPassword
+		readCLIPassword = func(int) ([]byte, error) { return []byte("valid replacement password"), nil }
+		t.Cleanup(func() { readCLIPassword = previousPasswordReader })
+		previousEntropyReader := cryptorand.Reader
+		cryptorand.Reader = failingReader{}
+		t.Cleanup(func() { cryptorand.Reader = previousEntropyReader })
+		if err := runAdminCLI(t.Context(), app.server.dataDir, []string{"reset-password"}); err == nil || !strings.Contains(err.Error(), "generate password salt") {
+			t.Fatalf("password hash entropy failure = %v", err)
+		}
+	})
+
+	t.Run("TOTP update failure", func(t *testing.T) {
+		app := newTestApp(t, true)
+		setTestAdminTOTP(t, app)
+		execSQLiteTestMutation(t, app, "reject TOTP reset", `CREATE TRIGGER reject_totp_reset BEFORE UPDATE OF totp_enabled ON admin_users BEGIN SELECT RAISE(ABORT, 'TOTP reset blocked'); END`)
+		if err := runAdminCLI(t.Context(), app.server.dataDir, []string{"reset-totp"}); err == nil || !strings.Contains(err.Error(), "reset TOTP") {
+			t.Fatalf("TOTP reset persistence failure = %v", err)
+		}
+	})
+
+	t.Run("TOTP session revocation failure", func(t *testing.T) {
+		app := newTestApp(t, true)
+		setTestAdminTOTP(t, app)
+		execSQLiteTestMutation(t, app, "reject TOTP reset session deletion", `CREATE TRIGGER reject_totp_session_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'session revoke blocked'); END`)
+		if err := runAdminCLI(t.Context(), app.server.dataDir, []string{"reset-totp"}); err == nil || !strings.Contains(err.Error(), "revoke sessions") {
+			t.Fatalf("TOTP session revocation failure = %v", err)
+		}
+	})
+}
+
+func TestAdminCLIRecoveryCodeGenerationAndPersistenceFailures(t *testing.T) {
+	t.Run("entropy source fails", func(t *testing.T) {
+		app := newTestApp(t, true)
+		setTestAdminTOTP(t, app)
+		previous := cryptorand.Reader
+		cryptorand.Reader = failingReader{}
+		t.Cleanup(func() { cryptorand.Reader = previous })
+		if err := runAdminCLI(t.Context(), app.server.dataDir, []string{"recovery-codes"}); err == nil || !strings.Contains(err.Error(), "read failed") {
+			t.Fatalf("recovery-code entropy error = %v", err)
+		}
+	})
+
+	t.Run("recovery-code replacement fails", func(t *testing.T) {
+		app := newTestApp(t, true)
+		setTestAdminTOTP(t, app)
+		execSQLiteTestMutation(t, app, "reject recovery-code insert", `CREATE TRIGGER reject_recovery_code_insert BEFORE INSERT ON totp_recovery_codes BEGIN SELECT RAISE(ABORT, 'recovery-code insert blocked'); END`)
+		if err := runAdminCLI(t.Context(), app.server.dataDir, []string{"recovery-codes"}); err == nil || !strings.Contains(err.Error(), "replace recovery codes") {
+			t.Fatalf("recovery-code persistence error = %v", err)
+		}
+	})
+}
+
+func setTestAdminTOTP(t *testing.T, app testApp) {
+	t.Helper()
+	secretValue, err := totp.NewSecret()
+	if err != nil {
+		t.Fatal(err)
+	}
+	encrypted, err := secret.Seal(app.server.masterKey, secretValue, "totp_secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := app.server.store.SetTOTP(t.Context(), app.admin.ID, encrypted, nil); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestRestoreCLIRejectsInvalidConfiguredPortAfterDryRunRestore(t *testing.T) {
@@ -467,6 +737,111 @@ func TestRestoreCLIIncludesAWGStateAndRollsItBackOnApplyFailure(t *testing.T) {
 	if string(awg.state) != "awg-current" || len(awg.restored) < 2 || string(awg.restored[0]) != "awg-before" || string(awg.restored[len(awg.restored)-1]) != "awg-current" {
 		t.Fatalf("AmneziaWG backup/rollback states = %q / %q", awg.state, awg.restored)
 	}
+}
+
+func TestRestoreCLIReportsPreRestoreAndRollbackFailures(t *testing.T) {
+	t.Run("backup master key mismatch", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		settings, err := app.server.store.GetSettings(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		settings.RealityPrivateKeyEnc = "malformed authenticated ciphertext"
+		if err := app.server.store.UpdateSettings(context.Background(), settings); err != nil {
+			t.Fatal(err)
+		}
+		target, err := backup.NewManager(app.server.store, app.server.dataDir, app.server.configDir, app.server.masterKey).Create("key-check")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = runRestoreCLIWithApplier(context.Background(), app.server.dataDir, app.server.configDir, []string{target.Name, "RESTORE"}, func(context.Context, *store.Store, []byte, string, int) error {
+			t.Fatal("restore applier called for a backup with invalid encrypted key material")
+			return nil
+		})
+		if err == nil || !strings.Contains(err.Error(), "different XRAY_EASY_MASTER_KEY") {
+			t.Fatalf("master-key mismatch result = %v", err)
+		}
+	})
+
+	t.Run("pre-restore backup fails when AWG snapshot is unavailable", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		target, err := backup.NewManager(app.server.store, app.server.dataDir, app.server.configDir, app.server.masterKey).Create("restore-target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		awg := &cliAWGBackup{exportErr: errors.New("injected AWG snapshot failure")}
+		err = runRestoreCLIWithApplierAndAWG(context.Background(), app.server.dataDir, app.server.configDir, []string{target.Name, "RESTORE"}, func(context.Context, *store.Store, []byte, string, int) error {
+			t.Fatal("restore applier called after pre-restore backup failed")
+			return nil
+		}, awg)
+		if err == nil || !strings.Contains(err.Error(), "create pre-restore backup") || !strings.Contains(err.Error(), "injected AWG snapshot failure") {
+			t.Fatalf("pre-restore backup result = %v", err)
+		}
+	})
+
+	t.Run("target state restore failure is reported", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		backupAWG := &cliAWGBackup{state: []byte("target-awg-state")}
+		manager := backup.NewManager(app.server.store, app.server.dataDir, app.server.configDir, app.server.masterKey)
+		manager.AWG = backupAWG
+		target, err := manager.Create("restore-target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		awg := &cliAWGBackup{state: []byte("current-awg-state"), restoreErr: errors.New("injected AWG restore failure")}
+		err = runRestoreCLIWithApplierAndAWG(context.Background(), app.server.dataDir, app.server.configDir, []string{target.Name, "RESTORE"}, func(context.Context, *store.Store, []byte, string, int) error {
+			t.Fatal("restore applier called after state restore failed")
+			return nil
+		}, awg)
+		if err == nil || !strings.Contains(err.Error(), "restore state") || !strings.Contains(err.Error(), "injected AWG restore failure") {
+			t.Fatalf("target state restore result = %v", err)
+		}
+	})
+
+	t.Run("rollback state restore failure is reported", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		backupAWG := &cliAWGBackup{state: []byte("target-awg-state")}
+		manager := backup.NewManager(app.server.store, app.server.dataDir, app.server.configDir, app.server.masterKey)
+		manager.AWG = backupAWG
+		target, err := manager.Create("restore-target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		awg := &cliAWGBackup{state: []byte("current-awg-state"), restoreErrors: []error{nil, errors.New("injected rollback AWG failure")}}
+		applyCalls := 0
+		err = runRestoreCLIWithApplierAndAWG(context.Background(), app.server.dataDir, app.server.configDir, []string{target.Name, "RESTORE"}, func(context.Context, *store.Store, []byte, string, int) error {
+			applyCalls++
+			return errors.New("injected config apply failure")
+		}, awg)
+		if err == nil || !strings.Contains(err.Error(), "rollback from") || !strings.Contains(err.Error(), "restore pre-restore snapshot") || !strings.Contains(err.Error(), "injected rollback AWG failure") || applyCalls != 1 {
+			t.Fatalf("rollback restore result = %v; apply calls=%d", err, applyCalls)
+		}
+	})
+
+	t.Run("rollback config apply failure is reported", func(t *testing.T) {
+		app := newTestApp(t, true)
+		configureCLIEnv(t, app, app.server.masterKey)
+		backupAWG := &cliAWGBackup{state: []byte("target-awg-state")}
+		manager := backup.NewManager(app.server.store, app.server.dataDir, app.server.configDir, app.server.masterKey)
+		manager.AWG = backupAWG
+		target, err := manager.Create("restore-target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		awg := &cliAWGBackup{state: []byte("current-awg-state")}
+		applyCalls := 0
+		err = runRestoreCLIWithApplierAndAWG(context.Background(), app.server.dataDir, app.server.configDir, []string{target.Name, "RESTORE"}, func(context.Context, *store.Store, []byte, string, int) error {
+			applyCalls++
+			return errors.New("injected apply failure")
+		}, awg)
+		if err == nil || !strings.Contains(err.Error(), "rollback from") || !strings.Contains(err.Error(), "apply pre-restore snapshot") || applyCalls != 2 {
+			t.Fatalf("rollback apply result = %v; apply calls=%d", err, applyCalls)
+		}
+	})
 }
 
 func TestAtomicWriteDecodeJSONAndSmallHelpers(t *testing.T) {

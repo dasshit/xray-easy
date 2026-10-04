@@ -1,15 +1,120 @@
 package backup
 
 import (
+	cryptorand "crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"xray-easy/internal/domain"
 )
+
+func TestCreateRejectsMalformedConfigAndUnsafeTLSDirectory(t *testing.T) {
+	t.Run("malformed active config", func(t *testing.T) {
+		manager, _ := newTestManager(t)
+		if err := os.WriteFile(filepath.Join(manager.ConfigDir, "active.json"), []byte("not-json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Create("malformed-config"); err == nil || !strings.Contains(err.Error(), "parse active config") {
+			t.Fatalf("Create accepted malformed active config: %v", err)
+		}
+		entries, err := os.ReadDir(manager.BackupDir())
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("failed config backup left artifacts: %v, %v", entries, err)
+		}
+	})
+
+	t.Run("symlink in TLS directory", func(t *testing.T) {
+		manager, _ := newTestManager(t)
+		tlsRoot := filepath.Join(manager.DataDir, "hysteria-tls")
+		if err := os.MkdirAll(tlsRoot, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(filepath.Join(t.TempDir(), "missing.pem"), filepath.Join(tlsRoot, "privkey.pem")); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Create("unsafe-tls"); err == nil || !strings.Contains(err.Error(), "symlink") {
+			t.Fatalf("Create accepted symlinked TLS data: %v", err)
+		}
+		entries, err := os.ReadDir(manager.BackupDir())
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("failed TLS backup left artifacts: %v, %v", entries, err)
+		}
+	})
+
+	t.Run("active config cannot be read", func(t *testing.T) {
+		manager, _ := newTestManager(t)
+		if err := os.Mkdir(filepath.Join(manager.ConfigDir, "active.json"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Create("unreadable-config"); err == nil || !strings.Contains(err.Error(), "read active config") {
+			t.Fatalf("Create accepted a directory in place of active.json: %v", err)
+		}
+	})
+}
+
+func TestCreateAndRestoreReportClosedSQLiteStoreFailures(t *testing.T) {
+	t.Run("create backup", func(t *testing.T) {
+		manager, db := newTestManager(t)
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Create("closed-store"); err == nil || !strings.Contains(err.Error(), "backup SQLite") {
+			t.Fatalf("Create with a closed store error = %v", err)
+		}
+		entries, err := os.ReadDir(manager.BackupDir())
+		if err != nil || len(entries) != 0 {
+			t.Fatalf("failed SQLite backup left artifacts: %v, %v", entries, err)
+		}
+	})
+
+	t.Run("restore snapshot current state", func(t *testing.T) {
+		manager, db := newTestManager(t)
+		info, err := manager.Create("closed-store")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "snapshot current SQLite state") {
+			t.Fatalf("RestoreState with a closed store error = %v", err)
+		}
+	})
+}
+
+type failedRandomReader struct{ err error }
+
+func (r failedRandomReader) Read([]byte) (int, error) { return 0, r.err }
+
+type backupReadCloser struct {
+	io.Reader
+	closeErr error
+}
+
+func (r backupReadCloser) Close() error { return r.closeErr }
+
+type backupWriteCloser struct {
+	*strings.Builder
+	writeErr error
+	closeErr error
+}
+
+func (w backupWriteCloser) Write(data []byte) (int, error) {
+	if w.writeErr != nil {
+		return 0, w.writeErr
+	}
+	return w.Builder.Write(data)
+}
+
+func (w backupWriteCloser) Close() error { return w.closeErr }
 
 type failingBackupTempFile struct {
 	*os.File
@@ -91,6 +196,109 @@ func TestWriteFilePropagatesAtomicPersistenceFailuresAndCleansTemporaryFiles(t *
 	}
 }
 
+func TestRandomSuffixPropagatesEntropyFailure(t *testing.T) {
+	previous := cryptorand.Reader
+	cryptorand.Reader = failedRandomReader{err: errors.New("entropy unavailable")}
+	t.Cleanup(func() { cryptorand.Reader = previous })
+
+	if _, err := randomSuffix(); err == nil || !strings.Contains(err.Error(), "entropy unavailable") {
+		t.Fatalf("randomSuffix error = %v, want entropy failure", err)
+	}
+}
+
+func TestCreatePropagatesRandomSuffixEntropyFailure(t *testing.T) {
+	manager, _ := newTestManager(t)
+	previous := cryptorand.Reader
+	cryptorand.Reader = failedRandomReader{err: errors.New("backup entropy unavailable")}
+	t.Cleanup(func() { cryptorand.Reader = previous })
+	if _, err := manager.Create("entropy-failure"); err == nil || !strings.Contains(err.Error(), "backup entropy unavailable") {
+		t.Fatalf("Create() error = %v, want entropy failure", err)
+	}
+	if entries, err := os.ReadDir(manager.BackupDir()); err != nil || len(entries) != 0 {
+		t.Fatalf("failed random suffix left backup artifacts: %v, %v", entries, err)
+	}
+}
+
+func TestRestoreStateReportsSymlinkLoopWhileInspectingAWGBackup(t *testing.T) {
+	manager, _ := newTestManager(t)
+	loop := filepath.Join(t.TempDir(), "loop")
+	if err := os.Symlink(loop, loop); err != nil {
+		t.Fatal(err)
+	}
+	err := manager.RestoreState(Info{Path: loop})
+	if err == nil || !strings.Contains(err.Error(), "inspect AmneziaWG backup") {
+		t.Fatalf("RestoreState() error = %v, want AWG backup inspection error", err)
+	}
+}
+
+func TestRestoreStateReportsUnreadableAWGBackupAndInvalidTLSRoot(t *testing.T) {
+	t.Run("AWG archive cannot be read", func(t *testing.T) {
+		manager, _ := newTestManager(t)
+		manager.AWG = &awgBackupStub{current: []byte("snapshot")}
+		info, err := manager.Create("unreadable-awg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		archive := filepath.Join(info.Path, "amneziawg.tar.gz")
+		if err := os.Chmod(archive, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(archive, 0o600) })
+		if _, err := os.ReadFile(archive); err == nil {
+			t.Skip("current user can read a file with mode 000")
+		}
+		if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "read AmneziaWG backup") {
+			t.Fatalf("RestoreState() with unreadable AWG archive = %v", err)
+		}
+	})
+
+	t.Run("TLS backup root is not a directory", func(t *testing.T) {
+		manager, _ := newTestManager(t)
+		info, err := manager.Create("invalid-tls-root")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(info.Path, "hysteria-tls"), []byte("invalid"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "prepare Hysteria 2 TLS restore") {
+			t.Fatalf("RestoreState() with invalid TLS root = %v", err)
+		}
+	})
+}
+
+func TestCopyAndCloseTLSFileReturnsCopyAndCloseErrorsInOrder(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		readerErr error
+		inputErr  error
+		writeErr  error
+		outputErr error
+		wantErr   error
+	}{
+		{name: "success"},
+		{name: "copy failure takes precedence", readerErr: errors.New("read failed"), inputErr: errors.New("input close failed"), outputErr: errors.New("output close failed"), wantErr: errors.New("read failed")},
+		{name: "input close failure", inputErr: errors.New("input close failed"), outputErr: errors.New("output close failed"), wantErr: errors.New("input close failed")},
+		{name: "output close failure", outputErr: errors.New("output close failed"), wantErr: errors.New("output close failed")},
+		{name: "write failure", writeErr: errors.New("write failed"), wantErr: errors.New("write failed")},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			input := backupReadCloser{Reader: strings.NewReader("certificate"), closeErr: test.inputErr}
+			if test.readerErr != nil {
+				input.Reader = failedRandomReader{err: test.readerErr}
+			}
+			output := backupWriteCloser{Builder: &strings.Builder{}, writeErr: test.writeErr, closeErr: test.outputErr}
+			err := copyAndCloseTLSFile(input, output)
+			if (err == nil) != (test.wantErr == nil) || err != nil && err.Error() != test.wantErr.Error() {
+				t.Fatalf("copyAndCloseTLSFile() error = %v, want %v", err, test.wantErr)
+			}
+			if test.name == "success" && output.String() != "certificate" {
+				t.Fatalf("copied TLS file = %q", output.String())
+			}
+		})
+	}
+}
+
 func TestListAndVerifyReportMalformedBackupArtifacts(t *testing.T) {
 	t.Run("malformed metadata in list", func(t *testing.T) {
 		manager, _ := newTestManager(t)
@@ -148,6 +356,34 @@ func TestListAndVerifyReportMalformedBackupArtifacts(t *testing.T) {
 			t.Fatalf("Verify accepted invalid SQLite: %v", err)
 		}
 	})
+
+	t.Run("AWG metadata disagrees with archive", func(t *testing.T) {
+		manager, _ := newTestManager(t)
+		info, err := manager.Create("unexpected-awg")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(info.Path, "amneziawg.tar.gz"), []byte("unexpected"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := manager.Verify(info.Name); err == nil || !strings.Contains(err.Error(), "AmneziaWG metadata") {
+			t.Fatalf("Verify() accepted mismatched AWG metadata: %v", err)
+		}
+	})
+}
+
+func TestPruneReturnsBackupListingErrors(t *testing.T) {
+	manager, _ := newTestManager(t)
+	broken := filepath.Join(manager.BackupDir(), "backup-broken")
+	if err := os.MkdirAll(broken, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(broken, "metadata.json"), []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.prune(nil); err == nil || !strings.Contains(err.Error(), "metadata") {
+		t.Fatalf("prune() ignored invalid backup metadata: %v", err)
+	}
 }
 
 func TestListRelativeFilesRejectsSymlinksAndSpecialFiles(t *testing.T) {
@@ -231,6 +467,13 @@ func TestCopyTLSDirectoryRejectsUnsafeEntriesAndPreservesModes(t *testing.T) {
 	if err := os.Remove(filepath.Join(source, "pipe")); err != nil {
 		t.Fatal(err)
 	}
+	blockedDestination := filepath.Join(root, "blocked-copy")
+	if err := os.WriteFile(blockedDestination, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := copyTLSDirectory(source, blockedDestination); err == nil {
+		t.Fatal("TLS copier accepted a file as its destination directory")
+	}
 	if err := os.Mkdir(filepath.Join(source, "versions"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -252,6 +495,57 @@ func TestCopyTLSDirectoryRejectsUnsafeEntriesAndPreservesModes(t *testing.T) {
 	if err != nil || publicInfo.Mode().Perm() != 0o444 {
 		t.Fatalf("copied certificate permissions = %v, %v", publicInfo, err)
 	}
+	if _, err := copyTLSDirectory(source, destination); err == nil {
+		t.Fatal("TLS copier overwrote files in an existing destination tree")
+	}
+}
+
+func TestCopyTLSDirectoryReportsPermissionFailures(t *testing.T) {
+	t.Run("source lookup denied", func(t *testing.T) {
+		root := t.TempDir()
+		parent := filepath.Join(root, "private")
+		if err := os.Mkdir(parent, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		source := filepath.Join(parent, "tls")
+		if err := os.Mkdir(source, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(parent, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(parent, 0o700) })
+		if _, err := os.Stat(source); err == nil {
+			t.Skip("current user can access a directory with mode 000")
+		}
+		if _, err := copyTLSDirectory(source, filepath.Join(root, "copy")); err == nil {
+			t.Fatal("copyTLSDirectory ignored a source lookup permission error")
+		}
+	})
+
+	t.Run("source file open denied", func(t *testing.T) {
+		root := t.TempDir()
+		source := filepath.Join(root, "tls")
+		if err := os.Mkdir(source, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		privateKey := filepath.Join(source, "privkey.pem")
+		if err := os.WriteFile(privateKey, []byte("private key"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(privateKey, 0); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(privateKey, 0o600) })
+		file, err := os.Open(privateKey)
+		if err == nil {
+			_ = file.Close()
+			t.Skip("current user can open a file with mode 000")
+		}
+		if _, err := copyTLSDirectory(source, filepath.Join(root, "copy")); err == nil {
+			t.Fatal("copyTLSDirectory ignored a source file open error")
+		}
+	})
 }
 
 func TestBackupFilesystemHelpersReportMissingInputs(t *testing.T) {
@@ -261,6 +555,16 @@ func TestBackupFilesystemHelpersReportMissingInputs(t *testing.T) {
 	}
 	if _, err := hashFiles(t.TempDir(), []string{"missing.file"}); err == nil {
 		t.Fatal("hashFiles accepted missing file")
+	}
+	directoryRoot := t.TempDir()
+	if err := os.Mkdir(filepath.Join(directoryRoot, "directory"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hashFiles(directoryRoot, []string{"directory"}); err == nil {
+		t.Fatal("hashFiles accepted a directory as a regular file")
+	}
+	if _, err := listRelativeFiles(t.TempDir(), "missing-tls"); err == nil {
+		t.Fatal("listRelativeFiles accepted a missing TLS directory")
 	}
 	if err := writeFile(filepath.Join(t.TempDir(), "missing", "artifact"), []byte("x"), 0o600); err == nil {
 		t.Fatal("writeFile accepted missing directory")
@@ -366,6 +670,54 @@ func TestRestoreStateRejectsUnavailableDependenciesAndUnsafeStagePaths(t *testin
 	})
 }
 
+func TestRestoreStateRejectsAWGBackupWhenServiceIsDisabled(t *testing.T) {
+	manager, _ := newTestManager(t)
+	manager.AWG = &awgBackupStub{current: []byte("awg-state")}
+	info, err := manager.Create("awg-enabled")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager.AWG = nil
+	if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "enable the AmneziaWG Compose profile") {
+		t.Fatalf("RestoreState() with AWG state and no AWG adapter = %v", err)
+	}
+}
+
+func TestRestoreDisablesHysteriaTransactionallyWhenTLSMaterialIsAbsent(t *testing.T) {
+	manager, db := newTestManager(t)
+	settings := domain.HysteriaSettings{Enabled: true, TLSMode: domain.HysteriaTLSCustom, CertificateID: "0123456789abcdef0123456789abcdef", UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff}
+	if err := db.InitializeHysteriaSettings(t.Context(), settings); err != nil {
+		t.Fatal(err)
+	}
+	info, err := manager.Create("hysteria-without-tls")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := db.GetSettings(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	current.PublicHost = "live.example.test"
+	if err := db.UpdateSettings(t.Context(), current); err != nil {
+		t.Fatal(err)
+	}
+	triggerDB, err := sql.Open("sqlite", "file:"+filepath.Join(filepath.Dir(manager.DataDir), "state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer triggerDB.Close()
+	if _, err := triggerDB.Exec(`CREATE TRIGGER reject_restored_hysteria_disable BEFORE UPDATE ON hysteria_settings BEGIN SELECT RAISE(ABORT, 'disable rejected'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "disable Hysteria 2 after restore") {
+		t.Fatalf("RestoreState() error = %v, want Hysteria disable failure", err)
+	}
+	restored, err := db.GetSettings(t.Context())
+	if err != nil || restored.PublicHost != "live.example.test" {
+		t.Fatalf("failed restore did not roll SQLite back to the live state: %+v, %v", restored, err)
+	}
+}
+
 func TestBackupDoesNotRecordAnEmptyHysteriaTLSDirectory(t *testing.T) {
 	manager, _ := newTestManager(t)
 	tlsDir := filepath.Join(manager.DataDir, "hysteria-tls")
@@ -383,6 +735,71 @@ func TestBackupDoesNotRecordAnEmptyHysteriaTLSDirectory(t *testing.T) {
 	if err != nil || verified.Name != info.Name {
 		t.Fatalf("verify backup without TLS files = %+v, %v", verified, err)
 	}
+}
+
+func TestRestoreAcceptsAnEmptyTLSDirectoryAndMissingHysteriaSettings(t *testing.T) {
+	manager, _ := newTestManager(t)
+	info, err := manager.Create("empty-tls-restore")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(info.Path, "hysteria-tls"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := manager.RestoreState(info); err != nil {
+		t.Fatalf("RestoreState() rejected an empty TLS directory or absent optional Hysteria settings: %v", err)
+	}
+}
+
+func TestRestoreReportsTLSStatFailures(t *testing.T) {
+	t.Run("backup TLS path is a symlink loop", func(t *testing.T) {
+		manager, _ := newTestManager(t)
+		info, err := manager.Create("backup-tls-loop")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tlsPath := filepath.Join(info.Path, "hysteria-tls")
+		loop := filepath.Join(t.TempDir(), "loop")
+		if err := os.Symlink(loop, loop); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(loop, tlsPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "too many levels of symbolic links") {
+			t.Fatalf("RestoreState() error = %v, want backup TLS stat error", err)
+		}
+	})
+
+	t.Run("live TLS path is a symlink loop", func(t *testing.T) {
+		manager, _ := newTestManager(t)
+		liveTLS := filepath.Join(manager.DataDir, "hysteria-tls")
+		if err := os.MkdirAll(liveTLS, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for name, contents := range map[string]string{"fullchain.pem": "certificate", "privkey.pem": "private key"} {
+			if err := os.WriteFile(filepath.Join(liveTLS, name), []byte(contents), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		info, err := manager.Create("live-tls-loop")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(liveTLS); err != nil {
+			t.Fatal(err)
+		}
+		loop := filepath.Join(t.TempDir(), "loop")
+		if err := os.Symlink(loop, loop); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(loop, liveTLS); err != nil {
+			t.Fatal(err)
+		}
+		if err := manager.RestoreState(info); err == nil || !strings.Contains(err.Error(), "too many levels of symbolic links") {
+			t.Fatalf("RestoreState() error = %v, want live TLS stat error", err)
+		}
+	})
 }
 
 func TestRestoreKeepsLiveDatabaseWhenBackupStateIsMissing(t *testing.T) {

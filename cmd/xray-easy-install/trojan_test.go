@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,6 +78,55 @@ func TestTrojanTUIRejectsConflictingPortAndAcceptsReplacement(t *testing.T) {
 	}
 }
 
+func TestTrojanTUIChoicesDefaultsAndInputErrors(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		input       string
+		before      configuration
+		wantEnabled bool
+		wantPort    int
+		wantNotice  string
+	}{
+		{name: "disabled", input: "\n", before: configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080}, wantPort: 10443},
+		{name: "already enabled with default port", input: "\n\n", before: configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080, trojanEnabled: true}, wantEnabled: true, wantPort: 10443},
+		{name: "numeric enable and default port", input: "2\n\n", before: configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080}, wantEnabled: true, wantPort: 10443},
+		{name: "empty custom port uses default", input: "\x1b[B\n" + strings.Repeat("\x7f", 5) + "\n", before: configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080}, wantEnabled: true, wantPort: 10443},
+		{name: "invalid port can be corrected", input: "\x1b[B\n" + strings.Repeat("\x7f", 5) + "0\n\x7f10445\n", before: configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080, trojan: 10443}, wantEnabled: true, wantPort: 10445, wantNotice: "Enter a TCP port"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			w := newWizard(strings.NewReader(tc.input), &output)
+			defer w.close()
+			got, err := w.trojan(context.Background(), tc.before)
+			if err != nil || got.trojanEnabled != tc.wantEnabled || got.trojan != tc.wantPort {
+				t.Fatalf("Trojan selection = %+v, %v; want enabled=%t port=%d", got, err, tc.wantEnabled, tc.wantPort)
+			}
+			if tc.wantNotice != "" && !strings.Contains(output.String(), tc.wantNotice) {
+				t.Fatalf("missing notice %q in %q", tc.wantNotice, output.String())
+			}
+		})
+	}
+	t.Run("small terminal can only be cancelled", func(t *testing.T) {
+		var output bytes.Buffer
+		w := newWizard(strings.NewReader("x\x1b"), &output)
+		defer w.close()
+		w.width, w.height = 50, 18
+		if _, err := w.trojan(context.Background(), configuration{}); !errors.Is(err, errCancelled) {
+			t.Fatalf("small-terminal flow error = %v", err)
+		}
+		if !strings.Contains(output.String(), "Enlarge the terminal before continuing") {
+			t.Fatal("small-terminal guidance missing")
+		}
+	})
+	t.Run("closed input is reported", func(t *testing.T) {
+		w := newWizard(strings.NewReader(""), &bytes.Buffer{})
+		defer w.close()
+		if _, err := w.trojan(context.Background(), configuration{}); err == nil || !strings.Contains(err.Error(), "input ended") {
+			t.Fatalf("closed input error = %v", err)
+		}
+	})
+}
+
 func TestValidateTrojanConfiguration(t *testing.T) {
 	base := configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080, trojan: 10443}
 	if err := validateTrojanConfiguration(base); err != nil {
@@ -103,5 +153,34 @@ func TestUpdateTrojanConfigurationRejectsMissingAndDuplicateEnvironment(t *testi
 	}
 	if err := updateTrojanConfiguration(root, configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080, trojan: 10445}); err == nil || !strings.Contains(err.Error(), "duplicate XRAY_TROJAN_PORT") {
 		t.Fatalf("duplicate Trojan setting error = %v", err)
+	}
+}
+
+func TestUpdateTrojanConfigurationFillsMissingKeysAndDefaultsPort(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".env")
+	if err := os.WriteFile(path, []byte("# existing setting\nOTHER=value\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateTrojanConfiguration(root, configuration{public: 443, vmess: 9443, shadowsocks: 8388, ui: 8080, trojanEnabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	values, err := readEnvironmentFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if values["XRAY_TROJAN_PORT"] != "10443" || values["XRAY_TROJAN_ENABLED"] != "true" || values["OTHER"] != "value" {
+		t.Fatalf("updated Trojan values = %#v", values)
+	}
+}
+
+func TestUpdateTrojanConfigurationRejectsDuplicateEnabledKey(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, ".env")
+	if err := os.WriteFile(path, []byte("XRAY_TROJAN_ENABLED=false\nXRAY_TROJAN_ENABLED=true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := updateTrojanConfiguration(root, configuration{}); err == nil || !strings.Contains(err.Error(), "duplicate XRAY_TROJAN_ENABLED") {
+		t.Fatalf("duplicate enabled key error = %v", err)
 	}
 }

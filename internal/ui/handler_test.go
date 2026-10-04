@@ -56,3 +56,21 @@ func TestHandlerReadsConfiguredDirectory(t *testing.T) {
 		t.Fatalf("configured UI response = %d %q", response.Code, response.Body.String())
 	}
 }
+
+func TestHandlerReportsUnavailableConfiguredDirectory(t *testing.T) {
+	t.Setenv("XRAY_EASY_UI_DIR", filepath.Join(t.TempDir(), "missing"))
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "UI is unavailable") {
+		t.Fatalf("missing configured UI response = %d %q", response.Code, response.Body.String())
+	}
+}
+
+func TestHandlerUsesDefaultDirectoryWhenUnset(t *testing.T) {
+	t.Setenv("XRAY_EASY_UI_DIR", "")
+	response := httptest.NewRecorder()
+	Handler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "UI is unavailable") {
+		t.Fatalf("default UI directory response = %d %q", response.Code, response.Body.String())
+	}
+}

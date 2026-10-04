@@ -97,6 +97,44 @@ func TestTelemetryHubSharesOneUpstreamAcrossSubscribers(t *testing.T) {
 	}
 }
 
+func TestTelemetryHubPublishIgnoresStaleRunsAndClonesUpdates(t *testing.T) {
+	hub := newTelemetryHub(NewService(&fakeRuntime{}))
+	update := &controllerv1.TelemetryUpdate{Sequence: 1}
+	hub.publish(1, update) // No subscriber exists yet.
+	channel := make(chan *controllerv1.TelemetryUpdate, 1)
+	hub.runID = 1
+	hub.subscribers[1] = channel
+	hub.publish(0, &controllerv1.TelemetryUpdate{Sequence: 2})
+	select {
+	case <-channel:
+		t.Fatal("stale telemetry run was published")
+	default:
+	}
+	hub.publish(hub.runID, update)
+	got := <-channel
+	got.Sequence = 99
+	if hub.current.GetSequence() != 1 {
+		t.Fatalf("subscriber mutation changed cached update: %+v", hub.current)
+	}
+	if cloneTelemetryUpdate(nil) != nil {
+		t.Fatal("cloneTelemetryUpdate(nil) did not return nil")
+	}
+}
+
+func TestOfferHubSnapshotReplacesAQueuedUpdate(t *testing.T) {
+	channel := make(chan *controllerv1.TelemetryUpdate, 1)
+	channel <- &controllerv1.TelemetryUpdate{Sequence: 1}
+	offerHubSnapshot(channel, &controllerv1.TelemetryUpdate{Sequence: 2})
+	select {
+	case update := <-channel:
+		if update.GetSequence() != 2 {
+			t.Fatalf("coalesced snapshot sequence = %d, want latest sequence 2", update.GetSequence())
+		}
+	default:
+		t.Fatal("latest snapshot was dropped")
+	}
+}
+
 func TestLeaseSnapshotIncludesOnlySupportedOnlineXraySourceObservations(t *testing.T) {
 	connectedAt := timestamppb.New(time.Now().UTC().Add(-time.Minute))
 	seenAt := timestamppb.New(time.Now().UTC())
@@ -120,6 +158,43 @@ func TestLeaseSnapshotIncludesOnlySupportedOnlineXraySourceObservations(t *testi
 	}
 	if snapshot.GetObservations()[0].GetConnectedAt() == nil || snapshot.GetObservations()[1].GetConnectedAt() == nil {
 		t.Fatal("lease snapshot omitted runtime connection chronology")
+	}
+}
+
+func TestLeaseSnapshotSkipsMalformedAndUnusableObservations(t *testing.T) {
+	seenAt := timestamppb.New(time.Now().UTC())
+	update := &controllerv1.TelemetryUpdate{
+		Sources: []*controllerv1.TelemetrySourceStatus{
+			nil,
+			{Protocol: "amneziawg", Available: true},
+			{Protocol: "xray", Error: "temporarily unavailable", Generation: "runtime-b", Sequence: 12},
+		},
+		Clients: []*controllerv1.TelemetryClient{
+			nil,
+			{DeviceKey: "offline", Protocol: "vless", Online: false},
+			{DeviceKey: "unsupported", Protocol: "hysteria2", Online: true},
+			{DeviceKey: "no-address", Protocol: "vless", Online: true, SourceObservations: []*controllerv1.TelemetrySourceObservation{
+				nil,
+				{Address: "  ", ConnectedAt: seenAt},
+				{Address: "192.0.2.1"},
+			}},
+			{DeviceKey: "valid", Protocol: "trojan", Online: true, SourceObservations: []*controllerv1.TelemetrySourceObservation{
+				{Address: "  ", ConnectedAt: seenAt},
+				{Address: "192.0.2.2", LastSeen: seenAt, ConnectedAt: seenAt},
+			}},
+		},
+	}
+
+	snapshot := leaseSnapshotFromTelemetry(update)
+	if snapshot.GetSourceAvailable() || snapshot.GetSourceGeneration() != "runtime-b" || snapshot.GetSourceSequence() != 12 || snapshot.GetSourceError() != "temporarily unavailable" {
+		t.Fatalf("lease source status = %+v", snapshot)
+	}
+	if len(snapshot.GetObservations()) != 1 {
+		t.Fatalf("filtered lease observations = %+v; want only the usable connected observation", snapshot.GetObservations())
+	}
+	observation := snapshot.GetObservations()[0]
+	if observation.GetProfileEmail() != "valid" || observation.GetProtocol() != "trojan" || observation.GetSourceIp() != "192.0.2.2" || observation.GetLastActivity() != seenAt || observation.GetConnectedAt() != seenAt {
+		t.Fatalf("valid lease observation = %+v", observation)
 	}
 }
 

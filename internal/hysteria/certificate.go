@@ -46,6 +46,10 @@ func Import(root string, certPEM, keyPEM []byte, serverName string) (string, Cer
 
 // importWithVerifier performs the operation represented by its name.
 func importWithVerifier(root string, certPEM, keyPEM []byte, serverName string, verify func([]byte, *x509.Certificate, string) error) (string, CertificateInfo, error) {
+	return importWithVerifierAndID(root, certPEM, keyPEM, serverName, verify, newID)
+}
+
+func importWithVerifierAndID(root string, certPEM, keyPEM []byte, serverName string, verify func([]byte, *x509.Certificate, string) error, generateID func() (string, error)) (string, CertificateInfo, error) {
 	parsed, info, err := validatePair(certPEM, keyPEM, serverName)
 	if err != nil {
 		return "", CertificateInfo{}, err
@@ -53,7 +57,7 @@ func importWithVerifier(root string, certPEM, keyPEM []byte, serverName string, 
 	if err := verify(certPEM, parsed, serverName); err != nil {
 		return "", CertificateInfo{}, err
 	}
-	id, err := newID()
+	id, err := generateID()
 	if err != nil {
 		return "", CertificateInfo{}, err
 	}
@@ -66,18 +70,26 @@ func importWithVerifier(root string, certPEM, keyPEM []byte, serverName string, 
 // GenerateMkcert creates a temporary mkcert CA, writes an IPv4 SAN certificate
 // into a versioned directory, and discards the CA private key afterwards.
 func GenerateMkcert(ctx context.Context, root, publicIPv4 string) (string, CertificateInfo, error) {
+	return generateMkcertWithID(ctx, root, publicIPv4, newID)
+}
+
+func generateMkcertWithID(ctx context.Context, root, publicIPv4 string, generateID func() (string, error)) (string, CertificateInfo, error) {
+	return generateMkcertWithIDAndTempDirs(ctx, root, publicIPv4, generateID, os.MkdirTemp)
+}
+
+func generateMkcertWithIDAndTempDirs(ctx context.Context, root, publicIPv4 string, generateID func() (string, error), mkdirTemp func(string, string) (string, error)) (string, CertificateInfo, error) {
 	if strings.TrimSpace(publicIPv4) == "" {
 		return "", CertificateInfo{}, errors.New("public IPv4 is required")
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
 		return "", CertificateInfo{}, err
 	}
-	staging, err := os.MkdirTemp(root, ".mkcert-*")
+	staging, err := mkdirTemp(root, ".mkcert-*")
 	if err != nil {
 		return "", CertificateInfo{}, err
 	}
 	defer os.RemoveAll(staging)
-	caRoot, err := os.MkdirTemp("", "xray-easy-mkcert-ca-*")
+	caRoot, err := mkdirTemp("", "xray-easy-mkcert-ca-*")
 	if err != nil {
 		return "", CertificateInfo{}, err
 	}
@@ -108,7 +120,7 @@ func GenerateMkcert(ctx context.Context, root, publicIPv4 string) (string, Certi
 		return "", CertificateInfo{}, err
 	}
 	_ = parsed
-	id, err := newID()
+	id, err := generateID()
 	if err != nil {
 		return "", CertificateInfo{}, err
 	}
@@ -152,6 +164,10 @@ func versionDirectory(root, id string, allowLegacyRoot bool) (string, error) {
 
 // validatePair validates the supplied value.
 func validatePair(certPEM, keyPEM []byte, serverName string) (*x509.Certificate, CertificateInfo, error) {
+	return validatePairWithMarshaller(certPEM, keyPEM, serverName, x509.MarshalPKIXPublicKey)
+}
+
+func validatePairWithMarshaller(certPEM, keyPEM []byte, serverName string, marshalPublicKey func(any) ([]byte, error)) (*x509.Certificate, CertificateInfo, error) {
 	block, _ := pem.Decode(certPEM)
 	if block == nil || block.Type != "CERTIFICATE" {
 		return nil, CertificateInfo{}, errors.New("Hysteria 2 certificate must be PEM encoded")
@@ -186,11 +202,11 @@ func validatePair(certPEM, keyPEM []byte, serverName string) (*x509.Certificate,
 	if !ok {
 		return nil, CertificateInfo{}, errors.New("Hysteria 2 private key type is not supported")
 	}
-	publicDER, err := x509.MarshalPKIXPublicKey(signer.Public())
+	publicDER, err := marshalPublicKey(signer.Public())
 	if err != nil {
 		return nil, CertificateInfo{}, errors.New("Hysteria 2 private key is invalid")
 	}
-	certDER, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	certDER, err := marshalPublicKey(cert.PublicKey)
 	if err != nil || !bytes.Equal(publicDER, certDER) {
 		return nil, CertificateInfo{}, errors.New("Hysteria 2 certificate and private key do not match")
 	}
@@ -199,7 +215,11 @@ func validatePair(certPEM, keyPEM []byte, serverName string) (*x509.Certificate,
 
 // verifyTrusted performs the operation represented by its name.
 func verifyTrusted(chainPEM []byte, cert *x509.Certificate, serverName string) error {
-	roots, err := x509.SystemCertPool()
+	return verifyTrustedWithSystemPool(chainPEM, cert, serverName, x509.SystemCertPool)
+}
+
+func verifyTrustedWithSystemPool(chainPEM []byte, cert *x509.Certificate, serverName string, systemPool func() (*x509.CertPool, error)) error {
+	roots, err := systemPool()
 	if err != nil || roots == nil {
 		return errors.New("system certificate roots are unavailable")
 	}
@@ -249,21 +269,39 @@ func certificateInfo(cert *x509.Certificate) CertificateInfo {
 
 // writeVersion writes the supplied value.
 func writeVersion(root, id string, cert, key []byte) error {
-	if err := os.MkdirAll(root, 0o700); err != nil {
+	return writeVersionWith(root, id, cert, key, versionFileOperations{
+		mkdirAll:     os.MkdirAll,
+		mkdirTemp:    func(root, pattern string) (string, error) { return os.MkdirTemp(root, pattern) },
+		removeAll:    os.RemoveAll,
+		writePrivate: writePrivate,
+		rename:       os.Rename,
+	})
+}
+
+type versionFileOperations struct {
+	mkdirAll     func(string, os.FileMode) error
+	mkdirTemp    func(string, string) (string, error)
+	removeAll    func(string) error
+	writePrivate func(string, []byte, os.FileMode) error
+	rename       func(string, string) error
+}
+
+func writeVersionWith(root, id string, cert, key []byte, ops versionFileOperations) error {
+	if err := ops.mkdirAll(root, 0o700); err != nil {
 		return err
 	}
-	staging, err := os.MkdirTemp(root, ".certificate-*")
+	staging, err := ops.mkdirTemp(root, ".certificate-*")
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(staging)
-	if err := writePrivate(filepath.Join(staging, "fullchain.pem"), cert, 0o444); err != nil {
+	defer ops.removeAll(staging)
+	if err := ops.writePrivate(filepath.Join(staging, "fullchain.pem"), cert, 0o444); err != nil {
 		return err
 	}
-	if err := writePrivate(filepath.Join(staging, "privkey.pem"), key, 0o400); err != nil {
+	if err := ops.writePrivate(filepath.Join(staging, "privkey.pem"), key, 0o400); err != nil {
 		return err
 	}
-	if err := os.Rename(staging, filepath.Join(root, id)); err != nil {
+	if err := ops.rename(staging, filepath.Join(root, id)); err != nil {
 		return err
 	}
 	return nil
@@ -271,11 +309,24 @@ func writeVersion(root, id string, cert, key []byte) error {
 
 // writePrivate writes the supplied value.
 func writePrivate(path string, data []byte, mode os.FileMode) error {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
+	return writePrivateWith(path, data, mode,
+		func(path string, flags int, mode os.FileMode) (privateCertificateFile, error) {
+			return os.OpenFile(path, flags, mode)
+		}, io.Copy)
+}
+
+type privateCertificateFile interface {
+	io.Writer
+	Sync() error
+	Close() error
+}
+
+func writePrivateWith(path string, data []byte, mode os.FileMode, open func(string, int, os.FileMode) (privateCertificateFile, error), copyData func(io.Writer, io.Reader) (int64, error)) error {
+	file, err := open(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return err
 	}
-	if _, err := io.Copy(file, bytes.NewReader(data)); err != nil {
+	if _, err := copyData(file, bytes.NewReader(data)); err != nil {
 		_ = file.Close()
 		return err
 	}

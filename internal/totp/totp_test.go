@@ -1,7 +1,9 @@
 package totp
 
 import (
+	"crypto/rand"
 	"encoding/base32"
+	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -9,6 +11,10 @@ import (
 
 	"xray-easy/internal/auth"
 )
+
+type failingReader struct{}
+
+func (failingReader) Read([]byte) (int, error) { return 0, errors.New("random source failed") }
 
 func TestCodeMatchesRFC6238SHA1Vector(t *testing.T) {
 	secret := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString([]byte("12345678901234567890"))
@@ -104,5 +110,17 @@ func TestGeneratedCodesHaveExpectedFormatAndPassRecoveryValidation(t *testing.T)
 	}
 	if err := auth.ValidateRecoveryCode(code); err != nil {
 		t.Fatalf("generated recovery code rejected: %v", err)
+	}
+}
+
+func TestSecretAndRecoveryCodeReportRandomSourceFailure(t *testing.T) {
+	previous := rand.Reader
+	rand.Reader = failingReader{}
+	t.Cleanup(func() { rand.Reader = previous })
+	if value, err := NewSecret(); err == nil || value != "" || !strings.Contains(err.Error(), "generate TOTP secret") {
+		t.Fatalf("NewSecret() = %q, %v; want random-source error", value, err)
+	}
+	if value, err := NewRecoveryCode(); err == nil || value != "" || !strings.Contains(err.Error(), "generate recovery code") {
+		t.Fatalf("NewRecoveryCode() = %q, %v; want random-source error", value, err)
 	}
 }

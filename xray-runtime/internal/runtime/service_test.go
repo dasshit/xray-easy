@@ -1041,3 +1041,22 @@ func TestCapturedXrayLogsKeepAccessWarningsAndHideSecrets(t *testing.T) {
 		t.Fatalf("accepted access event = %+v", accepted)
 	}
 }
+
+func TestCapturedXrayLogsIgnoreUnsupportedMessagesAndMapErrors(t *testing.T) {
+	var captured []logRecord
+	handler := capturedXrayLog{write: func(level, component, message string) {
+		captured = append(captured, logRecord{level: level, component: component, message: message})
+	}}
+	handler.Handle(&corelog.GeneralMessage{Severity: corelog.Severity_Error, Content: "runtime failed"})
+	handler.Handle(&corelog.GeneralMessage{Severity: corelog.Severity_Debug, Content: "debug detail"})
+	handler.Handle(&corelog.GeneralMessage{Severity: corelog.Severity(99), Content: "unsupported severity"})
+	handler.Handle(nil)
+	(capturedXrayLog{}).Handle(&corelog.GeneralMessage{Severity: corelog.Severity_Error, Content: "ignored without sink"})
+
+	if len(captured) != 2 {
+		t.Fatalf("captured messages = %+v, want error and debug only", captured)
+	}
+	if captured[0].level != "error" || captured[0].message != "runtime failed" || captured[1].level != "debug" || captured[1].message != "debug detail" {
+		t.Fatalf("captured severity mapping = %+v", captured)
+	}
+}

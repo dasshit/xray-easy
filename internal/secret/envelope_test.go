@@ -1,6 +1,7 @@
 package secret
 
 import (
+	"crypto/cipher"
 	"crypto/rand"
 	"encoding/base64"
 	"errors"
@@ -24,6 +25,64 @@ func (r *limitedReader) Read(value []byte) (int, error) {
 	}
 	r.remaining -= count
 	return count, nil
+}
+
+func TestSealAndOpenReportCryptoDependencyFailures(t *testing.T) {
+	masterKey := []byte(strings.Repeat("k", 32))
+	sealed, err := Seal(masterKey, "payload", "purpose")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("injected crypto failure")
+	for _, test := range []struct {
+		name   string
+		mutate func(*envelopeCrypto)
+	}{
+		{name: "seal derive", mutate: func(crypto *envelopeCrypto) {
+			crypto.derive = func([]byte, []byte, string) ([]byte, error) { return nil, wantErr }
+		}},
+		{name: "seal cipher", mutate: func(crypto *envelopeCrypto) {
+			crypto.newCipher = func([]byte) (cipher.Block, error) { return nil, wantErr }
+		}},
+		{name: "seal AEAD", mutate: func(crypto *envelopeCrypto) {
+			crypto.newGCM = func(cipher.Block) (cipher.AEAD, error) { return nil, wantErr }
+		}},
+		{name: "open derive", mutate: func(crypto *envelopeCrypto) {
+			crypto.derive = func([]byte, []byte, string) ([]byte, error) { return nil, wantErr }
+		}},
+		{name: "open cipher", mutate: func(crypto *envelopeCrypto) {
+			crypto.newCipher = func([]byte) (cipher.Block, error) { return nil, wantErr }
+		}},
+		{name: "open AEAD", mutate: func(crypto *envelopeCrypto) {
+			crypto.newGCM = func(cipher.Block) (cipher.AEAD, error) { return nil, wantErr }
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			crypto := defaultEnvelopeCrypto()
+			test.mutate(&crypto)
+			var result string
+			var callErr error
+			if strings.HasPrefix(test.name, "seal") {
+				result, callErr = sealWith(masterKey, "payload", "purpose", crypto)
+			} else {
+				result, callErr = openWith(masterKey, sealed, "purpose", crypto)
+			}
+			if result != "" || callErr == nil {
+				t.Fatalf("crypto operation = %q, %v; want injected error", result, callErr)
+			}
+		})
+	}
+}
+
+func TestKeyDerivationReportsReaderFailures(t *testing.T) {
+	wantErr := errors.New("injected key reader failure")
+	readFailure := func(io.Reader, []byte) (int, error) { return 0, wantErr }
+	if key, err := deriveKeyWith([]byte(strings.Repeat("k", 32)), "purpose", readFailure); key != nil || !errors.Is(err, wantErr) {
+		t.Fatalf("deriveKeyWith() = %x, %v; want injected error", key, err)
+	}
+	if key, err := deriveWith([]byte(strings.Repeat("k", 32)), []byte("salt"), "purpose", readFailure); key != nil || !errors.Is(err, wantErr) {
+		t.Fatalf("deriveWith() = %x, %v; want injected error", key, err)
+	}
 }
 
 func TestSealAndOpenRoundTripWithPurposeSeparation(t *testing.T) {

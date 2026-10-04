@@ -46,25 +46,5 @@ func updateTrojanConfiguration(root string, cfg configuration) error {
 			lines = append(lines, key+"="+updates[key])
 		}
 	}
-	tmp, err := os.CreateTemp(root, ".env-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if err := tmp.Chmod(0o600); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if _, err := tmp.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), path)
+	return writePrivateAtomic(path, ".env-*", []byte(strings.Join(lines, "\n")+"\n"), 0o600, os.Rename)
 }

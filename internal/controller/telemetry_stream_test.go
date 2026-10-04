@@ -72,6 +72,66 @@ func (a *unavailableAWGTelemetry) WatchPeerStats(context.Context, time.Duration)
 	return nil, a.openErr
 }
 
+type blockedXrayTelemetry struct {
+	*fakeRuntime
+	started  chan struct{}
+	release  chan struct{}
+	returned chan struct{}
+}
+
+func (r *blockedXrayTelemetry) WatchTelemetry(context.Context, time.Duration) (xrayruntimev1.Runtime_WatchTelemetryClient, error) {
+	close(r.started)
+	<-r.release
+	close(r.returned)
+	return nil, errors.New("stream stopped")
+}
+
+type retryingXrayTelemetry struct {
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (r *retryingXrayTelemetry) WatchTelemetry(ctx context.Context, _ time.Duration) (xrayruntimev1.Runtime_WatchTelemetryClient, error) {
+	r.calls++
+	if r.calls == 1 {
+		return nil, errors.New("temporary stream open failure")
+	}
+	return &terminatingXrayTelemetryStream{cancel: r.cancel}, nil
+}
+
+type terminatingXrayTelemetryStream struct {
+	xrayruntimev1.Runtime_WatchTelemetryClient
+	cancel context.CancelFunc
+}
+
+func (s *terminatingXrayTelemetryStream) Recv() (*xrayruntimev1.TelemetryResponse, error) {
+	s.cancel()
+	return nil, errors.New("temporary stream receive failure")
+}
+
+type retryingAWGTelemetry struct {
+	calls  int
+	cancel context.CancelFunc
+}
+
+func (a *retryingAWGTelemetry) WatchPeerStats(ctx context.Context, _ time.Duration) (awgapi.Control_WatchPeerStatsClient, error) {
+	a.calls++
+	if a.calls == 1 {
+		return nil, errors.New("temporary stream open failure")
+	}
+	return &terminatingAWGTelemetryStream{cancel: a.cancel}, nil
+}
+
+type terminatingAWGTelemetryStream struct {
+	awgapi.Control_WatchPeerStatsClient
+	cancel context.CancelFunc
+}
+
+func (s *terminatingAWGTelemetryStream) Recv() (*awgapi.PeerStatsUpdate, error) {
+	s.cancel()
+	return nil, errors.New("temporary stream receive failure")
+}
+
 func (a *oneSnapshotAWG) WatchPeerStats(ctx context.Context, _ time.Duration) (awgapi.Control_WatchPeerStatsClient, error) {
 	a.ctx <- ctx
 	return &oneSnapshotAWGStream{ctx: ctx, update: a.update}, nil
@@ -119,6 +179,60 @@ func TestOfferTelemetryEventReplacesStaleSnapshot(t *testing.T) {
 	}
 }
 
+func TestWaitTelemetryRetryExpiresOrStopsOnCancellation(t *testing.T) {
+	if !waitTelemetryRetry(context.Background(), time.Millisecond) {
+		t.Fatal("retry wait did not report its timer firing")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if waitTelemetryRetry(ctx, time.Hour) {
+		t.Fatal("retry wait continued after cancellation")
+	}
+}
+
+func TestTelemetryPumpsRetryOpenFailuresAndReportReceiveFailures(t *testing.T) {
+	xrayCtx, cancelXray := context.WithCancel(context.Background())
+	defer cancelXray()
+	awgCtx, cancelAWG := context.WithCancel(context.Background())
+	defer cancelAWG()
+	xray := &retryingXrayTelemetry{cancel: cancelXray}
+	awg := &retryingAWGTelemetry{cancel: cancelAWG}
+	xrayEvents := make(chan telemetrySourceEvent, 1)
+	awgEvents := make(chan telemetrySourceEvent, 1)
+	done := make(chan struct{}, 2)
+	go func() {
+		pumpXrayTelemetry(xrayCtx, xray, time.Second, xrayEvents)
+		done <- struct{}{}
+	}()
+	go func() {
+		pumpAWGTelemetry(awgCtx, awg, time.Second, awgEvents)
+		done <- struct{}{}
+	}()
+
+	for range 2 {
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			cancelXray()
+			cancelAWG()
+			t.Fatal("telemetry pump did not stop after its stream failed")
+		}
+	}
+	if xray.calls != 2 || awg.calls != 2 {
+		t.Fatalf("stream open attempts = xray %d, AWG %d; want initial failure followed by a stream", xray.calls, awg.calls)
+	}
+	for protocol, events := range map[string]<-chan telemetrySourceEvent{"xray": xrayEvents, "amneziawg": awgEvents} {
+		select {
+		case event := <-events:
+			if event.protocol != protocol || event.err == nil {
+				t.Errorf("%s telemetry failure event = %+v", protocol, event)
+			}
+		default:
+			t.Errorf("%s telemetry stream failure was not reported", protocol)
+		}
+	}
+}
+
 func TestControllerTelemetryStreamRequiresRequest(t *testing.T) {
 	if err := NewService(&fakeRuntime{}).WatchTelemetry(nil, nil); status.Code(err) != codes.InvalidArgument {
 		t.Fatalf("nil telemetry request error = %v", err)
@@ -150,7 +264,7 @@ func TestControllerTelemetryStreamFansInXrayAndCancelsUpstream(t *testing.T) {
 				nil,
 				{},
 				{Email: "unsupported@example.test", Protocol: xrayruntimev1.Protocol_PROTOCOL_UNSPECIFIED},
-				{Email: "ios@example.test", Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, Online: true, UploadBytes: 100, DownloadBytes: 200, LastActivity: timestamppb.New(seenAt), SourceIps: []*xrayruntimev1.IPObservation{{Address: "2001:db8::9", LastSeen: timestamppb.New(seenAt)}}},
+				{Email: "ios@example.test", Protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS, Online: true, UploadBytes: 100, DownloadBytes: 200, LastActivity: timestamppb.New(seenAt), SourceIps: []*xrayruntimev1.IPObservation{nil, {}, {Address: "  "}, {Address: "2001:db8::9", LastSeen: timestamppb.New(seenAt)}}},
 			},
 		},
 	}
@@ -199,7 +313,7 @@ func TestControllerTelemetryStreamFansInAWGAndReportsXrayAvailability(t *testing
 	awg := &oneSnapshotAWG{
 		fakeAWGRuntime: &fakeAWGRuntime{}, ctx: make(chan context.Context, 1),
 		update: &awgapi.PeerStatsUpdate{SampledAt: timestamppb.New(seenAt), SourceGeneration: "awg-a", Sequence: 5, FullSnapshot: true,
-			Peers: []*awgapi.PeerStats{{Name: "iphone", Online: true, SourceIp: "203.0.113.7", UploadBytes: 11, DownloadBytes: 29, LastActivity: timestamppb.New(seenAt)}},
+			Peers: []*awgapi.PeerStats{nil, {}, {Name: "iphone", Online: true, SourceIp: "203.0.113.7", UploadBytes: 11, DownloadBytes: 29, LastActivity: timestamppb.New(seenAt)}},
 		},
 	}
 	service := NewServiceWithAdapters(&fakeRuntime{}, nil, nil, awg)
@@ -253,6 +367,65 @@ func TestControllerTelemetryStreamFansInAWGAndReportsXrayAvailability(t *testing
 	case <-upstream.Done():
 	case <-time.After(time.Second):
 		t.Fatal("Controller did not cancel the AWG stream after downstream stopped")
+	}
+}
+
+func TestControllerTelemetryReportsUnsupportedAWGStreamer(t *testing.T) {
+	stop := errors.New("stop after unsupported AWG status")
+	service := NewServiceWithAdapters(&fakeRuntime{}, nil, nil, &fakeAWGRuntime{})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	stream := &stopOnTelemetrySnapshot{ctx: ctx, stop: stop, matched: func(update *controllerv1.TelemetryUpdate) bool {
+		for _, source := range update.GetSources() {
+			if source.GetProtocol() == "amneziawg" && !source.GetAvailable() && source.GetError() != "" {
+				return true
+			}
+		}
+		return false
+	}}
+	if err := service.WatchTelemetry(&controllerv1.WatchTelemetryRequest{SampleIntervalMs: 1000}, stream); !errors.Is(err, stop) {
+		t.Fatalf("WatchTelemetry() error = %v", err)
+	}
+}
+
+type cancelAfterFirstLeaseSnapshot struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	started <-chan struct{}
+}
+
+func (s cancelAfterFirstLeaseSnapshot) Send(*controllerv1.LeaseSnapshot) error {
+	s.cancel()
+	select {
+	case <-s.started:
+		return nil
+	case <-time.After(time.Second):
+		return errors.New("telemetry pump did not start")
+	}
+}
+func (s cancelAfterFirstLeaseSnapshot) SetHeader(metadata.MD) error  { return nil }
+func (s cancelAfterFirstLeaseSnapshot) SendHeader(metadata.MD) error { return nil }
+func (s cancelAfterFirstLeaseSnapshot) SetTrailer(metadata.MD)       {}
+func (s cancelAfterFirstLeaseSnapshot) Context() context.Context     { return s.ctx }
+func (s cancelAfterFirstLeaseSnapshot) SendMsg(any) error            { return nil }
+func (s cancelAfterFirstLeaseSnapshot) RecvMsg(any) error            { return io.EOF }
+
+func TestWatchLeaseSnapshotsStopsWhenConsumerCancels(t *testing.T) {
+	runtime := &blockedXrayTelemetry{
+		fakeRuntime: &fakeRuntime{}, started: make(chan struct{}),
+		release: make(chan struct{}), returned: make(chan struct{}),
+	}
+	service := NewServiceWithAdapters(runtime, nil, nil, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	err := service.WatchLeaseSnapshots(&controllerv1.EmptyRequest{}, cancelAfterFirstLeaseSnapshot{ctx: ctx, cancel: cancel, started: runtime.started})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("WatchLeaseSnapshots() error = %v, want canceled context", err)
+	}
+	close(runtime.release)
+	select {
+	case <-runtime.returned:
+	case <-time.After(time.Second):
+		t.Fatal("upstream watcher did not exit after release")
 	}
 }
 

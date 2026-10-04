@@ -53,14 +53,21 @@ type connection interface {
 
 // Client invokes the private AWG gRPC API using its shared bearer token.
 type Client struct {
-	connection connection
-	client     awgapi.ControlClient
-	token      string
+	connection      connection
+	client          awgapi.ControlClient
+	token           string
+	makeOutgoingCtx func(context.Context) (context.Context, string, error)
 }
 
 // Dial reads the private token file and prepares a connection to the AWG
 // service. Network connectivity is checked on the first RPC.
 func Dial(address, tokenPath string) (*Client, error) {
+	return dialWith(address, tokenPath, func(target string, options ...grpc.DialOption) (connection, error) {
+		return grpc.NewClient(target, options...)
+	})
+}
+
+func dialWith(address, tokenPath string, newConnection func(string, ...grpc.DialOption) (connection, error)) (*Client, error) {
 	data, err := os.ReadFile(tokenPath)
 	if err != nil {
 		return nil, fmt.Errorf("read AWG control token: %w", err)
@@ -69,7 +76,7 @@ func Dial(address, tokenPath string) (*Client, error) {
 	if token == "" {
 		return nil, errors.New("AWG control token is empty")
 	}
-	conn, err := grpc.NewClient(
+	conn, err := newConnection(
 		address,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(24<<20), grpc.MaxCallSendMsgSize(24<<20)),
@@ -171,7 +178,7 @@ func (c *Client) WatchPeerStats(ctx context.Context, interval time.Duration) (aw
 	if interval > 5*time.Second {
 		interval = 5 * time.Second
 	}
-	ctx, requestID, err := interaction.OutgoingContext(ctx)
+	ctx, requestID, err := c.outgoingContext(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("create AWG stream request ID: %w", err)
 	}
@@ -311,7 +318,7 @@ func (c *Client) Close() error { return c.connection.Close() }
 
 // call performs the operation represented by its name.
 func (c *Client) call(ctx context.Context, method string, invoke func(context.Context) error) error {
-	ctx, requestID, err := interaction.OutgoingContext(ctx)
+	ctx, requestID, err := c.outgoingContext(ctx)
 	if err != nil {
 		return fmt.Errorf("create AWG request ID: %w", err)
 	}
@@ -324,6 +331,13 @@ func (c *Client) call(ctx context.Context, method string, invoke func(context.Co
 		return fmt.Errorf("AWG %s failed: %w", method, err)
 	}
 	return nil
+}
+
+func (c *Client) outgoingContext(ctx context.Context) (context.Context, string, error) {
+	if c.makeOutgoingCtx != nil {
+		return c.makeOutgoingCtx(ctx)
+	}
+	return interaction.OutgoingContext(ctx)
 }
 
 // parsePeer parses the supplied value.

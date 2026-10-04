@@ -18,6 +18,7 @@ type recordingTrojanHandler struct {
 	users     []string
 	added     []string
 	removed   []string
+	listErr   error
 	addErr    error
 	removeErr error
 }
@@ -47,7 +48,7 @@ func (h *recordingTrojanHandler) UsersInInbound(_ context.Context, tag string) (
 	if tag != xray.TrojanInboundTag {
 		return nil, context.Canceled
 	}
-	return append([]string(nil), h.users...), nil
+	return append([]string(nil), h.users...), h.listErr
 }
 
 func createRuntimeTrojanClient(t *testing.T, app testApp, name string) domain.Client {
@@ -126,6 +127,9 @@ func TestTrojanReconcilerRepairsRosterAndFailsClosed(t *testing.T) {
 		if len(handler.removed) != 1 || handler.removed[0] != "stale@example.test" || len(handler.added) != 1 || handler.added[0] != client.Email {
 			t.Fatalf("reconciled roster removed=%v added=%v", handler.removed, handler.added)
 		}
+		if err := app.server.reconcileRunning(t.Context()); err != nil {
+			t.Fatalf("reconcile an already matching Trojan roster: %v", err)
+		}
 	})
 
 	t.Run("handler unavailable", func(t *testing.T) {
@@ -134,6 +138,54 @@ func TestTrojanReconcilerRepairsRosterAndFailsClosed(t *testing.T) {
 		app.server.handler = app.handler
 		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Trojan HandlerService is unavailable") {
 			t.Fatalf("missing Trojan handler error = %v", err)
+		}
+	})
+
+	t.Run("roster and mutation failures", func(t *testing.T) {
+		app := newTestApp(t, true)
+		handler := &recordingTrojanHandler{fakeXrayHandler: app.handler}
+		app.server.handler = handler
+		client := createRuntimeTrojanClient(t, app, "family-error-paths")
+		handler.listErr = errors.New("Trojan roster unavailable")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Trojan roster unavailable") {
+			t.Fatalf("Trojan list error = %v", err)
+		}
+		handler.listErr = nil
+		handler.users = []string{"stale@example.test"}
+		handler.removeErr = errors.New("Trojan remove failed")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Trojan remove failed") {
+			t.Fatalf("Trojan remove error = %v", err)
+		}
+		handler.removeErr = nil
+		handler.users = nil
+		handler.addErr = errors.New("Trojan add failed")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Trojan add failed") {
+			t.Fatalf("Trojan add error = %v", err)
+		}
+		handler.addErr = nil
+		if err := app.server.reconcileRunning(t.Context()); err != nil {
+			t.Fatalf("Trojan roster did not recover: %v", err)
+		}
+		if len(handler.added) == 0 || handler.added[len(handler.added)-1] != client.Email {
+			t.Fatalf("Trojan profile was not restored: %+v", handler.added)
+		}
+	})
+
+	t.Run("stored password cannot be decrypted", func(t *testing.T) {
+		app := newTestApp(t, true)
+		app.server.trojanPort = 11443
+		app.server.handler = &recordingTrojanHandler{fakeXrayHandler: app.handler}
+		client := createRuntimeTrojanClient(t, app, "bad-password-profile")
+		clients, err := app.server.store.ListClients(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := app.server.reconcileRealityShortIDsLocked(t.Context(), clients); err != nil {
+			t.Fatalf("prepare matching topology before corrupting the credential: %v", err)
+		}
+		execSQLiteTestMutation(t, app, "corrupt Trojan password", "UPDATE clients SET trojan_password_enc='invalid' WHERE id='"+client.ID+"'")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Trojan password is unavailable") {
+			t.Fatalf("unreadable Trojan password error = %v", err)
 		}
 	})
 }

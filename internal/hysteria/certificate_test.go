@@ -1,6 +1,7 @@
 package hysteria
 
 import (
+	"crypto/ecdh"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -11,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -210,6 +212,33 @@ func TestValidatePairAcceptsPKCS1AndECDSAPrivateKeys(t *testing.T) {
 	}
 }
 
+func TestValidatePairRejectsPrivateKeyThatCannotSign(t *testing.T) {
+	cert, _ := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+	if _, _, err := validatePair(cert, keyPEM, "vpn.example.com"); err == nil || !strings.Contains(err.Error(), "type is not supported") {
+		t.Fatalf("validatePair() error = %v, want unsupported signer type", err)
+	}
+}
+
+func TestValidatePairRejectsPublicKeyMarshalFailure(t *testing.T) {
+	cert, key := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
+	wantErr := errors.New("marshal failure")
+	_, _, err := validatePairWithMarshaller(cert, key, "vpn.example.com", func(any) ([]byte, error) {
+		return nil, wantErr
+	})
+	if err == nil || !strings.Contains(err.Error(), "private key is invalid") {
+		t.Fatalf("validatePairWithMarshaller() error = %v, want invalid-key error", err)
+	}
+}
+
 func TestInspectSupportsLegacyRootAndReportsMissingFiles(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
@@ -309,6 +338,89 @@ func TestImportWithVerifierRejectsValidationTrustAndPersistenceFailures(t *testi
 	}
 }
 
+func TestImportAndMkcertReportVersionIDGenerationErrors(t *testing.T) {
+	wantErr := errors.New("random ID generation failed")
+	cert, key := testCertificate(t, "203.0.113.10", time.Now().Add(time.Hour))
+	if _, _, err := importWithVerifierAndID(t.TempDir(), cert, key, "203.0.113.10", func([]byte, *x509.Certificate, string) error { return nil }, func() (string, error) {
+		return "", wantErr
+	}); !errors.Is(err, wantErr) {
+		t.Fatalf("importWithVerifierAndID() error = %v, want %v", err, wantErr)
+	}
+
+	root := t.TempDir()
+	fixture := t.TempDir()
+	ca, _ := testCertificate(t, "temporary-ca.example.test", time.Now().Add(time.Hour))
+	for name, contents := range map[string][]byte{"leaf.pem": cert, "key.pem": key, "rootCA.pem": ca} {
+		if err := os.WriteFile(filepath.Join(fixture, name), contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	binDir := t.TempDir()
+	script := fmt.Sprintf(`#!/bin/sh
+cert=
+key=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -cert-file) cert="$2"; shift 2 ;;
+    -key-file) key="$2"; shift 2 ;;
+    *) shift ;;
+  esac
+done
+cp %q "$cert"
+cp %q "$key"
+mkdir -p "$CAROOT"
+cp %q "$CAROOT/rootCA.pem"
+`, filepath.Join(fixture, "leaf.pem"), filepath.Join(fixture, "key.pem"), filepath.Join(fixture, "rootCA.pem"))
+	if err := os.WriteFile(filepath.Join(binDir, "mkcert"), []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	if _, _, err := generateMkcertWithID(t.Context(), root, "203.0.113.10", func() (string, error) { return "", wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("generateMkcertWithID() error = %v, want %v", err, wantErr)
+	}
+	const existingVersion = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	if err := os.Mkdir(filepath.Join(root, existingVersion), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := generateMkcertWithID(t.Context(), root, "203.0.113.10", func() (string, error) { return existingVersion, nil }); err == nil {
+		t.Fatal("mkcert generation overwrote an existing certificate version")
+	}
+}
+
+func TestGenerateMkcertReportsTemporaryDirectoryFailures(t *testing.T) {
+	wantErr := errors.New("temporary directory failure")
+	for _, failAtCall := range []int{1, 2} {
+		t.Run(fmt.Sprintf("call-%d", failAtCall), func(t *testing.T) {
+			calls := 0
+			mkdirTemp := func(dir, pattern string) (string, error) {
+				calls++
+				if calls == failAtCall {
+					return "", wantErr
+				}
+				return os.MkdirTemp(dir, pattern)
+			}
+			_, _, err := generateMkcertWithIDAndTempDirs(t.Context(), t.TempDir(), "203.0.113.10", func() (string, error) { return "", nil }, mkdirTemp)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("generateMkcertWithIDAndTempDirs() error = %v, want %v", err, wantErr)
+			}
+		})
+	}
+}
+
+func TestVerifyTrustedReportsUnavailableSystemCertificatePool(t *testing.T) {
+	certPEM, _ := testCertificate(t, "vpn.example.com", time.Now().Add(time.Hour))
+	cert := mustParseCertificate(t, certPEM)
+	wantErr := errors.New("injected system pool error")
+	for _, systemPool := range []func() (*x509.CertPool, error){
+		func() (*x509.CertPool, error) { return nil, wantErr },
+		func() (*x509.CertPool, error) { return nil, nil },
+	} {
+		if err := verifyTrustedWithSystemPool(certPEM, cert, "vpn.example.com", systemPool); err == nil || !strings.Contains(err.Error(), "system certificate roots are unavailable") {
+			t.Fatalf("verifyTrustedWithSystemPool() error = %v", err)
+		}
+	}
+}
+
 func mustParseCertificate(t *testing.T, chain []byte) *x509.Certificate {
 	t.Helper()
 	block, _ := pem.Decode(chain)
@@ -349,6 +461,47 @@ func TestWriteVersionRejectsInvalidRootAndExistingVersion(t *testing.T) {
 	}
 }
 
+func TestWriteVersionWithReturnsEveryOperationError(t *testing.T) {
+	wantErr := errors.New("injected file operation failure")
+	for _, failedOperation := range []string{"mkdir-all", "mkdir-temp", "write-cert", "write-key", "rename"} {
+		t.Run(failedOperation, func(t *testing.T) {
+			root := t.TempDir()
+			writeCalls := 0
+			ops := versionFileOperations{
+				mkdirAll: func(string, os.FileMode) error {
+					if failedOperation == "mkdir-all" {
+						return wantErr
+					}
+					return nil
+				},
+				mkdirTemp: func(string, string) (string, error) {
+					if failedOperation == "mkdir-temp" {
+						return "", wantErr
+					}
+					return root, nil
+				},
+				removeAll: func(string) error { return nil },
+				writePrivate: func(string, []byte, os.FileMode) error {
+					writeCalls++
+					if failedOperation == "write-cert" && writeCalls == 1 || failedOperation == "write-key" && writeCalls == 2 {
+						return wantErr
+					}
+					return nil
+				},
+				rename: func(string, string) error {
+					if failedOperation == "rename" {
+						return wantErr
+					}
+					return nil
+				},
+			}
+			if err := writeVersionWith(root, "id", []byte("cert"), []byte("key"), ops); !errors.Is(err, wantErr) {
+				t.Fatalf("writeVersionWith() error = %v, want %v", err, wantErr)
+			}
+		})
+	}
+}
+
 func TestWritePrivateRejectsExistingFilesAndNewIDReadsExactlySixteenBytes(t *testing.T) {
 	t.Parallel()
 	path := filepath.Join(t.TempDir(), "secret")
@@ -368,6 +521,55 @@ func TestWritePrivateRejectsExistingFilesAndNewIDReadsExactlySixteenBytes(t *tes
 	}
 	if _, err := newIDFrom(strings.NewReader("short")); err == nil {
 		t.Fatal("newIDFrom accepted a short random source")
+	}
+}
+
+type fakePrivateCertificateFile struct {
+	syncErr  error
+	closeErr error
+	closed   int
+}
+
+func (*fakePrivateCertificateFile) Write(p []byte) (int, error) { return len(p), nil }
+func (f *fakePrivateCertificateFile) Sync() error               { return f.syncErr }
+func (f *fakePrivateCertificateFile) Close() error {
+	f.closed++
+	return f.closeErr
+}
+
+func TestWritePrivateWithHandlesOpenCopySyncAndCloseErrors(t *testing.T) {
+	wantErr := errors.New("injected private-file error")
+	for _, failedOperation := range []string{"open", "copy", "sync", "close"} {
+		t.Run(failedOperation, func(t *testing.T) {
+			file := &fakePrivateCertificateFile{}
+			open := func(string, int, os.FileMode) (privateCertificateFile, error) {
+				if failedOperation == "open" {
+					return nil, wantErr
+				}
+				return file, nil
+			}
+			copyData := func(io.Writer, io.Reader) (int64, error) {
+				if failedOperation == "copy" {
+					return 0, wantErr
+				}
+				return 1, nil
+			}
+			if failedOperation == "sync" {
+				file.syncErr = wantErr
+			}
+			if failedOperation == "close" {
+				file.closeErr = wantErr
+			}
+			err := writePrivateWith("secret", []byte("data"), 0o400, open, copyData)
+			if !errors.Is(err, wantErr) {
+				t.Fatalf("writePrivateWith() error = %v, want %v", err, wantErr)
+			}
+			if failedOperation == "copy" || failedOperation == "sync" {
+				if file.closed != 1 {
+					t.Fatalf("file closed %d times after %s error, want 1", file.closed, failedOperation)
+				}
+			}
+		})
 	}
 }
 

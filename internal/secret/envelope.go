@@ -22,6 +22,28 @@ const envelopeVersion = "enc-v1"
 // plaintext and is safe to store in SQLite. Each value gets an independent
 // salt and nonce.
 func Seal(masterKey []byte, value string, purpose string) (string, error) {
+	return sealWith(masterKey, value, purpose, defaultEnvelopeCrypto())
+}
+
+type envelopeCrypto struct {
+	random    io.Reader
+	readFull  func(io.Reader, []byte) (int, error)
+	derive    func([]byte, []byte, string) ([]byte, error)
+	newCipher func([]byte) (cipher.Block, error)
+	newGCM    func(cipher.Block) (cipher.AEAD, error)
+}
+
+func defaultEnvelopeCrypto() envelopeCrypto {
+	return envelopeCrypto{
+		random: rand.Reader, readFull: io.ReadFull,
+		derive: func(masterKey, salt []byte, purpose string) ([]byte, error) {
+			return deriveWith(masterKey, salt, purpose, io.ReadFull)
+		},
+		newCipher: aes.NewCipher, newGCM: cipher.NewGCM,
+	}
+}
+
+func sealWith(masterKey []byte, value string, purpose string, crypto envelopeCrypto) (string, error) {
 	if len(masterKey) < 32 {
 		return "", errors.New("master key must contain at least 32 bytes")
 	}
@@ -29,23 +51,23 @@ func Seal(masterKey []byte, value string, purpose string) (string, error) {
 		return "", errors.New("envelope purpose is required")
 	}
 	salt := make([]byte, 32)
-	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+	if _, err := crypto.readFull(crypto.random, salt); err != nil {
 		return "", fmt.Errorf("generate envelope salt: %w", err)
 	}
-	key, err := derive(masterKey, salt, purpose)
+	key, err := crypto.derive(masterKey, salt, purpose)
 	if err != nil {
 		return "", err
 	}
-	block, err := aes.NewCipher(key)
+	block, err := crypto.newCipher(key)
 	if err != nil {
 		return "", err
 	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := crypto.newGCM(block)
 	if err != nil {
 		return "", err
 	}
 	nonce := make([]byte, gcm.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+	if _, err := crypto.readFull(crypto.random, nonce); err != nil {
 		return "", fmt.Errorf("generate envelope nonce: %w", err)
 	}
 	ciphertext := gcm.Seal(nil, nonce, []byte(value), []byte(purpose))
@@ -55,6 +77,10 @@ func Seal(masterKey []byte, value string, purpose string) (string, error) {
 
 // Open opens the requested resource.
 func Open(masterKey []byte, encoded, purpose string) (string, error) {
+	return openWith(masterKey, encoded, purpose, defaultEnvelopeCrypto())
+}
+
+func openWith(masterKey []byte, encoded, purpose string, crypto envelopeCrypto) (string, error) {
 	if len(masterKey) < 32 {
 		return "", errors.New("master key must contain at least 32 bytes")
 	}
@@ -75,15 +101,15 @@ func Open(masterKey []byte, encoded, purpose string) (string, error) {
 	if err != nil {
 		return "", errors.New("invalid encrypted value payload")
 	}
-	key, err := derive(masterKey, salt, purpose)
+	key, err := crypto.derive(masterKey, salt, purpose)
 	if err != nil {
 		return "", err
 	}
-	block, err := aes.NewCipher(key)
+	block, err := crypto.newCipher(key)
 	if err != nil {
 		return "", err
 	}
-	gcm, err := cipher.NewGCM(block)
+	gcm, err := crypto.newGCM(block)
 	if err != nil || len(nonce) != gcm.NonceSize() {
 		return "", errors.New("invalid encrypted value nonce")
 	}
@@ -98,6 +124,10 @@ func Open(masterKey []byte, encoded, purpose string) (string, error) {
 // installation master key. The result is stable across restarts and is never
 // stored in the database.
 func Derive(masterKey []byte, purpose string) ([]byte, error) {
+	return deriveKeyWith(masterKey, purpose, io.ReadFull)
+}
+
+func deriveKeyWith(masterKey []byte, purpose string, readFull func(io.Reader, []byte) (int, error)) ([]byte, error) {
 	if len(masterKey) < 32 {
 		return nil, errors.New("master key must contain at least 32 bytes")
 	}
@@ -106,17 +136,17 @@ func Derive(masterKey []byte, purpose string) ([]byte, error) {
 	}
 	reader := hkdf.New(sha256.New, masterKey, nil, []byte("xray-easy/derived/"+purpose))
 	key := make([]byte, 32)
-	if _, err := io.ReadFull(reader, key); err != nil {
+	if _, err := readFull(reader, key); err != nil {
 		return nil, fmt.Errorf("derive key: %w", err)
 	}
 	return key, nil
 }
 
 // derive performs the operation represented by its name.
-func derive(masterKey, salt []byte, purpose string) ([]byte, error) {
+func deriveWith(masterKey, salt []byte, purpose string, readFull func(io.Reader, []byte) (int, error)) ([]byte, error) {
 	reader := hkdf.New(sha256.New, masterKey, salt, []byte("xray-easy/"+purpose))
 	key := make([]byte, 32)
-	if _, err := io.ReadFull(reader, key); err != nil {
+	if _, err := readFull(reader, key); err != nil {
 		return nil, fmt.Errorf("derive envelope key: %w", err)
 	}
 	return key, nil

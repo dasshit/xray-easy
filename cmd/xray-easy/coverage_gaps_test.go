@@ -103,7 +103,24 @@ func TestConfigurationHelpersValidatePortsHostsAndHysteriaFallbacks(t *testing.T
 	if err := app.server.validateHysteriaHost(context.Background(), "1.1.1.1"); err == nil {
 		t.Fatal("stored Hysteria settings did not enforce the mkcert IP")
 	}
+	if err := app.server.validateHysteriaHost(context.Background(), "8.8.8.8"); err != nil {
+		t.Fatalf("matching self-signed Hysteria endpoint rejected: %v", err)
+	}
+	storedHysteria, err := app.server.store.GetHysteriaSettings(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	storedHysteria.Enabled = false
+	if err := app.server.store.UpdateHysteriaSettings(context.Background(), storedHysteria); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.server.validateHysteriaHost(context.Background(), "1.1.1.1"); err != nil {
+		t.Fatalf("disabled Hysteria settings rejected a host change: %v", err)
+	}
 	app.server.store.Close()
+	if err := app.server.validateHysteriaHost(context.Background(), "1.1.1.1"); err == nil {
+		t.Fatal("validateHysteriaHost succeeded with an unavailable settings store")
+	}
 	if !app.server.hysteriaEnabled(context.Background()) {
 		t.Fatal("environment fallback should apply when Hysteria settings cannot be read")
 	}
@@ -206,6 +223,28 @@ func TestConfiguredTrojanPortValidatesEveryPublicPortCollision(t *testing.T) {
 	t.Setenv("XRAY_EASY_UI_PORT", "not-a-port")
 	if _, err := configuredTrojanPort(); err == nil || !strings.Contains(err.Error(), "XRAY_EASY_UI_PORT") {
 		t.Fatalf("invalid Web UI port was ignored: %v", err)
+	}
+	t.Setenv("XRAY_EASY_UI_PORT", "8080")
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "public port dependency", key: "XRAY_PUBLIC_PORT", value: "invalid"},
+		{name: "VMess port dependency", key: "XRAY_VMESS_PORT", value: "invalid"},
+		{name: "Shadowsocks port dependency", key: "XRAY_SHADOWSOCKS_PORT", value: "443"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XRAY_PUBLIC_PORT", "443")
+			t.Setenv("XRAY_VMESS_PORT", "9443")
+			t.Setenv("XRAY_SHADOWSOCKS_PORT", "8388")
+			t.Setenv("XRAY_EASY_UI_PORT", "8080")
+			t.Setenv("XRAY_TROJAN_PORT", "10443")
+			t.Setenv(test.key, test.value)
+			if _, err := configuredTrojanPort(); err == nil {
+				t.Fatal("invalid dependency port was accepted")
+			}
+		})
 	}
 }
 

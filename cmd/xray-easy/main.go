@@ -465,12 +465,19 @@ func main() {
 		}
 		return
 	}
-	if err := runControlPlane(context.Background(), initializeControlPlane, func(serverHTTP *http.Server) error {
-		return serverHTTP.ListenAndServe()
-	}); err != nil {
+	if err := startControlPlane(); err != nil {
 		fatal(err)
 	}
 }
+
+var (
+	exitProcess       = os.Exit
+	startControlPlane = func() error {
+		return runControlPlane(context.Background(), initializeControlPlane, func(serverHTTP *http.Server) error {
+			return serverHTTP.ListenAndServe()
+		})
+	}
+)
 
 // runControlPlane runs the requested operation.
 func runControlPlane(ctx context.Context, initialize func(context.Context) (*server, func(), error), listen func(*http.Server) error) error {
@@ -1114,6 +1121,10 @@ func configuredTrojanPort() (int, error) {
 	if err != nil || port < 1 || port > 65535 {
 		return 0, errors.New("XRAY_TROJAN_PORT must be an integer between 1 and 65535")
 	}
+	uiPort, err := strconv.Atoi(envOr("XRAY_EASY_UI_PORT", "8080"))
+	if err != nil || uiPort < 1 || uiPort > 65535 {
+		return 0, errors.New("XRAY_EASY_UI_PORT must be an integer between 1 and 65535")
+	}
 	publicPort, err := configuredPublicPort()
 	if err != nil {
 		return 0, err
@@ -1125,10 +1136,6 @@ func configuredTrojanPort() (int, error) {
 	shadowsocksPort, err := configuredShadowsocksPort()
 	if err != nil {
 		return 0, err
-	}
-	uiPort, err := strconv.Atoi(envOr("XRAY_EASY_UI_PORT", "8080"))
-	if err != nil || uiPort < 1 || uiPort > 65535 {
-		return 0, errors.New("XRAY_EASY_UI_PORT must be an integer between 1 and 65535")
 	}
 	for name, other := range map[string]int{
 		"XRAY_PUBLIC_PORT":      publicPort,
@@ -1736,6 +1743,11 @@ func (s *server) totpDisable(w http.ResponseWriter, r *http.Request) {
 
 // events performs the operation represented by its name.
 func (s *server) events(w http.ResponseWriter, r *http.Request) {
+	s.eventsWithHeartbeat(w, r, 20*time.Second)
+}
+
+// eventsWithHeartbeat serves the event stream using the requested heartbeat interval.
+func (s *server) eventsWithHeartbeat(w http.ResponseWriter, r *http.Request, heartbeatInterval time.Duration) {
 	if _, err := s.authenticated(r); err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "authentication required"})
 		return
@@ -1765,11 +1777,7 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 		if s.stats != nil {
 			clients = s.stats.Snapshot()
 		}
-		payload, err := json.Marshal(map[string]any{"type": "stats", "at": time.Now().UTC(), "clients": clients})
-		if err != nil {
-			return err
-		}
-		if _, err := fmt.Fprintf(w, "event: stats\ndata: %s\n\n", payload); err != nil {
+		if err := writeSSEEvent(w, "stats", map[string]any{"type": "stats", "at": time.Now().UTC(), "clients": clients}); err != nil {
 			return err
 		}
 		flusher.Flush()
@@ -1789,12 +1797,8 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 			payload["state"] = "unavailable"
 			payload["xray_runtime_error"] = diagnostics.Redact(err.Error())
 		}
-		data, marshalErr := json.Marshal(payload)
-		if marshalErr != nil {
-			return marshalErr
-		}
-		if _, writeErr := fmt.Fprintf(w, "event: status\ndata: %s\n\n", data); writeErr != nil {
-			return writeErr
+		if err := writeSSEEvent(w, "status", payload); err != nil {
+			return err
 		}
 		flusher.Flush()
 		return nil
@@ -1805,7 +1809,7 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 	if err := sendStatus(); err != nil {
 		return
 	}
-	heartbeat := time.NewTicker(20 * time.Second)
+	heartbeat := time.NewTicker(heartbeatInterval)
 	defer heartbeat.Stop()
 	for {
 		select {
@@ -1829,6 +1833,16 @@ func (s *server) events(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 		}
 	}
+}
+
+// writeSSEEvent writes one JSON-encoded server-sent event to the stream.
+func writeSSEEvent(w io.Writer, event string, payload any) error {
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+	return err
 }
 
 // settings updates the requested value.
@@ -2278,24 +2292,7 @@ func updateActiveLogLevel(path, level string) error {
 	if err != nil {
 		return err
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".active-log-*.json")
-	if err != nil {
-		return err
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if _, err := temporary.Write(append(updated, '\n')); err != nil {
-		_ = temporary.Close()
-		return err
-	}
-	if err := temporary.Close(); err != nil {
-		return err
-	}
-	return os.Rename(temporaryPath, path)
+	return writeAtomic(path, append(updated, '\n'))
 }
 
 // clientsFingerprint performs the operation represented by its name.
@@ -2442,12 +2439,7 @@ func (s *server) clients(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported client fingerprint"})
 		return
 	}
-	if protocol == domain.ProtocolVLESS {
-		if settings.RealityPrivateKeyEnc == "" {
-			writeJSON(w, http.StatusConflict, map[string]any{"code": "setup_incomplete", "error": "REALITY setup is incomplete"})
-			return
-		}
-	} else if protocol == domain.ProtocolHysteria2 {
+	if protocol == domain.ProtocolHysteria2 {
 		hysteriaSettings, settingsErr := loadHysteriaSettings(r.Context(), s.store)
 		if settingsErr != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not read Hysteria 2 settings"})
@@ -2672,21 +2664,11 @@ func (s *server) createProtocolClient(ctx context.Context, settings domain.Setti
 		err = s.store.CreateShadowsocksClient(ctx, client)
 	case domain.ProtocolTrojan:
 		err = s.store.CreateTrojanClient(ctx, client)
-	default:
-		return domain.Client{}, errors.New("new profiles must use VLESS, VMess, Hysteria 2, Shadowsocks, or Trojan")
 	}
 	if err != nil {
 		return domain.Client{}, fmt.Errorf("create client: %w", err)
 	}
 	client.ShortID = shortID
-	if protocol == domain.ProtocolShadowsocks && mustDecryptShadowsocksPassword(s.masterKey, client) == "" {
-		_ = s.store.DeleteClient(ctx, clientID)
-		return domain.Client{}, errors.New("could not decrypt Shadowsocks password")
-	}
-	if protocol == domain.ProtocolTrojan && mustDecryptTrojanPassword(s.masterKey, client) == "" {
-		_ = s.store.DeleteClient(ctx, clientID)
-		return domain.Client{}, errors.New("could not decrypt Trojan password")
-	}
 	clients = append(clients, client)
 	reserved, err := s.store.ListReservedShortIDs(ctx)
 	if err != nil {
@@ -4013,14 +3995,25 @@ func (s *server) applyClientsLiveLocked(ctx context.Context, settings domain.Set
 
 // prepareCandidateLocked performs the operation represented by its name.
 func (s *server) prepareCandidateLocked(ctx context.Context, settings domain.Settings, privateKey string, clients []domain.Client) (string, string, error) {
-	if err := s.store.SeedReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
-		return "", "", err
-	}
-	reserved, err := s.store.ListReservedShortIDs(ctx)
+	reserved, err := loadReservedShortIDs(ctx, s.store)
 	if err != nil {
 		return "", "", err
 	}
 	return s.prepareCandidateWithReservedLocked(ctx, settings, privateKey, clients, reserved)
+}
+
+// reservedShortIDPool provides the durable reserve needed to render an Xray candidate.
+type reservedShortIDPool interface {
+	SeedReservedShortIDs(context.Context, int, func() (string, error)) error
+	ListReservedShortIDs(context.Context) ([]string, error)
+}
+
+// loadReservedShortIDs initializes a legacy reserve and returns its unassigned IDs.
+func loadReservedShortIDs(ctx context.Context, pool reservedShortIDPool) ([]string, error) {
+	if err := pool.SeedReservedShortIDs(ctx, xray.ReservedShortIDCount, xray.NewShortID); err != nil {
+		return nil, err
+	}
+	return pool.ListReservedShortIDs(ctx)
 }
 
 // prepareCandidateWithReservedLocked performs the operation represented by its name.
@@ -4554,7 +4547,7 @@ func envOr(name, fallback string) string {
 // fatal performs the operation represented by its name.
 func fatal(err error) {
 	fmt.Fprintln(os.Stderr, err)
-	os.Exit(1)
+	exitProcess(1)
 }
 
 // publicSettings performs the operation represented by its name.

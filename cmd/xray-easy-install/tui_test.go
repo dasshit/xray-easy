@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -53,6 +54,57 @@ func TestKeyboardNavigationAndCancellation(t *testing.T) {
 	}
 }
 
+func TestKeyboardEscapeSequenceFallbacks(t *testing.T) {
+	t.Run("standalone escape waits for sequence timeout", func(t *testing.T) {
+		w := &wizard{bytes: make(chan byte, 1)}
+		w.bytes <- 27
+		key, err := w.key(context.Background())
+		if err != nil || key.kind != keyEscape {
+			t.Fatalf("key = %+v, %v; want Escape", key, err)
+		}
+	})
+
+	for _, tc := range []struct {
+		name  string
+		input string
+	}{
+		{name: "escape followed by ordinary character", input: "\x1bX"},
+		{name: "escape sequence ends before direction", input: "\x1b["},
+		{name: "unknown escape sequence", input: "\x1b[Z"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := &wizard{bytes: make(chan byte, 4)}
+			for _, value := range []byte(tc.input) {
+				w.bytes <- value
+			}
+			close(w.bytes)
+			key, err := w.key(context.Background())
+			if err != nil || key.kind != keyEscape {
+				t.Fatalf("key = %+v, %v; want Escape", key, err)
+			}
+		})
+	}
+
+	t.Run("escape sequence cancelled while waiting", func(t *testing.T) {
+		w := &wizard{bytes: make(chan byte, 1)}
+		w.bytes <- 27
+		ctx, cancel := context.WithCancel(context.Background())
+		result := make(chan keyPress, 1)
+		errResult := make(chan error, 1)
+		go func() {
+			key, err := w.key(ctx)
+			result <- key
+			errResult <- err
+		}()
+		time.Sleep(5 * time.Millisecond)
+		cancel()
+		key, err := <-result, <-errResult
+		if !errors.Is(err, context.Canceled) || key != (keyPress{}) {
+			t.Fatalf("cancelled escape = %+v, %v", key, err)
+		}
+	})
+}
+
 func TestPortsCanBeEditedWithArrowsAndBackspace(t *testing.T) {
 	var output bytes.Buffer
 	input := "\x1b[B9099\x7f0\n"
@@ -83,6 +135,42 @@ func TestPortsCanBeEditedWithArrowsAndBackspace(t *testing.T) {
 	_, _, err = w.ports(context.Background(), 443, 8080)
 	if !errors.Is(err, errCancelled) {
 		t.Fatalf("Esc did not cancel port setup: %v", err)
+	}
+}
+
+func TestOptionalServiceMenusAcceptKeyboardNavigation(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		run  func(*wizard, configuration) (configuration, error)
+		cfg  configuration
+	}{
+		{
+			name: "AmneziaWG can be turned off with the previous option key",
+			cfg:  configuration{awgEnabled: true},
+			run: func(w *wizard, cfg configuration) (configuration, error) {
+				return w.amneziaWG(context.Background(), cfg)
+			},
+		},
+		{
+			name: "lease policy can be turned off with the previous option key",
+			cfg:  configuration{leaseEnabled: true},
+			run: func(w *wizard, cfg configuration) (configuration, error) {
+				return w.leaseService(context.Background(), cfg)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var output bytes.Buffer
+			w := newWizard(strings.NewReader("\x1b[A\n"), &output)
+			defer w.close()
+			result, err := test.run(w, test.cfg)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.awgEnabled || result.leaseEnabled {
+				t.Fatalf("menu result left optional service enabled: %+v", result)
+			}
+		})
 	}
 }
 
@@ -185,6 +273,12 @@ func TestTerminalRenderingHandlesSmallScreenAndStyles(t *testing.T) {
 	if got := lastRune("aβ"); got != "β" {
 		t.Fatalf("last rune = %q", got)
 	}
+	if got := lastRune(""); got != "" {
+		t.Fatalf("last rune of empty string = %q", got)
+	}
+	if got := lastRune(string([]byte{'a', 0xff})); got != string([]byte{0xff}) {
+		t.Fatalf("last invalid UTF-8 rune = %q", got)
+	}
 	for _, style := range []string{"accent", "selected", "dim", "border", "notice", "normal"} {
 		if w.color(style) == "" {
 			t.Fatalf("color for %s missing", style)
@@ -193,6 +287,21 @@ func TestTerminalRenderingHandlesSmallScreenAndStyles(t *testing.T) {
 	w.noColor = true
 	if w.color("selected") != "" {
 		t.Fatal("NO_COLOR was not honored")
+	}
+	output.Reset()
+	w.mu.Lock()
+	w.width, w.height = 0, 0
+	w.renderLocked()
+	w.mu.Unlock()
+	if output.Len() != 0 {
+		t.Fatal("renderer wrote a frame for an invalid terminal size")
+	}
+	w.mu.Lock()
+	w.width, w.height = 120, 32
+	w.mu.Unlock()
+	w.review(configuration{project: defaultProject, version: defaultVersion, public: 443, ui: 8080, leaseEnabled: true})
+	if !strings.Contains(output.String(), "2 leases · 30s grace") {
+		t.Fatal("review did not describe the enabled lease policy")
 	}
 }
 
@@ -270,6 +379,52 @@ func TestTerminalSessionRestoresSettingsAndMainRuns(t *testing.T) {
 		t.Fatalf("terminal settings were not restored: %s", log)
 	}
 	readPrivateFile(t, filepath.Join(root, ".env"))
+
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte("#!/bin/sh\necho injected docker failure >&2\nexit 17\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	failureInput, failureWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer failureInput.Close()
+	_ = failureWriter.Close()
+	failureOutput, err := os.CreateTemp(t.TempDir(), "terminal-error-output-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer failureOutput.Close()
+	var failureText bytes.Buffer
+	if code := runMain([]string{t.TempDir()}, failureInput, failureOutput, &failureText); code != 1 {
+		t.Fatalf("runMain install failure exit code = %d, stderr=%s", code, failureText.String())
+	}
+	if !strings.Contains(failureText.String(), "Installation stopped: Docker Compose v2 is required") || !strings.Contains(failureText.String(), "injected docker failure") {
+		t.Fatalf("runMain did not report the install failure: %s", failureText.String())
+	}
+	if err := os.WriteFile(filepath.Join(binDir, "docker"), []byte(docker), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cancelInput, cancelWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelInput.Close()
+	if _, err := io.WriteString(cancelWriter, "\x1b"); err != nil {
+		t.Fatal(err)
+	}
+	_ = cancelWriter.Close()
+	cancelOutput, err := os.CreateTemp(t.TempDir(), "terminal-cancel-output-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cancelOutput.Close()
+	var cancelErrors bytes.Buffer
+	if code := runMain([]string{t.TempDir()}, cancelInput, cancelOutput, &cancelErrors); code != 0 {
+		t.Fatalf("runMain cancellation exit code = %d, stderr=%s", code, cancelErrors.String())
+	}
+	if !strings.Contains(readFile(t, cancelOutput.Name()), "Installation cancelled. No containers were changed.") {
+		t.Fatal("runMain did not explain that cancellation left containers unchanged")
+	}
 }
 
 func TestRunMainRejectsBadArgumentsAndUnavailableTerminal(t *testing.T) {
@@ -324,5 +479,130 @@ func TestTerminalSizeFallbackAndResize(t *testing.T) {
 			t.Fatal("resize did not redraw")
 		case <-time.After(time.Millisecond):
 		}
+	}
+}
+
+func TestTerminalSizeParsesOutputAndFallsBackForInvalidDimensions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("installer terminal handling is Unix-specific")
+	}
+	input, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer writer.Close()
+	bin := t.TempDir()
+	stty := filepath.Join(bin, "stty")
+	oldPath := os.Getenv("PATH")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+oldPath)
+	for _, test := range []struct {
+		name, output string
+		wantWidth    int
+		wantHeight   int
+	}{
+		{name: "valid size", output: "24 120\n", wantWidth: 120, wantHeight: 24},
+		{name: "malformed output", output: "bad size\n", wantWidth: 100, wantHeight: 30},
+		{name: "missing dimension", output: "24\n", wantWidth: 100, wantHeight: 30},
+		{name: "non-positive dimensions", output: "0 0\n", wantWidth: 100, wantHeight: 30},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			script := "#!/bin/sh\nprintf '%s' '" + test.output + "'\n"
+			if err := os.WriteFile(stty, []byte(script), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			width, height := terminalSize(input)
+			if width != test.wantWidth || height != test.wantHeight {
+				t.Fatalf("terminal size = %dx%d, want %dx%d", width, height, test.wantWidth, test.wantHeight)
+			}
+		})
+	}
+}
+
+func TestEnterTerminalReportsSetupAndOutputFailures(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("installer terminal handling is Unix-specific")
+	}
+	bin := t.TempDir()
+	stty := filepath.Join(bin, "stty")
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	input, inputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	defer inputWriter.Close()
+	output, outputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	defer outputWriter.Close()
+
+	t.Run("cannot read current terminal settings", func(t *testing.T) {
+		if err := os.WriteFile(stty, []byte("#!/bin/sh\nexit 7\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := enterTerminal(input, output); err == nil || !strings.Contains(err.Error(), "read terminal settings") {
+			t.Fatalf("enterTerminal() error = %v, want read-settings failure", err)
+		}
+	})
+
+	t.Run("cannot enable keyboard input", func(t *testing.T) {
+		script := "#!/bin/sh\nif [ \"$1\" = -g ]; then echo saved-settings; exit 0; fi\necho rejected >&2\nexit 9\n"
+		if err := os.WriteFile(stty, []byte(script), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := enterTerminal(input, output); err == nil || !strings.Contains(err.Error(), "enable keyboard input") || !strings.Contains(err.Error(), "rejected") {
+			t.Fatalf("enterTerminal() error = %v, want keyboard-setup failure", err)
+		}
+	})
+
+	t.Run("alternate screen output fails", func(t *testing.T) {
+		if err := os.WriteFile(stty, []byte("#!/bin/sh\nif [ \"$1\" = -g ]; then echo saved-settings; fi\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		outputPath := filepath.Join(t.TempDir(), "empty")
+		if err := os.WriteFile(outputPath, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		readOnlyOutput, err := os.Open(outputPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer readOnlyOutput.Close()
+		if _, err := enterTerminal(input, readOnlyOutput); err == nil {
+			t.Fatal("enterTerminal() accepted an unwritable alternate-screen output")
+		}
+	})
+}
+
+type delayedCancelContext struct {
+	context.Context
+	done  <-chan struct{}
+	calls int
+}
+
+func (ctx *delayedCancelContext) Done() <-chan struct{} { return ctx.done }
+
+func (ctx *delayedCancelContext) Err() error {
+	ctx.calls++
+	if ctx.calls > 1 {
+		return context.Canceled
+	}
+	return nil
+}
+
+func TestNextByteHandlesBufferedInputAndCancellationDuringWait(t *testing.T) {
+	inputWizard := &wizard{bytes: make(chan byte, 1)}
+	inputWizard.bytes <- 'x'
+	if got, err := inputWizard.nextByte(context.Background()); err != nil || got != 'x' {
+		t.Fatalf("buffered terminal byte = %q, %v", got, err)
+	}
+	done := make(chan struct{})
+	close(done)
+	ctx := &delayedCancelContext{Context: context.Background(), done: done}
+	if _, err := (&wizard{bytes: make(chan byte)}).nextByte(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled terminal wait error = %v", err)
 	}
 }

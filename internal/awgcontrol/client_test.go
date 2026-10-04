@@ -15,11 +15,14 @@ import (
 	awgapi "xray-easy/awg-contract/api/v1"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -97,6 +100,51 @@ func newFakeClient(responses map[string]map[string]any) (*Client, *fakeInvoker) 
 	return &Client{connection: connection, client: awgapi.NewControlClient(connection), token: "test-token"}, connection
 }
 
+type nilResponseControlClient struct{ awgapi.ControlClient }
+
+func (nilResponseControlClient) GetStatus(context.Context, *emptypb.Empty, ...grpc.CallOption) (*awgapi.StatusResponse, error) {
+	return nil, nil
+}
+func (nilResponseControlClient) ListPeers(context.Context, *emptypb.Empty, ...grpc.CallOption) (*awgapi.ListPeersResponse, error) {
+	return nil, nil
+}
+func (nilResponseControlClient) GetPeerStats(context.Context, *emptypb.Empty, ...grpc.CallOption) (*awgapi.GetPeerStatsResponse, error) {
+	return nil, nil
+}
+func (nilResponseControlClient) CreatePeer(context.Context, *awgapi.CreatePeerRequest, ...grpc.CallOption) (*awgapi.Peer, error) {
+	return nil, nil
+}
+func (nilResponseControlClient) SetPeerEnabled(context.Context, *awgapi.SetPeerEnabledRequest, ...grpc.CallOption) (*awgapi.Peer, error) {
+	return nil, nil
+}
+func (nilResponseControlClient) SetPeerExpiry(context.Context, *awgapi.SetPeerExpiryRequest, ...grpc.CallOption) (*awgapi.Peer, error) {
+	return nil, nil
+}
+func (nilResponseControlClient) GetClientConfig(context.Context, *awgapi.GetClientConfigRequest, ...grpc.CallOption) (*awgapi.ClientConfigResponse, error) {
+	return nil, nil
+}
+func (nilResponseControlClient) ExportBackup(context.Context, *emptypb.Empty, ...grpc.CallOption) (*awgapi.BackupResponse, error) {
+	return nil, nil
+}
+
+type malformedPeerStatsControlClient struct {
+	awgapi.ControlClient
+	response *awgapi.GetPeerStatsResponse
+}
+
+func (c malformedPeerStatsControlClient) GetPeerStats(context.Context, *emptypb.Empty, ...grpc.CallOption) (*awgapi.GetPeerStatsResponse, error) {
+	return c.response, nil
+}
+
+type failingWatchControlClient struct {
+	awgapi.ControlClient
+	err error
+}
+
+func (c failingWatchControlClient) WatchPeerStats(context.Context, *awgapi.WatchPeerStatsRequest, ...grpc.CallOption) (awgapi.Control_WatchPeerStatsClient, error) {
+	return nil, c.err
+}
+
 func TestDialReadsAndTrimsPrivateToken(t *testing.T) {
 	tokenPath := filepath.Join(t.TempDir(), "control.token")
 	if err := os.WriteFile(tokenPath, []byte("  test-token\n"), 0o600); err != nil {
@@ -122,6 +170,20 @@ func TestDialReadsAndTrimsPrivateToken(t *testing.T) {
 	}
 	if _, err := Dial("passthrough:///awg-service", empty); err == nil || !strings.Contains(err.Error(), "empty") {
 		t.Fatalf("Dial with empty token error = %v", err)
+	}
+}
+
+func TestDialReportsConnectionConstructionError(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "control.token")
+	if err := os.WriteFile(tokenPath, []byte("test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	wantErr := errors.New("bad grpc options")
+	client, err := dialWith("passthrough:///awg", tokenPath, func(string, ...grpc.DialOption) (connection, error) {
+		return nil, wantErr
+	})
+	if client != nil || !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "create AWG gRPC client") {
+		t.Fatalf("dialWith() = %v, %v; want wrapped client construction error", client, err)
 	}
 }
 
@@ -175,14 +237,87 @@ func TestClientStatusAndPeerLifecycleCallsAuthenticatedAPI(t *testing.T) {
 	if err := client.RemovePeer(context.Background(), "iphone"); err != nil {
 		t.Fatal(err)
 	}
+	expiresAt := time.Date(2026, 10, 4, 12, 0, 0, 0, time.FixedZone("UTC+3", 3*60*60))
+	if _, err := client.CreatePeer(context.Background(), "iphone-expiring", &expiresAt); err != nil {
+		t.Fatalf("CreatePeer(expiring) = %v", err)
+	}
+	if got := connection.requests[serviceName+"CreatePeer"].(*awgapi.CreatePeerRequest).GetExpiresAt().AsTime(); !got.Equal(expiresAt.UTC()) {
+		t.Fatalf("CreatePeer expiry = %s, want %s", got, expiresAt.UTC())
+	}
+	if _, err := client.SetPeerExpiry(context.Background(), "iphone", &expiresAt); err != nil {
+		t.Fatalf("SetPeerExpiry(expiring) = %v", err)
+	}
+	if got := connection.requests[serviceName+"SetPeerExpiry"].(*awgapi.SetPeerExpiryRequest).GetExpiresAt().AsTime(); !got.Equal(expiresAt.UTC()) {
+		t.Fatalf("SetPeerExpiry expiry = %s, want %s", got, expiresAt.UTC())
+	}
 	peerStats, err := client.PeerStats(context.Background())
 	if err != nil || len(peerStats) != 1 || peerStats[0].Name != "iphone" || peerStats[0].SourceIP != "203.0.113.8" || peerStats[0].UploadBytes != 9007199254740993 || peerStats[0].DownloadBytes != 45 {
 		t.Fatalf("PeerStats() = %+v, %v", peerStats, err)
 	}
 	if got := strings.Join(connection.calls, ","); got != strings.Join([]string{
-		serviceName + "GetStatus", serviceName + "ListPeers", serviceName + "CreatePeer", serviceName + "SetPeerEnabled", serviceName + "SetPeerExpiry", serviceName + "GetClientConfig", serviceName + "RemovePeer", serviceName + "GetPeerStats",
+		serviceName + "GetStatus", serviceName + "ListPeers", serviceName + "CreatePeer", serviceName + "SetPeerEnabled", serviceName + "SetPeerExpiry", serviceName + "GetClientConfig", serviceName + "RemovePeer", serviceName + "CreatePeer", serviceName + "SetPeerExpiry", serviceName + "GetPeerStats",
 	}, ",") {
 		t.Fatalf("AWG RPC calls = %s", got)
+	}
+}
+
+func TestClientRejectsNilRPCResponses(t *testing.T) {
+	client := &Client{connection: &fakeInvoker{}, client: nilResponseControlClient{}, token: "test-token"}
+	if _, err := client.Status(context.Background()); err == nil {
+		t.Fatal("Status accepted a nil response")
+	}
+	if _, err := client.ListPeers(context.Background()); err == nil || !strings.Contains(err.Error(), "response is missing") {
+		t.Fatalf("ListPeers nil response error = %v", err)
+	}
+	if _, err := client.PeerStats(context.Background()); err == nil || !strings.Contains(err.Error(), "response is missing") {
+		t.Fatalf("PeerStats nil response error = %v", err)
+	}
+	if _, err := client.CreatePeer(context.Background(), "phone", nil); err == nil {
+		t.Fatal("CreatePeer accepted a nil peer")
+	}
+	if _, err := client.SetPeerEnabled(context.Background(), "phone", true); err == nil {
+		t.Fatal("SetPeerEnabled accepted a nil peer")
+	}
+	if _, err := client.SetPeerExpiry(context.Background(), "phone", nil); err == nil {
+		t.Fatal("SetPeerExpiry accepted a nil peer")
+	}
+	if _, err := client.ClientConfig(context.Background(), "phone"); err == nil || !strings.Contains(err.Error(), "config is missing") {
+		t.Fatalf("ClientConfig nil response error = %v", err)
+	}
+	if _, err := client.ExportBackup(context.Background()); err == nil || !strings.Contains(err.Error(), "backup response is missing") {
+		t.Fatalf("ExportBackup nil response error = %v", err)
+	}
+}
+
+func TestPeerStatsRejectsNilPeersAndInvalidHandshakeTimestamps(t *testing.T) {
+	for _, response := range []*awgapi.GetPeerStatsResponse{
+		{Peers: []*awgapi.PeerStats{nil}},
+		{Peers: []*awgapi.PeerStats{{Name: "phone", LastHandshake: &timestamppb.Timestamp{Seconds: -62135596801}}}},
+	} {
+		client := &Client{connection: &fakeInvoker{}, client: malformedPeerStatsControlClient{response: response}}
+		if _, err := client.PeerStats(context.Background()); err == nil {
+			t.Fatalf("PeerStats accepted malformed response %+v", response)
+		}
+	}
+}
+
+func TestCallAndWatchPeerStatsPropagateRequestIDErrors(t *testing.T) {
+	wantErr := context.Canceled
+	client, _ := newFakeClient(nil)
+	client.makeOutgoingCtx = func(context.Context) (context.Context, string, error) { return nil, "", wantErr }
+	if err := client.RemovePeer(context.Background(), "phone"); !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "create AWG request ID") {
+		t.Fatalf("call request ID error = %v", err)
+	}
+	if _, err := client.WatchPeerStats(context.Background(), time.Second); !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "create AWG stream request ID") {
+		t.Fatalf("stream request ID error = %v", err)
+	}
+}
+
+func TestWatchPeerStatsLogsStreamCreationFailure(t *testing.T) {
+	wantErr := errors.New("stream creation failed")
+	client := &Client{connection: &fakeInvoker{}, client: failingWatchControlClient{err: wantErr}, token: "test-token"}
+	if _, err := client.WatchPeerStats(context.Background(), time.Second); !errors.Is(err, wantErr) || !strings.Contains(err.Error(), "open AWG telemetry stream") {
+		t.Fatalf("WatchPeerStats stream creation error = %v", err)
 	}
 }
 
@@ -240,6 +375,15 @@ func TestClientPropagatesRPCAndConnectionCloseErrors(t *testing.T) {
 	if _, err := client.ListPeers(context.Background()); err == nil || !strings.Contains(err.Error(), "ListPeers failed") {
 		t.Fatalf("RPC error = %v", err)
 	}
+	if _, err := client.SetPeerEnabled(context.Background(), "phone", true); err == nil || !strings.Contains(err.Error(), "SetPeerEnabled failed") {
+		t.Fatalf("SetPeerEnabled RPC error = %v", err)
+	}
+	if _, err := client.SetPeerExpiry(context.Background(), "phone", nil); err == nil || !strings.Contains(err.Error(), "SetPeerExpiry failed") {
+		t.Fatalf("SetPeerExpiry RPC error = %v", err)
+	}
+	if _, err := client.ClientConfig(context.Background(), "phone"); err == nil || !strings.Contains(err.Error(), "GetClientConfig failed") {
+		t.Fatalf("ClientConfig RPC error = %v", err)
+	}
 	connection.closeErr = errors.New("close failed")
 	if err := client.Close(); err == nil || err.Error() != "close failed" {
 		t.Fatalf("Close() error = %v", err)
@@ -267,6 +411,12 @@ func TestParsePeerRejectsMissingAndInvalidTimestamps(t *testing.T) {
 	if _, err := parsePeer(invalidExpiry); err == nil || !strings.Contains(err.Error(), "expiresAt is invalid") {
 		t.Fatalf("parsePeer invalid expiresAt error = %v", err)
 	}
+	validExpiry := proto.Clone(valid).(*awgapi.Peer)
+	validExpiry.ExpiresAt = timestamppb.New(time.Date(2026, 10, 4, 12, 0, 0, 0, time.FixedZone("UTC+3", 3*60*60)))
+	parsedExpiry, err := parsePeer(validExpiry)
+	if err != nil || parsedExpiry.ExpiresAt == nil || !parsedExpiry.ExpiresAt.Equal(validExpiry.ExpiresAt.AsTime().UTC()) {
+		t.Fatalf("parsePeer valid expiry = %+v, %v", parsedExpiry, err)
+	}
 	parsed, err := parsePeer(valid)
 	if err != nil || parsed.ExpiresAt != nil || parsed.Disabled {
 		t.Fatalf("parsePeer unlimited enabled peer = %+v, %v", parsed, err)
@@ -275,7 +425,8 @@ func TestParsePeerRejectsMissingAndInvalidTimestamps(t *testing.T) {
 
 type telemetryAWGServer struct {
 	awgapi.UnimplementedControlServer
-	requests chan *awgapi.WatchPeerStatsRequest
+	requests  chan *awgapi.WatchPeerStatsRequest
+	streamErr error
 }
 
 func (s *telemetryAWGServer) WatchPeerStats(request *awgapi.WatchPeerStatsRequest, stream awgapi.Control_WatchPeerStatsServer) error {
@@ -287,7 +438,34 @@ func (s *telemetryAWGServer) WatchPeerStats(request *awgapi.WatchPeerStatsReques
 	if err := stream.Send(&awgapi.PeerStatsUpdate{SourceGeneration: "awg-test", Sequence: 4, FullSnapshot: true, SampledAt: timestamppb.Now(), Peers: []*awgapi.PeerStats{{Name: "ios", Online: true, UploadBytes: 9, DownloadBytes: 12}}}); err != nil {
 		return err
 	}
-	return nil
+	return s.streamErr
+}
+
+func TestClientLogsNonEOFPeerStatsStreamFailureOnlyOnce(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	stub := &telemetryAWGServer{requests: make(chan *awgapi.WatchPeerStatsRequest, 1), streamErr: status.Error(codes.Unavailable, "stream interrupted")}
+	awgapi.RegisterControlServer(server, stub)
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(func() { server.Stop(); _ = listener.Close() })
+	connection, err := grpc.NewClient("passthrough:///awg-stream-failure", grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return listener.Dial() }), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = connection.Close() })
+	client := &Client{connection: connection, client: awgapi.NewControlClient(connection), token: "stream-token"}
+	stream, err := client.WatchPeerStats(context.Background(), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("first stream message: %v", err)
+	}
+	for range 2 {
+		if _, err := stream.Recv(); status.Code(err) != codes.Unavailable {
+			t.Fatalf("stream error = %v, want Unavailable", err)
+		}
+	}
 }
 
 func TestClientOpensAuthenticatedTelemetryStreamAndClampsInterval(t *testing.T) {

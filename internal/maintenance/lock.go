@@ -20,6 +20,10 @@ type Lock struct {
 
 // Acquire performs the operation represented by its name.
 func Acquire(ctx context.Context, path string) (*Lock, error) {
+	return acquire(ctx, path, unix.Flock)
+}
+
+func acquire(ctx context.Context, path string, flock func(fd int, how int) error) (*Lock, error) {
 	if path == "" {
 		return &Lock{}, nil
 	}
@@ -31,7 +35,7 @@ func Acquire(ctx context.Context, path string) (*Lock, error) {
 		return nil, err
 	}
 	for {
-		err = unix.Flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+		err = flock(int(file.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 		if err == nil {
 			return &Lock{file: file}, nil
 		}

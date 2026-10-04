@@ -140,6 +140,13 @@ func TestDoctorLeaseServiceChecksAreConditionalAndReportHealth(t *testing.T) {
 		t.Fatalf("lease service awaiting first-run setup was not a warning: %+v", findDoctorCheck(checks, "Xray lease service"))
 	}
 	leaseHealthProbe = func(context.Context, string) (leaseHealthStatus, error) {
+		return leaseHealthStatus{Ready: true}, nil
+	}
+	checks = collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
+	if !hasDoctorCheck(checks, "Xray lease service", doctorFail) || !doctorCheckContains(checks, "Xray lease service", "snapshot stream is disconnected") {
+		t.Fatalf("disconnected telemetry stream was not a failure: %+v", findDoctorCheck(checks, "Xray lease service"))
+	}
+	leaseHealthProbe = func(context.Context, string) (leaseHealthStatus, error) {
 		return leaseHealthStatus{}, errors.New("connection refused")
 	}
 	checks = collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
@@ -175,6 +182,9 @@ func (f doctorRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, e
 func TestProbeLeaseServiceValidatesEndpointAndHealthPayload(t *testing.T) {
 	if _, err := probeLeaseService(context.Background(), "invalid host"); err == nil {
 		t.Fatal("invalid health endpoint address was accepted")
+	}
+	if _, err := probeLeaseServiceWithClient(context.Background(), "%", http.DefaultClient); err == nil || !strings.Contains(err.Error(), "address is invalid") {
+		t.Fatalf("malformed URL error = %v", err)
 	}
 	for _, test := range []struct {
 		name       string
@@ -213,6 +223,15 @@ func TestProbeLeaseServiceValidatesEndpointAndHealthPayload(t *testing.T) {
 			}
 		})
 	}
+	previousTransport := http.DefaultTransport
+	http.DefaultTransport = doctorRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ready":true,"controllerStreamConnected":false}`)), Header: make(http.Header)}, nil
+	})
+	t.Cleanup(func() { http.DefaultTransport = previousTransport })
+	health, err := probeLeaseServiceWithClient(context.Background(), "127.0.0.1:18080", nil)
+	if err != nil || !health.Ready || health.ControllerStreamConnected {
+		t.Fatalf("default lease HTTP client health=%+v error=%v", health, err)
+	}
 }
 
 func TestLeasePolicyFromEnvironmentValidatesAllDurations(t *testing.T) {
@@ -222,6 +241,28 @@ func TestLeasePolicyFromEnvironmentValidatesAllDurations(t *testing.T) {
 	config, err := leasePolicyFromEnvironment()
 	if err != nil || config.MaxActiveLeases != 2 || config.GracePeriod != 30*time.Second {
 		t.Fatalf("lease policy = %+v, %v", config, err)
+	}
+}
+
+func TestLeasePolicyFromEnvironmentReturnsEachParseError(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		key   string
+		value string
+	}{
+		{name: "maximum active leases", key: "XRAY_LEASE_MAX_ACTIVE", value: "many"},
+		{name: "grace period", key: "XRAY_LEASE_GRACE", value: "soon"},
+		{name: "retry delay", key: "XRAY_LEASE_RETRY_DELAY", value: "later"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Setenv("XRAY_LEASE_MAX_ACTIVE", "2")
+			t.Setenv("XRAY_LEASE_GRACE", "30s")
+			t.Setenv("XRAY_LEASE_RETRY_DELAY", "1s")
+			t.Setenv(test.key, test.value)
+			if _, err := leasePolicyFromEnvironment(); err == nil {
+				t.Fatalf("lease policy accepted invalid %s value %q", test.key, test.value)
+			}
+		})
 	}
 }
 

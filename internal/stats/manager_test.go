@@ -64,6 +64,18 @@ func openStatsTestStore(t *testing.T) (*store.Store, string) {
 	return db, path
 }
 
+func execStatsSQL(t *testing.T, path, statement string) {
+	t.Helper()
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec(statement); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func createStatsClient(t *testing.T, db *store.Store, id, email string) {
 	t.Helper()
 	err := db.CreateClient(context.Background(), domain.Client{ID: id, Name: "device-" + id, Enabled: true}, "uuid-"+id, email, "short-"+id)
@@ -425,6 +437,29 @@ func TestPollRecordsAndClearsStoreAndAPIErrors(t *testing.T) {
 			t.Fatal("snapshot write error was not retained")
 		}
 	})
+}
+
+func TestPollCombinesXrayAndAWGFailures(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	xrayErr := errors.New("Xray unavailable")
+	awgErr := errors.New("AWG unavailable")
+	manager := NewManager(db, &fakeStatsAPI{err: xrayErr}, &fakeAWGStatsAPI{err: awgErr})
+	if err := manager.Poll(context.Background()); !errors.Is(err, xrayErr) {
+		t.Fatalf("Poll() error = %v, want Xray error", err)
+	}
+	want := "Xray stats: Xray unavailable; AmneziaWG stats: AWG unavailable"
+	if got := manager.LastError(); got != want {
+		t.Fatalf("combined LastError() = %q, want %q", got, want)
+	}
+}
+
+func TestPollReturnsAWGStorageFailures(t *testing.T) {
+	db, path := openStatsTestStore(t)
+	execStatsSQL(t, path, "DROP TABLE awg_traffic_snapshots")
+	manager := NewManager(db, &fakeStatsAPI{}, &fakeAWGStatsAPI{})
+	if err := manager.Poll(context.Background()); err == nil || !strings.Contains(err.Error(), "list AmneziaWG traffic snapshots") {
+		t.Fatalf("Poll() error = %v, want AWG storage failure", err)
+	}
 }
 
 func TestStartPollsImmediatelyAndOnIntervalUntilCanceled(t *testing.T) {

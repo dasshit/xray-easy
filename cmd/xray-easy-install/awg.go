@@ -148,25 +148,5 @@ func updateEnvironmentFile(root string, data []byte, updates map[string]string) 
 	for _, key := range missing {
 		lines = append(lines, key+"="+updates[key])
 	}
-	file, err := os.CreateTemp(root, ".env-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err := file.Chmod(0o600); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if _, err := file.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		_ = file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return writePrivateAtomic(path, ".env-*", []byte(strings.Join(lines, "\n")+"\n"), 0o600, os.Rename)
 }

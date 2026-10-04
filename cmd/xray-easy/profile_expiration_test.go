@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -268,4 +269,25 @@ func TestProfileCreationRejectsExpiryForUnsupportedProtocolAndPastDeadline(t *te
 func futureTimePtr() *time.Time {
 	value := time.Now().UTC().Add(time.Hour)
 	return &value
+}
+
+func TestExpireDueClientsReturnsCanceledStoreQuery(t *testing.T) {
+	app := newTestApp(t, true)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := app.server.expireDueClients(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expiry sweep with canceled context = %v, want context.Canceled", err)
+	}
+}
+
+func TestExpirationWorkerUsesDefaultIntervalWhenNonPositive(t *testing.T) {
+	app := newTestApp(t, true)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	done := app.server.startExpirationWorkerWithInterval(ctx, 0)
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("expiry worker did not stop after cancellation")
+	}
 }

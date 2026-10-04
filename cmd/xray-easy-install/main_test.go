@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -11,6 +12,67 @@ import (
 	"strings"
 	"testing"
 )
+
+type installerFailedRandomReader struct{ err error }
+
+func (r installerFailedRandomReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestRandomBase64ReturnsEntropyFailure(t *testing.T) {
+	previous := cryptorand.Reader
+	cryptorand.Reader = installerFailedRandomReader{err: errors.New("entropy unavailable")}
+	t.Cleanup(func() { cryptorand.Reader = previous })
+	if _, err := randomBase64(32); err == nil || !strings.Contains(err.Error(), "entropy unavailable") {
+		t.Fatalf("randomBase64 error = %v, want entropy failure", err)
+	}
+}
+
+func TestCreateConfigurationPropagatesMasterKeyEntropyFailure(t *testing.T) {
+	previous := cryptorand.Reader
+	cryptorand.Reader = installerFailedRandomReader{err: errors.New("master key entropy unavailable")}
+	t.Cleanup(func() { cryptorand.Reader = previous })
+	root := t.TempDir()
+	err := createConfiguration(root, configuration{project: defaultProject, version: defaultVersion, public: 443, vmess: 9443, ui: 8080})
+	if err == nil || !strings.Contains(err.Error(), "master key entropy unavailable") {
+		t.Fatalf("createConfiguration() error = %v, want master-key entropy failure", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, ".env")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed key generation left an environment file: %v", err)
+	}
+}
+
+func TestRunInstallRejectsUnsupportedDockerVersionsAndEnvironmentPathErrors(t *testing.T) {
+	for _, testcase := range []struct {
+		name         string
+		root         func(*testing.T) string
+		runner       *fakeRunner
+		wantContains string
+	}{
+		{name: "old engine", root: func(t *testing.T) string { return t.TempDir() }, runner: &fakeRunner{engineVersion: "27.9.1"}, wantContains: "Docker Engine 28.0.0 or newer"},
+		{name: "old compose", root: func(t *testing.T) string { return t.TempDir() }, runner: &fakeRunner{composeVersion: "2.33.0"}, wantContains: "Docker Compose 2.33.1 or newer"},
+		{name: "environment path is beneath a regular file", root: func(t *testing.T) string {
+			root := filepath.Join(t.TempDir(), "project")
+			if err := os.WriteFile(root, []byte("not a directory"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return root
+		}, runner: &fakeRunner{}, wantContains: "not a directory"},
+		{name: "existing environment is invalid", root: func(t *testing.T) string {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, ".env"), []byte("malformed"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			return root
+		}, runner: &fakeRunner{}, wantContains: "existing .env is invalid"},
+	} {
+		t.Run(testcase.name, func(t *testing.T) {
+			root := testcase.root(t)
+			_, err := runInstall(context.Background(), root, strings.NewReader(""), &bytes.Buffer{}, testcase.runner)
+			if err == nil || !strings.Contains(err.Error(), testcase.wantContains) {
+				t.Fatalf("runInstall() error = %v, want %q", err, testcase.wantContains)
+			}
+		})
+	}
+}
 
 type fakeRunner struct {
 	calls          []string
@@ -197,6 +259,30 @@ func TestDefaultVMessPortAvoidsInstallerPortSelections(t *testing.T) {
 	}
 }
 
+func TestMainRoutesUsageExitCode(t *testing.T) {
+	oldArgs, oldExit := os.Args, exitProcess
+	t.Cleanup(func() { os.Args, exitProcess = oldArgs, oldExit })
+	os.Args = []string{"xray-easy-install"}
+	exitCode := -1
+	exitProcess = func(code int) { exitCode = code }
+	main()
+	if exitCode != 2 {
+		t.Fatalf("usage exit code = %d, want 2", exitCode)
+	}
+}
+
+func TestDefaultTrojanPortAvoidsEveryInstallerPort(t *testing.T) {
+	if got := defaultTrojanPort(443, 9443, 8388, 8080); got != 10443 {
+		t.Fatalf("default Trojan port = %d, want 10443", got)
+	}
+	if got := defaultTrojanPort(10443, 10444, 8388, 8080); got != 10445 {
+		t.Fatalf("Trojan default did not skip public and VMess collisions: %d", got)
+	}
+	if got := defaultTrojanPort(10443, 8388, 10444, 10445); got != 10446 {
+		t.Fatalf("Trojan default did not skip all selected ports: %d", got)
+	}
+}
+
 func TestInstallerConfigurationHelpersCoverDefaultsAndCollisions(t *testing.T) {
 	if got := defaultShadowsocksPort(443, 9443, 8388); got != 8389 {
 		t.Fatalf("default Shadowsocks port = %d, want 8389", got)
@@ -239,7 +325,9 @@ func TestInstallerValidatesTrojanAndShadowsocksPortsAndMethods(t *testing.T) {
 		{"Trojan UI-port collision", func() configuration { c := base; c.trojan = 8080; return c }()},
 		{"Trojan invalid port", func() configuration { c := base; c.trojan = 65536; return c }()},
 		{"Shadowsocks public-port collision", func() configuration { c := base; c.shadowsocks = 443; return c }()},
+		{"Shadowsocks VMess-port collision", func() configuration { c := base; c.shadowsocks = 9443; return c }()},
 		{"Shadowsocks UI-port collision", func() configuration { c := base; c.shadowsocks = 8080; return c }()},
+		{"Shadowsocks invalid port", func() configuration { c := base; c.shadowsocks = 65536; return c }()},
 		{"Shadowsocks invalid network", func() configuration { c := base; c.shadowsocksNetwork = "sctp"; return c }()},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -254,6 +342,11 @@ func TestInstallerValidatesTrojanAndShadowsocksPortsAndMethods(t *testing.T) {
 			}
 		})
 	}
+	defaultPort := base
+	defaultPort.shadowsocks = 0
+	if err := validateShadowsocksConfiguration(defaultPort); err != nil {
+		t.Fatalf("zero Shadowsocks port should select a valid default: %v", err)
+	}
 }
 
 func TestPrintNextStepsIncludesEnabledTransportFirewallGuidance(t *testing.T) {
@@ -261,7 +354,7 @@ func TestPrintNextStepsIncludesEnabledTransportFirewallGuidance(t *testing.T) {
 	printNextSteps(&output, configuration{
 		public: 443, vmess: 9443, ui: 8080, shadowsocks: 8388,
 		shadowsocksEnabled: true, hysteriaEnabled: true, awgEnabled: true,
-		awgPublicPort: 1234,
+		awgPublicPort: 1234, trojanEnabled: true, trojan: 10443,
 	})
 	text := output.String()
 	for _, want := range []string{
@@ -270,10 +363,26 @@ func TestPrintNextStepsIncludesEnabledTransportFirewallGuidance(t *testing.T) {
 		"Allow inbound TCP and UDP 8388",
 		"Allow inbound UDP 443 through the VDS firewall for Hysteria 2",
 		"Allow inbound UDP 1234 through the VDS firewall for AmneziaWG",
+		"Allow inbound TCP 10443 through the VDS firewall for Trojan",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("next-step guidance omitted %q: %s", want, text)
 		}
+	}
+}
+
+func TestCollectStartupDiagnosticsContinuesAfterOneCommandFails(t *testing.T) {
+	root := t.TempDir()
+	runner := &fakeRunner{failOn: "logs --tail=100"}
+	var output bytes.Buffer
+	ui := newWizard(strings.NewReader(""), &output)
+	defer ui.close()
+	collectStartupDiagnostics(context.Background(), root, runner, ui)
+	if len(runner.calls) != 2 || runner.calls[0] != "compose -f compose.yaml ps --all" || !strings.Contains(runner.calls[1], "logs --tail=100") {
+		t.Fatalf("startup diagnostics commands = %v", runner.calls)
+	}
+	if !strings.Contains(output.String(), "Could not collect one diagnostic command") {
+		t.Fatalf("startup diagnostics did not explain partial collection failure: %s", output.String())
 	}
 }
 
@@ -483,6 +592,10 @@ func TestVersionAtLeast(t *testing.T) {
 		{"v5.5.1-desktop.1", "2.33.1", true},
 		{"27.10.0", "28.0.0", false},
 		{"invalid", "2.33.1", false},
+		{"x.1.1", "2.33.1", false},
+		{"999999999999999999999999.1.1", "2.33.1", false},
+		{"2.33.1", "invalid", false},
+		{"2.33", "2.33.1", false},
 	} {
 		if got := versionAtLeast(test.version, test.minimum); got != test.want {
 			t.Errorf("versionAtLeast(%q, %q) = %t, want %t", test.version, test.minimum, got, test.want)
@@ -559,6 +672,23 @@ func TestInvalidEnvironmentIsRejected(t *testing.T) {
 		"XRAY_EASY_UI_PORT=0",
 		"XRAY_PUBLIC_PORT=8080\nXRAY_EASY_UI_PORT=8080",
 		"XRAY_PUBLIC_PORT=443\nXRAY_VMESS_PORT=443",
+		"XRAY_VMESS_PORT=not-a-port",
+		"XRAY_VMESS_PORT=8080",
+		"XRAY_SHADOWSOCKS_PORT=not-a-port",
+		"XRAY_SHADOWSOCKS_PORT=443",
+		"XRAY_SHADOWSOCKS_PORT=9443",
+		"XRAY_SHADOWSOCKS_PORT=8080",
+		"XRAY_SHADOWSOCKS_NETWORK=sctp",
+		"XRAY_TROJAN_PORT=not-a-port",
+		"XRAY_TROJAN_PORT=443",
+		"XRAY_TROJAN_PORT=9443",
+		"XRAY_TROJAN_PORT=8388",
+		"XRAY_TROJAN_PORT=8080",
+		"XRAY_HYSTERIA2_ENABLED=true\nXRAY_HYSTERIA2_TLS_MODE=unknown",
+		"XRAY_HYSTERIA2_ENABLED=true\nXRAY_HYSTERIA2_TLS_MODE=custom\nXRAY_HYSTERIA2_TLS_SERVER_NAME=bad name",
+		"COMPOSE_PROFILES=awg\nAWG_PUBLIC_HOST=vpn.example.test\nAWG_PUBLIC_PORT=not-a-port",
+		"COMPOSE_PROFILES=awg\nAWG_PUBLIC_HOST=vpn.example.test\nAWG_PUBLIC_PORT=443",
+		"COMPOSE_PROFILES=awg\nAWG_PUBLIC_HOST=bad host",
 	} {
 		env := "XRAY_EASY_MASTER_KEY=" + key + "\n" + line + "\n"
 		if err := os.WriteFile(filepath.Join(root, ".env"), []byte(env), 0o600); err != nil {

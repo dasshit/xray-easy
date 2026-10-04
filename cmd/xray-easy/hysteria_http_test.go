@@ -3,8 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"database/sql"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
+	"math/big"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -79,6 +87,139 @@ func TestHysteriaCertificateUploadRejectsOversizeAndMissingInitialSetup(t *testi
 	})
 }
 
+func TestHysteriaCertificateUploadBusyMissingKeyAndSuccess(t *testing.T) {
+	t.Run("storage is busy", func(t *testing.T) {
+		app := newTestApp(t, true)
+		lock, err := maintenance.Acquire(context.Background(), app.server.maintenancePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+
+		request := httptest.NewRequest(http.MethodPost, "/api/transports/hysteria2/certificate", strings.NewReader(""))
+		ctx, cancel := context.WithTimeout(request.Context(), 5*time.Millisecond)
+		defer cancel()
+		request = request.WithContext(ctx)
+		request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+		response := httptest.NewRecorder()
+		newMux(app.server).ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("busy upload status = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("private key is required", func(t *testing.T) {
+		app := newTestApp(t, true)
+		body := multipartBodyWithFiles(t, map[string]string{"fullchain": "certificate"})
+		request := httptest.NewRequest(http.MethodPost, "/api/transports/hysteria2/certificate", strings.NewReader(body))
+		request.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+		request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+		response := httptest.NewRecorder()
+		newMux(app.server).ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "privkey.pem is required") {
+			t.Fatalf("upload without private key = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("trusted certificate is imported and audited", func(t *testing.T) {
+		app := newTestApp(t, true)
+		chainPEM, keyPEM, rootPEM := trustedHysteriaUploadMaterial(t)
+		rootPath := filepath.Join(t.TempDir(), "test-roots.pem")
+		if err := os.WriteFile(rootPath, rootPEM, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("SSL_CERT_FILE", rootPath)
+		body := certificateUploadBody(t, string(chainPEM), string(keyPEM), "vpn.example.test")
+		request := httptest.NewRequest(http.MethodPost, "/api/transports/hysteria2/certificate", strings.NewReader(body))
+		request.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+		request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+		response := httptest.NewRecorder()
+		newMux(app.server).ServeHTTP(response, request)
+		if response.Code != http.StatusCreated {
+			t.Fatalf("trusted certificate upload = %d %s", response.Code, response.Body.String())
+		}
+		var result struct {
+			CertificateID string `json:"certificate_id"`
+		}
+		if err := json.Unmarshal(response.Body.Bytes(), &result); err != nil || len(result.CertificateID) != 32 {
+			t.Fatalf("import response = %+v, %v", result, err)
+		}
+		if _, err := os.Stat(filepath.Join(app.server.hysteriaTLSDir(), result.CertificateID, "privkey.pem")); err != nil {
+			t.Fatalf("imported key not found: %v", err)
+		}
+		db, err := sql.Open("sqlite", "file:"+filepath.Join(app.server.dataDir, "state.db"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer db.Close()
+		var auditCount int
+		if err := db.QueryRow(`SELECT COUNT(*) FROM audit_events WHERE action='hysteria.certificate.import'`).Scan(&auditCount); err != nil || auditCount != 1 {
+			t.Fatalf("certificate import audit count = %d, %v", auditCount, err)
+		}
+	})
+}
+
+func trustedHysteriaUploadMaterial(t *testing.T) ([]byte, []byte, []byte) {
+	t.Helper()
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().Add(-time.Minute)
+	rootTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(100), Subject: pkix.Name{CommonName: "Xray-easy test CA"},
+		NotBefore: now, NotAfter: now.Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(101), Subject: pkix.Name{CommonName: "vpn.example.test"},
+		NotBefore: now, NotAfter: now.Add(time.Hour), DNSNames: []string{"vpn.example.test"},
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, root, &leafKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(leafKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chain := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leafDER}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})...)
+	return chain, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rootDER})
+}
+
+func multipartBodyWithFiles(t *testing.T, files map[string]string) string {
+	t.Helper()
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	writer.SetBoundary("boundary")
+	for field, contents := range files {
+		part, err := writer.CreateFormFile(field, field+".pem")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := part.Write([]byte(contents)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return body.String()
+}
+
 func TestReadMultipartFileValidatesExactlyOneBoundedFile(t *testing.T) {
 	t.Parallel()
 	form := &multipart.Form{File: map[string][]*multipart.FileHeader{}}
@@ -96,6 +237,31 @@ func TestReadMultipartFileValidatesExactlyOneBoundedFile(t *testing.T) {
 	form.File["certificate"] = []*multipart.FileHeader{{}}
 	if _, err := readMultipartFile(form, "certificate"); err == nil {
 		t.Fatal("multipart file without an uploaded body was accepted")
+	}
+}
+
+func TestReadMultipartFileRejectsBodyOverLimitAndMissingTemporaryFile(t *testing.T) {
+	body := multipartBodyWithFiles(t, map[string]string{"certificate": strings.Repeat("x", hysteriaCertificateMaxBytes+1)})
+	request := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(body))
+	request.Header.Set("Content-Type", "multipart/form-data; boundary=boundary")
+	if err := request.ParseMultipartForm(1); err != nil {
+		t.Fatal(err)
+	}
+	form := request.MultipartForm
+	if form == nil || len(form.File["certificate"]) != 1 {
+		t.Fatal("multipart parser did not produce the oversized file")
+	}
+	defer form.RemoveAll()
+	file := form.File["certificate"][0]
+	file.Size = 1 // Simulate untrusted metadata that understates the actual body size.
+	if _, err := readMultipartFile(form, "certificate"); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("oversized file body error = %v", err)
+	}
+	if err := form.RemoveAll(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readMultipartFile(form, "certificate"); err == nil {
+		t.Fatal("missing temporary upload backing file was opened")
 	}
 }
 
@@ -146,6 +312,76 @@ func TestHysteriaSettingsStatusAndPreviewRequireAuthenticationAndCertificate(t *
 	response = requestJSON(t, app, "POST", "/api/transports/hysteria2/preview", request, true)
 	if response.Code != 409 || !strings.Contains(response.Body.String(), "certificate_not_ready") {
 		t.Fatalf("enable without a cert = %d %s", response.Code, response.Body.String())
+	}
+}
+
+func TestHysteriaSettingsPreviewFailureAndCombinedImpactPaths(t *testing.T) {
+	t.Run("authentication required", func(t *testing.T) {
+		app := newTestApp(t, true)
+		response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/preview", hysteriaSettingsRequest{}, false)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("unauthenticated preview = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("settings read failure", func(t *testing.T) {
+		app := newTestApp(t, true)
+		execSQLiteTestMutation(t, app, "drop Hysteria settings", `DROP TABLE hysteria_settings`)
+		response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/preview", hysteriaSettingsRequest{}, true)
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not read Hysteria 2 settings") {
+			t.Fatalf("preview after settings storage failure = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("change ID entropy failure", func(t *testing.T) {
+		app := newTestApp(t, true)
+		previous := rand.Reader
+		rand.Reader = failingReader{}
+		t.Cleanup(func() { rand.Reader = previous })
+		response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/preview", hysteriaSettingsRequest{
+			TLSMode: domain.HysteriaTLSLegacy, UDPIdleTimeout: 120, MasqueradeType: domain.HysteriaMasqueradeOff,
+		}, true)
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not create Hysteria 2 change") {
+			t.Fatalf("preview after entropy failure = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("Hysteria and VMess inbounds change together", func(t *testing.T) {
+		app := newTestApp(t, true)
+		client, err := domain.NewProtocolClient("vmess-preview-test", "vmess-phone", domain.ProtocolVMess, "", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.UUID, err = xray.NewUUID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.Email = "vmess-preview-test@xray-easy"
+		if err := app.server.store.CreateVMessClient(context.Background(), client); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(app.server.configDir, "active.json"), []byte(`{"inbounds":[{"tag":"hysteria2"}]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/preview", hysteriaSettingsRequest{
+			Enabled: true, TLSMode: domain.HysteriaTLSLegacy, UDPIdleTimeout: 120, MasqueradeType: domain.HysteriaMasqueradeOff,
+		}, true)
+		if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Hysteria 2 and VMess inbounds will be changed") {
+			t.Fatalf("combined Hysteria and VMess preview = %d %s", response.Code, response.Body.String())
+		}
+	})
+}
+
+func TestLoadHysteriaSettingsReturnsErrorIfDefaultRowDisappears(t *testing.T) {
+	app := newTestApp(t, false)
+	execSQLiteTestMutation(t, app, "delete Hysteria settings row", `DELETE FROM hysteria_settings`)
+	execSQLiteTestMutation(t, app, "remove Hysteria settings during bootstrap", `CREATE TRIGGER remove_bootstrapped_hysteria_settings AFTER INSERT ON hysteria_settings BEGIN DELETE FROM hysteria_settings WHERE id=NEW.id; END`)
+	if _, err := loadHysteriaSettings(t.Context(), app.server.store); err == nil {
+		t.Fatal("loadHysteriaSettings accepted a default row removed during initialization")
+	}
+	t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "unsupported")
+	if _, err := loadHysteriaSettings(t.Context(), app.server.store); err == nil {
+		t.Fatal("loadHysteriaSettings accepted invalid environment defaults")
 	}
 }
 
@@ -538,6 +774,54 @@ func TestHysteriaCertificateGenerationRejectsInvalidAddressesAndMethods(t *testi
 	invalid := requestJSON(t, app, "POST", "/api/transports/hysteria2/certificate/mkcert", map[string]string{"ipv4": "2001:db8::1"}, true)
 	if invalid.Code != 400 || !strings.Contains(invalid.Body.String(), "public IPv4") {
 		t.Fatalf("invalid mkcert address = %d %s", invalid.Code, invalid.Body.String())
+	}
+}
+
+func TestHysteriaCertificateGenerationRejectsUnauthenticatedBusyAndMalformedRequests(t *testing.T) {
+	t.Run("authentication required", func(t *testing.T) {
+		app := newTestApp(t, true)
+		response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/certificate/mkcert", map[string]string{"ipv4": "8.8.8.8"}, false)
+		if response.Code != http.StatusUnauthorized {
+			t.Fatalf("anonymous mkcert status = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("storage is busy", func(t *testing.T) {
+		app := newTestApp(t, true)
+		lock, err := maintenance.Acquire(t.Context(), app.server.maintenancePath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer lock.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 20*time.Millisecond)
+		defer cancel()
+		request := httptest.NewRequest(http.MethodPost, "/api/transports/hysteria2/certificate/mkcert", strings.NewReader(`{"ipv4":"8.8.8.8"}`)).WithContext(ctx)
+		request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+		response := httptest.NewRecorder()
+		newMux(app.server).ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable || !strings.Contains(response.Body.String(), "storage is busy") {
+			t.Fatalf("busy mkcert request = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("malformed JSON", func(t *testing.T) {
+		app := newTestApp(t, true)
+		request := httptest.NewRequest(http.MethodPost, "/api/transports/hysteria2/certificate/mkcert", strings.NewReader("{"))
+		request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+		response := httptest.NewRecorder()
+		newMux(app.server).ServeHTTP(response, request)
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("malformed mkcert request = %d %s", response.Code, response.Body.String())
+		}
+	})
+}
+
+func TestHysteriaCertificateGenerationReportsMissingMkcertExecutable(t *testing.T) {
+	app := newTestApp(t, true)
+	t.Setenv("PATH", t.TempDir())
+	response := requestJSON(t, app, http.MethodPost, "/api/transports/hysteria2/certificate/mkcert", map[string]string{"ipv4": "8.8.8.8"}, true)
+	if response.Code != http.StatusBadGateway || !strings.Contains(response.Body.String(), "mkcert") {
+		t.Fatalf("missing mkcert response = %d %s", response.Code, response.Body.String())
 	}
 }
 

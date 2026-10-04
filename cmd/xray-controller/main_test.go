@@ -6,7 +6,9 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/test/bufconn"
@@ -87,6 +89,70 @@ func TestReadToken(t *testing.T) {
 	}
 	if _, err := readToken(path); err == nil {
 		t.Fatal("group-readable token accepted")
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("not-base64!"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readToken(path); err == nil {
+		t.Fatal("malformed base64 token accepted")
+	}
+	if err := os.WriteFile(path, []byte("c2hvcnQ="), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readToken(path); err == nil {
+		t.Fatal("short decoded token accepted")
+	}
+	directory := filepath.Join(t.TempDir(), "directory")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readToken(directory); err == nil {
+		t.Fatal("token directory was read as a token file")
+	}
+}
+
+func TestReadOptionalToken(t *testing.T) {
+	if value, err := readOptionalToken("  "); err != nil || value != "" {
+		t.Fatalf("empty optional token path = %q, %v", value, err)
+	}
+	if value, err := readOptionalToken(filepath.Join(t.TempDir(), "missing")); err != nil || value != "" {
+		t.Fatalf("missing optional token = %q, %v", value, err)
+	}
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte(testControllerToken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readOptionalToken(path); err == nil {
+		t.Fatal("invalid optional token file was silently ignored")
+	}
+}
+
+func TestDefaultAdaptersAndSignalContext(t *testing.T) {
+	if _, err := defaultDialHealthClient("invalid", filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("default health adapter accepted invalid settings")
+	}
+	if _, err := defaultDialEmbeddedXray("invalid", filepath.Join(t.TempDir(), "missing"), t.TempDir()); err == nil {
+		t.Fatal("default embedded Xray adapter accepted invalid settings")
+	}
+	if _, err := defaultDialAWG("invalid", filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Fatal("default AWG adapter accepted invalid settings")
+	}
+	listener := bufconn.Listen(1024)
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := defaultServeController(grpc.NewServer(), listener); err == nil {
+		t.Fatal("default gRPC server succeeded on a closed listener")
+	}
+	ctx, cancel := defaultControllerSignalContext()
+	cancel()
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("signal context did not respond to cancellation")
 	}
 }
 
@@ -173,19 +239,37 @@ func TestServeRejectsRuntimeAndAWGAdapterFailures(t *testing.T) {
 	t.Setenv("XRAY_RUNTIME_TOKEN_FILE", runtimeToken)
 	t.Setenv("XRAY_RUNTIME_ADDR", "127.0.0.1:10086")
 	t.Setenv("XRAY_CONFIG_DIR", dir)
-	oldDialRuntime, oldDialAWG := dialEmbeddedXray, dialAWG
-	defer func() { dialEmbeddedXray, dialAWG = oldDialRuntime, oldDialAWG }()
+	oldDialRuntime, oldDialAWG, oldListener := dialEmbeddedXray, dialAWG, listenController
+	defer func() { dialEmbeddedXray, dialAWG, listenController = oldDialRuntime, oldDialAWG, oldListener }()
 	dialEmbeddedXray = func(string, string, string) (closeableXrayRuntime, error) {
 		return nil, errors.New("runtime unavailable")
 	}
 	if err := serve(); err == nil {
 		t.Fatal("runtime adapter failure was ignored")
 	}
-	dialEmbeddedXray = oldDialRuntime
+	dialEmbeddedXray = func(string, string, string) (closeableXrayRuntime, error) { return &fakeEmbeddedXray{}, nil }
 	dialAWG = func(string, string) (closeableAWGRuntime, error) { return nil, errors.New("AWG unavailable") }
+	listenController = func(string, string) (net.Listener, error) { return bufconn.Listen(1024), nil }
 	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
+	if err := serve(); err == nil || !strings.Contains(err.Error(), "AWG unavailable") {
+		t.Fatalf("AWG adapter failure = %v, want injected error", err)
+	}
+}
+
+func TestServeRejectsInvalidOptionalLeaseToken(t *testing.T) {
+	dir := t.TempDir()
+	controllerToken := filepath.Join(dir, "controller-token")
+	leaseToken := filepath.Join(dir, "lease-token")
+	if err := os.WriteFile(controllerToken, []byte(testControllerToken), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(leaseToken, []byte(testControllerToken), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XRAY_CONTROLLER_TOKEN_FILE", controllerToken)
+	t.Setenv("XRAY_LEASE_TOKEN_FILE", leaseToken)
 	if err := serve(); err == nil {
-		t.Fatal("AWG adapter failure was ignored")
+		t.Fatal("serve accepted a group-readable lease token")
 	}
 }
 

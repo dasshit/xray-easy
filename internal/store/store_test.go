@@ -327,23 +327,28 @@ func TestProtocolStorageDefaultsAndCredentialNullability(t *testing.T) {
 		uuid     string
 		protocol string
 		auth     string
-		states   [6]int
+		states   [10]int
+		ssPass   string
+		trojan   string
 	}{
-		{name: "implicit legacy", client: domain.Client{Enabled: true}, uuid: "legacy-uuid", protocol: string(domain.ProtocolLegacyDual), auth: "legacy-uuid", states: [6]int{1, 0, 1, 0, 0, 0}},
-		{name: "explicit legacy", client: domain.Client{Protocol: domain.ProtocolLegacyDual, Revoked: true}, uuid: "legacy-uuid", protocol: string(domain.ProtocolLegacyDual), auth: "legacy-uuid", states: [6]int{0, 1, 0, 1, 0, 0}},
-		{name: "VLESS enabled fallback", client: domain.Client{Protocol: domain.ProtocolVLESS, Enabled: true}, protocol: string(domain.ProtocolVLESS), states: [6]int{1, 0, 0, 0, 0, 0}},
-		{name: "VLESS explicit disabled", client: domain.Client{Protocol: domain.ProtocolVLESS, VLESSEnabled: false, VLESSRevoked: true}, protocol: string(domain.ProtocolVLESS), states: [6]int{0, 1, 0, 0, 0, 0}},
-		{name: "Hysteria enabled fallback", client: domain.Client{Protocol: domain.ProtocolHysteria2, Enabled: true, HysteriaAuth: "password"}, protocol: string(domain.ProtocolHysteria2), auth: "password", states: [6]int{0, 0, 1, 0, 0, 0}},
-		{name: "VMess enabled", client: domain.Client{Protocol: domain.ProtocolVMess, Enabled: true}, protocol: string(domain.ProtocolVMess), states: [6]int{0, 0, 0, 0, 1, 0}},
-		{name: "unsupported protocol", client: domain.Client{Protocol: domain.ProtocolAmneziaWG, Enabled: true}, protocol: string(domain.ProtocolAmneziaWG), states: [6]int{}},
-		{name: "Shadowsocks enabled fallback", client: domain.Client{Protocol: domain.ProtocolShadowsocks, Enabled: true, ShadowsocksPasswordEnc: "enc"}, protocol: string(domain.ProtocolShadowsocks), states: [6]int{0, 0, 0, 0, 0, 0}},
-		{name: "Shadowsocks explicit revoked", client: domain.Client{Protocol: domain.ProtocolShadowsocks, ShadowsocksRevoked: true, ShadowsocksPasswordEnc: "enc"}, protocol: string(domain.ProtocolShadowsocks), states: [6]int{0, 0, 0, 0, 0, 0}},
+		{name: "implicit legacy", client: domain.Client{Enabled: true}, uuid: "legacy-uuid", protocol: string(domain.ProtocolLegacyDual), auth: "legacy-uuid", states: [10]int{1, 0, 1, 0, 0, 0, 0, 0, 0, 0}},
+		{name: "explicit legacy", client: domain.Client{Protocol: domain.ProtocolLegacyDual, Revoked: true}, uuid: "legacy-uuid", protocol: string(domain.ProtocolLegacyDual), auth: "legacy-uuid", states: [10]int{0, 1, 0, 1, 0, 0, 0, 0, 0, 0}},
+		{name: "VLESS enabled fallback", client: domain.Client{Protocol: domain.ProtocolVLESS, Enabled: true}, protocol: string(domain.ProtocolVLESS), states: [10]int{1, 0, 0, 0, 0, 0, 0, 0, 0, 0}},
+		{name: "VLESS explicit disabled", client: domain.Client{Protocol: domain.ProtocolVLESS, VLESSEnabled: false, VLESSRevoked: true}, protocol: string(domain.ProtocolVLESS), states: [10]int{0, 1, 0, 0, 0, 0, 0, 0, 0, 0}},
+		{name: "Hysteria enabled fallback", client: domain.Client{Protocol: domain.ProtocolHysteria2, Enabled: true, HysteriaAuth: "password"}, protocol: string(domain.ProtocolHysteria2), auth: "password", states: [10]int{0, 0, 1, 0, 0, 0, 0, 0, 0, 0}},
+		{name: "VMess enabled", client: domain.Client{Protocol: domain.ProtocolVMess, Enabled: true}, protocol: string(domain.ProtocolVMess), states: [10]int{0, 0, 0, 0, 1, 0, 0, 0, 0, 0}},
+		{name: "unsupported protocol", client: domain.Client{Protocol: domain.ProtocolAmneziaWG, Enabled: true}, protocol: string(domain.ProtocolAmneziaWG), states: [10]int{}},
+		{name: "Shadowsocks enabled fallback", client: domain.Client{Protocol: domain.ProtocolShadowsocks, Enabled: true, ShadowsocksPasswordEnc: "enc"}, protocol: string(domain.ProtocolShadowsocks), states: [10]int{0, 0, 0, 0, 0, 0, 1, 0, 0, 0}, ssPass: "enc"},
+		{name: "Shadowsocks explicit revoked", client: domain.Client{Protocol: domain.ProtocolShadowsocks, ShadowsocksRevoked: true, ShadowsocksPasswordEnc: "enc"}, protocol: string(domain.ProtocolShadowsocks), states: [10]int{0, 0, 0, 0, 0, 0, 0, 1, 0, 0}, ssPass: "enc"},
+		{name: "Trojan enabled fallback", client: domain.Client{Protocol: domain.ProtocolTrojan, Enabled: true, TrojanPasswordEnc: "trojan-enc"}, protocol: string(domain.ProtocolTrojan), states: [10]int{0, 0, 0, 0, 0, 0, 0, 0, 1, 0}, trojan: "trojan-enc"},
+		{name: "Trojan explicit revoked", client: domain.Client{Protocol: domain.ProtocolTrojan, TrojanRevoked: true, TrojanPasswordEnc: "trojan-enc"}, protocol: string(domain.ProtocolTrojan), states: [10]int{0, 0, 0, 0, 0, 0, 0, 0, 0, 1}, trojan: "trojan-enc"},
 	}
 	for _, test := range cases {
 		t.Run(test.name, func(t *testing.T) {
-			protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, _, _, _, _, _, _ := clientProtocolStorage(test.client, test.uuid)
-			if protocol != test.protocol || auth != test.auth || [6]int{vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked} != test.states {
-				t.Fatalf("stored protocol credentials = %q/%q [%d %d %d %d %d %d]", protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked)
+			protocol, auth, vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssPassword, ssEnabled, ssRevoked, trojanPassword, trojanEnabled, trojanRevoked := clientProtocolStorage(test.client, test.uuid)
+			gotStates := [10]int{vlessEnabled, vlessRevoked, hysteriaEnabled, hysteriaRevoked, vmessEnabled, vmessRevoked, ssEnabled, ssRevoked, trojanEnabled, trojanRevoked}
+			if protocol != test.protocol || auth != test.auth || gotStates != test.states || ssPassword != test.ssPass || trojanPassword != test.trojan {
+				t.Fatalf("stored protocol credentials = %q/%q states=%v shadowsocks=%q trojan=%q", protocol, auth, gotStates, ssPassword, trojanPassword)
 			}
 		})
 	}

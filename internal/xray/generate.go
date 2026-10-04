@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strings"
 
 	"xray-easy/internal/domain"
@@ -12,8 +13,12 @@ import (
 
 // NewUUID constructs and returns the requested value.
 func NewUUID() (string, error) {
+	return newUUID(rand.Reader)
+}
+
+func newUUID(source io.Reader) (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := io.ReadFull(source, b); err != nil {
 		return "", err
 	}
 	b[6] = (b[6] & 0x0f) | 0x40
@@ -23,7 +28,11 @@ func NewUUID() (string, error) {
 
 // NewRealityKeyPair constructs and returns the requested value.
 func NewRealityKeyPair() (privateKey, publicKey string, err error) {
-	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	return newRealityKeyPair(ecdh.X25519().GenerateKey)
+}
+
+func newRealityKeyPair(generate func(io.Reader) (*ecdh.PrivateKey, error)) (privateKey, publicKey string, err error) {
+	key, err := generate(rand.Reader)
 	if err != nil {
 		return "", "", err
 	}
@@ -35,9 +44,13 @@ func NewRealityKeyPair() (privateKey, publicKey string, err error) {
 
 // NewShortID constructs and returns the requested value.
 func NewShortID() (string, error) {
+	return newShortID(rand.Reader)
+}
+
+func newShortID(source io.Reader) (string, error) {
 	for {
 		b := make([]byte, 8)
-		if _, err := rand.Read(b); err != nil {
+		if _, err := io.ReadFull(source, b); err != nil {
 			return "", err
 		}
 		value := hex.EncodeToString(b)

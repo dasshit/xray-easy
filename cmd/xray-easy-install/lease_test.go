@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,6 +111,19 @@ func TestLeaseServiceWizardSelection(t *testing.T) {
 	}
 }
 
+func TestLeaseServiceWizardRequiresReadableTerminal(t *testing.T) {
+	var output strings.Builder
+	wizard := newWizard(strings.NewReader("\n\x1b"), &output)
+	defer wizard.close()
+	wizard.width, wizard.height = 50, 18
+	if _, err := wizard.leaseService(context.Background(), configuration{}); !errors.Is(err, errCancelled) {
+		t.Fatalf("small terminal lease selection error = %v", err)
+	}
+	if !strings.Contains(output.String(), "Enlarge the terminal before continuing.") {
+		t.Fatal("small-terminal guidance was not displayed")
+	}
+}
+
 func TestValidateLeaseConfigurationChecksOptionalPolicyAndDurations(t *testing.T) {
 	root := t.TempDir()
 	if err := validateLeaseConfiguration(root, configuration{}); err != nil {
@@ -132,6 +146,7 @@ func TestValidateLeaseConfigurationChecksOptionalPolicyAndDurations(t *testing.T
 	}{
 		{"unsupported limit", "XRAY_LEASE_MAX_ACTIVE=3\n", "maximum active leases must be 2"},
 		{"malformed duration", "XRAY_LEASE_GRACE=soon\n", "XRAY_LEASE_GRACE"},
+		{"malformed retry duration", "XRAY_LEASE_RETRY_DELAY=later\n", "XRAY_LEASE_RETRY_DELAY"},
 		{"zero duration", "XRAY_LEASE_RETRY_DELAY=0s\n", "retry delay must be between 0 and 1 minute"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -142,5 +157,36 @@ func TestValidateLeaseConfigurationChecksOptionalPolicyAndDurations(t *testing.T
 				t.Fatalf("invalid lease policy error=%v, want %q", err, test.want)
 			}
 		})
+	}
+}
+
+func TestValidateLeaseConfigurationRejectsUnreadableEnvironmentAndMalformedLimit(t *testing.T) {
+	root := t.TempDir()
+	fileAsRoot := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(fileAsRoot, []byte("regular file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLeaseConfiguration(fileAsRoot, configuration{leaseEnabled: true}); err == nil {
+		t.Fatal("lease validation ignored an inaccessible .env path")
+	}
+
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("XRAY_LEASE_MAX_ACTIVE=two\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLeaseConfiguration(root, configuration{leaseEnabled: true}); err == nil || !strings.Contains(err.Error(), "XRAY_LEASE_MAX_ACTIVE") {
+		t.Fatalf("malformed lease maximum error = %v", err)
+	}
+}
+
+func TestLeaseEnvironmentHelpersReportReadFailures(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, ".env"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateLeaseConfiguration(root, configuration{leaseEnabled: true}); err == nil {
+		t.Fatal("lease validation accepted a non-file .env path")
+	}
+	if err := updateLeaseConfiguration(root, configuration{leaseEnabled: true}); err == nil {
+		t.Fatal("lease environment update accepted a non-file .env path")
 	}
 }

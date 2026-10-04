@@ -20,6 +20,16 @@ func CreateBundle(dataDir string, files map[string][]byte, now time.Time) (strin
 	}, os.Remove, os.Rename)
 }
 
+type bundleFilesystem struct {
+	absolute func(string) (string, error)
+	mkdirAll func(string, os.FileMode) error
+	chmod    func(string, os.FileMode) error
+}
+
+func systemBundleFilesystem() bundleFilesystem {
+	return bundleFilesystem{absolute: filepath.Abs, mkdirAll: os.MkdirAll, chmod: os.Chmod}
+}
+
 // bundleFile is an internal type used by the package.
 type bundleFile interface {
 	// Name defines part of the interface contract.
@@ -34,19 +44,28 @@ type bundleFile interface {
 	Close() error
 }
 
+type bundleCloser interface {
+	// Close releases the resource.
+	Close() error
+}
+
 // createBundleWith creates the requested value.
 func createBundleWith(dataDir string, files map[string][]byte, now time.Time, createTemp func(string, string) (bundleFile, error), remove func(string) error, rename func(string, string) error) (string, error) {
+	return createBundleWithFilesystem(dataDir, files, now, systemBundleFilesystem(), createTemp, remove, rename)
+}
+
+func createBundleWithFilesystem(dataDir string, files map[string][]byte, now time.Time, filesystem bundleFilesystem, createTemp func(string, string) (bundleFile, error), remove func(string) error, rename func(string, string) error) (string, error) {
 	if len(files) == 0 {
 		return "", errors.New("doctor bundle is empty")
 	}
-	directory, err := filepath.Abs(filepath.Join(dataDir, "diagnostics"))
+	directory, err := filesystem.absolute(filepath.Join(dataDir, "diagnostics"))
 	if err != nil {
 		return "", fmt.Errorf("resolve diagnostics directory: %w", err)
 	}
-	if err := os.MkdirAll(directory, 0o700); err != nil {
+	if err := filesystem.mkdirAll(directory, 0o700); err != nil {
 		return "", fmt.Errorf("create diagnostics directory: %w", err)
 	}
-	if err := os.Chmod(directory, 0o700); err != nil {
+	if err := filesystem.chmod(directory, 0o700); err != nil {
 		return "", fmt.Errorf("secure diagnostics directory: %w", err)
 	}
 	if now.IsZero() {
@@ -88,14 +107,8 @@ func createBundleWith(dataDir string, files map[string][]byte, now time.Time, cr
 			return "", fmt.Errorf("write doctor bundle file: %w", err)
 		}
 	}
-	if err := archive.Close(); err != nil {
-		_ = zipper.Close()
-		_ = temporary.Close()
-		return "", fmt.Errorf("finish doctor bundle archive: %w", err)
-	}
-	if err := zipper.Close(); err != nil {
-		_ = temporary.Close()
-		return "", fmt.Errorf("compress doctor bundle: %w", err)
+	if err := closeArchiveWriters(archive, zipper, temporary); err != nil {
+		return "", err
 	}
 	if err := temporary.Sync(); err != nil {
 		_ = temporary.Close()
@@ -109,6 +122,19 @@ func createBundleWith(dataDir string, files map[string][]byte, now time.Time, cr
 		return "", fmt.Errorf("publish doctor bundle: %w", err)
 	}
 	return path, nil
+}
+
+func closeArchiveWriters(archive, zipper, temporary bundleCloser) error {
+	if err := archive.Close(); err != nil {
+		_ = zipper.Close()
+		_ = temporary.Close()
+		return fmt.Errorf("finish doctor bundle archive: %w", err)
+	}
+	if err := zipper.Close(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("compress doctor bundle: %w", err)
+	}
+	return nil
 }
 
 // safeArchiveName performs the operation represented by its name.

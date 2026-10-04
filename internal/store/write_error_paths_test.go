@@ -62,3 +62,14 @@ func TestStoreWriteMethodsReturnDatabaseErrors(t *testing.T) {
 		})
 	}
 }
+
+func TestInitializeHysteriaSettingsRejectsInvalidDomainValuesBeforeWriting(t *testing.T) {
+	db, ctx := openTestStore(t, "invalid-hysteria-defaults.db")
+	invalid := domain.HysteriaSettings{TLSMode: "unsupported", UDPIdleTimeout: 60, MasqueradeType: domain.HysteriaMasqueradeOff}
+	if err := db.InitializeHysteriaSettings(ctx, invalid); err == nil || !strings.Contains(err.Error(), "TLS mode") {
+		t.Fatalf("invalid Hysteria settings error = %v", err)
+	}
+	if _, err := db.GetHysteriaSettings(ctx); err == nil {
+		t.Fatal("invalid Hysteria settings were persisted")
+	}
+}

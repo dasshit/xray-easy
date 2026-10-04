@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +133,137 @@ func TestLiveClientApplyRestoresXrayWhenPersistenceFails(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "persist client change") || rollbackCalled || len(app.sup.applyCalls) != 2 || !strings.HasSuffix(app.sup.applyCalls[1][1], "-rollback") {
 		t.Fatalf("persistence failure recovery err=%v rollbackCalled=%v applyCalls=%v", err, rollbackCalled, app.sup.applyCalls)
 	}
+}
+
+func TestLiveClientApplyReportsPreparationAndRuntimeFailuresAndCommitsSuccess(t *testing.T) {
+	newInputs := func(t *testing.T) (testApp, domain.Settings, string, domain.Client) {
+		t.Helper()
+		app := newTestApp(t, true)
+		client := seedTestClient(t, app, "live-apply")
+		settings, err := app.server.store.GetSettings(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		privateKey, err := secret.Open(app.server.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return app, settings, privateKey, client
+	}
+
+	t.Run("candidate validation failure", func(t *testing.T) {
+		app, settings, privateKey, client := newInputs(t)
+		app.sup.validateErr = errors.New("candidate rejected")
+		err := app.server.applyClientsLiveLocked(t.Context(), settings, privateKey, []domain.Client{client}, app.admin.ID, "client.state", client.ID, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "candidate rejected") || len(app.sup.applyCalls) != 0 {
+			t.Fatalf("candidate validation failure = %v, apply calls=%v", err, app.sup.applyCalls)
+		}
+	})
+
+	t.Run("runtime apply failure", func(t *testing.T) {
+		app, settings, privateKey, client := newInputs(t)
+		app.sup.applyErrors = []error{errors.New("runtime rejected candidate")}
+		err := app.server.applyClientsLiveLocked(t.Context(), settings, privateKey, []domain.Client{client}, app.admin.ID, "client.state", client.ID, nil, nil)
+		if err == nil || !strings.Contains(err.Error(), "runtime rejected candidate") || len(app.sup.applyCalls) != 1 {
+			t.Fatalf("runtime apply failure = %v, apply calls=%v", err, app.sup.applyCalls)
+		}
+	})
+
+	t.Run("successful commit", func(t *testing.T) {
+		app, settings, privateKey, client := newInputs(t)
+		err := app.server.applyClientsLiveLocked(t.Context(), settings, privateKey, []domain.Client{client}, app.admin.ID, "client.state", client.ID, nil, nil)
+		if err != nil || len(app.sup.applyCalls) != 1 {
+			t.Fatalf("successful live apply = %v, apply calls=%v", err, app.sup.applyCalls)
+		}
+		if _, err := os.Stat(filepath.Join(app.server.configDir, "active.json")); err != nil {
+			t.Fatalf("committed active config: %v", err)
+		}
+	})
+}
+
+func TestCandidatePreparationCoversSecretsEntropyPersistenceAndFileFailures(t *testing.T) {
+	t.Run("derive Shadowsocks server key", func(t *testing.T) {
+		t.Setenv("XRAY_SHADOWSOCKS_ENABLED", "true")
+		app := newTestApp(t, true)
+		settings, err := app.server.store.GetSettings(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		app.server.masterKey = []byte("short")
+		hysteriaSettings, err := loadHysteriaSettings(t.Context(), app.server.store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := app.server.prepareCandidateWithHysteriaLocked(t.Context(), settings, "unused", nil, nil, hysteriaSettings); err == nil || !strings.Contains(err.Error(), "derive Shadowsocks 2022 server key") {
+			t.Fatalf("candidate preparation with invalid master key = %v", err)
+		}
+	})
+
+	t.Run("generate apply operation ID", func(t *testing.T) {
+		app := newTestApp(t, true)
+		settings, err := app.server.store.GetSettings(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		privateKey, err := secret.Open(app.server.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		hysteriaSettings, err := loadHysteriaSettings(t.Context(), app.server.store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		previous := cryptorand.Reader
+		cryptorand.Reader = failingReader{}
+		t.Cleanup(func() { cryptorand.Reader = previous })
+		if _, _, err := app.server.prepareCandidateWithHysteriaLocked(t.Context(), settings, privateKey, nil, nil, hysteriaSettings); err == nil || !strings.Contains(err.Error(), "read failed") {
+			t.Fatalf("candidate preparation entropy error = %v", err)
+		}
+	})
+
+	t.Run("persist apply operation", func(t *testing.T) {
+		app := newTestApp(t, true)
+		settings, err := app.server.store.GetSettings(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		privateKey, err := secret.Open(app.server.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		hysteriaSettings, err := loadHysteriaSettings(t.Context(), app.server.store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		execSQLiteTestMutation(t, app, "reject apply operation", `CREATE TRIGGER reject_apply_operation BEFORE INSERT ON apply_operations BEGIN SELECT RAISE(ABORT, 'apply operation blocked'); END`)
+		if _, _, err := app.server.prepareCandidateWithHysteriaLocked(t.Context(), settings, privateKey, nil, nil, hysteriaSettings); err == nil || !strings.Contains(err.Error(), "apply operation blocked") {
+			t.Fatalf("candidate preparation persistence error = %v", err)
+		}
+	})
+
+	t.Run("write candidate file", func(t *testing.T) {
+		app := newTestApp(t, true)
+		settings, err := app.server.store.GetSettings(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		privateKey, err := secret.Open(app.server.masterKey, settings.RealityPrivateKeyEnc, "reality_private_key")
+		if err != nil {
+			t.Fatal(err)
+		}
+		hysteriaSettings, err := loadHysteriaSettings(t.Context(), app.server.store)
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidateDir := filepath.Join(app.server.configDir, "candidates")
+		if err := os.Chmod(candidateDir, 0o500); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(candidateDir, 0o700) })
+		if _, _, err := app.server.prepareCandidateWithHysteriaLocked(t.Context(), settings, privateKey, nil, nil, hysteriaSettings); err == nil || !strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+			t.Fatalf("candidate file write error = %v", err)
+		}
+	})
 }
 
 func TestApplyClientsLockedReportsMaintenanceApplyAndPromotionFailures(t *testing.T) {

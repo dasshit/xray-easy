@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"xray-easy/internal/interaction"
 	"xray-easy/internal/xrayapi/core"
 	handlercommand "xray-easy/internal/xrayapi/handler"
 	"xray-easy/internal/xrayapi/protocol"
@@ -306,6 +307,60 @@ func TestHandlerClientErrorsForEmptyAddressAndDialFailure(t *testing.T) {
 	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestHandlerClientReturnsRequestIDGenerationErrors(t *testing.T) {
+	wantErr := errors.New("request id source failed")
+	for _, test := range []struct {
+		name   string
+		failAt int
+		call   func(*HandlerClient) error
+	}{
+		{"users initial trace", 1, func(client *HandlerClient) error { _, err := client.Users(context.Background()); return err }},
+		{"users final trace", 3, func(client *HandlerClient) error { _, err := client.Users(context.Background()); return err }},
+		{"alter initial trace", 1, func(client *HandlerClient) error {
+			return client.RemoveUser(context.Background(), "device@example.test")
+		}},
+		{"alter final trace", 3, func(client *HandlerClient) error {
+			return client.RemoveUser(context.Background(), "device@example.test")
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			implementation := &handlerTestServer{tags: []*core.InboundHandlerConfig{{Tag: inboundTag}}}
+			client := newHandlerTestClient(t, implementation)
+			calls := 0
+			client.outgoingContext = func(ctx context.Context) (context.Context, string, error) {
+				calls++
+				if calls == test.failAt {
+					return nil, "", wantErr
+				}
+				return interaction.OutgoingContext(ctx)
+			}
+			if err := test.call(client); !errors.Is(err, wantErr) {
+				t.Fatalf("HandlerClient call error = %v, want %v", err, wantErr)
+			}
+		})
+	}
+
+	t.Run("inbound resolution trace", func(t *testing.T) {
+		client := newHandlerTestClient(t, &handlerTestServer{tags: []*core.InboundHandlerConfig{{Tag: inboundTag}}})
+		service, err := client.service(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.outgoingContext = func(context.Context) (context.Context, string, error) { return nil, "", wantErr }
+		if _, err := client.resolveInboundTag(context.Background(), service, inboundTag); !errors.Is(err, wantErr) {
+			t.Fatalf("resolveInboundTag() error = %v, want %v", err, wantErr)
+		}
+	})
+}
+
+func TestHandlerClientReturnsMalformedOperationErrorInsteadOfPanicking(t *testing.T) {
+	client := NewHandlerClient("")
+	err := client.AddUser(context.Background(), string([]byte{0xff}), "uuid", "flow")
+	if err == nil || !strings.Contains(err.Error(), "marshal Xray Handler operation") {
+		t.Fatalf("AddUser() error = %v, want serialization error", err)
 	}
 }
 

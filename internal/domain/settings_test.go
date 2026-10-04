@@ -122,7 +122,7 @@ func TestValidatePublicHostBoundaryCases(t *testing.T) {
 		}
 	}
 	for _, host := range []string{
-		strings.Repeat("a", 254), "example..com", "example-.com", "-example.com",
+		strings.Repeat("a", 254), "example..com", "example-.com", "-example.com", ".", "exa_mple.com",
 		"a" + strings.Repeat("b", 63) + ".example", "[2001:db8::1]", "https://example.com",
 	} {
 		if err := ValidatePublicHost(host); err == nil {

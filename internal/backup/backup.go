@@ -617,17 +617,8 @@ func copyTLSDirectory(source, destination string) (bool, error) {
 			_ = input.Close()
 			return err
 		}
-		_, copyErr := io.Copy(output, input)
-		inputErr := input.Close()
-		outputErr := output.Close()
-		if copyErr != nil {
-			return copyErr
-		}
-		if inputErr != nil {
-			return inputErr
-		}
-		if outputErr != nil {
-			return outputErr
+		if err := copyAndCloseTLSFile(input, output); err != nil {
+			return err
 		}
 		fileCount++
 		return nil
@@ -636,6 +627,19 @@ func copyTLSDirectory(source, destination string) (bool, error) {
 		return false, err
 	}
 	return fileCount > 0, nil
+}
+
+func copyAndCloseTLSFile(input io.ReadCloser, output io.WriteCloser) error {
+	_, copyErr := io.Copy(output, input)
+	inputErr := input.Close()
+	outputErr := output.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	if inputErr != nil {
+		return inputErr
+	}
+	return outputErr
 }
 
 // listRelativeFiles performs the operation represented by its name.
@@ -696,7 +700,7 @@ func (m *Manager) prune(preserve map[string]struct{}) error {
 // randomSuffix performs the operation represented by its name.
 func randomSuffix() (string, error) {
 	raw := make([]byte, 4)
-	if _, err := rand.Read(raw); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(raw), nil

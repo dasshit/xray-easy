@@ -120,6 +120,40 @@ func TestInitializeControlPlaneRejectsFilesystemPortsAndAWGConfiguration(t *test
 	})
 }
 
+func TestInitializeControlPlaneRejectsHysteriaAndOptionalTransportConfiguration(t *testing.T) {
+	t.Run("invalid Hysteria environment defaults", func(t *testing.T) {
+		configureControlPlaneEnvironment(t)
+		t.Setenv("XRAY_HYSTERIA2_TLS_MODE", "unsupported")
+		if _, _, err := initializeControlPlane(context.Background()); err == nil || !strings.Contains(err.Error(), "initialize Hysteria 2 settings") {
+			t.Fatalf("invalid Hysteria TLS mode error = %v", err)
+		}
+	})
+
+	t.Run("invalid Shadowsocks port", func(t *testing.T) {
+		configureControlPlaneEnvironment(t)
+		t.Setenv("XRAY_SHADOWSOCKS_PORT", "443")
+		if _, _, err := initializeControlPlane(context.Background()); err == nil || !strings.Contains(err.Error(), "XRAY_SHADOWSOCKS_PORT must differ") {
+			t.Fatalf("invalid Shadowsocks port error = %v", err)
+		}
+	})
+
+	t.Run("invalid Trojan port", func(t *testing.T) {
+		configureControlPlaneEnvironment(t)
+		t.Setenv("XRAY_TROJAN_PORT", "443")
+		if _, _, err := initializeControlPlane(context.Background()); err == nil || !strings.Contains(err.Error(), "XRAY_TROJAN_PORT must differ") {
+			t.Fatalf("invalid Trojan port error = %v", err)
+		}
+	})
+
+	t.Run("Controller address is required", func(t *testing.T) {
+		configureControlPlaneEnvironment(t)
+		t.Setenv("XRAY_CONTROLLER_ADDR", "")
+		if _, _, err := initializeControlPlane(context.Background()); err == nil || !strings.Contains(err.Error(), "XRAY_CONTROLLER_ADDR must be configured") {
+			t.Fatalf("missing Controller address error = %v", err)
+		}
+	})
+}
+
 func TestDialRuntimeControlRequiresAndOpensController(t *testing.T) {
 	t.Setenv("XRAY_CONTROLLER_ADDR", "")
 	if _, _, err := dialRuntimeControl(); err == nil || !strings.Contains(err.Error(), "direct runtime connections from the backend are disabled") {

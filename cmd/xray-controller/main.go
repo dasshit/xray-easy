@@ -60,17 +60,26 @@ type closeableXrayRuntime interface {
 }
 
 // dialHealthClient is an internal package variable.
-var dialHealthClient = func(address, tokenPath string) (healthClient, error) {
+var dialHealthClient = defaultDialHealthClient
+
+// defaultDialHealthClient creates a Controller client for health checks.
+func defaultDialHealthClient(address, tokenPath string) (healthClient, error) {
 	return controller.Dial(address, tokenPath)
 }
 
 // dialEmbeddedXray is an internal package variable.
-var dialEmbeddedXray = func(address, tokenPath, configDir string) (closeableXrayRuntime, error) {
+var dialEmbeddedXray = defaultDialEmbeddedXray
+
+// defaultDialEmbeddedXray creates the embedded Xray runtime adapter.
+func defaultDialEmbeddedXray(address, tokenPath, configDir string) (closeableXrayRuntime, error) {
 	return controller.DialEmbeddedXray(address, tokenPath, configDir)
 }
 
 // dialAWG is an internal package variable.
-var dialAWG = func(address, tokenPath string) (closeableAWGRuntime, error) {
+var dialAWG = defaultDialAWG
+
+// defaultDialAWG creates the optional AmneziaWG adapter.
+func defaultDialAWG(address, tokenPath string) (closeableAWGRuntime, error) {
 	return awgcontrol.Dial(address, tokenPath)
 }
 
@@ -78,10 +87,18 @@ var dialAWG = func(address, tokenPath string) (closeableAWGRuntime, error) {
 var listenController = net.Listen
 
 // serveController is an internal package variable.
-var serveController = func(server *grpc.Server, listener net.Listener) error { return server.Serve(listener) }
+var serveController = defaultServeController
+
+// defaultServeController runs the gRPC server on the supplied listener.
+func defaultServeController(server *grpc.Server, listener net.Listener) error {
+	return server.Serve(listener)
+}
 
 // controllerSignalContext is an internal package variable.
-var controllerSignalContext = func() (context.Context, context.CancelFunc) {
+var controllerSignalContext = defaultControllerSignalContext
+
+// defaultControllerSignalContext returns a context canceled by process termination signals.
+func defaultControllerSignalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
 

@@ -57,3 +57,19 @@ func TestLogRPCCancellationUsesCanceledOutcome(t *testing.T) {
 		t.Fatalf("cancellation log fields = %#v", fields)
 	}
 }
+
+func TestLogRPCNormalizesNonPositiveAttempt(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	LogRPC(logger, "controller", "method", "request", "xray", time.Now(), nil, Trace{Attempt: 0})
+	var fields map[string]any
+	if err := json.Unmarshal(output.Bytes(), &fields); err != nil {
+		t.Fatal(err)
+	}
+	if fields["retry_attempt"] != float64(1) {
+		t.Fatalf("retry_attempt = %v, want normalized attempt 1", fields["retry_attempt"])
+	}
+	if _, exists := fields["state_revision"]; exists {
+		t.Fatalf("zero state revision should be omitted: %#v", fields)
+	}
+}

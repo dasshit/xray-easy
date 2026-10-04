@@ -89,6 +89,7 @@ func (f *fakeRuntime) DisconnectLease(_ context.Context, request *xrayruntimev1.
 }
 
 type runtimeWithoutLease struct{ XrayRuntime }
+type runtimeWithoutLogLevel struct{ XrayRuntime }
 
 func TestServiceHealthStatusAndLogs(t *testing.T) {
 	runtime := &fakeRuntime{
@@ -110,6 +111,95 @@ func TestServiceHealthStatusAndLogs(t *testing.T) {
 	}
 	if response, err := service.GetCapabilities(context.Background(), &controllerv1.EmptyRequest{}); err != nil || !response.Xray.Configured || response.Amneziawg.Configured {
 		t.Fatalf("GetCapabilities() = %v, %v", response, err)
+	}
+}
+
+func TestServicePropagatesRuntimeReadAndConfigurationErrors(t *testing.T) {
+	wantErr := errors.New("runtime operation failed")
+	operationID := "0123456789abcdef0123456789abcdef"
+	for _, test := range []struct {
+		name string
+		call func(*Service) error
+	}{
+		{name: "status", call: func(s *Service) error {
+			_, err := s.GetStatus(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		}},
+		{name: "logs", call: func(s *Service) error {
+			_, err := s.GetLogs(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		}},
+		{name: "validate config", call: func(s *Service) error {
+			_, err := s.ValidateConfig(context.Background(), &controllerv1.ValidateConfigRequest{Path: "/candidate", OperationId: operationID, StateRevision: 1})
+			return err
+		}},
+		{name: "apply config", call: func(s *Service) error {
+			_, err := s.ApplyConfig(context.Background(), &controllerv1.ApplyConfigRequest{Path: "/candidate", OperationId: operationID, StateRevision: 1})
+			return err
+		}},
+		{name: "replace inbound", call: func(s *Service) error {
+			_, err := s.ReplaceInbound(context.Background(), &controllerv1.ReplaceInboundRequest{CandidatePath: "/candidate", PreviousPath: "/active", Tag: "vless-reality", OperationId: operationID, StateRevision: 1})
+			return err
+		}},
+		{name: "probe target", call: func(s *Service) error {
+			_, err := s.ProbeTarget(context.Background(), &controllerv1.ProbeTargetRequest{Target: "example.test:443"})
+			return err
+		}},
+		{name: "probe IPv6", call: func(s *Service) error {
+			_, err := s.ProbeIPv6(context.Background(), &controllerv1.EmptyRequest{})
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			service := NewService(&fakeRuntime{err: wantErr})
+			if err := test.call(service); !errors.Is(err, wantErr) {
+				t.Fatalf("runtime failure = %v, want original error", err)
+			}
+			if err := test.call(NewService(nil)); status.Code(err) != codes.Unavailable {
+				t.Fatalf("missing Xray adapter error = %v, want Unavailable", err)
+			}
+		})
+	}
+}
+
+func TestConfigurationRPCsRejectTraceRevisionMismatch(t *testing.T) {
+	const operationID = "0123456789abcdef0123456789abcdef"
+	ctx := interaction.WithStateRevision(interaction.WithOperationID(context.Background(), "fedcba9876543210fedcba9876543210"), 2)
+	service := NewService(&fakeRuntime{})
+	if _, err := service.ValidateConfig(ctx, &controllerv1.ValidateConfigRequest{Path: "/candidate", OperationId: operationID, StateRevision: 1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ValidateConfig() trace mismatch = %v", err)
+	}
+	if _, err := service.ApplyConfig(ctx, &controllerv1.ApplyConfigRequest{Path: "/candidate", OperationId: operationID, StateRevision: 1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ApplyConfig() trace mismatch = %v", err)
+	}
+	if _, err := service.ReplaceInbound(ctx, &controllerv1.ReplaceInboundRequest{CandidatePath: "/candidate", PreviousPath: "/active", Tag: "vless-reality", OperationId: operationID, StateRevision: 1}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("ReplaceInbound() trace mismatch = %v", err)
+	}
+}
+
+func TestSetXrayLogLevelValidatesCapabilityAndPropagatesRuntimeResults(t *testing.T) {
+	if _, err := (*Service)(nil).SetXrayLogLevel(context.Background(), &controllerv1.SetXrayLogLevelRequest{Level: "debug"}); status.Code(err) != codes.Unavailable {
+		t.Fatalf("nil service log-level error = %v", err)
+	}
+	service := NewService(&fakeRuntime{})
+	for _, request := range []*controllerv1.SetXrayLogLevelRequest{nil, {Level: "  "}} {
+		if _, err := service.SetXrayLogLevel(context.Background(), request); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("invalid log-level request error = %v", err)
+		}
+	}
+	withoutCapability := NewServiceWithAdapters(&runtimeWithoutLogLevel{XrayRuntime: &fakeRuntime{}}, nil, nil, nil)
+	if _, err := withoutCapability.SetXrayLogLevel(context.Background(), &controllerv1.SetXrayLogLevelRequest{Level: "debug"}); status.Code(err) != codes.Unimplemented {
+		t.Fatalf("unsupported log-level capability error = %v", err)
+	}
+	runtime := &fakeRuntime{}
+	service = NewService(runtime)
+	response, err := service.SetXrayLogLevel(context.Background(), &controllerv1.SetXrayLogLevelRequest{Level: "debug"})
+	if err != nil || !response.GetOk() || runtime.called != "SetLogLevel" {
+		t.Fatalf("SetXrayLogLevel success = %+v, runtime called=%q, err=%v", response, runtime.called, err)
+	}
+	runtime.err = errors.New("runtime unavailable")
+	if _, err := service.SetXrayLogLevel(context.Background(), &controllerv1.SetXrayLogLevelRequest{Level: "info"}); !errors.Is(err, runtime.err) {
+		t.Fatalf("SetXrayLogLevel runtime error = %v", err)
 	}
 }
 

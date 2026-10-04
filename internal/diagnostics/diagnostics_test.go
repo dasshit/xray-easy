@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,16 @@ type failingBundleFile struct {
 	writes         int
 	syncErr        error
 	closeErr       error
+}
+
+type testBundleCloser struct {
+	err    error
+	closed bool
+}
+
+func (c *testBundleCloser) Close() error {
+	c.closed = true
+	return c.err
 }
 
 func (f *failingBundleFile) Chmod(mode os.FileMode) error {
@@ -63,6 +74,23 @@ func TestRedactMasksSecretsAndBearerValues(t *testing.T) {
 	}
 	if !strings.Contains(redacted, "[REDACTED]") || !strings.Contains(redacted, "[REDACTED-UUID]") {
 		t.Fatalf("redaction markers missing: %q", redacted)
+	}
+}
+
+func TestRedactFailsClosedWhenSecretPatternsLoseCaptureGroups(t *testing.T) {
+	previousQuoted, previousPlain := quotedSecretFieldPattern, secretFieldPattern
+	t.Cleanup(func() {
+		quotedSecretFieldPattern = previousQuoted
+		secretFieldPattern = previousPlain
+	})
+	quotedSecretFieldPattern = regexp.MustCompile(`token`)
+	if got := Redact("token"); got != "[REDACTED]" {
+		t.Fatalf("quoted-secret fallback = %q, want redacted", got)
+	}
+	quotedSecretFieldPattern = previousQuoted
+	secretFieldPattern = regexp.MustCompile(`password`)
+	if got := Redact("password"); got != "[REDACTED]" {
+		t.Fatalf("plain-secret fallback = %q, want redacted", got)
 	}
 }
 
@@ -158,9 +186,11 @@ func TestCreateBundleReportsAtomicFileFailuresAndRemovesTemporaryFiles(t *testin
 	for _, test := range []struct {
 		failure string
 		want    string
+		failAt  int
 	}{
 		{failure: "chmod", want: "secure doctor bundle"},
 		{failure: "write", want: "write doctor bundle header"},
+		{failure: "gzip-close", want: "compress doctor bundle", failAt: 3},
 		{failure: "sync", want: "sync doctor bundle"},
 		{failure: "close", want: "close doctor bundle"},
 		{failure: "rename", want: "publish doctor bundle"},
@@ -181,6 +211,9 @@ func TestCreateBundleReportsAtomicFileFailuresAndRemovesTemporaryFiles(t *testin
 						file.chmodErr = injected
 					case "write":
 						file.writeErr = injected
+					case "gzip-close":
+						file.writeErr = injected
+						file.failWriteAfter = test.failAt
 					case "sync":
 						file.syncErr = injected
 					case "close":
@@ -212,6 +245,80 @@ func TestCreateBundleReportsTemporaryFileCreationFailure(t *testing.T) {
 		os.Remove, os.Rename)
 	if err == nil || !strings.Contains(err.Error(), wantErr.Error()) {
 		t.Fatalf("temporary bundle creation error = %v", err)
+	}
+}
+
+func TestCreateBundleReportsDirectoryPreparationFailures(t *testing.T) {
+	wantErr := errors.New("injected directory failure")
+	base := bundleFilesystem{
+		absolute: func(path string) (string, error) { return filepath.Abs(path) },
+		mkdirAll: func(path string, mode os.FileMode) error { return os.MkdirAll(path, mode) },
+		chmod:    func(path string, mode os.FileMode) error { return os.Chmod(path, mode) },
+	}
+	tests := []struct {
+		name string
+		fs   bundleFilesystem
+		want string
+	}{
+		{
+			name: "absolute path",
+			fs:   bundleFilesystem{absolute: func(string) (string, error) { return "", wantErr }, mkdirAll: base.mkdirAll, chmod: base.chmod},
+			want: "resolve diagnostics directory",
+		},
+		{
+			name: "mkdir",
+			fs:   bundleFilesystem{absolute: base.absolute, mkdirAll: func(string, os.FileMode) error { return wantErr }, chmod: base.chmod},
+			want: "create diagnostics directory",
+		},
+		{
+			name: "chmod",
+			fs:   bundleFilesystem{absolute: base.absolute, mkdirAll: base.mkdirAll, chmod: func(string, os.FileMode) error { return wantErr }},
+			want: "secure diagnostics directory",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			_, err := createBundleWithFilesystem(t.TempDir(), map[string][]byte{"report.txt": []byte("safe")}, time.Now(), test.fs,
+				func(string, string) (bundleFile, error) { return nil, errors.New("should not create a file") }, os.Remove, os.Rename)
+			if err == nil || !strings.Contains(err.Error(), test.want) || !errors.Is(err, wantErr) {
+				t.Fatalf("directory setup error = %v, want %q wrapping injected failure", err, test.want)
+			}
+		})
+	}
+}
+
+func TestCloseArchiveWritersClosesDownstreamResourcesOnFailure(t *testing.T) {
+	wantErr := errors.New("injected close failure")
+	tests := []struct {
+		name          string
+		archiveErr    error
+		compressorErr error
+		wantMessage   string
+		wantArchive   bool
+		wantZip       bool
+		wantFile      bool
+	}{
+		{name: "archive close", archiveErr: wantErr, wantMessage: "finish doctor bundle archive", wantArchive: true, wantZip: true, wantFile: true},
+		{name: "compressor close", compressorErr: wantErr, wantMessage: "compress doctor bundle", wantArchive: true, wantZip: true, wantFile: true},
+		{name: "success", wantArchive: true, wantZip: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			archive := &testBundleCloser{err: test.archiveErr}
+			zipper := &testBundleCloser{err: test.compressorErr}
+			file := &testBundleCloser{}
+			err := closeArchiveWriters(archive, zipper, file)
+			if test.wantMessage == "" {
+				if err != nil {
+					t.Fatalf("closeArchiveWriters() = %v, want nil", err)
+				}
+			} else if err == nil || !errors.Is(err, wantErr) || !strings.Contains(err.Error(), test.wantMessage) {
+				t.Fatalf("closeArchiveWriters() = %v, want %q wrapping injected error", err, test.wantMessage)
+			}
+			if archive.closed != test.wantArchive || zipper.closed != test.wantZip || file.closed != test.wantFile {
+				t.Fatalf("close sequence = archive:%v zipper:%v file:%v", archive.closed, zipper.closed, file.closed)
+			}
+		})
 	}
 }
 

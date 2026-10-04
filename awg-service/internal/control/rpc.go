@@ -6,6 +6,7 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"errors"
+	"io"
 	"log/slog"
 	"strconv"
 	"strings"
@@ -162,7 +163,7 @@ func ensureIncomingTrace(ctx context.Context) (context.Context, string, string, 
 	}
 	newID := func() (string, error) {
 		value := make([]byte, 16)
-		if _, err := rand.Read(value); err != nil {
+		if _, err := io.ReadFull(rand.Reader, value); err != nil {
 			return "", err
 		}
 		return hex.EncodeToString(value), nil

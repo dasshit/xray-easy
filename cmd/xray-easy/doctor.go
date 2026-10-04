@@ -9,7 +9,6 @@ import (
 	"io"
 	"net/http"
 	"net/netip"
-	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -726,12 +725,9 @@ func probeLeaseService(ctx context.Context, address string) (leaseHealthStatus, 
 // probeLeaseServiceWithClient checks the configured health endpoint through an HTTP client.
 func probeLeaseServiceWithClient(ctx context.Context, address string, client *http.Client) (leaseHealthStatus, error) {
 	endpoint := "http://" + strings.TrimSpace(address) + "/healthz"
-	if _, err := url.ParseRequestURI(endpoint); err != nil {
-		return leaseHealthStatus{}, errors.New("lease health address is invalid")
-	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return leaseHealthStatus{}, err
+	if err != nil || request.URL.Scheme != "http" || request.URL.Host == "" {
+		return leaseHealthStatus{}, errors.New("lease health address is invalid")
 	}
 	if client == nil {
 		client = http.DefaultClient
@@ -843,6 +839,18 @@ func publicHostKind(host string) string {
 
 // probeWritableDirectory performs the operation represented by its name.
 func probeWritableDirectory(path string) error {
+	return probeWritableDirectoryWith(path,
+		func(directory, pattern string) (writableProbeFile, error) {
+			return os.CreateTemp(directory, pattern)
+		}, os.Remove)
+}
+
+type writableProbeFile interface {
+	Name() string
+	Close() error
+}
+
+func probeWritableDirectoryWith(path string, createTemp func(string, string) (writableProbeFile, error), remove func(string) error) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		return err
@@ -850,16 +858,16 @@ func probeWritableDirectory(path string) error {
 	if !info.IsDir() {
 		return fmt.Errorf("%s is not a directory", path)
 	}
-	probe, err := os.CreateTemp(path, ".xray-easy-doctor-*")
+	probe, err := createTemp(path, ".xray-easy-doctor-*")
 	if err != nil {
 		return err
 	}
 	probePath := probe.Name()
 	if err := probe.Close(); err != nil {
-		_ = os.Remove(probePath)
+		_ = remove(probePath)
 		return err
 	}
-	if err := os.Remove(probePath); err != nil {
+	if err := remove(probePath); err != nil {
 		return err
 	}
 	return nil

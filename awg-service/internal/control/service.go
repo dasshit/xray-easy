@@ -655,14 +655,24 @@ func writePendingOperationKey(dataDir, operationID, privateKey string) error {
 	if err != nil {
 		return err
 	}
+	return persistPendingOperationKey(file, path, privateKey, os.Remove)
+}
+
+type pendingOperationFile interface {
+	WriteString(string) (int, error)
+	Sync() error
+	Close() error
+}
+
+func persistPendingOperationKey(file pendingOperationFile, path, privateKey string, remove func(string) error) error {
 	if _, err := file.WriteString(privateKey); err != nil {
 		_ = file.Close()
-		_ = os.Remove(path)
+		_ = remove(path)
 		return err
 	}
 	if err := file.Sync(); err != nil {
 		_ = file.Close()
-		_ = os.Remove(path)
+		_ = remove(path)
 		return err
 	}
 	return file.Close()

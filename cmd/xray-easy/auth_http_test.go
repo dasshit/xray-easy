@@ -1,6 +1,7 @@
 package main
 
 import (
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"net/http"
 	"strings"
@@ -60,6 +61,56 @@ func TestSetupInitializeValidatesInputsAndPersistsFirstAdmin(t *testing.T) {
 	if got := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false).Code; got != http.StatusConflict {
 		t.Fatalf("second initialization status = %d", got)
 	}
+}
+
+func TestSetupInitializeReportsSecretAndStorageFailures(t *testing.T) {
+	request := initializeRequest{Username: "admin", Password: "correct horse battery", PublicHost: "vpn.example.test", RealityTarget: "www.example.com:443", RealitySNI: "www.example.com"}
+
+	t.Run("master key cannot encrypt generated REALITY key", func(t *testing.T) {
+		app := newTestApp(t, false)
+		app.server.masterKey = []byte("too-short")
+		response := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false)
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not encrypt REALITY private key") {
+			t.Fatalf("invalid master key initialization = %d %s", response.Code, response.Body.String())
+		}
+		status := decodeResponse[map[string]any](t, requestJSON(t, app, http.MethodGet, "/api/setup/status", nil, false))
+		if status["initialized"] != false {
+			t.Fatalf("failed key encryption initialized setup: %+v", status)
+		}
+	})
+
+	t.Run("administrator insert fails", func(t *testing.T) {
+		app := newTestApp(t, false)
+		execSQLiteTestMutation(t, app, "reject admin insert", `CREATE TRIGGER reject_admin_insert BEFORE INSERT ON admin_users BEGIN SELECT RAISE(ABORT, 'admin insert blocked'); END`)
+		response := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false)
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "admin insert blocked") {
+			t.Fatalf("admin insert failure = %d %s", response.Code, response.Body.String())
+		}
+		status := decodeResponse[map[string]any](t, requestJSON(t, app, http.MethodGet, "/api/setup/status", nil, false))
+		if status["initialized"] != false {
+			t.Fatalf("failed admin insert initialized setup: %+v", status)
+		}
+	})
+
+	t.Run("password salt entropy fails", func(t *testing.T) {
+		app := newTestApp(t, false)
+		original := cryptorand.Reader
+		cryptorand.Reader = failingReader{}
+		t.Cleanup(func() { cryptorand.Reader = original })
+		response := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false)
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), "generate password salt") {
+			t.Fatalf("password hash entropy failure = %d %s", response.Code, response.Body.String())
+		}
+	})
+
+	t.Run("Xray settings update fails", func(t *testing.T) {
+		app := newTestApp(t, false)
+		execSQLiteTestMutation(t, app, "reject initial settings update", `CREATE TRIGGER reject_initial_settings_update BEFORE UPDATE ON settings BEGIN SELECT RAISE(ABORT, 'settings update blocked'); END`)
+		response := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false)
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not save Xray API settings") {
+			t.Fatalf("initial settings update failure = %d %s", response.Code, response.Body.String())
+		}
+	})
 }
 
 func TestSetupInitializeCanonicalizesIPv6PublicHost(t *testing.T) {
@@ -162,6 +213,14 @@ func TestLoginSessionCookieLogoutAndProtectedRoutes(t *testing.T) {
 	}
 	if got := requestJSON(t, app, http.MethodGet, "/api/me", nil, true).Code; got != http.StatusUnauthorized {
 		t.Fatalf("session survived logout: status=%d", got)
+	}
+}
+
+func TestLogoutAllRequiresAnAuthenticatedAdmin(t *testing.T) {
+	app := newTestApp(t, true)
+	response := requestJSON(t, app, http.MethodPost, "/api/auth/logout-all", nil, false)
+	if response.Code != http.StatusUnauthorized || !strings.Contains(response.Body.String(), "authentication required") {
+		t.Fatalf("unauthenticated logout-all = %d %s", response.Code, response.Body.String())
 	}
 }
 

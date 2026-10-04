@@ -98,6 +98,7 @@ type fakeXrayHandler struct {
 	remove    map[string]bool
 	addCall   [][3]string
 	userAdded chan string
+	afterAdd  func()
 }
 
 func (f *fakeXrayHandler) Users(context.Context) ([]string, error) {
@@ -111,9 +112,9 @@ func (f *fakeXrayHandler) Users(context.Context) ([]string, error) {
 
 func (f *fakeXrayHandler) AddUser(_ context.Context, email, uuid, flow string) error {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.addCall = append(f.addCall, [3]string{email, uuid, flow})
 	if f.addErr != nil {
+		f.mu.Unlock()
 		return f.addErr
 	}
 	f.users = append(f.users, email)
@@ -122,6 +123,11 @@ func (f *fakeXrayHandler) AddUser(_ context.Context, email, uuid, flow string) e
 		case f.userAdded <- email:
 		default:
 		}
+	}
+	hook := f.afterAdd
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
 	}
 	return nil
 }

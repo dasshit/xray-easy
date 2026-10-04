@@ -37,6 +37,15 @@ func TestControlPlaneMiddlewareSetsSecurityAndCacheHeaders(t *testing.T) {
 	}
 }
 
+func TestSetSecurityHeadersEnablesHSTSForHTTPSRequests(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "https://localhost:8080/", nil)
+	response := httptest.NewRecorder()
+	setSecurityHeaders(response, request)
+	if got := response.Header().Get("Strict-Transport-Security"); got != "max-age=31536000" {
+		t.Fatalf("HSTS header = %q", got)
+	}
+}
+
 func TestControlPlaneMiddlewareRejectsCrossOriginMutation(t *testing.T) {
 	called := false
 	handler := controlPlaneMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true }))
@@ -158,6 +167,28 @@ func TestBrowserOriginParsingAndTrustedProxyScheme(t *testing.T) {
 	request.Header.Set("X-Forwarded-Proto", "https")
 	if got := requestScheme(request); got != "http" {
 		t.Fatalf("untrusted forwarded scheme = %q, want http", got)
+	}
+}
+
+func TestCanonicalHostPortNormalizesHostsAndDefaultPorts(t *testing.T) {
+	for _, test := range []struct {
+		host, scheme, want string
+	}{
+		{host: " Example.COM ", scheme: "http", want: "example.com:80"},
+		{host: "example.com:8443", scheme: "https", want: "example.com:8443"},
+		{host: "[2001:DB8::2]", scheme: "https", want: "[2001:db8::2]:443"},
+		{host: "[2001:DB8::2]:9443", scheme: "http", want: "[2001:db8::2]:9443"},
+		{host: "not a host", scheme: "http", want: ""},
+	} {
+		if got := canonicalHostPort(test.host, test.scheme); got != test.want {
+			t.Errorf("canonicalHostPort(%q, %q) = %q, want %q", test.host, test.scheme, got, test.want)
+		}
+	}
+}
+
+func TestRejectedOriginErrorMessage(t *testing.T) {
+	if got := (errOriginRejected{}).Error(); got != "request origin is not allowed" {
+		t.Fatalf("origin rejection message = %q", got)
 	}
 }
 

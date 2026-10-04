@@ -232,11 +232,15 @@ func (s *Service) SetXrayLogLevel(ctx context.Context, request *controllerv1.Set
 	if request == nil || strings.TrimSpace(request.GetLevel()) == "" {
 		return nil, status.Error(codes.InvalidArgument, "log level is required")
 	}
-	runtime, ok := s.xray.(XrayLogRuntime)
+	runtime, err := s.runtime()
+	if err != nil {
+		return nil, err
+	}
+	logRuntime, ok := runtime.(XrayLogRuntime)
 	if !ok {
 		return nil, status.Error(codes.Unimplemented, "runtime log level control is unavailable")
 	}
-	if err := runtime.SetLogLevel(ctx, request.GetLevel()); err != nil {
+	if err := logRuntime.SetLogLevel(ctx, request.GetLevel()); err != nil {
 		return nil, err
 	}
 	return &controllerv1.OperationResponse{Ok: true}, nil

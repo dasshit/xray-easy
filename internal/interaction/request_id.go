@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,7 +26,7 @@ const (
 )
 
 // randomRead is an internal package variable.
-var randomRead = rand.Read
+var randomRead = func(value []byte) (int, error) { return io.ReadFull(rand.Reader, value) }
 
 // contextKey is an internal type used by the package.
 type contextKey struct{ name string }

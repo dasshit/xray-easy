@@ -297,6 +297,35 @@ func TestServiceValidatesAndPropagatesAmneziaWGExpiryOperations(t *testing.T) {
 	if _, err := service.SetAmneziaWGPeerEnabled(ctx, &controllerv1.SetAmneziaWGPeerEnabledRequest{Name: "phone", Enabled: true}); err == nil || !errors.Is(err, awg.err) {
 		t.Fatalf("AWG enable runtime error = %v", err)
 	}
+	for _, request := range []*controllerv1.CreateAmneziaWGPeerRequest{
+		{Name: "phone", ExpiresAt: &timestamppb.Timestamp{Seconds: 253402300800}},
+		{Name: "phone", ExpiresAt: timestamppb.New(service.now().Add(-time.Second))},
+	} {
+		if _, err := service.CreateAmneziaWGPeer(ctx, request); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("CreateAmneziaWGPeer invalid expiry %+v = %v", request, err)
+		}
+	}
+	if _, err := service.SetAmneziaWGPeerExpiry(ctx, &controllerv1.SetAmneziaWGPeerExpiryRequest{Name: "phone", ExpiresAt: timestamppb.New(service.now().Add(-time.Second))}); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("SetAmneziaWGPeerExpiry with past deadline = %v", err)
+	}
+}
+
+func TestIdempotentDeviceMutationsPropagateUserLookupFailures(t *testing.T) {
+	handler := &fakeXrayHandler{err: errors.New("user listing unavailable")}
+	service := NewServiceWithAdapters(&fakeRuntime{}, handler, nil, nil)
+	ctx := interaction.WithOperationID(context.Background(), "0123456789abcdef0123456789abcdef")
+	if _, err := service.AddDeviceUser(ctx, &controllerv1.AddDeviceUserRequest{Protocol: "vless", Email: "phone@xray-easy", Id: "uuid"}); !errors.Is(err, handler.err) {
+		t.Fatalf("AddDeviceUser() list failure = %v", err)
+	}
+	if _, err := service.RemoveDeviceUser(ctx, &controllerv1.RemoveDeviceUserRequest{Protocol: "vless", Email: "phone@xray-easy"}); !errors.Is(err, handler.err) {
+		t.Fatalf("RemoveDeviceUser() list failure = %v", err)
+	}
+}
+
+func TestDeviceUsersRejectsUnknownProtocol(t *testing.T) {
+	if _, err := deviceUsers(context.Background(), &fakeXrayHandler{}, "unknown"); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("deviceUsers() unknown protocol error = %v", err)
+	}
 }
 
 type concurrentAddHandler struct {

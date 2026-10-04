@@ -157,6 +157,46 @@ func TestNewServiceValidatesControllerAndPolicy(t *testing.T) {
 	}
 }
 
+func TestServiceRunRequiresInitializedStateAndAdvancesRetryBackoff(t *testing.T) {
+	if err := (*Service)(nil).Run(context.Background()); err == nil || !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("nil Service Run() error = %v", err)
+	}
+
+	controller := &fakeLeaseController{watchErr: status.Error(codes.Unavailable, "controller unavailable")}
+	service, err := NewService(controller, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.retryJitter = func(delay time.Duration) time.Duration { return delay }
+	var delays []time.Duration
+	service.retryWait = func(_ context.Context, delay time.Duration) bool {
+		delays = append(delays, delay)
+		return len(delays) == 1
+	}
+	if err := service.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if len(delays) != 2 || delays[0] != time.Second || delays[1] != 2*time.Second {
+		t.Fatalf("retry delays = %v, want 1s then 2s", delays)
+	}
+}
+
+func TestServiceRunStopsAfterEndedStreamWhenRetryIsCanceled(t *testing.T) {
+	controller := &fakeLeaseController{}
+	controller.watchFn = func(ctx context.Context) (controllerv1.Controller_WatchLeaseSnapshotsClient, error) {
+		return &fakeSnapshotStream{ctx: ctx, terminal: io.EOF}, nil
+	}
+	service, err := NewService(controller, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.retryJitter = func(delay time.Duration) time.Duration { return delay }
+	service.retryWait = func(context.Context, time.Duration) bool { return false }
+	if err := service.Run(context.Background()); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+}
+
 func TestServiceRunRetriesUnavailableControllerAndStopsOnCancellation(t *testing.T) {
 	controller := &fakeLeaseController{watchErr: status.Error(codes.Unavailable, "controller offline"), watchCall: make(chan struct{}, 1)}
 	service, err := NewService(controller, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -292,6 +332,90 @@ func TestServiceConsumeAcceptsCompleteSnapshotAndEndsOnEOF(t *testing.T) {
 	}
 }
 
+func TestServiceConsumeRemovesCompletedOperationsWhenLeaseDisappears(t *testing.T) {
+	now := time.Now().UTC()
+	service, err := NewService(&fakeLeaseController{}, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := LeaseKey{Protocol: "vless", Email: "profile", SourceIP: "192.0.2.13"}
+	service.tracker.Apply(leaseSnapshot("runtime-a", 1, now, key.SourceIP), now)
+	service.operations[key] = pendingOperation{id: "operation", generation: "runtime-a"}
+	stream := &fakeSnapshotStream{ctx: context.Background(), snapshots: []*controllerv1.LeaseSnapshot{{
+		SourceAvailable: true, FullSnapshot: true, SourceGeneration: "runtime-a", SourceSequence: 2, SampledAt: timestamppb.New(now.Add(time.Second)),
+	}}}
+	if err := service.consume(context.Background(), stream); err == nil {
+		t.Fatal("consume() unexpectedly returned without stream termination")
+	}
+	if _, exists := service.operations[key]; exists {
+		t.Fatal("operation for a disappeared lease was retained")
+	}
+}
+
+func TestServiceConsumeEnforcesDecisionsFromIncomingSnapshotsAndStopsOnCancel(t *testing.T) {
+	base := time.Now().UTC().Truncate(time.Second)
+	controller := &fakeLeaseController{}
+	service, err := NewService(controller, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	clockCall := 0
+	service.now = func() time.Time {
+		clockCall++
+		if clockCall == 1 {
+			return base
+		}
+		return base.Add(31 * time.Second)
+	}
+	service.newID = func() (string, error) { return "snapshot-enforcement", nil }
+	toProtoSnapshot := func(sequence uint64, sampledAt time.Time) *controllerv1.LeaseSnapshot {
+		return &controllerv1.LeaseSnapshot{
+			SourceAvailable: true, FullSnapshot: true, SourceGeneration: "runtime-a", SourceSequence: sequence, SampledAt: timestamppb.New(sampledAt),
+			Observations: []*controllerv1.LeaseObservation{
+				{Protocol: "vless", ProfileEmail: "profile", SourceIp: "192.0.2.1", LastActivity: timestamppb.New(sampledAt), ConnectedAt: timestamppb.New(base.Add(-time.Minute))},
+				{Protocol: "vless", ProfileEmail: "profile", SourceIp: "192.0.2.2", LastActivity: timestamppb.New(sampledAt), ConnectedAt: timestamppb.New(sampledAt)},
+			},
+		}
+	}
+	stream := &fakeSnapshotStream{ctx: context.Background(), snapshots: []*controllerv1.LeaseSnapshot{
+		toProtoSnapshot(1, base), toProtoSnapshot(2, base.Add(31*time.Second)),
+	}}
+	if err := service.consume(context.Background(), stream); err == nil {
+		t.Fatal("consume() unexpectedly returned without stream termination")
+	}
+	if len(controller.requests) != 1 || controller.requests[0].GetSourceIp() != "192.0.2.1" {
+		t.Fatalf("snapshot-triggered disconnect requests = %+v", controller.requests)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	holdingStream := &fakeSnapshotStream{ctx: ctx, hold: true}
+	done := make(chan error, 1)
+	go func() { done <- service.consume(ctx, holdingStream) }()
+	cancel()
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("consume() cancellation error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("consume() did not stop after context cancellation")
+	}
+}
+
+func TestQueueSnapshotResultUnblocksOnCancellationWhenBufferIsFull(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	updates := make(chan leaseSnapshotResult, 1)
+	updates <- leaseSnapshotResult{}
+	cancel()
+	if queueSnapshotResult(ctx, updates, leaseSnapshotResult{err: io.EOF}) {
+		t.Fatal("queueSnapshotResult() did not abandon a blocked send after cancellation")
+	}
+	pumpLeaseSnapshots(ctx, &fakeSnapshotStream{ctx: ctx, snapshots: []*controllerv1.LeaseSnapshot{{SourceGeneration: "blocked"}}}, updates)
+	if len(updates) != 1 {
+		t.Fatal("snapshot pump replaced the pending buffered update after cancellation")
+	}
+}
+
 func TestServiceEnforceHandlesIDGenerationDefiniteRPCAndEmptyResponseFailures(t *testing.T) {
 	key := LeaseKey{Protocol: "vless", Email: "profile@xray-easy", SourceIP: "192.0.2.1"}
 	decision := func(t *testing.T, service *Service, now time.Time) Decision {
@@ -347,42 +471,89 @@ func TestServiceEnforceHandlesIDGenerationDefiniteRPCAndEmptyResponseFailures(t 
 	}
 }
 
+type fakeLeaseTimer struct {
+	channel    chan time.Time
+	stopResult bool
+	resetDelay time.Duration
+}
+
+func (t *fakeLeaseTimer) Stop() bool                     { return t.stopResult }
+func (t *fakeLeaseTimer) Reset(delay time.Duration) bool { t.resetDelay = delay; return false }
+func (t *fakeLeaseTimer) Channel() <-chan time.Time      { return t.channel }
+
 func TestServiceTimerAndUtilityEdgeCases(t *testing.T) {
 	service, err := NewService(&fakeLeaseController{}, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
 		t.Fatal(err)
 	}
-	var timer *time.Timer
+	var timer leaseTimer
 	var channel <-chan time.Time
 	service.resetTimer(&timer, &channel)
 	if channel != nil {
 		t.Fatal("unavailable tracker unexpectedly armed a timer")
 	}
+	firedWithoutDeadline := &fakeLeaseTimer{channel: make(chan time.Time, 1)}
+	firedWithoutDeadline.channel <- time.Now()
+	firedWithoutDeadline.stopResult = false
+	timer = firedWithoutDeadline
+	service.resetTimer(&timer, &channel)
+	if channel != nil || len(firedWithoutDeadline.channel) != 0 {
+		t.Fatal("unavailable tracker did not drain an expired timer")
+	}
+
 	now := time.Now().UTC()
 	service.tracker.Apply(leaseSnapshot("runtime-a", 1, now, "192.0.2.1"), now)
 	service.tracker.Apply(leaseSnapshot("runtime-a", 2, now.Add(time.Second), "192.0.2.1", "192.0.2.2"), now.Add(time.Second))
+	activeTimer := &fakeLeaseTimer{channel: make(chan time.Time, 1)}
+	service.makeTimer = func(time.Duration) leaseTimer { return activeTimer }
+	timer = nil
 	service.resetTimer(&timer, &channel)
 	if timer == nil || channel == nil {
 		t.Fatal("active conflict did not arm its grace timer")
 	}
-	service.tracker.Apply(leaseSnapshot("runtime-a", 3, now.Add(2*time.Second), "192.0.2.2"), now.Add(2*time.Second))
+	activeTimer.channel <- time.Now()
 	service.resetTimer(&timer, &channel)
-	if channel != nil {
-		t.Fatal("resolved conflict retained its timer")
+	if len(activeTimer.channel) != 0 {
+		t.Fatal("resetTimer did not drain a fired timer")
 	}
-	if timer != nil {
-		timer.Stop()
+	service.resetTimer(&timer, &channel)
+	if activeTimer.resetDelay < 0 {
+		t.Fatal("reset timer received a negative duration")
+	}
+	standardTimerService, err := NewService(&fakeLeaseController{}, DefaultConfig(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	standardTimerService.tracker.Apply(leaseSnapshot("runtime-a", 1, now, "192.0.2.6"), now)
+	standardTimerService.tracker.Apply(leaseSnapshot("runtime-a", 2, now.Add(time.Second), "192.0.2.6", "192.0.2.7"), now.Add(time.Second))
+	var standardTimer leaseTimer
+	var standardChannel <-chan time.Time
+	standardTimerService.resetTimer(&standardTimer, &standardChannel)
+	standardTimerService.resetTimer(&standardTimer, &standardChannel)
+	standardTimer.Stop()
+	if !waitRetry(context.Background(), time.Millisecond) {
+		t.Fatal("waitRetry did not return after its timer fired")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if waitRetry(canceled, time.Hour) {
+		t.Fatal("waitRetry returned true after context cancellation")
 	}
 
-	// Exercise stopping and draining a timer that has already fired while the
-	// upstream telemetry source becomes unavailable.
-	firedTimer := time.NewTimer(time.Millisecond)
-	<-firedTimer.C
 	service.tracker.SetUnavailable()
-	firedChannel := (<-chan time.Time)(firedTimer.C)
-	service.resetTimer(&firedTimer, &firedChannel)
-	if firedChannel != nil {
-		t.Fatal("unavailable tracker retained an expired timer channel")
+	var pastDeadlineTimer leaseTimer
+	var pastDeadlineChannel <-chan time.Time
+	service.tracker.Apply(leaseSnapshot("runtime-a", 3, now.Add(2*time.Second), "192.0.2.1", "192.0.2.2"), now.Add(2*time.Second))
+	service.tracker.grace[profileFor(LeaseKey{Protocol: "vless", Email: "profile@xray-easy", SourceIP: "192.0.2.1"})] = time.Now().Add(-time.Second)
+	pastTimer := &fakeLeaseTimer{channel: make(chan time.Time, 1)}
+	service.makeTimer = func(delay time.Duration) leaseTimer {
+		pastTimer.resetDelay = delay
+		return pastTimer
+	}
+	pastDeadlineTimer = nil
+	service.resetTimer(&pastDeadlineTimer, &pastDeadlineChannel)
+	if pastDeadlineTimer == nil || pastTimer.resetDelay != 0 {
+		t.Fatalf("past deadline timer = %v, delay=%s; want immediate timer", pastDeadlineTimer, pastTimer.resetDelay)
 	}
 	if safeError(nil) != "" || safeError(errors.New(strings.Repeat("x", 200))) == "" || len(safeError(errors.New(strings.Repeat("x", 200)))) != 160 {
 		t.Fatal("safeError did not handle nil and oversized errors")
@@ -390,8 +561,14 @@ func TestServiceTimerAndUtilityEdgeCases(t *testing.T) {
 	if got := jitter(0); got != time.Second {
 		t.Fatalf("jitter of non-positive duration = %s", got)
 	}
+	if got := jitter(time.Nanosecond); got != time.Nanosecond {
+		t.Fatalf("jitter with no spread = %s", got)
+	}
 	if _, err := randomOperationID(); err != nil {
 		t.Fatalf("randomOperationID: %v", err)
+	}
+	if _, err := randomOperationIDFrom(strings.NewReader("short")); err == nil {
+		t.Fatal("randomOperationIDFrom accepted insufficient entropy")
 	}
 	if profileLogID("profile") == profileLogID("other") {
 		t.Fatal("profile log identifiers collided in the test")
@@ -399,6 +576,9 @@ func TestServiceTimerAndUtilityEdgeCases(t *testing.T) {
 }
 
 func TestNormalizeLeaseSnapshotValidatesReadinessAndObservations(t *testing.T) {
+	if got := normalizeLeaseSnapshot(nil); got.Available || got.Full || got.Leases != nil {
+		t.Fatalf("nil lease snapshot normalized to %+v", got)
+	}
 	valid := &controllerv1.LeaseSnapshot{
 		SourceAvailable: true, FullSnapshot: true, SourceGeneration: "generation-a", SourceSequence: 7,
 		SampledAt: timestamppb.New(time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)),

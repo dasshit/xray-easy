@@ -660,6 +660,9 @@ func TestRestoreStateRejectsUninitializedManager(t *testing.T) {
 func TestManifestRejectsInvalidSignatureFormatAndTraversal(t *testing.T) {
 	root := t.TempDir()
 	key := []byte(strings.Repeat("m", 32))
+	if err := verifyManifest(root, key); err == nil || !strings.Contains(err.Error(), "read backup manifest") {
+		t.Fatalf("verifyManifest() without a manifest = %v", err)
+	}
 	writeManifest := func(value manifest) {
 		t.Helper()
 		data, err := json.Marshal(value)

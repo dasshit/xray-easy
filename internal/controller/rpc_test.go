@@ -2,6 +2,8 @@ package controller
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"errors"
 	"net"
 	"strings"
 	"testing"
@@ -106,6 +108,16 @@ func TestLeaseTokenIsRestrictedToLeaseRPCs(t *testing.T) {
 	}
 }
 
+func TestControllerIdentityRejectsMissingAndAmbiguousAuthorizationMetadata(t *testing.T) {
+	if identity, err := controllerIdentity(context.Background(), controllerv1.Controller_Health_FullMethodName, "admin-token", ""); status.Code(err) != codes.Unauthenticated || identity != "" {
+		t.Fatalf("identity without metadata = %q, %v", identity, err)
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer admin-token", "authorization", "Bearer other-token"))
+	if identity, err := controllerIdentity(ctx, controllerv1.Controller_Health_FullMethodName, "admin-token", ""); status.Code(err) != codes.Unauthenticated || identity != "" {
+		t.Fatalf("identity with ambiguous credentials = %q, %v", identity, err)
+	}
+}
+
 func TestGeneratedRPCDispatchesEveryTypedMethod(t *testing.T) {
 	listener := bufconn.Listen(1 << 20)
 	server := grpc.NewServer()
@@ -191,12 +203,49 @@ func TestProtocolForRPCUsesOnlySafeTypedMetadata(t *testing.T) {
 		{"/controller/GetAmneziaWGStatus", &controllerv1.EmptyRequest{}, "amneziawg"},
 		{"/controller/AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "vless", Id: "private"}, "vless"},
 		{"/controller/AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "hysteria2"}, "hysteria2"},
+		{"/controller/ListDeviceUsers", &controllerv1.ListDeviceUsersRequest{Protocol: "trojan"}, "trojan"},
 		{"/controller/GetStatus", &controllerv1.EmptyRequest{}, "xray"},
 		{"/controller/AddDeviceUser", &controllerv1.AddDeviceUserRequest{Protocol: "unexpected"}, "xray"},
 	} {
 		if got := protocolForRPC(test.method, test.request); got != test.want {
 			t.Errorf("protocolForRPC(%q) = %q, want %q", test.method, got, test.want)
 		}
+	}
+}
+
+type controllerFailingEntropy struct{}
+
+func (controllerFailingEntropy) Read([]byte) (int, error) {
+	return 0, errors.New("entropy unavailable")
+}
+
+type controllerTestServerStream struct {
+	grpc.ServerStream
+	ctx context.Context
+}
+
+func (s controllerTestServerStream) Context() context.Context { return s.ctx }
+
+func TestLoggingInterceptorsReportRequestIDGenerationFailure(t *testing.T) {
+	previous := cryptorand.Reader
+	cryptorand.Reader = controllerFailingEntropy{}
+	t.Cleanup(func() { cryptorand.Reader = previous })
+
+	_, err := LoggingInterceptor("controller-test")(
+		context.Background(), &controllerv1.EmptyRequest{}, &grpc.UnaryServerInfo{FullMethod: controllerv1.Controller_Health_FullMethodName},
+		func(context.Context, any) (any, error) { t.Fatal("handler ran without a request ID"); return nil, nil },
+	)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("unary logging interceptor error = %v, want Internal", err)
+	}
+	err = LoggingStreamInterceptor("controller-test")(
+		nil,
+		controllerTestServerStream{ctx: context.Background()},
+		&grpc.StreamServerInfo{FullMethod: controllerv1.Controller_WatchTelemetry_FullMethodName},
+		func(any, grpc.ServerStream) error { t.Fatal("stream handler ran without a request ID"); return nil },
+	)
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("stream logging interceptor error = %v, want Internal", err)
 	}
 }
 

@@ -42,6 +42,120 @@ func TestStoreTransactionsRollBackWhenTOTPTriggersFail(t *testing.T) {
 	}
 }
 
+func TestTOTPAndRecoveryCodeOperationsPropagateEachTransactionalWriteFailure(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		trigger   string
+		operation func(*Store, context.Context, Admin) error
+		want      string
+	}{
+		{
+			name:    "TOTP account update",
+			trigger: `CREATE TRIGGER reject_totp_account_update BEFORE UPDATE ON admin_users BEGIN SELECT RAISE(ABORT, 'admin update blocked'); END`,
+			operation: func(db *Store, ctx context.Context, admin Admin) error {
+				return db.SetTOTP(ctx, admin.ID, "secret", nil)
+			},
+			want: "admin update blocked",
+		},
+		{
+			name:    "recovery-code replacement delete",
+			trigger: `CREATE TRIGGER reject_recovery_replace_delete BEFORE DELETE ON totp_recovery_codes BEGIN SELECT RAISE(ABORT, 'recovery delete blocked'); END`,
+			operation: func(db *Store, ctx context.Context, admin Admin) error {
+				return db.ReplaceRecoveryCodes(ctx, admin.ID, []string{"hash"})
+			},
+			want: "recovery delete blocked",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, ctx := openTestStore(t, "totp-write-"+strings.ReplaceAll(test.name, " ", "-")+".db")
+			admin := initTestAdmin(t, db, ctx)
+			if test.name == "recovery-code replacement delete" {
+				if err := db.SetTOTP(ctx, admin.ID, "old-secret", []string{"old-hash"}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.db.Exec(test.trigger); err != nil {
+				t.Fatal(err)
+			}
+			if err := test.operation(db, ctx, admin); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("operation error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestInitializeAndPasswordChangeRollBackAfterWriteTriggers(t *testing.T) {
+	t.Run("administrator insert", func(t *testing.T) {
+		db, ctx := openTestStore(t, "initialize-admin-trigger.db")
+		if _, err := db.db.Exec(`CREATE TRIGGER reject_initial_admin BEFORE INSERT ON admin_users BEGIN SELECT RAISE(ABORT, 'admin insert blocked'); END`); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Initialize(ctx, "admin", "hash", "vpn.example.test", 443); err == nil || !strings.Contains(err.Error(), "admin insert blocked") {
+			t.Fatalf("Initialize admin insertion error = %v", err)
+		}
+	})
+
+	t.Run("password update", func(t *testing.T) {
+		db, ctx := openTestStore(t, "password-update-trigger.db")
+		admin := initTestAdmin(t, db, ctx)
+		if _, err := db.db.Exec(`CREATE TRIGGER reject_admin_password BEFORE UPDATE OF password_hash ON admin_users BEGIN SELECT RAISE(ABORT, 'password update blocked'); END`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.ChangeAdminPassword(ctx, admin.ID, "new-hash"); err == nil || !strings.Contains(err.Error(), "password update blocked") {
+			t.Fatalf("ChangeAdminPassword update error = %v", err)
+		}
+		current, err := db.FirstAdmin(ctx)
+		if err != nil || current.PasswordHash != "password-hash" {
+			t.Fatalf("failed password update partially changed hash: %+v, %v", current, err)
+		}
+	})
+
+	t.Run("session deletion", func(t *testing.T) {
+		db, ctx := openTestStore(t, "password-session-delete-trigger.db")
+		admin := initTestAdmin(t, db, ctx)
+		if _, err := db.CreateSession(ctx, admin.ID, time.Hour); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.db.Exec(`CREATE TRIGGER reject_password_session_delete BEFORE DELETE ON sessions BEGIN SELECT RAISE(ABORT, 'session delete blocked'); END`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.ChangeAdminPassword(ctx, admin.ID, "new-hash"); err == nil || !strings.Contains(err.Error(), "session delete blocked") {
+			t.Fatalf("ChangeAdminPassword session deletion error = %v", err)
+		}
+		current, err := db.FirstAdmin(ctx)
+		if err != nil || current.PasswordHash != "password-hash" {
+			t.Fatalf("failed password transaction changed hash: %+v, %v", current, err)
+		}
+	})
+}
+
+func TestCreateClientRollsBackOnClientOrShortIDHistoryWriteFailure(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		trigger string
+		client  domain.Client
+		shortID string
+		want    string
+	}{
+		{name: "client row", trigger: `CREATE TRIGGER reject_client_row BEFORE INSERT ON clients BEGIN SELECT RAISE(ABORT, 'client insert blocked'); END`, client: domain.Client{ID: "phone", Name: "phone", Enabled: true}, shortID: "", want: "client insert blocked"},
+		{name: "short ID history", trigger: `CREATE TRIGGER reject_short_id_history BEFORE INSERT ON reality_short_ids BEGIN SELECT RAISE(ABORT, 'history insert blocked'); END`, client: domain.Client{ID: "phone", Name: "phone", Enabled: true}, shortID: "0123456789abcdef", want: "history insert blocked"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, ctx := openTestStore(t, "create-client-"+strings.ReplaceAll(test.name, " ", "-")+".db")
+			if _, err := db.db.Exec(test.trigger); err != nil {
+				t.Fatal(err)
+			}
+			err := db.CreateClient(ctx, test.client, "uuid", "phone@example.test", test.shortID)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("CreateClient() error = %v, want %q", err, test.want)
+			}
+			if clients, listErr := db.ListClients(ctx); listErr != nil || len(clients) != 0 {
+				t.Fatalf("failed profile transaction left clients: %+v, %v", clients, listErr)
+			}
+		})
+	}
+}
+
 func TestStoreRejectsCorruptRowsAndCanceledWrites(t *testing.T) {
 	db, ctx := openTestStore(t, "corrupt-rows.db")
 	admin := initTestAdmin(t, db, ctx)
@@ -58,6 +172,95 @@ func TestStoreRejectsCorruptRowsAndCanceledWrites(t *testing.T) {
 	}
 	if err := db.AddAudit(ctx, admin.ID, "test", "admin", admin.ID, "valid audit event"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestCreateApplyOperationWithNextRevisionReportsMissingSequence(t *testing.T) {
+	db, ctx := openTestStore(t, "missing-apply-revision-sequence.db")
+	if _, err := db.db.ExecContext(ctx, `DELETE FROM apply_revision_sequence WHERE id=1`); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	_, err := db.CreateApplyOperationWithNextRevision(ctx, ApplyOperation{
+		ID: "missing-sequence", State: "pending", CreatedAt: now, UpdatedAt: now,
+	})
+	if err == nil || !strings.Contains(err.Error(), "read apply revision sequence") {
+		t.Fatalf("apply operation creation error = %v, want missing-sequence error", err)
+	}
+}
+
+func TestStoreShortIDAndApplyRevisionTransactionsRollbackWriteFailures(t *testing.T) {
+	t.Run("reserved short ID insert", func(t *testing.T) {
+		db, ctx := openTestStore(t, "short-id-insert-trigger.db")
+		if _, err := db.db.Exec(`CREATE TRIGGER reject_short_id_insert BEFORE INSERT ON reality_short_ids BEGIN SELECT RAISE(ABORT, 'short ID blocked'); END`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SeedReservedShortIDs(ctx, 1, func() (string, error) { return "0123456789abcdef", nil }); err == nil || !strings.Contains(err.Error(), "short ID blocked") {
+			t.Fatalf("short ID seed error = %v", err)
+		}
+		if ids, err := db.ListReservedShortIDs(ctx); err != nil || len(ids) != 0 {
+			t.Fatalf("failed reserve left partial IDs: %v, %v", ids, err)
+		}
+	})
+
+	t.Run("apply operation insert", func(t *testing.T) {
+		db, ctx := openTestStore(t, "apply-operation-insert-trigger.db")
+		if _, err := db.db.Exec(`CREATE TRIGGER reject_revision_apply BEFORE INSERT ON apply_operations BEGIN SELECT RAISE(ABORT, 'apply insert blocked'); END`); err != nil {
+			t.Fatal(err)
+		}
+		now := time.Now().UTC()
+		operation := ApplyOperation{ID: "blocked", State: "pending", CreatedAt: now, UpdatedAt: now}
+		if _, err := db.CreateApplyOperationWithNextRevision(ctx, operation); err == nil || !strings.Contains(err.Error(), "apply insert blocked") {
+			t.Fatalf("apply operation error = %v", err)
+		}
+		if _, err := db.db.Exec(`DROP TRIGGER reject_revision_apply`); err != nil {
+			t.Fatal(err)
+		}
+		operation.ID = "after-rollback"
+		revision, err := db.CreateApplyOperationWithNextRevision(ctx, operation)
+		if err != nil || revision != 1 {
+			t.Fatalf("revision after failed insert = %d, %v; want 1", revision, err)
+		}
+	})
+}
+
+func TestRestoreFromReportsShortIDHistoryInsertFailureAtomically(t *testing.T) {
+	ctx := context.Background()
+	destination, err := Open(ctx, filepath.Join(t.TempDir(), "restore-destination.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer destination.Close()
+	initTestAdmin(t, destination, ctx)
+	before, err := destination.GetSettings(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := Open(ctx, filepath.Join(t.TempDir(), "restore-source.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	initTestAdmin(t, source, ctx)
+	if err := source.CreateClient(ctx, domain.Client{ID: "phone", Name: "phone", Enabled: true}, "uuid-phone", "phone@example.test", "0123456789abcdef"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := source.db.ExecContext(ctx, `DELETE FROM reality_short_ids`); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := filepath.Join(t.TempDir(), "restore-source.snapshot.db")
+	if err := source.BackupTo(snapshot); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := destination.db.Exec(`CREATE TRIGGER reject_restored_short_id BEFORE INSERT ON reality_short_ids BEGIN SELECT RAISE(ABORT, 'short ID history blocked'); END`); err != nil {
+		t.Fatal(err)
+	}
+	if err := destination.RestoreFrom(snapshot); err == nil || !strings.Contains(err.Error(), "restore short ID history") {
+		t.Fatalf("restore history insertion error = %v", err)
+	}
+	current, err := destination.GetSettings(ctx)
+	if err != nil || current.PublicHost != before.PublicHost {
+		t.Fatalf("short ID history failure partially restored settings: %+v, %v", current, err)
 	}
 }
 

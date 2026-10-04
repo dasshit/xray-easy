@@ -23,6 +23,7 @@ type recordingInboundReplacer struct {
 	*fakeXrayRuntime
 	calls [][4]string
 	err   error
+	errs  []error
 	hook  func()
 }
 
@@ -30,6 +31,9 @@ func (r *recordingInboundReplacer) ReplaceInbound(_ context.Context, candidate, 
 	r.calls = append(r.calls, [4]string{candidate, previous, tag, operationID})
 	if r.hook != nil {
 		r.hook()
+	}
+	if len(r.errs) >= len(r.calls) {
+		return r.errs[len(r.calls)-1]
 	}
 	return r.err
 }
@@ -677,6 +681,9 @@ func TestShadowsocksReconcilerRepairsLiveRoster(t *testing.T) {
 	if len(handler.removed) != 1 || handler.removed[0] != "stale@example.test" || len(handler.added) != 1 || handler.added[0] != client.Email {
 		t.Fatalf("reconciled Shadowsocks roster: removed=%v added=%v", handler.removed, handler.added)
 	}
+	if err := app.server.reconcileRunning(t.Context()); err != nil {
+		t.Fatalf("reconcile already matching Shadowsocks roster: %v", err)
+	}
 }
 
 func TestShadowsocksReconcilerReportsHandlerCapabilityAndCredentialFailures(t *testing.T) {
@@ -700,6 +707,59 @@ func TestShadowsocksReconcilerReportsHandlerCapabilityAndCredentialFailures(t *t
 			t.Fatalf("Shadowsocks roster error = %v", err)
 		}
 	})
+	t.Run("list, removal and addition failures", func(t *testing.T) {
+		app := newTestApp(t, true)
+		handler := &recordingShadowsocksHandler{fakeXrayHandler: app.handler}
+		app.server.handler = handler
+		client := createRuntimeShadowsocksClient(t, app, "error-path-phone")
+		handler.listErr = errors.New("Shadowsocks roster query failed")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Shadowsocks roster query failed") {
+			t.Fatalf("Shadowsocks list error = %v", err)
+		}
+		handler.listErr = nil
+		handler.users = []string{"stale@example.test"}
+		handler.removeErr = errors.New("Shadowsocks remove failed")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Shadowsocks remove failed") {
+			t.Fatalf("Shadowsocks remove error = %v", err)
+		}
+		handler.removeErr = nil
+		handler.users = nil
+		handler.addErr = errors.New("Shadowsocks add failed")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Shadowsocks add failed") {
+			t.Fatalf("Shadowsocks add error = %v", err)
+		}
+		handler.addErr = nil
+		if err := app.server.reconcileRunning(t.Context()); err != nil {
+			t.Fatalf("Shadowsocks roster did not recover: %v", err)
+		}
+		if len(handler.added) == 0 || handler.added[len(handler.added)-1] != client.Email {
+			t.Fatalf("Shadowsocks profile was not restored: %+v", handler.added)
+		}
+	})
+	t.Run("stored password cannot be decrypted", func(t *testing.T) {
+		app := newTestApp(t, true)
+		app.server.handler = &recordingShadowsocksHandler{fakeXrayHandler: app.handler}
+		client := createRuntimeShadowsocksClient(t, app, "bad-password-phone")
+		clients, err := app.server.store.ListClients(t.Context())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := app.server.reconcileRealityShortIDsLocked(t.Context(), clients); err != nil {
+			t.Fatalf("prepare matching topology before corrupting the credential: %v", err)
+		}
+		execSQLiteTestMutation(t, app, "corrupt Shadowsocks password", "UPDATE clients SET shadowsocks_password_enc='invalid' WHERE id='"+client.ID+"'")
+		if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "Shadowsocks password is unavailable") {
+			t.Fatalf("unreadable Shadowsocks password error = %v", err)
+		}
+	})
+}
+
+func TestReconcileRunningReportsEmptyNodeSettingsReadFailure(t *testing.T) {
+	app := newTestApp(t, false)
+	execSQLiteTestMutation(t, app, "drop node settings", `DROP TABLE settings`)
+	if err := app.server.reconcileRunning(t.Context()); err == nil || !strings.Contains(err.Error(), "no such table") {
+		t.Fatalf("empty node settings read error = %v", err)
+	}
 }
 
 func TestVMessCreationRequiresAValidSharedTLSCertificate(t *testing.T) {
@@ -1056,6 +1116,9 @@ func TestRuntimeReconcilerHandlesVMessApiAvailabilityAndRosterFailures(t *testin
 	if len(handler.added) == 0 || handler.added[len(handler.added)-1] != client.Email {
 		t.Fatalf("VMess client was not restored to live inbound: %+v", handler.added)
 	}
+	if err := app.server.reconcileRunning(t.Context()); err != nil {
+		t.Fatalf("reconcile already matching VMess roster: %v", err)
+	}
 }
 
 func TestRuntimeReconcilerReportsStoreAndShortIDFailures(t *testing.T) {
@@ -1164,6 +1227,36 @@ func TestPersistedClientReconciliationRepairsDriftAndReportsFailures(t *testing.
 	}
 	if err := app.server.reconcilePersistedClientConfigLocked(t.Context(), []domain.Client{client}); err == nil || !strings.Contains(err.Error(), "promote reconciled") {
 		t.Fatalf("config promotion failure = %v", err)
+	}
+}
+
+func TestPersistedClientReconciliationReportsStorageFailures(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		statement string
+		want      string
+	}{
+		{name: "settings query", statement: `DROP TABLE settings`, want: "no such table"},
+		{name: "encrypted REALITY key", statement: `UPDATE settings SET reality_private_key_enc='invalid' WHERE id=1`, want: "could not decrypt REALITY private key"},
+		{name: "reserved short IDs", statement: `DROP TABLE reality_short_ids`, want: "no such table"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := newTestApp(t, true)
+			execSQLiteTestMutation(t, app, "inject reconciliation storage failure", test.statement)
+			if err := app.server.reconcilePersistedClientConfigLocked(t.Context(), nil); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("reconciliation storage error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestActiveConfigUsersMatchRejectsInvalidJSON(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "active.json")
+	if err := os.WriteFile(path, []byte(`{"inbounds":`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if activeConfigUsersMatch(path, nil, false) {
+		t.Fatal("invalid JSON active config matched persisted clients")
 	}
 }
 

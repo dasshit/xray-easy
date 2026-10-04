@@ -41,6 +41,9 @@ type Service struct {
 	logger      *slog.Logger
 	now         func() time.Time
 	newID       func() (string, error)
+	retryWait   func(context.Context, time.Duration) bool
+	retryJitter func(time.Duration) time.Duration
+	makeTimer   func(time.Duration) leaseTimer
 	operations  map[LeaseKey]pendingOperation
 	connected   atomic.Bool
 	sourceReady atomic.Bool
@@ -51,6 +54,23 @@ type pendingOperation struct {
 	id         string
 	generation string
 }
+
+type leaseSnapshotResult struct {
+	snapshot *controllerv1.LeaseSnapshot
+	err      error
+}
+
+type leaseTimer interface {
+	Stop() bool
+	Reset(time.Duration) bool
+	Channel() <-chan time.Time
+}
+
+type standardLeaseTimer struct{ timer *time.Timer }
+
+func (t standardLeaseTimer) Stop() bool                     { return t.timer.Stop() }
+func (t standardLeaseTimer) Reset(delay time.Duration) bool { return t.timer.Reset(delay) }
+func (t standardLeaseTimer) Channel() <-chan time.Time      { return t.timer.C }
 
 // NewService creates a lease policy worker using the supplied restricted Controller client.
 func NewService(controller Controller, config Config, logger *slog.Logger) (*Service, error) {
@@ -79,7 +99,7 @@ func (s *Service) Run(ctx context.Context) error {
 			s.tracker.SetUnavailable()
 			s.setStatus(false, false)
 			s.logger.Warn("lease snapshot stream unavailable; enforcement is fail-open", "component", "controller", "result", "failure", "error", safeError(err))
-			if !waitRetry(ctx, jitter(backoff)) {
+			if !s.waitForRetry(ctx, s.retryDelay(backoff)) {
 				break
 			}
 			backoff = min(backoff*2, 30*time.Second)
@@ -95,12 +115,26 @@ func (s *Service) Run(ctx context.Context) error {
 			break
 		}
 		s.logger.Warn("lease snapshot stream ended; enforcement is fail-open", "component", "controller", "result", "failure", "error", safeError(err))
-		if !waitRetry(ctx, jitter(backoff)) {
+		if !s.waitForRetry(ctx, s.retryDelay(backoff)) {
 			break
 		}
 		backoff = min(backoff*2, 30*time.Second)
 	}
 	return ctx.Err()
+}
+
+func (s *Service) waitForRetry(ctx context.Context, delay time.Duration) bool {
+	if s.retryWait != nil {
+		return s.retryWait(ctx, delay)
+	}
+	return waitRetry(ctx, delay)
+}
+
+func (s *Service) retryDelay(delay time.Duration) time.Duration {
+	if s.retryJitter != nil {
+		return s.retryJitter(delay)
+	}
+	return jitter(delay)
 }
 
 // Ready reports whether the stream is connected and a usable Xray snapshot has arrived.
@@ -119,25 +153,9 @@ func (s *Service) setStatus(connected, sourceReady bool) {
 
 // consume reconciles snapshots and runs grace/retry deadlines until the stream ends.
 func (s *Service) consume(ctx context.Context, stream controllerv1.Controller_WatchLeaseSnapshotsClient) error {
-	type received struct {
-		snapshot *controllerv1.LeaseSnapshot
-		err      error
-	}
-	updates := make(chan received, 1)
-	go func() {
-		for {
-			snapshot, err := stream.Recv()
-			select {
-			case updates <- received{snapshot: snapshot, err: err}:
-			case <-ctx.Done():
-				return
-			}
-			if err != nil {
-				return
-			}
-		}
-	}()
-	var timer *time.Timer
+	updates := make(chan leaseSnapshotResult, 1)
+	go pumpLeaseSnapshots(ctx, stream, updates)
+	var timer leaseTimer
 	var timerChannel <-chan time.Time
 	defer func() {
 		if timer != nil {
@@ -182,13 +200,25 @@ func (s *Service) consume(ctx context.Context, stream controllerv1.Controller_Wa
 	}
 }
 
+func pumpLeaseSnapshots(ctx context.Context, stream controllerv1.Controller_WatchLeaseSnapshotsClient, updates chan<- leaseSnapshotResult) {
+	for {
+		snapshot, err := stream.Recv()
+		if !queueSnapshotResult(ctx, updates, leaseSnapshotResult{snapshot: snapshot, err: err}) {
+			return
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
 // resetTimer arms the worker timer for the tracker's next enforcement deadline.
-func (s *Service) resetTimer(timer **time.Timer, channel *<-chan time.Time) {
+func (s *Service) resetTimer(timer *leaseTimer, channel *<-chan time.Time) {
 	deadline, ok := s.tracker.NextDeadline()
 	if !ok {
 		if *timer != nil && !(*timer).Stop() {
 			select {
-			case <-(*timer).C:
+			case <-(*timer).Channel():
 			default:
 			}
 		}
@@ -200,17 +230,30 @@ func (s *Service) resetTimer(timer **time.Timer, channel *<-chan time.Time) {
 		delay = 0
 	}
 	if *timer == nil {
-		*timer = time.NewTimer(delay)
+		if s.makeTimer == nil {
+			*timer = standardLeaseTimer{timer: time.NewTimer(delay)}
+		} else {
+			*timer = s.makeTimer(delay)
+		}
 	} else {
 		if !(*timer).Stop() {
 			select {
-			case <-(*timer).C:
+			case <-(*timer).Channel():
 			default:
 			}
 		}
 		(*timer).Reset(delay)
 	}
-	*channel = (*timer).C
+	*channel = (*timer).Channel()
+}
+
+func queueSnapshotResult(ctx context.Context, updates chan<- leaseSnapshotResult, result leaseSnapshotResult) bool {
+	select {
+	case updates <- result:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // enforce executes one idempotent disconnect decision and records its outcome.
@@ -319,8 +362,12 @@ func protobufTime(value *timestamppb.Timestamp) time.Time {
 
 // randomOperationID creates an opaque idempotency key for a disconnect operation.
 func randomOperationID() (string, error) {
+	return randomOperationIDFrom(rand.Reader)
+}
+
+func randomOperationIDFrom(source io.Reader) (string, error) {
 	var value [16]byte
-	if _, err := rand.Read(value[:]); err != nil {
+	if _, err := io.ReadFull(source, value[:]); err != nil {
 		return "", fmt.Errorf("generate operation id: %w", err)
 	}
 	return hex.EncodeToString(value[:]), nil

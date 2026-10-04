@@ -82,6 +82,7 @@ type Manager struct {
 	streamCancel context.CancelFunc
 	rootContext  context.Context
 	checkpoints  map[string]streamCheckpoint
+	retryWait    func(context.Context, time.Duration) bool
 }
 
 // streamCheckpoint is an internal type used by the package.
@@ -619,14 +620,28 @@ func (m *Manager) consumeTelemetryStream(ctx context.Context) {
 		if err != nil && !errors.Is(err, io.EOF) {
 			m.markStreamError(err)
 		}
-		timer := time.NewTimer(backoff)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
+		if !m.waitForRetry(ctx, backoff) {
 			return
-		case <-timer.C:
 		}
 		backoff = min(backoff*2, 30*time.Second)
+	}
+}
+
+func (m *Manager) waitForRetry(ctx context.Context, delay time.Duration) bool {
+	if m.retryWait != nil {
+		return m.retryWait(ctx, delay)
+	}
+	return waitTelemetryRetry(ctx, delay)
+}
+
+func waitTelemetryRetry(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
 	}
 }
 

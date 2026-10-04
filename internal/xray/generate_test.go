@@ -1,12 +1,21 @@
 package xray
 
 import (
+	"bytes"
 	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
+	"io"
 	"regexp"
 	"testing"
 )
+
+type failedCredentialReader struct{}
+
+func (failedCredentialReader) Read([]byte) (int, error) {
+	return 0, errors.New("random source unavailable")
+}
 
 func TestValidatePublicHost(t *testing.T) {
 	for _, host := range []string{"vpn.example.com", "198.51.100.10", "node-1.example", "2001:db8::1"} {
@@ -52,6 +61,24 @@ func TestGeneratedCredentialsHaveExpectedFormatAndKeyRelationship(t *testing.T) 
 	shortBytes, err := hex.DecodeString(shortID)
 	if err != nil || len(shortBytes) != 8 || shortID == "0000000000000000" {
 		t.Fatalf("NewShortID returned invalid value %q: %v", shortID, err)
+	}
+}
+
+func TestCredentialGeneratorsReturnRandomSourceErrorsAndRetryZeroShortIDs(t *testing.T) {
+	failed := failedCredentialReader{}
+	if _, err := newUUID(failed); err == nil {
+		t.Fatal("newUUID accepted a failed random source")
+	}
+	wantErr := errors.New("key generation unavailable")
+	if _, _, err := newRealityKeyPair(func(io.Reader) (*ecdh.PrivateKey, error) { return nil, wantErr }); !errors.Is(err, wantErr) {
+		t.Fatal("newRealityKeyPair accepted a failed random source")
+	}
+	if _, err := newShortID(failed); err == nil {
+		t.Fatal("newShortID accepted a failed random source")
+	}
+	reader := bytes.NewReader(append(make([]byte, 8), bytes.Repeat([]byte{1}, 8)...))
+	if got, err := newShortID(reader); err != nil || got != "0101010101010101" {
+		t.Fatalf("newShortID() after zero output = %q, %v", got, err)
 	}
 }
 

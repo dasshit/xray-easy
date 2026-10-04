@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/base64"
 	"errors"
 	"io"
@@ -15,6 +16,24 @@ import (
 
 	"xray-easy/internal/domain"
 )
+
+func TestDoctorReportsRequestIDEntropyFailure(t *testing.T) {
+	dataDir, configDir, key := prepareDoctorState(t, true)
+	setDoctorEnvironment(t, key)
+	previous := cryptorand.Reader
+	cryptorand.Reader = failingReader{}
+	t.Cleanup(func() { cryptorand.Reader = previous })
+	var output bytes.Buffer
+	err := runDoctor(context.Background(), dataDir, configDir, &output,
+		&doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running", ActiveRevision: 1}},
+		&doctorHandlerStub{}, &doctorStatsStub{})
+	if err == nil || !strings.Contains(err.Error(), "doctor found 1 failing check") {
+		t.Fatalf("doctor error = %v, want one reported check failure\n%s", err, output.String())
+	}
+	if !strings.Contains(output.String(), "could not create a validation operation ID") {
+		t.Fatalf("doctor omitted request ID entropy failure: %s", output.String())
+	}
+}
 
 type rejectingDoctorWriter struct{}
 

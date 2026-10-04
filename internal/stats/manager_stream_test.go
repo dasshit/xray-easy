@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -255,6 +256,109 @@ func TestApplyStreamUpdatePreservesCachedSourcesWhenTelemetryIsUnavailable(t *te
 	}
 }
 
+func TestApplyStreamUpdateRetainsStaleStatsAndCoalescesNotifications(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	createStatsClient(t, db, "phone", "phone@example.test")
+	manager := NewManager(db, &fakeStatsAPI{})
+	now := time.Now().UTC()
+	stale := now.Add(-onlineWindow - time.Second)
+	manager.latest["phone"] = ClientStats{Online: true, LastSeen: &stale, SourceIPs: []string{"198.51.100.2"}, UploadBytes: 40, UploadBytesPerSecond: 5}
+	manager.latest["awg:ios"] = ClientStats{Online: true, LastSeen: &stale, SourceIPs: []string{"203.0.113.4"}, UploadBytes: 25, UploadBytesPerSecond: 3}
+	notifications, unsubscribe := manager.Subscribe()
+	defer unsubscribe()
+	update := &controllerv1.TelemetryUpdate{Sources: []*controllerv1.TelemetrySourceStatus{
+		nil,
+		{Protocol: "xray", Available: false},
+		{Protocol: "amneziawg", Available: false},
+	}}
+	for range 2 {
+		if err := manager.ApplyStreamUpdate(context.Background(), update); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(notifications) != 1 {
+		t.Fatalf("coalesced notification count = %d, want 1", len(notifications))
+	}
+	if got := manager.Snapshot(); got["phone"].Online || len(got["phone"].SourceIPs) != 0 || got["awg:ios"].Online || len(got["awg:ios"].SourceIPs) != 0 {
+		t.Fatalf("stale clients retained online/source state: %+v", got)
+	}
+	if got := manager.LastError(); got != "xray telemetry is unavailable; amneziawg telemetry is unavailable" {
+		t.Fatalf("combined source error = %q", got)
+	}
+}
+
+func TestApplyStreamUpdateReturnsTrafficSnapshotReadAndWriteFailures(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		statement string
+		wantError string
+	}{
+		{"read", "DROP TABLE traffic_snapshots", "list traffic snapshots"},
+		{"write", "CREATE TRIGGER reject_stream_snapshot BEFORE INSERT ON traffic_snapshots BEGIN SELECT RAISE(ABORT, 'stream snapshot write failed'); END", "save traffic snapshot for phone"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, path := openStatsTestStore(t)
+			createStatsClient(t, db, "phone", "phone@example.test")
+			execStatsSQL(t, path, test.statement)
+			manager := NewManager(db, &fakeStatsAPI{})
+			at := timestamppb.New(time.Now().UTC())
+			update := &controllerv1.TelemetryUpdate{
+				Sources: []*controllerv1.TelemetrySourceStatus{{Protocol: "xray", Available: true, Generation: "runtime", Sequence: 1}},
+				Clients: []*controllerv1.TelemetryClient{{DeviceKey: "phone@example.test", Protocol: "vless", Online: true, LastActivity: at, UploadBytes: 1}},
+			}
+			if err := manager.ApplyStreamUpdate(context.Background(), update); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("ApplyStreamUpdate() error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestApplyStreamUpdateReturnsAWGSnapshotStorageFailures(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		statement string
+		wantError string
+	}{
+		{"read", "DROP TABLE awg_traffic_snapshots", "list AmneziaWG traffic snapshots"},
+		{"write", "CREATE TRIGGER reject_stream_awg BEFORE INSERT ON awg_traffic_snapshots BEGIN SELECT RAISE(ABORT, 'stream AWG write failed'); END", "save AmneziaWG traffic snapshot"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			db, path := openStatsTestStore(t)
+			execStatsSQL(t, path, test.statement)
+			manager := NewManager(db, &fakeStatsAPI{})
+			at := timestamppb.New(time.Now().UTC())
+			update := &controllerv1.TelemetryUpdate{
+				Sources: []*controllerv1.TelemetrySourceStatus{{Protocol: "amneziawg", Available: true, Generation: "awg-runtime", Sequence: 1}},
+				Clients: []*controllerv1.TelemetryClient{{DeviceKey: "awg:ios", Protocol: "amneziawg", Online: true, LastActivity: at, UploadBytes: 1}},
+			}
+			if err := manager.ApplyStreamUpdate(context.Background(), update); err == nil || !strings.Contains(err.Error(), test.wantError) {
+				t.Fatalf("ApplyStreamUpdate() error = %v, want %q", err, test.wantError)
+			}
+		})
+	}
+}
+
+func TestAWGObservationFilteringAndCachedStatusExpiry(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	manager := NewManager(db, &fakeStatsAPI{})
+	now := time.Now().UTC()
+	next := make(map[string]ClientStats)
+	if err := manager.updateAWGObserved(context.Background(), nil, next, now, []domain.AmneziaWGPeerStats{{Name: ""}}); err != nil {
+		t.Fatalf("empty peer name caused a persistence error: %v", err)
+	}
+	stale := now.Add(-onlineWindow - time.Second)
+	preserveAWGStats(next, map[string]ClientStats{
+		"awg:stale": {Online: true, LastSeen: &stale, SourceIPs: []string{"203.0.113.8"}},
+		"vless":     {Online: true, LastSeen: &stale, SourceIPs: []string{"198.51.100.4"}},
+	}, now)
+	if stats := next["awg:stale"]; stats.Online || len(stats.SourceIPs) != 0 {
+		t.Fatalf("stale AWG status was retained: %+v", stats)
+	}
+	if _, ok := next["vless"]; ok {
+		t.Fatal("preserveAWGStats copied a non-AWG profile")
+	}
+}
+
 func TestApplyStreamUpdateMapsAWGPeerAndComputesRates(t *testing.T) {
 	db, _ := openStatsTestStore(t)
 	manager := NewManager(db, &fakeStatsAPI{})
@@ -374,6 +478,30 @@ func TestConsumeTelemetryStreamReportsOpenAndReceiveFailures(t *testing.T) {
 				t.Fatalf("stream failure state = %q", manager.LastError())
 			}
 		})
+	}
+}
+
+func TestConsumeTelemetryStreamAdvancesRetryBackoff(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	stream := &fakeTelemetryStreamOpener{ctxs: make(chan context.Context, 2), openErr: errors.New("controller unavailable")}
+	manager := NewManager(db, &fakeStatsAPI{})
+	manager.stream = stream
+	var delays []time.Duration
+	manager.retryWait = func(_ context.Context, delay time.Duration) bool {
+		delays = append(delays, delay)
+		return len(delays) == 1
+	}
+	manager.consumeTelemetryStream(context.Background())
+	if len(delays) != 2 || delays[0] != time.Second || delays[1] != 2*time.Second {
+		t.Fatalf("telemetry stream retry delays = %v, want [1s 2s]", delays)
+	}
+	if !waitTelemetryRetry(context.Background(), time.Millisecond) {
+		t.Fatal("waitTelemetryRetry did not return after its timer fired")
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if waitTelemetryRetry(canceled, time.Hour) {
+		t.Fatal("waitTelemetryRetry returned true for a canceled context")
 	}
 }
 

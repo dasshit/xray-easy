@@ -2,6 +2,7 @@ package interaction
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -173,5 +174,81 @@ func TestHTTPMiddlewareReportsOperationIDGenerationFailure(t *testing.T) {
 	HTTPMiddleware(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { called = true })).ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
 	if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not create operation identifier") || called || calls != 2 {
 		t.Fatalf("operation ID failure response = %d %q, handler=%v, random reads=%d", response.Code, response.Body.String(), called, calls)
+	}
+}
+
+func TestOutgoingContextAndEnsureIncomingPropagateIDGenerationErrors(t *testing.T) {
+	wantErr := context.Canceled
+	for _, test := range []struct {
+		name string
+		run  func() error
+	}{
+		{name: "outgoing request ID", run: func() error {
+			original := randomRead
+			randomRead = func([]byte) (int, error) { return 0, wantErr }
+			defer func() { randomRead = original }()
+			_, _, err := OutgoingContext(context.Background())
+			return err
+		}},
+		{name: "outgoing operation ID", run: func() error {
+			original := randomRead
+			calls := 0
+			randomRead = func(value []byte) (int, error) {
+				calls++
+				if calls == 2 {
+					return 0, wantErr
+				}
+				for i := range value {
+					value[i] = byte(i + 1)
+				}
+				return len(value), nil
+			}
+			defer func() { randomRead = original }()
+			_, _, err := OutgoingContext(context.Background())
+			return err
+		}},
+		{name: "incoming request ID", run: func() error {
+			original := randomRead
+			randomRead = func([]byte) (int, error) { return 0, wantErr }
+			defer func() { randomRead = original }()
+			_, _, err := EnsureIncoming(context.Background())
+			return err
+		}},
+		{name: "incoming operation ID", run: func() error {
+			original := randomRead
+			calls := 0
+			randomRead = func(value []byte) (int, error) {
+				calls++
+				if calls == 2 {
+					return 0, wantErr
+				}
+				for i := range value {
+					value[i] = byte(i + 1)
+				}
+				return len(value), nil
+			}
+			defer func() { randomRead = original }()
+			_, _, err := EnsureIncoming(context.Background())
+			return err
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if err := test.run(); !errors.Is(err, wantErr) {
+				t.Fatalf("ID generation error = %v, want %v", err, wantErr)
+			}
+		})
+	}
+}
+
+func TestIncomingTraceRejectsDuplicateMetadata(t *testing.T) {
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		attemptMetadataKey, "2", attemptMetadataKey, "3",
+		revisionMetadataKey, "4", revisionMetadataKey, "5",
+	))
+	if got := IncomingAttempt(ctx); got != 0 {
+		t.Errorf("IncomingAttempt with duplicate values = %d, want 0", got)
+	}
+	if got := IncomingStateRevision(ctx); got != 0 {
+		t.Errorf("IncomingStateRevision with duplicate values = %d, want 0", got)
 	}
 }

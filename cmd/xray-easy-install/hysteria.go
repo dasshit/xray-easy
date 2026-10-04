@@ -108,27 +108,7 @@ func updateHysteriaConfiguration(root string, cfg configuration) error {
 			lines = append(lines, key+"="+updates[key])
 		}
 	}
-	file, err := os.CreateTemp(root, ".env-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err := file.Chmod(0o600); err != nil {
-		file.Close()
-		return err
-	}
-	if _, err := file.WriteString(strings.Join(lines, "\n") + "\n"); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Sync(); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return writePrivateAtomic(path, ".env-*", []byte(strings.Join(lines, "\n")+"\n"), 0o600, os.Rename)
 }
 
 // importHysteriaCertificate performs the operation represented by its name.
@@ -185,21 +165,5 @@ func importHysteriaCertificate(root string, cfg configuration) (bool, error) {
 
 // writeImportedFile writes the supplied value.
 func writeImportedFile(path string, content []byte, mode os.FileMode) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".hysteria-import-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	if err := file.Chmod(mode); err != nil {
-		file.Close()
-		return err
-	}
-	if _, err := file.Write(content); err != nil {
-		file.Close()
-		return err
-	}
-	if err := file.Close(); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
+	return writePrivateAtomic(path, ".hysteria-import-*", content, mode, os.Rename)
 }

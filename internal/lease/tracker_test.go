@@ -307,6 +307,9 @@ func TestTrackerNilAndEmptyStateHelpersAreSafe(t *testing.T) {
 		t.Fatal("nil tracker returned state or a policy decision")
 	}
 	tracker = testTracker(t)
+	if tracker.decisions(now, false) != nil {
+		t.Fatal("unavailable tracker made a decision")
+	}
 	deadline, scheduled = tracker.NextDeadline()
 	if tracker.Due(now) != nil || !deadline.IsZero() || scheduled || len(tracker.profiles()) != 0 || len(tracker.activeFor(profileKey{})) != 0 {
 		t.Fatal("empty tracker reported active policy state")
@@ -318,6 +321,34 @@ func TestTrackerNilAndEmptyStateHelpersAreSafe(t *testing.T) {
 		t.Fatalf("empty schedule decision = %+v, %t", decision, ok)
 	}
 	tracker.Complete(LeaseKey{}, true, now)
+}
+
+func TestTrackerSuppressesEarlyThirdLeaseRetryAndGuardsClosedOrPendingState(t *testing.T) {
+	now := time.Date(2026, 10, 3, 12, 0, 0, 0, time.UTC)
+	tracker := testTracker(t)
+	leases := []string{"192.0.2.1", "192.0.2.2", "192.0.2.3"}
+	tracker.Apply(leaseSnapshot("runtime-a", 1, now, leases...), now)
+	first := LeaseKey{Protocol: "vless", Email: "profile@xray-easy", SourceIP: leases[0]}
+	tracker.Complete(first, false, now)
+	if got := tracker.Due(now); len(got) != 0 {
+		t.Fatalf("third lease retry was scheduled before retryAt: %+v", got)
+	}
+	active := tracker.activeFor(profileFor(first))
+	state := tracker.leases[first]
+	state.pending = true
+	if _, ok := tracker.scheduleOldest(active, "test", now.Add(time.Hour)); ok {
+		t.Fatal("pending lease was scheduled again")
+	}
+	state.pending = false
+	state.closedAt = now
+	if _, ok := tracker.scheduleOldest(active, "test", now.Add(time.Hour)); ok {
+		t.Fatal("closed lease was scheduled again")
+	}
+	state.closedAt = time.Time{}
+	state.retryAt = now.Add(time.Hour)
+	if _, ok := tracker.scheduleOldest(active, "test", now); ok {
+		t.Fatal("lease before retryAt was scheduled")
+	}
 }
 
 func TestTrackerObservationValidationRejectsMalformedEmailAndFutureTimestamp(t *testing.T) {

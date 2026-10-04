@@ -130,6 +130,45 @@ func TestRenderServerConfigSeparatesProtocolUsersAndShortIDs(t *testing.T) {
 	}
 }
 
+func TestRenderServerConfigIncludesStringHysteriaMasquerade(t *testing.T) {
+	settings := validTestSettings()
+	settings.Hysteria2Enabled = true
+	settings.HysteriaMasqueradeType = "string"
+	settings.HysteriaMasqueradeString = "https://cover.example.test/"
+	data, err := RenderServerConfig(settings, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var config struct {
+		Inbounds []struct {
+			Tag            string `json:"tag"`
+			StreamSettings struct {
+				HysteriaSettings struct {
+					Masquerade *struct {
+						Type       string `json:"type"`
+						Content    string `json:"content"`
+						StatusCode int    `json:"statusCode"`
+					} `json:"masquerade"`
+				} `json:"hysteriaSettings"`
+			} `json:"streamSettings"`
+		} `json:"inbounds"`
+	}
+	if err := json.Unmarshal(data, &config); err != nil {
+		t.Fatal(err)
+	}
+	for _, inbound := range config.Inbounds {
+		if inbound.Tag != HysteriaInboundTag {
+			continue
+		}
+		masquerade := inbound.StreamSettings.HysteriaSettings.Masquerade
+		if masquerade == nil || masquerade.Type != "string" || masquerade.Content != settings.HysteriaMasqueradeString || masquerade.StatusCode != 404 {
+			t.Fatalf("Hysteria masquerade = %+v, want configured string response", masquerade)
+		}
+		return
+	}
+	t.Fatal("Hysteria inbound was not rendered")
+}
+
 func TestRenderAndBuildShadowsocksProfile(t *testing.T) {
 	settings := validTestSettings()
 	settings.ShadowsocksEnabled = true
@@ -459,6 +498,60 @@ func TestRenderServerConfigRejectsInvalidOptionalProtocolClients(t *testing.T) {
 			clients := []Client{}
 			test.change(&settings, &clients)
 			if _, err := RenderServerConfig(settings, clients); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("RenderServerConfig() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
+func TestRenderServerConfigCoversOptionalProtocolSortsAndValidationBranches(t *testing.T) {
+	base := validTestSettings()
+	base.Hysteria2Enabled = true
+	base.VMessPublicPort = 9443
+	base.ShadowsocksEnabled = true
+	base.ShadowsocksPublicPort = 8388
+	base.ShadowsocksMethod = domain.ShadowsocksMethod2022AES256GCM
+	base.ShadowsocksNetwork = domain.ShadowsocksNetworkTCPUDP
+	base.ShadowsocksServerKey = testShadowsocks2022Key(1)
+	base.ShadowsocksBootstrapUserKey = testShadowsocks2022Key(2)
+	base.TrojanEnabled = true
+	base.TrojanPublicPort = 10443
+	clients := []Client{
+		{ID: "v-b", Protocol: domain.ProtocolVMess, UUID: "uuid-b", Email: "v-b@xray-easy", VMessEnabled: true},
+		{ID: "v-a", Protocol: domain.ProtocolVMess, UUID: "uuid-a", Email: "v-a@xray-easy", VMessEnabled: true},
+		{ID: "h-b", Protocol: domain.ProtocolHysteria2, Email: "h-b@xray-easy", HysteriaEnabled: true, HysteriaAuth: "auth-b"},
+		{ID: "h-a", Protocol: domain.ProtocolHysteria2, Email: "h-a@xray-easy", HysteriaEnabled: true, HysteriaAuth: "auth-a"},
+		{ID: "s-b", Protocol: domain.ProtocolShadowsocks, Email: "s-b@xray-easy", ShadowsocksEnabled: true, ShadowsocksPassword: testShadowsocks2022Key(4)},
+		{ID: "s-a", Protocol: domain.ProtocolShadowsocks, Email: "s-a@xray-easy", ShadowsocksEnabled: true, ShadowsocksPassword: testShadowsocks2022Key(3)},
+		{ID: "t-b", Protocol: domain.ProtocolTrojan, Email: "t-b@xray-easy", TrojanEnabled: true, TrojanPassword: "secret-b"},
+		{ID: "t-a", Protocol: domain.ProtocolTrojan, Email: "t-a@xray-easy", TrojanEnabled: true, TrojanPassword: "secret-a"},
+	}
+	if _, err := RenderServerConfig(base, clients); err != nil {
+		t.Fatalf("RenderServerConfig() with all active protocol families: %v", err)
+	}
+
+	for _, test := range []struct {
+		name     string
+		settings Settings
+		clients  []Client
+		want     string
+	}{
+		{"empty reserved ID", func() Settings { s := base; s.ReservedShortIDs = []string{""}; return s }(), nil, "reserved REALITY short ID is invalid"},
+		{"reserved sentinel ID", func() Settings { s := base; s.ReservedShortIDs = []string{emptyShortID}; return s }(), nil, "reserved REALITY short ID is invalid"},
+		{"duplicate reserved ID", func() Settings {
+			s := base
+			s.ReservedShortIDs = []string{"0123456789abcdef", "0123456789abcdef"}
+			return s
+		}(), nil, "REALITY short IDs must be unique"},
+		{"VMess missing email", base, []Client{{ID: "v", Protocol: domain.ProtocolVMess, UUID: "uuid", VMessEnabled: true}}, "missing VMess credentials"},
+		{"Shadowsocks missing port", func() Settings { s := base; s.ShadowsocksPublicPort = 0; return s }(), nil, "Shadowsocks public port"},
+		{"Shadowsocks invalid server key", func() Settings { s := base; s.ShadowsocksServerKey = "invalid"; return s }(), nil, "invalid Shadowsocks 2022 server key"},
+		{"Shadowsocks invalid bootstrap key", func() Settings { s := base; s.ShadowsocksBootstrapUserKey = ""; return s }(), nil, "invalid Shadowsocks 2022 bootstrap user key"},
+		{"Trojan missing port", func() Settings { s := base; s.TrojanPublicPort = 0; return s }(), nil, "Trojan public port"},
+		{"Trojan missing email", base, []Client{{ID: "t", Protocol: domain.ProtocolTrojan, TrojanEnabled: true, TrojanPassword: "secret"}}, "missing Trojan credentials"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := RenderServerConfig(test.settings, test.clients); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("RenderServerConfig() error = %v, want %q", err, test.want)
 			}
 		})

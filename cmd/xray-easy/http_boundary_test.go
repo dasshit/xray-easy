@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"xray-easy/internal/stats"
 )
 
 type failingStreamWriter struct {
@@ -14,6 +18,8 @@ type failingStreamWriter struct {
 	failAt   int
 	status   int
 	writeErr error
+	flushes  int
+	onFlush  func(int)
 }
 
 func (w *failingStreamWriter) Header() http.Header    { return w.header }
@@ -25,7 +31,12 @@ func (w *failingStreamWriter) Write(data []byte) (int, error) {
 	}
 	return len(data), nil
 }
-func (*failingStreamWriter) Flush() {}
+func (w *failingStreamWriter) Flush() {
+	w.flushes++
+	if w.onFlush != nil {
+		w.onFlush(w.flushes)
+	}
+}
 
 func TestHTTPBoundaryValidationAndProfileRenderingErrors(t *testing.T) {
 	t.Parallel()
@@ -97,5 +108,89 @@ func TestSSEStopsOnStatsAndStatusWriteFailures(t *testing.T) {
 				t.Fatalf("failed stream left %d event subscriptions", remaining)
 			}
 		})
+	}
+}
+
+func TestSSEStopsOnStreamedStatsAndStatusWriteFailures(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		wake func(*testing.T, testApp, *failingStreamWriter)
+	}{
+		{
+			name: "stats update",
+			wake: func(t *testing.T, app testApp, writer *failingStreamWriter) {
+				manager := stats.NewManager(app.server.store, fixedStatsAPI{})
+				app.server.stats = manager
+				writer.onFlush = func(flush int) {
+					if flush == 2 {
+						if err := manager.Poll(context.Background()); err != nil {
+							t.Errorf("publish stats notification: %v", err)
+						}
+					}
+				}
+			},
+		},
+		{
+			name: "status event",
+			wake: func(_ *testing.T, app testApp, writer *failingStreamWriter) {
+				writer.onFlush = func(flush int) {
+					if flush == 2 {
+						app.server.notifyEvents()
+					}
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			app := newTestApp(t, true)
+			writer := &failingStreamWriter{header: make(http.Header), failAt: 3, writeErr: errors.New("client disconnected")}
+			test.wake(t, app, writer)
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			request := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+			request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+			newMux(app.server).ServeHTTP(writer, request)
+			if writer.writes != 3 {
+				t.Fatalf("SSE writes = %d, want third event write to fail", writer.writes)
+			}
+		})
+	}
+}
+
+func TestSSEStopsWhenSessionExpiresDuringStream(t *testing.T) {
+	app := newTestApp(t, true)
+	manager := stats.NewManager(app.server.store, fixedStatsAPI{})
+	app.server.stats = manager
+	writer := &failingStreamWriter{header: make(http.Header)}
+	writer.onFlush = func(flush int) {
+		if flush == 2 {
+			if err := app.server.store.DeleteAllSessions(t.Context(), app.admin.ID); err != nil {
+				t.Errorf("expire SSE administrator session: %v", err)
+				return
+			}
+			if err := manager.Poll(t.Context()); err != nil {
+				t.Errorf("publish stats after session expiry: %v", err)
+			}
+		}
+	}
+	request := httptest.NewRequest(http.MethodGet, "/api/events", nil)
+	request.AddCookie(&http.Cookie{Name: "xray_easy_session", Value: app.token})
+	newMux(app.server).ServeHTTP(writer, request)
+	if writer.writes != 2 {
+		t.Fatalf("SSE writes after session expiry = %d, want only initial stats/status", writer.writes)
+	}
+}
+
+func TestWriteSSEEventHandlesEncodingAndWriteErrors(t *testing.T) {
+	writer := &failingStreamWriter{header: make(http.Header), failAt: 1, writeErr: errors.New("stream closed")}
+	if err := writeSSEEvent(writer, "bad", make(chan int)); err == nil || writer.writes != 0 {
+		t.Fatalf("unencodable SSE payload result = %v, writes=%d", err, writer.writes)
+	}
+	if err := writeSSEEvent(writer, "stats", map[string]bool{"online": true}); !errors.Is(err, writer.writeErr) || writer.writes != 1 {
+		t.Fatalf("failed SSE write result = %v, writes=%d", err, writer.writes)
+	}
+	writer = &failingStreamWriter{header: make(http.Header)}
+	if err := writeSSEEvent(writer, "status", map[string]string{"state": "running"}); err != nil || writer.writes != 1 {
+		t.Fatalf("successful SSE event result = %v, writes=%d", err, writer.writes)
 	}
 }

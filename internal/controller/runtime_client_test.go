@@ -126,12 +126,16 @@ func TestAWGClientRoutesTypedOperations(t *testing.T) {
 	if err != nil || len(peers) != 1 || peers[0].Name != "phone" || peers[0].CreatedAt != createdAt {
 		t.Fatalf("ListPeers() = %+v, %v", peers, err)
 	}
-	created, err := awg.CreatePeer(context.Background(), "phone", nil)
+	expiresAt := createdAt.Add(24 * time.Hour)
+	created, err := awg.CreatePeer(context.Background(), "phone", &expiresAt)
 	if err != nil || created.IPv4 != "10.0.0.2" {
 		t.Fatalf("CreatePeer() = %+v, %v", created, err)
 	}
 	if _, err := awg.SetPeerEnabled(context.Background(), "phone", true); err != nil {
 		t.Fatalf("SetPeerEnabled() = %v", err)
+	}
+	if _, err := awg.SetPeerExpiry(context.Background(), "phone", &expiresAt); err != nil {
+		t.Fatalf("SetPeerExpiry(set) = %v", err)
 	}
 	if _, err := awg.SetPeerExpiry(context.Background(), "phone", nil); err != nil {
 		t.Fatalf("SetPeerExpiry(clear) = %v", err)
@@ -180,11 +184,23 @@ func TestAWGClientRejectsInvalidTypedResponses(t *testing.T) {
 	for _, response := range []*controllerv1.ListAmneziaWGPeersResponse{
 		{Peers: []*controllerv1.AmneziaWGPeer{nil}},
 		{Peers: []*controllerv1.AmneziaWGPeer{{Name: "phone"}}},
+		{Peers: []*controllerv1.AmneziaWGPeer{{PublicKey: "key", Ipv4: "10.0.0.2", Ipv6: "fd00::2"}}},
+		{Peers: []*controllerv1.AmneziaWGPeer{{Name: "phone", Ipv4: "10.0.0.2", Ipv6: "fd00::2"}}},
+		{Peers: []*controllerv1.AmneziaWGPeer{{Name: "phone", PublicKey: "key", Ipv6: "fd00::2"}}},
+		{Peers: []*controllerv1.AmneziaWGPeer{{Name: "phone", PublicKey: "key", Ipv4: "10.0.0.2"}}},
 		{Peers: []*controllerv1.AmneziaWGPeer{{Name: "phone", PublicKey: "key", Ipv4: "10.0.0.2", Ipv6: "fd00::2", CreatedAt: &timestamppb.Timestamp{Seconds: 999999999999}}}},
+		{Peers: []*controllerv1.AmneziaWGPeer{{Name: "phone", PublicKey: "key", Ipv4: "10.0.0.2", Ipv6: "fd00::2", CreatedAt: timestamppb.Now(), ExpiresAt: &timestamppb.Timestamp{Seconds: 999999999999}}}},
 	} {
 		if _, err := NewClientWithConn(&responseInvoker{responses: map[string]proto.Message{"/" + RPCServiceName + "/ListAmneziaWGPeers": response}}, "token").AWG().ListPeers(context.Background()); err == nil {
 			t.Errorf("invalid AWG peer accepted: %+v", response)
 		}
+	}
+	peer := &controllerv1.AmneziaWGPeer{
+		Name: "phone", PublicKey: "key", Ipv4: "10.0.0.2", Ipv6: "fd00::2",
+		CreatedAt: timestamppb.Now(), ExpiresAt: timestamppb.New(time.Now().UTC().Add(time.Hour)), Disabled: true,
+	}
+	if decoded, err := fromProtoPeer(peer); err != nil || decoded.ExpiresAt == nil || !decoded.Disabled {
+		t.Fatalf("fromProtoPeer(valid expiry) = %+v, %v", decoded, err)
 	}
 	for _, response := range []*controllerv1.AmneziaWGPeerStatsResponse{
 		{Peers: []*controllerv1.AmneziaWGPeerStats{nil}},
@@ -222,5 +238,14 @@ func TestAWGClientRejectsInvalidTypedResponses(t *testing.T) {
 	}
 	if _, err := NewClientWithConn(&responseInvoker{errors: map[string]error{"/" + RPCServiceName + "/ExportAmneziaWGBackup": errors.New("closed")}}, "token").AWG().ExportBackup(context.Background()); err == nil {
 		t.Fatal("AWG backup RPC failure ignored")
+	}
+	for method, call := range map[string]func(*AWGClient) error{
+		"ListAmneziaWGPeers":    func(client *AWGClient) error { _, err := client.ListPeers(context.Background()); return err },
+		"GetAmneziaWGPeerStats": func(client *AWGClient) error { _, err := client.PeerStats(context.Background()); return err },
+	} {
+		invoker := &responseInvoker{errors: map[string]error{"/" + RPCServiceName + "/" + method: status.Error(codes.Unavailable, "offline")}}
+		if err := call(NewClientWithConn(invoker, "token").AWG()); status.Code(err) != codes.Unavailable {
+			t.Errorf("%s error = %v", method, err)
+		}
 	}
 }

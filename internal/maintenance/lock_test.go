@@ -80,6 +80,16 @@ func TestAcquireReturnsLockFileOpenError(t *testing.T) {
 	}
 }
 
+func TestAcquireClosesFileWhenLockOperationFails(t *testing.T) {
+	wantErr := errors.New("lock operation failed")
+	_, err := acquire(context.Background(), filepath.Join(t.TempDir(), "maintenance.lock"), func(int, int) error {
+		return wantErr
+	})
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("acquire() error = %v, want %v", err, wantErr)
+	}
+}
+
 func TestCloseReportsUnlockError(t *testing.T) {
 	file, err := os.OpenFile(filepath.Join(t.TempDir(), "lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {

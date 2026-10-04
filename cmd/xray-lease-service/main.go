@@ -34,12 +34,43 @@ const (
 // leaseHealthCheck performs the health probe selected by the CLI healthcheck command.
 var leaseHealthCheck = checkHealth
 
+// leaseServiceWorker is the worker contract needed by the process entrypoint.
+type leaseServiceWorker interface {
+	healthProvider
+	Run(context.Context) error
+}
+
+// newLeaseWorker constructs the lease policy worker.
+var newLeaseWorker = defaultNewLeaseWorker
+
+// defaultNewLeaseWorker creates the production lease policy worker.
+func defaultNewLeaseWorker(client lease.Controller, config lease.Config, logger *slog.Logger) (leaseServiceWorker, error) {
+	return lease.NewService(client, config, logger)
+}
+
+// leaseSignalContext is the shutdown signal context factory.
+var leaseSignalContext = defaultLeaseSignalContext
+
+// defaultLeaseSignalContext returns a context canceled by process termination signals.
+func defaultLeaseSignalContext() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+}
+
+// runLeaseHealthServer serves the private readiness endpoint.
+var runLeaseHealthServer = defaultRunLeaseHealthServer
+
+// defaultRunLeaseHealthServer runs the HTTP readiness server.
+func defaultRunLeaseHealthServer(server *http.Server) error { return server.ListenAndServe() }
+
+// exitProcess terminates the process after a startup failure.
+var exitProcess = os.Exit
+
 // main runs the lease service or its container health check.
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		exitProcess(1)
 	}
 }
 
@@ -51,7 +82,7 @@ func run(args []string) error {
 	if len(args) > 1 || len(args) == 1 && args[0] != "serve" {
 		return errors.New("usage: xray-lease-service [serve|healthcheck]")
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := leaseSignalContext()
 	defer stop()
 	client, err := controller.Dial(envOr("XRAY_CONTROLLER_ADDR", defaultControllerAddress), envOr("XRAY_LEASE_TOKEN_FILE", defaultControllerToken))
 	if err != nil {
@@ -62,7 +93,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	worker, err := lease.NewService(client, config, slog.Default())
+	worker, err := newLeaseWorker(client, config, slog.Default())
 	if err != nil {
 		return fmt.Errorf("initialize lease policy: %w", err)
 	}
@@ -72,7 +103,7 @@ func run(args []string) error {
 		ReadHeaderTimeout: 2 * time.Second,
 	}
 	serverErr := make(chan error, 1)
-	go func() { serverErr <- server.ListenAndServe() }()
+	go func() { serverErr <- runLeaseHealthServer(server) }()
 	workerErr := make(chan error, 1)
 	go func() { workerErr <- worker.Run(ctx) }()
 	slog.Info("lease service started", "service", "xray-lease-service", "health_address", server.Addr, "max_active_leases", config.MaxActiveLeases, "grace_period", config.GracePeriod.String())

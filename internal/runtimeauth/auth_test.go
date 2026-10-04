@@ -15,11 +15,13 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
 )
 
 type authTestServerStream struct {
 	ctx     context.Context
 	request proto.Message
+	recvErr error
 }
 
 type failingAuthRandomSource struct{}
@@ -34,12 +36,28 @@ func (s *authTestServerStream) SetTrailer(metadata.MD)       {}
 func (s *authTestServerStream) Context() context.Context     { return s.ctx }
 func (s *authTestServerStream) SendMsg(any) error            { return nil }
 func (s *authTestServerStream) RecvMsg(message any) error {
+	if s.recvErr != nil {
+		return s.recvErr
+	}
 	target, ok := message.(proto.Message)
 	if !ok {
 		return io.ErrUnexpectedEOF
 	}
 	proto.Merge(target, s.request)
 	return nil
+}
+
+func TestAuthenticatedServerStreamContextAndReceiveErrors(t *testing.T) {
+	ctx := context.WithValue(context.Background(), struct{}{}, "base")
+	stream := &authenticatedServerStream{ServerStream: &authTestServerStream{ctx: ctx}}
+	if stream.Context() != ctx {
+		t.Fatal("unauthorized stream Context() did not delegate to the wrapped stream")
+	}
+	wantErr := errors.New("receive failed")
+	stream.ServerStream = &authTestServerStream{ctx: ctx, recvErr: wantErr}
+	if err := stream.RecvMsg(new(emptypb.Empty)); !errors.Is(err, wantErr) {
+		t.Fatalf("RecvMsg() error = %v, want %v", err, wantErr)
+	}
 }
 
 func TestStreamInterceptorAuthenticatesInitialProtobufRequest(t *testing.T) {
@@ -105,6 +123,16 @@ func TestSignContextReportsRandomNonceFailure(t *testing.T) {
 	t.Cleanup(func() { rand.Reader = original })
 	if _, err := SignContext(context.Background(), []byte(strings.Repeat("t", 32)), "id", "/runtime/Health", &emptypb.Empty{}); err == nil || !strings.Contains(err.Error(), "generate runtime authentication nonce") {
 		t.Fatalf("SignContext() = %v; want random nonce error", err)
+	}
+}
+
+func TestSignContextReportsMarshalFailureAndShortToken(t *testing.T) {
+	if _, err := SignContext(context.Background(), []byte("short"), "id", "/runtime/Health", &emptypb.Empty{}); err == nil || !strings.Contains(err.Error(), "at least 32 bytes") {
+		t.Fatalf("SignContext() short-token error = %v", err)
+	}
+	invalidUTF8 := &wrapperspb.StringValue{Value: string([]byte{0xff})}
+	if _, err := SignContext(context.Background(), []byte(strings.Repeat("t", 32)), "id", "/runtime/Health", invalidUTF8); err == nil || !strings.Contains(err.Error(), "marshal runtime authentication request") {
+		t.Fatalf("SignContext() marshal error = %v", err)
 	}
 }
 
@@ -248,5 +276,40 @@ func TestAuthenticatorRejectsMalformedRequestsAndExpiresNonces(t *testing.T) {
 	secondMD, _ := metadata.FromOutgoingContext(second)
 	if _, err := authenticator.authenticate(metadata.NewIncomingContext(context.Background(), secondMD), request, "/runtime/Health"); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAuthenticatorRejectsMissingNonceOrSignatureAndMarshalFailures(t *testing.T) {
+	authenticator, err := NewAuthenticator([]byte(strings.Repeat("a", 32)), func(string, string) bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := &emptypb.Empty{}
+	for name, metadataValues := range map[string]metadata.MD{
+		"missing nonce":     metadata.Pairs("x-xray-operation", "id", "x-xray-signature", strings.Repeat("00", 32)),
+		"missing signature": metadata.Pairs("x-xray-operation", "id", "x-xray-nonce", "00112233445566778899aabbccddeeff"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := authenticator.authenticate(metadata.NewIncomingContext(context.Background(), metadataValues), request, "/runtime/Health"); err == nil {
+				t.Fatal("request with missing metadata was accepted")
+			}
+		})
+	}
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"x-xray-operation", "id",
+		"x-xray-nonce", "00112233445566778899aabbccddeeff",
+		"x-xray-signature", strings.Repeat("00", 32),
+	))
+	invalidUTF8 := &wrapperspb.StringValue{Value: string([]byte{0xff})}
+	if _, err := authenticator.authenticate(ctx, invalidUTF8, "/runtime/Health"); err == nil || !strings.Contains(err.Error(), "marshal authenticated request") {
+		t.Fatalf("authenticate() marshal error = %v", err)
+	}
+	shortSignature := metadata.NewIncomingContext(context.Background(), metadata.Pairs(
+		"x-xray-operation", "id",
+		"x-xray-nonce", "00112233445566778899aabbccddeeff",
+		"x-xray-signature", "00",
+	))
+	if _, err := authenticator.authenticate(shortSignature, request, "/runtime/Health"); err == nil || !strings.Contains(err.Error(), "invalid request signature") {
+		t.Fatalf("authenticate() signature-length error = %v", err)
 	}
 }

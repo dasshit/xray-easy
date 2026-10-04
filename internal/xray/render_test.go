@@ -2,11 +2,32 @@ package xray
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"strings"
 	"testing"
 	"time"
 
 	"xray-easy/internal/domain"
 )
+
+type errorWriter struct{ err error }
+
+func (w errorWriter) Write([]byte) (int, error) { return 0, w.err }
+
+func TestEncodeIndentedJSONReturnsWriterErrors(t *testing.T) {
+	wantErr := errors.New("writer unavailable")
+	if err := encodeIndentedJSONTo(map[string]string{"value": "test"}, errorWriter{err: wantErr}); !errors.Is(err, wantErr) {
+		t.Fatalf("encodeIndentedJSONTo() error = %v, want %v", err, wantErr)
+	}
+	if _, err := encodeIndentedJSONWith(nil, func(any, io.Writer) error { return wantErr }); !errors.Is(err, wantErr) {
+		t.Fatalf("encodeIndentedJSONWith() error = %v, want %v", err, wantErr)
+	}
+	encoded, err := encodeIndentedJSON(map[string]string{"value": "<test>"})
+	if err != nil || strings.Contains(string(encoded), "\\u003c") {
+		t.Fatalf("encodeIndentedJSON() = %q, %v; HTML characters should remain unescaped", encoded, err)
+	}
+}
 
 func TestRenderServerConfigKeepsRealityShortIDsInSyncWithActiveClients(t *testing.T) {
 	config, err := RenderServerConfig(Settings{

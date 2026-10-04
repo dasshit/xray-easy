@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -918,7 +919,7 @@ func (s *Store) FindAdmin(ctx context.Context, username string) (Admin, error) {
 // CreateSession creates the requested value.
 func (s *Store) CreateSession(ctx context.Context, adminID string, ttl time.Duration) (string, error) {
 	raw := make([]byte, 32)
-	if _, err := rand.Read(raw); err != nil {
+	if _, err := io.ReadFull(rand.Reader, raw); err != nil {
 		return "", err
 	}
 	token := hex.EncodeToString(raw)
@@ -1376,9 +1377,6 @@ func clientProtocolStorage(client domain.Client, uuid string) (string, string, i
 		}
 	case domain.ProtocolVMess:
 		vmessEnabled, vmessRevoked = client.Enabled, client.Revoked
-		if !vmessEnabled && !vmessRevoked && client.Enabled && !client.Revoked {
-			vmessEnabled = true
-		}
 	case domain.ProtocolShadowsocks:
 		shadowsocksEnabled, shadowsocksRevoked = client.ShadowsocksEnabled, client.ShadowsocksRevoked
 		if !shadowsocksEnabled && !shadowsocksRevoked && client.Enabled && !client.Revoked {
@@ -1851,7 +1849,12 @@ func (s *Store) CreateApplyOperation(ctx context.Context, operation ApplyOperati
 // is deliberately preserved by RestoreFrom so restoring an older backup does
 // not lower the revision high-water mark held by the embedded Xray runtime.
 func (s *Store) CreateApplyOperationWithNextRevision(ctx context.Context, operation ApplyOperation) (int64, error) {
-	tx, err := s.db.BeginTx(ctx, nil)
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
@@ -1869,6 +1872,13 @@ SET revision = MAX(revision, (SELECT COALESCE(MAX(revision), 0) FROM apply_opera
 		return 0, err
 	}
 	if err := tx.Commit(); err != nil {
+		// SQLite leaves a transaction active after some COMMIT failures (for
+		// example, a deferred foreign-key violation). The sql.Tx is marked done
+		// even when the driver returns that error, so explicitly roll back on
+		// the pinned connection before returning it to the pool.
+		if _, rollbackErr := conn.ExecContext(context.Background(), `ROLLBACK`); rollbackErr != nil {
+			return 0, errors.Join(err, fmt.Errorf("rollback failed apply transaction: %w", rollbackErr))
+		}
 		return 0, err
 	}
 	return revision, nil
@@ -1982,7 +1992,7 @@ func boolInt(value bool) int {
 // randomID performs the operation represented by its name.
 func randomID() (string, error) {
 	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
+	if _, err := io.ReadFull(rand.Reader, b); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
