@@ -17,6 +17,7 @@ import HysteriaSettingsPanel from './presentation/HysteriaSettingsPanel.vue'
 import CreateProfileModal from './presentation/CreateProfileModal.vue'
 import ProfileDeliveryModal from './presentation/ProfileDeliveryModal.vue'
 import ProfileExpiryModal from './presentation/ProfileExpiryModal.vue'
+import LiquidGlassFilter from './presentation/LiquidGlassFilter.vue'
 import { vModalFocus } from './presentation/modalFocus'
 
 const setup = ref<SetupStatus | null>(null)
@@ -102,6 +103,29 @@ const loggingSettingsChanged = computed(() => settings.value !== null && logLeve
 let events: EventSubscription | null = null
 let reconnectTimer: number | null = null
 let disposed = false
+let glassPointerSurface: HTMLElement | null = null
+
+/** Keep the moving glass highlight attached to the active button or modal surface. */
+function handleGlassPointerMove(event: PointerEvent) {
+  const target = event.target
+  const surface = target instanceof Element ? target.closest('button, .modal') : null
+  if (!(surface instanceof HTMLElement) || (surface instanceof HTMLButtonElement && surface.disabled) || event.pointerType === 'touch') {
+    glassPointerSurface?.style.removeProperty('--glass-pointer-x')
+    glassPointerSurface?.style.removeProperty('--glass-pointer-y')
+    glassPointerSurface = null
+    return
+  }
+  const rect = surface.getBoundingClientRect()
+  surface.style.setProperty('--glass-pointer-x', `${((event.clientX - rect.left) / rect.width) * 100}%`)
+  surface.style.setProperty('--glass-pointer-y', `${((event.clientY - rect.top) / rect.height) * 100}%`)
+  glassPointerSurface = surface
+}
+
+function clearGlassPointer() {
+  glassPointerSurface?.style.removeProperty('--glass-pointer-x')
+  glassPointerSurface?.style.removeProperty('--glass-pointer-y')
+  glassPointerSurface = null
+}
 
 /**
  * Return the configured application gateway or fail when dependency injection is missing.
@@ -631,8 +655,8 @@ function closeActiveModal() {
  */
 function handleKeydown(event: KeyboardEvent) { if (event.key === 'Escape') closeActiveModal() }
 
-onMounted(() => { disposed = false; applyTheme(theme.value); window.addEventListener('keydown', handleKeydown); void load() })
-onBeforeUnmount(() => { disposed = true; stopEvents(); window.removeEventListener('keydown', handleKeydown) })
+onMounted(() => { disposed = false; applyTheme(theme.value); window.addEventListener('keydown', handleKeydown); window.addEventListener('pointermove', handleGlassPointerMove, { passive: true }); void load() })
+onBeforeUnmount(() => { disposed = true; stopEvents(); clearGlassPointer(); window.removeEventListener('keydown', handleKeydown); window.removeEventListener('pointermove', handleGlassPointerMove) })
 /**
  * Return the localized confirmation title for a device action.
  * @param action - The action to describe, when one is selected.
@@ -649,6 +673,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
 
 <template>
   <main class="shell" :aria-busy="busy">
+    <LiquidGlassFilter />
     <header class="topbar">
       <div class="brand"><img class="brand-mark" :src="theme === 'dark' ? '/favicon-dark.svg' : '/favicon-light.svg'" alt="" aria-hidden="true" /><div class="brand-copy"><strong>{{ t().title }}</strong><span>{{ t().panelSubtitle }}</span></div></div>
       <div class="topbar-actions">
@@ -853,9 +878,33 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
 
       <CreateProfileModal v-if="createModalOpen" :language="language" :busy="busy" :hysteria-available="hysteriaAvailable" :vmess-available="vmessAvailable" :shadowsocks-available="shadowsocksAvailable" :trojan-available="trojanAvailable" :awg-available="amneziaWGAvailable" @cancel="closeCreateModal" @submit="createDevice" @open-settings="openHysteriaSettings" />
       <ProfileExpiryModal v-if="expiryClient" :client="expiryClient" :language="language" :busy="busy" @close="expiryClient = null" @save="saveClientExpiry" />
-      <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction"><div v-modal-focus class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div><p>{{ actionTitle(clientAction.action) }}</p><p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p><p v-if="clientAction.action === 'revoke' && clientAction.client.protocol === 'amneziawg'" class="hint">{{ t().awgConfirmRevoke }}</p><p v-else-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p><div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ clientAction.client.protocol === 'amneziawg' ? t().awgRevoke : actionLabel(clientAction.action) }}</button></div></div></div>
+      <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction">
+        <div v-modal-focus class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1">
+          <div class="modal-scroll-content">
+            <div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div>
+            <p>{{ actionTitle(clientAction.action) }}</p>
+            <p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p>
+            <p v-if="clientAction.action === 'revoke' && clientAction.client.protocol === 'amneziawg'" class="hint">{{ t().awgConfirmRevoke }}</p>
+            <p v-else-if="clientAction.action === 'revoke'" class="hint">{{ t().noUndo }}</p>
+            <div class="modal-actions"><button class="secondary" @click="closeClientAction">{{ t().cancel }}</button><button :class="clientAction.action === 'revoke' ? 'danger-fill' : ''" :disabled="busy" @click="confirmClientAction">{{ clientAction.client.protocol === 'amneziawg' ? t().awgRevoke : actionLabel(clientAction.action) }}</button></div>
+          </div>
+        </div>
+      </div>
       <ProfileDeliveryModal v-if="selectedProfile" :profile="selectedProfile" :client="selectedClient()" :language="language" :vless-qr-url="api.clients.profileQrUrl(selectedProfile.clientId)" :hysteria-qr-url="api.clients.profileHysteriaQrUrl(selectedProfile.clientId)" :vmess-qr-url="api.clients.profileVMessQrUrl(selectedProfile.clientId)" :shadowsocks-qr-url="api.clients.profileShadowsocksQrUrl(selectedProfile.clientId)" :trojan-qr-url="api.clients.profileTrojanQrUrl(selectedProfile.clientId)" :awg-qr-url="api.clients.profileAmneziaWGQrUrl(selectedProfile.clientId)" :awg-profile-url="api.clients.profileAmneziaWGUrl(selectedProfile.clientId)" :json-url="api.clients.profileJsonUrl(selectedProfile.clientId)" :copied-vless="copiedProfile" :copied-hysteria="copiedHysteria" :copied-vmess="copiedVMess" :copied-shadowsocks="copiedShadowsocks" :copied-trojan="copiedTrojan" @close="closeProfile" @copy-vless="copyProfileUri" @copy-hysteria="copyHysteriaUri" @copy-vmess="copyVMessUri" @copy-shadowsocks="copyShadowsocksUri" @copy-trojan="copyTrojanUri" />
-      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null"><div v-modal-focus class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1"><div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div><h3>{{ t().settingsDiff }}</h3><ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul><h3>{{ t().consequences }}</h3><ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul><p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p><label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label><div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div></div></div>
+      <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null">
+        <div v-modal-focus class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1">
+          <div class="modal-scroll-content">
+            <div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div>
+            <h3>{{ t().settingsDiff }}</h3>
+            <ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul>
+            <h3>{{ t().consequences }}</h3>
+            <ul class="review-list"><li v-for="item in pendingSettings.consequences" :key="item">{{ item }}</li></ul>
+            <p v-if="pendingSettings.revokedClients">{{ t().revokedClients }}: {{ pendingSettings.revokedClients }}</p>
+            <label v-if="pendingSettings.requiresConfirmation">{{ t().confirmation }} ({{ t().expected }} {{ pendingSettings.expectedConfirmation }})<input v-model="pendingSettings.confirmation" autocomplete="off" /></label>
+            <div class="modal-actions"><button class="secondary" :disabled="busy" @click="pendingSettings = null">{{ t().cancel }}</button><button :disabled="busy || (pendingSettings.requiresConfirmation && pendingSettings.confirmation !== pendingSettings.expectedConfirmation)" @click="applySettings">{{ t().applySettings }}</button></div>
+          </div>
+        </div>
+      </div>
     </section>
   </main>
 </template>
