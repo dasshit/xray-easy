@@ -49,7 +49,7 @@ function submit(): void {
       <div class="modal-scroll-content">
         <div class="modal-header">
           <div><p class="eyebrow">{{ text.profiles }}</p><h2 id="create-profile-title">{{ text.createProfile }}</h2></div>
-          <button class="icon-button" type="button" :aria-label="text.close" @click="emit('cancel')">×</button>
+          <button class="icon-button" type="button" :aria-label="text.close" @click="emit('cancel')"><svg class="close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg></button>
         </div>
         <form @submit.prevent="submit">
           <label>

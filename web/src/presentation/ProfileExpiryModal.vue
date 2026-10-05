@@ -28,7 +28,7 @@ function submit(): void {
       <div class="modal-scroll-content">
         <div class="modal-header">
           <div><p class="eyebrow">{{ client.name }}</p><h2 id="expiry-modal-title">{{ text.expiryDialogTitle }}</h2></div>
-          <button class="icon-button" type="button" :aria-label="text.close" @click="emit('close')">×</button>
+          <button class="icon-button" type="button" :aria-label="text.close" @click="emit('close')"><svg class="close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg></button>
         </div>
         <form @submit.prevent="submit">
           <ExpirySelector v-model="expiresAt" :language="language" @valid-change="expiryIsValid = $event" />

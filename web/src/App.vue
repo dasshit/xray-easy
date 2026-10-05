@@ -881,7 +881,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       <div v-if="clientAction" class="modal-backdrop" role="presentation" @click.self="closeClientAction">
         <div v-modal-focus class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="client-action-title" tabindex="-1">
           <div class="modal-scroll-content">
-            <div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction">×</button></div>
+            <div class="modal-header"><div><p class="eyebrow">{{ clientAction.client.name }}</p><h2 id="client-action-title">{{ t().action }}</h2></div><button class="icon-button" :aria-label="t().close" @click="closeClientAction"><svg class="close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg></button></div>
             <p>{{ actionTitle(clientAction.action) }}</p>
             <p v-if="clientAction.client.protocol === 'legacy_dual'" class="hint">{{ t().legacyActionNotice }}</p>
             <p v-if="clientAction.action === 'revoke' && clientAction.client.protocol === 'amneziawg'" class="hint">{{ t().awgConfirmRevoke }}</p>
@@ -894,7 +894,7 @@ function actionLabel(action?: ClientActionType) { if (action === 'enable') retur
       <div v-if="pendingSettings" class="modal-backdrop" role="presentation" @click.self="pendingSettings = null">
         <div v-modal-focus class="modal" role="dialog" aria-modal="true" aria-labelledby="settings-confirmation-title" tabindex="-1">
           <div class="modal-scroll-content">
-            <div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null">×</button></div>
+            <div class="modal-header"><div><p class="eyebrow">{{ pendingSettingsKind === 'logging' ? t().xrayLogging : t().vlessSettingsTitle }}</p><h2 id="settings-confirmation-title">{{ t().confirmation }}</h2></div><button class="icon-button" :aria-label="t().close" @click="pendingSettings = null"><svg class="close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg></button></div>
             <h3>{{ t().settingsDiff }}</h3>
             <ul class="review-list"><li v-for="item in pendingSettings.diff" :key="item.field"><strong>{{ item.field === 'log_level' ? t().logLevel : item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul>
             <h3>{{ t().consequences }}</h3>

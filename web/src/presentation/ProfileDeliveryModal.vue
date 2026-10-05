@@ -56,7 +56,7 @@ function profileLabel(): string {
       <div class="modal-scroll-content">
         <div class="modal-header">
           <div><p class="eyebrow">{{ profileLabel() }}</p><h2 id="profile-delivery-title">{{ text.profileFor }} {{ client?.name || '' }}</h2></div>
-          <button class="icon-button" type="button" :aria-label="text.close" @click="emit('close')">×</button>
+          <button class="icon-button" type="button" :aria-label="text.close" @click="emit('close')"><svg class="close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg></button>
         </div>
         <p class="hint profile-hint">{{ text.scanHint }}</p>
         <div class="profile-connection" :class="client?.online ? 'is-online' : 'is-offline'">
