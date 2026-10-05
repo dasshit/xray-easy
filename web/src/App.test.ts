@@ -165,14 +165,15 @@ describe('App profile delivery actions', () => {
     await wrapper.get('.section-heading button').trigger('click')
     await flushPromises()
     const modal = wrapper.get('.modal')
-    vi.spyOn(modal.element, 'getBoundingClientRect').mockReturnValue(new DOMRect(30, 40, 200, 100))
+    const modalElement = modal.element as HTMLElement
+    vi.spyOn(modalElement, 'getBoundingClientRect').mockReturnValue(new DOMRect(30, 40, 200, 100))
     dispatchPointerMove(wrapper.get('.modal h2').element, 'mouse', 80, 90)
-    expect(modal.element.style.getPropertyValue('--glass-pointer-x')).toBe('25%')
-    expect(modal.element.style.getPropertyValue('--glass-pointer-y')).toBe('50%')
+    expect(modalElement.style.getPropertyValue('--glass-pointer-x')).toBe('25%')
+    expect(modalElement.style.getPropertyValue('--glass-pointer-y')).toBe('50%')
 
     wrapper.unmount()
-    expect(modal.element.style.getPropertyValue('--glass-pointer-x')).toBe('')
-    expect(modal.element.style.getPropertyValue('--glass-pointer-y')).toBe('')
+    expect(modalElement.style.getPropertyValue('--glass-pointer-x')).toBe('')
+    expect(modalElement.style.getPropertyValue('--glass-pointer-y')).toBe('')
 
     const idleWrapper = mount(App, {
       global: { provide: { [xrayEasyGatewayKey as symbol]: createGateway() }, stubs: { HysteriaSettingsPanel: { template: '<div />' } } },
