@@ -115,7 +115,8 @@ flowchart LR
 ### Этап 5. Отдельный optional container и ограниченный доступ — реализовано
 
 - Добавить `xray-lease-service` в Compose под profile `lease`, выключенный по
-  умолчанию, без published ports и с внутренним `/healthz`.
+  умолчанию, без published ports и со стандартным gRPC health API на внутренней
+  сети; Docker проверяет его через локальный gRPC-клиент контейнера.
 - Создавать отдельный token в отдельном volume; Controller принимает его только
   для lease allowlist RPC.
 - Включить сервис в сборку образов CI и использовать non-root/read-only

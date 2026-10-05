@@ -545,7 +545,10 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 		}
 		for _, user := range manager.GetUsers(ctx) {
 			if user != nil && strings.TrimSpace(user.Email) != "" && !strings.EqualFold(strings.TrimSpace(user.Email), domain.ShadowsocksBootstrapUserEmail) {
-				usersByEmail[user.Email] = protocol
+				current, exists := usersByEmail[user.Email]
+				if !exists || telemetryProtocolPriority(protocol) < telemetryProtocolPriority(current) {
+					usersByEmail[user.Email] = protocol
+				}
 			}
 		}
 	}
@@ -608,6 +611,26 @@ func (e *Engine) GetTelemetry(ctx context.Context, inboundTags map[xrayruntimev1
 		result = append(result, user)
 	}
 	return result, nil
+}
+
+// telemetryProtocolPriority selects a stable owner when one statistics email
+// is configured in multiple inbound protocols. Lease-capable protocols win so
+// their connection observations remain visible to source-IP enforcement.
+func telemetryProtocolPriority(protocol xrayruntimev1.Protocol) int {
+	switch protocol {
+	case xrayruntimev1.Protocol_PROTOCOL_VLESS:
+		return 0
+	case xrayruntimev1.Protocol_PROTOCOL_VMESS:
+		return 1
+	case xrayruntimev1.Protocol_PROTOCOL_TROJAN:
+		return 2
+	case xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2:
+		return 3
+	case xrayruntimev1.Protocol_PROTOCOL_SHADOWSOCKS:
+		return 4
+	default:
+		return 5
+	}
 }
 
 // ConfiguredProtocols extracts supported protocol names from a validated

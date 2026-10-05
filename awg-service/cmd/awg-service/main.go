@@ -41,7 +41,8 @@ const (
 	// defaultIPv6Pool is an internal package constant.
 	defaultIPv6Pool = "fd88:88:88::/64"
 	// defaultInterface is an internal package constant.
-	defaultInterface = "awg0"
+	defaultInterface       = "awg0"
+	controlShutdownTimeout = 3 * time.Second
 )
 
 // peerNamePattern is an internal package variable.
@@ -166,12 +167,35 @@ func serveControlServer(server *grpc.Server, listener net.Listener, shutdown <-c
 	select {
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			server.Stop()
 			return fmt.Errorf("serve AWG control API: %w", err)
 		}
 		return nil
 	case <-shutdown:
-		server.GracefulStop()
+		stopControlServer(server, controlShutdownTimeout)
 		return nil
+	}
+}
+
+func stopControlServer(server *grpc.Server, timeout time.Duration) {
+	if server == nil {
+		return
+	}
+	if timeout <= 0 {
+		timeout = controlShutdownTimeout
+	}
+	stopped := make(chan struct{})
+	go func() {
+		server.GracefulStop()
+		close(stopped)
+	}()
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-stopped:
+	case <-timer.C:
+		server.Stop()
+		<-stopped
 	}
 }
 

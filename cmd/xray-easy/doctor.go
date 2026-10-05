@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"net/netip"
 	"os"
 	"path/filepath"
@@ -22,6 +21,7 @@ import (
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/lease"
+	"xray-easy/internal/leasehealth"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/store"
 	"xray-easy/internal/xray"
@@ -54,15 +54,13 @@ var doctorVersionPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}
 // xrayReleasePattern is an internal package variable.
 var xrayReleasePattern = regexp.MustCompile(`[0-9]+\.[0-9]+\.[0-9]+`)
 
-// leaseHealthProbe reads the optional lease-service health endpoint.
+// leaseHealthProbe reads the optional lease-service gRPC readiness service.
 var leaseHealthProbe = probeLeaseService
 
 // leaseHealthStatus describes lease-worker and telemetry readiness.
 type leaseHealthStatus struct {
 	// Ready indicates that a usable Xray snapshot has been accepted.
 	Ready bool `json:"ready"`
-	// ControllerStreamConnected indicates an authenticated live Controller stream.
-	ControllerStreamConnected bool `json:"controllerStreamConnected"`
 }
 
 // doctorXrayRuntime is an internal type used by the package.
@@ -661,17 +659,15 @@ func collectDoctorChecksWithAWG(ctx context.Context, dataDir, configDir string, 
 		} else if tracker, trackerErr := lease.NewTracker(policy); trackerErr != nil || tracker == nil {
 			appendCheck(doctorFail, "Xray lease policy", "lease policy values are outside supported limits", "Use a maximum of 2 leases, a grace period up to 10m, and a retry delay up to 1m.")
 		} else {
-			healthAddress := envOr("XRAY_LEASE_HEALTH_ADDR", "172.31.242.4:8091")
+			healthAddress := envOr("XRAY_LEASE_GRPC_ADDR", "172.31.242.4:8091")
 			health, healthErr := leaseHealthProbe(ctx, healthAddress)
 			switch {
 			case healthErr != nil:
-				appendCheck(doctorFail, "Xray lease service", "service health endpoint is unavailable", "Check the xray-lease-service container, Controller health, and the lease token volume.")
-			case !health.ControllerStreamConnected:
-				appendCheck(doctorFail, "Xray lease service", "Controller snapshot stream is disconnected", "Check Controller and Xray telemetry logs; enforcement pauses while telemetry is unavailable.")
+				appendCheck(doctorFail, "Xray lease service", "service health gRPC is unavailable", "Check the xray-lease-service container, Controller health, and the lease token volume.")
 			case !health.Ready && !settingsReady:
 				appendCheck(doctorWarn, "Xray lease service", "waiting for initial Xray setup and a usable telemetry snapshot", "Complete first-run setup in the Web UI, then rerun doctor.")
 			case !health.Ready:
-				appendCheck(doctorFail, "Xray lease service", "Controller is connected but Xray lease telemetry is not ready", "Check embedded Xray telemetry and Controller logs; enforcement pauses until complete snapshots resume.")
+				appendCheck(doctorFail, "Xray lease service", "lease telemetry is not ready", "Check embedded Xray telemetry and Controller logs; enforcement pauses until complete snapshots resume.")
 			default:
 				appendCheck(doctorPass, "Xray lease service", "Controller stream and Xray lease telemetry are ready; oldest source-IP lease is enforced", "")
 			}
@@ -717,34 +713,13 @@ func leasePolicyFromEnvironment() (lease.Config, error) {
 	return config, nil
 }
 
-// probeLeaseService requests the lease worker's internal health endpoint.
+// probeLeaseService requests the lease worker's private gRPC health service.
 func probeLeaseService(ctx context.Context, address string) (leaseHealthStatus, error) {
-	return probeLeaseServiceWithClient(ctx, address, &http.Client{Timeout: 2 * time.Second})
-}
-
-// probeLeaseServiceWithClient checks the configured health endpoint through an HTTP client.
-func probeLeaseServiceWithClient(ctx context.Context, address string, client *http.Client) (leaseHealthStatus, error) {
-	endpoint := "http://" + strings.TrimSpace(address) + "/healthz"
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil || request.URL.Scheme != "http" || request.URL.Host == "" {
-		return leaseHealthStatus{}, errors.New("lease health address is invalid")
-	}
-	if client == nil {
-		client = http.DefaultClient
-	}
-	response, err := client.Do(request)
+	ready, err := leasehealth.Check(ctx, address)
 	if err != nil {
 		return leaseHealthStatus{}, err
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		return leaseHealthStatus{}, fmt.Errorf("lease health endpoint returned HTTP %d", response.StatusCode)
-	}
-	var result leaseHealthStatus
-	if err := json.NewDecoder(io.LimitReader(response.Body, 4096)).Decode(&result); err != nil {
-		return leaseHealthStatus{}, errors.New("lease health endpoint returned invalid JSON")
-	}
-	return result, nil
+	return leaseHealthStatus{Ready: ready}, nil
 }
 
 // matchEmbeddedInboundTags performs the operation represented by its name.

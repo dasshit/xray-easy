@@ -71,18 +71,20 @@ type Manager struct {
 	api   StatsAPI
 	awg   AWGStatsAPI
 
-	mu           sync.RWMutex
-	applyMu      sync.Mutex
-	latest       map[string]ClientStats
-	subs         map[chan struct{}]struct{}
-	interval     time.Duration
-	lastError    string
-	now          func() time.Time
-	stream       telemetryStreamOpener
-	streamCancel context.CancelFunc
-	rootContext  context.Context
-	checkpoints  map[string]streamCheckpoint
-	retryWait    func(context.Context, time.Duration) bool
+	mu               sync.RWMutex
+	applyMu          sync.Mutex
+	latest           map[string]ClientStats
+	subs             map[chan struct{}]struct{}
+	interval         time.Duration
+	lastError        string
+	now              func() time.Time
+	stream           telemetryStreamOpener
+	streamCancel     context.CancelFunc
+	streamConnected  bool
+	streamGeneration uint64
+	rootContext      context.Context
+	checkpoints      map[string]streamCheckpoint
+	retryWait        func(context.Context, time.Duration) bool
 }
 
 // streamCheckpoint is an internal type used by the package.
@@ -117,11 +119,32 @@ func (m *Manager) Start(ctx context.Context) <-chan struct{} {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = m.Poll(ctx)
+				m.pollIfStreamInactive(ctx)
 			}
 		}
 	}()
 	return done
+}
+
+func (m *Manager) pollIfStreamInactive(ctx context.Context) {
+	m.mu.RLock()
+	streamConnected := m.stream != nil && m.streamConnected
+	m.mu.RUnlock()
+	if !streamConnected {
+		_ = m.Poll(ctx)
+	}
+}
+
+func (m *Manager) setStreamConnected(connected bool) {
+	m.setStreamConnectedForGeneration(0, connected)
+}
+
+func (m *Manager) setStreamConnectedForGeneration(generation uint64, connected bool) {
+	m.mu.Lock()
+	if generation == 0 || generation == m.streamGeneration {
+		m.streamConnected = connected
+	}
+	m.mu.Unlock()
 }
 
 // Poll polls the requested source.
@@ -575,7 +598,10 @@ func (m *Manager) Subscribe() (<-chan struct{}, func()) {
 		}
 		streamContext, cancel := context.WithCancel(parent)
 		m.streamCancel = cancel
-		go m.consumeTelemetryStream(streamContext)
+		m.streamGeneration++
+		generation := m.streamGeneration
+		m.streamConnected = false
+		go m.consumeTelemetryStreamGeneration(streamContext, generation)
 	}
 	m.mu.Unlock()
 	return channel, func() {
@@ -587,6 +613,7 @@ func (m *Manager) Subscribe() (<-chan struct{}, func()) {
 		if len(m.subs) == 0 && m.streamCancel != nil {
 			m.streamCancel()
 			m.streamCancel = nil
+			m.streamConnected = false
 		}
 		m.mu.Unlock()
 	}
@@ -594,10 +621,19 @@ func (m *Manager) Subscribe() (<-chan struct{}, func()) {
 
 // consumeTelemetryStream performs the operation represented by its name.
 func (m *Manager) consumeTelemetryStream(ctx context.Context) {
+	m.consumeTelemetryStreamGeneration(ctx, 0)
+}
+
+func (m *Manager) consumeTelemetryStreamGeneration(ctx context.Context, generation uint64) {
+	defer m.setStreamConnectedForGeneration(generation, false)
 	backoff := time.Second
 	for ctx.Err() == nil {
 		stream, err := m.stream.WatchTelemetry(ctx, time.Second)
+		if err == nil && stream == nil {
+			err = errors.New("Controller returned an empty telemetry stream")
+		}
 		if err == nil {
+			m.setStreamConnectedForGeneration(generation, true)
 			for ctx.Err() == nil {
 				var update *controllerv1.TelemetryUpdate
 				update, err = stream.Recv()
@@ -613,6 +649,7 @@ func (m *Manager) consumeTelemetryStream(ctx context.Context) {
 					backoff = time.Second
 				}
 			}
+			m.setStreamConnectedForGeneration(generation, false)
 		}
 		if ctx.Err() != nil {
 			return

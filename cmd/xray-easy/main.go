@@ -14,15 +14,18 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/skip2/go-qrcode"
@@ -75,6 +78,8 @@ type server struct {
 	diagnosticBuffer *diagnostics.Buffer
 	totpMu           sync.Mutex
 	pendingTOTP      map[string]pendingTOTP
+	loginThrottleMu  sync.Mutex
+	loginThrottle    *auth.LoginLimiter
 }
 
 // xrayRuntimeAPI is an internal type used by the package.
@@ -475,11 +480,101 @@ var (
 	exitProcess = os.Exit
 	// startControlPlane initializes and serves the authenticated control plane.
 	startControlPlane = func() error {
-		return runControlPlane(context.Background(), initializeControlPlane, func(serverHTTP *http.Server) error {
-			return serverHTTP.ListenAndServe()
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		return runControlPlane(ctx, initializeControlPlane, func(serverHTTP *http.Server) error {
+			return serveControlPlaneHTTP(ctx, serverHTTP)
 		})
 	}
 )
+
+const controlPlaneShutdownTimeout = 5 * time.Second
+
+const (
+	loginAttemptsPerSource = 10
+	loginAttemptWindow     = time.Minute
+	loginHashConcurrency   = 2
+)
+
+func serveControlPlaneHTTP(ctx context.Context, serverHTTP *http.Server) error {
+	listener, err := net.Listen("tcp", serverHTTP.Addr)
+	if err != nil {
+		return err
+	}
+	return serveControlPlaneListener(ctx, serverHTTP, listener, controlPlaneShutdownTimeout)
+}
+
+func serveControlPlaneListener(ctx context.Context, serverHTTP *http.Server, listener net.Listener, timeout time.Duration) error {
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- serverHTTP.Serve(listener) }()
+	select {
+	case err := <-serveDone:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		shutdownErr := serverHTTP.Shutdown(shutdownCtx)
+		cancel()
+		if shutdownErr != nil {
+			_ = serverHTTP.Close()
+		}
+		serveErr := <-serveDone
+		if shutdownErr != nil {
+			return fmt.Errorf("shutdown control-plane HTTP server: %w", shutdownErr)
+		}
+		if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			return serveErr
+		}
+		return nil
+	}
+}
+
+func (s *server) passwordLoginLimiter() *auth.LoginLimiter {
+	s.loginThrottleMu.Lock()
+	defer s.loginThrottleMu.Unlock()
+	if s.loginThrottle == nil {
+		s.loginThrottle = auth.NewLoginLimiter(loginAttemptsPerSource, loginAttemptWindow, loginHashConcurrency, 4096)
+	}
+	return s.loginThrottle
+}
+
+func loginClientSource(r *http.Request) string {
+	remote := strings.TrimSpace(r.RemoteAddr)
+	host, _, err := net.SplitHostPort(remote)
+	if err == nil {
+		remote = host
+	}
+	if address := net.ParseIP(remote); address != nil {
+		return address.String()
+	}
+	if remote == "" {
+		return "unknown"
+	}
+	return remote
+}
+
+func (s *server) passwordAdminForRequest(w http.ResponseWriter, r *http.Request, username, password string) (store.Admin, error, bool) {
+	limiter := s.passwordLoginLimiter()
+	allowed, retryAfter := limiter.Allow(loginClientSource(r))
+	if !allowed {
+		if retryAfter < time.Second {
+			retryAfter = time.Second
+		}
+		w.Header().Set("Retry-After", strconv.Itoa(int((retryAfter+time.Second-1)/time.Second)))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "too many authentication attempts"})
+		return store.Admin{}, nil, false
+	}
+	if !limiter.AcquireVerification() {
+		w.Header().Set("Retry-After", "1")
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": "password verification capacity is busy"})
+		return store.Admin{}, nil, false
+	}
+	defer limiter.ReleaseVerification()
+	admin, err := s.passwordAdmin(r.Context(), username, password)
+	return admin, err, true
+}
 
 // runControlPlane runs the requested operation.
 func runControlPlane(ctx context.Context, initialize func(context.Context) (*server, func(), error), listen func(*http.Server) error) error {
@@ -488,7 +583,7 @@ func runControlPlane(ctx context.Context, initialize func(context.Context) (*ser
 		return err
 	}
 	defer cleanup()
-	runtimeCtx, cancelRuntime := context.WithCancel(ctx)
+	runtimeCtx, cancelRuntime := context.WithCancel(context.Background())
 	statsDone := s.stats.Start(runtimeCtx)
 	reconcilerDone := s.startReconciler(runtimeCtx)
 	expirationDone := s.startExpirationWorker(runtimeCtx)
@@ -1242,7 +1337,19 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not encrypt REALITY private key"})
 		return
 	}
-	admin, err := s.store.Initialize(r.Context(), req.Username, hash, req.PublicHost, req.PublicPort)
+	initialSettings := domain.Settings{
+		PublicHost:           req.PublicHost,
+		PublicPort:           req.PublicPort,
+		XrayAPIListen:        s.defaultAPIListen,
+		InternalInboundPort:  8443,
+		RealityTarget:        req.RealityTarget,
+		RealitySNI:           req.RealitySNI,
+		RealityPrivateKeyEnc: encryptedPrivateKey,
+		RealityPublicKey:     publicKey,
+		ClientFingerprint:    "chrome",
+		LogLevel:             "warning",
+	}
+	admin, err := s.store.InitializeWithSettings(r.Context(), req.Username, hash, initialSettings)
 	if err != nil {
 		status := http.StatusInternalServerError
 		if strings.Contains(err.Error(), "already initialized") {
@@ -1250,19 +1357,6 @@ func (s *server) initialize(w http.ResponseWriter, r *http.Request) {
 		}
 		writeJSON(w, status, map[string]any{"error": err.Error()})
 		return
-	}
-	settings, err := s.store.GetSettings(r.Context())
-	if err == nil {
-		settings.XrayAPIListen = s.defaultAPIListen
-		settings.RealityTarget = req.RealityTarget
-		settings.RealitySNI = req.RealitySNI
-		settings.RealityPrivateKeyEnc = encryptedPrivateKey
-		settings.RealityPublicKey = publicKey
-		settings.ClientFingerprint = "chrome"
-		if err := s.store.UpdateSettings(r.Context(), settings); err != nil {
-			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "could not save Xray API settings"})
-			return
-		}
 	}
 	writeJSON(w, http.StatusCreated, map[string]any{"id": admin.ID, "username": admin.Username})
 }
@@ -1278,7 +1372,10 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	admin, err := s.passwordAdmin(r.Context(), req.Username, req.Password)
+	admin, err, proceed := s.passwordAdminForRequest(w, r, req.Username, req.Password)
+	if !proceed {
+		return
+	}
 	if err != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials"})
 		return
@@ -1307,7 +1404,10 @@ func (s *server) loginTOTP(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	admin, err := s.passwordAdmin(r.Context(), req.Username, req.Password)
+	admin, err, proceed := s.passwordAdminForRequest(w, r, req.Username, req.Password)
+	if !proceed {
+		return
+	}
 	if err != nil || !admin.TOTPEnabled {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials"})
 		return
@@ -1330,7 +1430,10 @@ func (s *server) loginRecovery(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": err.Error()})
 		return
 	}
-	admin, err := s.passwordAdmin(r.Context(), req.Username, req.Password)
+	admin, err, proceed := s.passwordAdminForRequest(w, r, req.Username, req.Password)
+	if !proceed {
+		return
+	}
 	if err != nil || !admin.TOTPEnabled || auth.ValidateRecoveryCode(req.RecoveryCode) != nil {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"error": "invalid credentials or recovery code"})
 		return

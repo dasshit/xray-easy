@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/base64"
 	"errors"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"xray-easy/internal/stats"
 	"xray-easy/internal/store"
@@ -221,5 +223,48 @@ func TestRunControlPlaneCleansRuntimeAndHandlesListenerResults(t *testing.T) {
 	})
 	if !errors.Is(err, initErr) || listenCalled {
 		t.Fatalf("initialization failure = %v, listenCalled=%v", err, listenCalled)
+	}
+}
+
+func TestServeControlPlaneListenerBoundsShutdownWithActiveRequest(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	requestStarted := make(chan struct{})
+	serverHTTP := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		<-r.Context().Done()
+	})}
+	ctx, cancel := context.WithCancel(context.Background())
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- serveControlPlaneListener(ctx, serverHTTP, listener, 25*time.Millisecond) }()
+	responseDone := make(chan struct{})
+	go func() {
+		defer close(responseDone)
+		response, requestErr := http.Get("http://" + listener.Addr().String())
+		if requestErr == nil {
+			_ = response.Body.Close()
+		}
+	}()
+	select {
+	case <-requestStarted:
+	case <-time.After(time.Second):
+		cancel()
+		t.Fatal("HTTP request did not reach the control plane")
+	}
+	cancel()
+	select {
+	case err := <-serveDone:
+		if err == nil || !strings.Contains(err.Error(), "shutdown control-plane HTTP server") {
+			t.Fatalf("forced HTTP shutdown error = %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("control-plane HTTP server did not force-close an active request")
+	}
+	select {
+	case <-responseDone:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP request remained open after forced shutdown")
 	}
 }
