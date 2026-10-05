@@ -105,7 +105,10 @@ let reconnectTimer: number | null = null
 let disposed = false
 let glassPointerSurface: HTMLElement | null = null
 
-/** Keep the moving glass highlight attached to the active button or modal surface. */
+/**
+ * Keep the moving glass highlight attached to the active button or modal surface.
+ * @param event - The latest pointer position over the application.
+ */
 function handleGlassPointerMove(event: PointerEvent) {
   const target = event.target
   const surface = target instanceof Element ? target.closest('button, .modal') : null
@@ -121,6 +124,7 @@ function handleGlassPointerMove(event: PointerEvent) {
   glassPointerSurface = surface
 }
 
+/** Remove pointer coordinates from the previously active glass surface. */
 function clearGlassPointer() {
   glassPointerSurface?.style.removeProperty('--glass-pointer-x')
   glassPointerSurface?.style.removeProperty('--glass-pointer-y')
