@@ -127,7 +127,10 @@ describe('App profile delivery actions', () => {
 
   it('tracks the pointer highlight on glass surfaces and clears it when needed', async () => {
     const gateway = createGateway()
+    const attachPoint = document.createElement('div')
+    document.body.append(attachPoint)
     const wrapper = mount(App, {
+      attachTo: attachPoint,
       global: { provide: { [xrayEasyGatewayKey as symbol]: gateway }, stubs: { HysteriaSettingsPanel: { template: '<div />' } } },
     })
     await flushPromises()
@@ -172,6 +175,7 @@ describe('App profile delivery actions', () => {
     expect(modalElement.style.getPropertyValue('--glass-pointer-y')).toBe('50%')
 
     wrapper.unmount()
+    attachPoint.remove()
     expect(modalElement.style.getPropertyValue('--glass-pointer-x')).toBe('')
     expect(modalElement.style.getPropertyValue('--glass-pointer-y')).toBe('')
 
