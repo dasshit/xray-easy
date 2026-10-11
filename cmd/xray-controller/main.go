@@ -16,6 +16,7 @@ import (
 
 	"xray-easy/internal/awgcontrol"
 	"xray-easy/internal/controller"
+	"xray-easy/internal/grpcshutdown"
 
 	"google.golang.org/grpc"
 )
@@ -33,6 +34,8 @@ const (
 	defaultRuntimeToken = "/run/runtime-auth/xray_runtime_token"
 	// defaultConfigDir is an internal package constant.
 	defaultConfigDir = "/etc/xray"
+	// controllerShutdownTimeout bounds graceful draining of long-lived RPCs.
+	controllerShutdownTimeout = 3 * time.Second
 )
 
 // healthClient is an internal type used by the package.
@@ -160,11 +163,15 @@ func serve() error {
 	var awg controller.AmneziaWGRuntime
 	if strings.TrimSpace(os.Getenv("AWG_PUBLIC_HOST")) != "" {
 		client, dialErr := dialAWG(envOr("AWG_CONTROL_ADDR", "172.31.241.4:10087"), envOr("AWG_CONTROL_TOKEN_FILE", "/run/awg-auth/control.token"))
-		if dialErr != nil {
-			return fmt.Errorf("initialize AmneziaWG adapter: %w", dialErr)
+		if dialErr != nil || client == nil {
+			if dialErr == nil {
+				dialErr = errors.New("adapter dial returned a nil client")
+			}
+			slog.Warn("optional AmneziaWG adapter is unavailable; Controller will continue without it", "error", dialErr)
+		} else {
+			defer client.Close()
+			awg = client
 		}
-		defer client.Close()
-		awg = client
 	}
 	controller.RegisterRPC(server, controller.NewServiceWithAdapters(runtime, runtime, runtime, awg))
 	slog.Info("Controller gRPC listening", "service", "xray-controller", "address", listener.Addr().String())
@@ -175,10 +182,11 @@ func serve() error {
 	go func() { serveErr <- serveFn(server, listener) }()
 	select {
 	case <-shutdown.Done():
-		server.GracefulStop()
+		grpcshutdown.Stop(server, controllerShutdownTimeout)
 		return nil
 	case err := <-serveErr:
 		if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			server.Stop()
 			return fmt.Errorf("serve Controller gRPC: %w", err)
 		}
 		return nil

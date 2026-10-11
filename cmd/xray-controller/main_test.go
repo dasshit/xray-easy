@@ -6,7 +6,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -240,7 +239,11 @@ func TestServeRejectsRuntimeAndAWGAdapterFailures(t *testing.T) {
 	t.Setenv("XRAY_RUNTIME_ADDR", "127.0.0.1:10086")
 	t.Setenv("XRAY_CONFIG_DIR", dir)
 	oldDialRuntime, oldDialAWG, oldListener := dialEmbeddedXray, dialAWG, listenController
-	defer func() { dialEmbeddedXray, dialAWG, listenController = oldDialRuntime, oldDialAWG, oldListener }()
+	oldSignals, oldServe := controllerSignalContext, serveController
+	defer func() {
+		dialEmbeddedXray, dialAWG, listenController = oldDialRuntime, oldDialAWG, oldListener
+		controllerSignalContext, serveController = oldSignals, oldServe
+	}()
 	dialEmbeddedXray = func(string, string, string) (closeableXrayRuntime, error) {
 		return nil, errors.New("runtime unavailable")
 	}
@@ -250,9 +253,15 @@ func TestServeRejectsRuntimeAndAWGAdapterFailures(t *testing.T) {
 	dialEmbeddedXray = func(string, string, string) (closeableXrayRuntime, error) { return &fakeEmbeddedXray{}, nil }
 	dialAWG = func(string, string) (closeableAWGRuntime, error) { return nil, errors.New("AWG unavailable") }
 	listenController = func(string, string) (net.Listener, error) { return bufconn.Listen(1024), nil }
+	controllerSignalContext = func() (context.Context, context.CancelFunc) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		return ctx, cancel
+	}
+	serveController = func(*grpc.Server, net.Listener) error { return grpc.ErrServerStopped }
 	t.Setenv("AWG_PUBLIC_HOST", "vpn.example.test")
-	if err := serve(); err == nil || !strings.Contains(err.Error(), "AWG unavailable") {
-		t.Fatalf("AWG adapter failure = %v, want injected error", err)
+	if err := serve(); err != nil {
+		t.Fatalf("optional AWG adapter failure prevented Controller startup: %v", err)
 	}
 }
 

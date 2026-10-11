@@ -3,12 +3,10 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
+	"net"
 	"os"
 	"os/signal"
 	"strconv"
@@ -16,8 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"xray-easy/internal/controller"
+	"xray-easy/internal/grpcshutdown"
 	"xray-easy/internal/lease"
+	"xray-easy/internal/leasehealth"
 )
 
 const (
@@ -25,10 +28,13 @@ const (
 	defaultControllerAddress = "172.31.241.5:10088"
 	// defaultControllerToken is the read-only mounted lease identity token.
 	defaultControllerToken = "/run/lease-auth/lease.token"
-	// defaultHealthAddress is the address used by the internal health server.
+	// defaultHealthAddress is the private gRPC readiness listener.
 	defaultHealthAddress = ":8091"
-	// defaultHealthCheck is the loopback endpoint used by the container probe.
-	defaultHealthCheck = "127.0.0.1:8091"
+	// defaultHealthCheck is the loopback gRPC target used by the container probe.
+	defaultHealthCheck      = "127.0.0.1:8091"
+	leaseHealthPollInterval = 250 * time.Millisecond
+	leaseHealthStopTimeout  = 2 * time.Second
+	leaseWorkerStopTimeout  = 3 * time.Second
 )
 
 // leaseHealthCheck performs the health probe selected by the CLI healthcheck command.
@@ -57,11 +63,16 @@ func defaultLeaseSignalContext() (context.Context, context.CancelFunc) {
 	return signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 }
 
-// runLeaseHealthServer serves the private readiness endpoint.
+// runLeaseHealthServer serves the private gRPC readiness API.
 var runLeaseHealthServer = defaultRunLeaseHealthServer
 
-// defaultRunLeaseHealthServer runs the HTTP readiness server.
-func defaultRunLeaseHealthServer(server *http.Server) error { return server.ListenAndServe() }
+// listenLeaseHealth opens the private readiness listener.
+var listenLeaseHealth = net.Listen
+
+// defaultRunLeaseHealthServer runs the gRPC readiness server.
+func defaultRunLeaseHealthServer(server *grpc.Server, listener net.Listener) error {
+	return server.Serve(listener)
+}
 
 // exitProcess terminates the process after a startup failure.
 var exitProcess = os.Exit
@@ -98,36 +109,106 @@ func run(args []string) error {
 	if err != nil {
 		return fmt.Errorf("initialize lease policy: %w", err)
 	}
-	server := &http.Server{
-		Addr:              envOr("XRAY_LEASE_HEALTH_ADDR", defaultHealthAddress),
-		Handler:           newHealthHandler(worker),
-		ReadHeaderTimeout: 2 * time.Second,
+	healthAddress := envOr("XRAY_LEASE_GRPC_LISTEN", defaultHealthAddress)
+	listener, err := listenLeaseHealth("tcp", healthAddress)
+	if err != nil {
+		return fmt.Errorf("listen for lease health gRPC: %w", err)
 	}
+	grpcServer := grpc.NewServer()
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+	healthpb.RegisterHealthServer(grpcServer, healthServer)
+	healthContext, stopHealth := context.WithCancel(ctx)
+	defer stopHealth()
+	readinessDone := make(chan struct{})
+	go func() {
+		defer close(readinessDone)
+		monitorLeaseReadiness(healthContext, worker, healthServer, leaseHealthPollInterval)
+	}()
 	serverErr := make(chan error, 1)
 	serveHealth := runLeaseHealthServer
-	go func() { serverErr <- serveHealth(server) }()
+	go func() { serverErr <- serveHealth(grpcServer, listener) }()
 	workerErr := make(chan error, 1)
 	go func() { workerErr <- worker.Run(ctx) }()
-	slog.Info("lease service started", "service", "xray-lease-service", "health_address", server.Addr, "max_active_leases", config.MaxActiveLeases, "grace_period", config.GracePeriod.String())
+	slog.Info("lease service started", "service", "xray-lease-service", "health_grpc_address", listener.Addr().String(), "max_active_leases", config.MaxActiveLeases, "grace_period", config.GracePeriod.String())
 	select {
 	case <-ctx.Done():
-		shutdown, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		defer cancel()
-		_ = server.Shutdown(shutdown)
+		stopHealth()
+		grpcshutdown.Stop(grpcServer, leaseHealthStopTimeout)
+		if err := waitLeaseWorker(workerErr); err != nil {
+			return err
+		}
+		<-readinessDone
 		return nil
 	case err := <-serverErr:
-		if !errors.Is(err, http.ErrServerClosed) {
-			stop()
-			return fmt.Errorf("lease service health server: %w", err)
+		stop()
+		stopHealth()
+		grpcServer.Stop()
+		workerStopErr := waitLeaseWorker(workerErr)
+		<-readinessDone
+		if workerStopErr != nil {
+			return workerStopErr
+		}
+		if err != nil && !errors.Is(err, grpc.ErrServerStopped) {
+			return fmt.Errorf("lease service health gRPC server: %w", err)
 		}
 		return nil
 	case err := <-workerErr:
 		stop()
-		if !errors.Is(err, context.Canceled) {
-			return fmt.Errorf("lease policy worker stopped: %w", err)
+		stopHealth()
+		grpcServer.Stop()
+		<-readinessDone
+		return leaseWorkerExitError(err)
+	}
+}
+
+func monitorLeaseReadiness(ctx context.Context, worker healthProvider, server *health.Server, interval time.Duration) {
+	if interval <= 0 {
+		interval = leaseHealthPollInterval
+	}
+	updateLeaseReadiness(worker, server)
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			updateLeaseReadiness(worker, server)
 		}
+	}
+}
+
+func updateLeaseReadiness(worker healthProvider, server *health.Server) {
+	state := healthpb.HealthCheckResponse_NOT_SERVING
+	if worker != nil && worker.Ready() {
+		state = healthpb.HealthCheckResponse_SERVING
+	}
+	server.SetServingStatus("", state)
+}
+
+func waitLeaseWorker(workerErr <-chan error) error {
+	timer := time.NewTimer(leaseWorkerStopTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-workerErr:
+		if err == nil || errors.Is(err, context.Canceled) {
+			return nil
+		}
+		return fmt.Errorf("lease policy worker stopped: %w", err)
+	case <-timer.C:
+		return errors.New("lease policy worker did not stop before the shutdown deadline")
+	}
+}
+
+func leaseWorkerExitError(err error) error {
+	if err == nil {
+		return errors.New("lease policy worker stopped unexpectedly")
+	}
+	if errors.Is(err, context.Canceled) {
 		return nil
 	}
+	return fmt.Errorf("lease policy worker stopped: %w", err)
 }
 
 // readConfig loads lease policy values from the process environment.
@@ -160,48 +241,22 @@ func readConfig() (lease.Config, error) {
 	return config, nil
 }
 
-// checkHealth verifies that the local lease service is connected to Controller.
+// checkHealth verifies that the lease service reports itself ready over gRPC.
 func checkHealth(address string) error {
-	return checkHealthWithClient(address, &http.Client{Timeout: 3 * time.Second})
-}
-
-// checkHealthWithClient performs the health request with the provided HTTP client.
-func checkHealthWithClient(address string, client *http.Client) error {
-	response, err := client.Get("http://" + address + "/healthz")
+	ready, err := leasehealth.Check(context.Background(), address)
 	if err != nil {
-		return fmt.Errorf("lease service health request failed: %w", err)
+		return err
 	}
-	defer response.Body.Close()
-	if response.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 1024))
-		return fmt.Errorf("lease service is not ready: %s", strings.TrimSpace(string(body)))
+	if !ready {
+		return errors.New("lease service is not ready: gRPC health status is NOT_SERVING")
 	}
 	return nil
 }
 
-// healthProvider exposes the stream state needed by the health endpoint.
+// healthProvider exposes the readiness state used by the standard gRPC health service.
 type healthProvider interface {
 	// Ready reports whether usable Xray lease telemetry has arrived.
 	Ready() bool
-	// StreamConnected reports whether the Controller snapshot stream is open.
-	StreamConnected() bool
-}
-
-// newHealthHandler creates the internal JSON readiness endpoint.
-func newHealthHandler(worker healthProvider) http.Handler {
-	return http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		if request.Method != http.MethodGet || request.URL.Path != "/healthz" {
-			http.NotFound(response, request)
-			return
-		}
-		response.Header().Set("Content-Type", "application/json")
-		streamConnected := worker != nil && worker.StreamConnected()
-		if !streamConnected {
-			response.WriteHeader(http.StatusServiceUnavailable)
-		}
-		ready := worker != nil && worker.Ready()
-		_ = json.NewEncoder(response).Encode(map[string]any{"ready": ready, "controllerStreamConnected": streamConnected})
-	})
 }
 
 // envOr returns a non-empty environment value or its fallback.

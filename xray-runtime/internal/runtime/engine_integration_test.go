@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"testing"
@@ -223,6 +224,65 @@ func TestEmbeddedEngineCollectsTelemetryForEachConfiguredProtocol(t *testing.T) 
 	}
 	if _, err := engine.GetTelemetry(ctx, map[xrayruntimev1.Protocol]string{xrayruntimev1.Protocol_PROTOCOL_VLESS: "missing-inbound"}); err == nil {
 		t.Fatal("telemetry read accepted an unknown inbound")
+	}
+}
+
+func TestEmbeddedEnginePrefersVLESSLeaseForLegacyDualIdentity(t *testing.T) {
+	vlessPort := freeEngineTCPPort(t)
+	hysteriaPort := freeEngineUDPPort(t)
+	certificateFile, keyFile := writeEngineTestCertificate(t)
+	configuration := []byte(fmt.Sprintf(`{"log":{"loglevel":"none"},"stats":{},"policy":{"levels":{"0":{"statsUserUplink":true,"statsUserDownlink":true,"statsUserOnline":true}}},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"vless","tag":"vless-reality","settings":{"clients":[],"decryption":"none"},"streamSettings":{"network":"tcp","security":"none"}},{"listen":"127.0.0.1","port":%d,"protocol":"hysteria","tag":"hysteria2","settings":{"version":2,"users":[]},"streamSettings":{"network":"hysteria","security":"tls","tlsSettings":{"certificates":[{"certificateFile":%q,"keyFile":%q}]},"hysteriaSettings":{"version":2,"udpIdleTimeout":60}}}],"outbounds":[{"protocol":"freedom","tag":"direct"}]}`, vlessPort, hysteriaPort, certificateFile, keyFile))
+	engine, err := LoadEngine(configuration)
+	if err != nil {
+		t.Fatalf("load legacy dual Xray config: %v", err)
+	}
+	defer func() {
+		if err := engine.Close(); err != nil {
+			t.Errorf("close legacy dual Xray engine: %v", err)
+		}
+	}()
+	if err := engine.Start(); err != nil {
+		t.Fatalf("start legacy dual Xray config: %v", err)
+	}
+	const email = "legacy-device@xray-easy"
+	if _, err := engine.AddUser(context.Background(), xrayruntimev1.Protocol_PROTOCOL_VLESS, "vless-reality", email, "12345678-1234-4234-8234-123456789012", "xtls-rprx-vision"); err != nil {
+		t.Fatalf("add VLESS legacy identity: %v", err)
+	}
+	if _, err := engine.AddUser(context.Background(), xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2, "hysteria2", email, "hysteria-secret", ""); err != nil {
+		t.Fatalf("add Hysteria legacy identity: %v", err)
+	}
+	statsManager, ok := engine.instance.GetFeature(corestats.ManagerType()).(corestats.Manager)
+	if !ok || statsManager == nil {
+		t.Fatal("legacy dual engine has no stats manager")
+	}
+	online, err := statsManager.GetOrRegisterOnlineMap("user>>>" + email + ">>>online")
+	if err != nil {
+		t.Fatal(err)
+	}
+	online.AddIP("192.0.2.41")
+	leaseKey := leaseConnectionKey{
+		protocol: xrayruntimev1.Protocol_PROTOCOL_VLESS,
+		email:    email,
+		sourceIP: netip.MustParseAddr("192.0.2.41"),
+	}
+	connectedAt := time.Now().UTC()
+	engine.leases.mu.Lock()
+	engine.leases.connections[leaseKey] = map[uintptr]*leaseConnection{1: {}}
+	engine.leases.connectedAt[leaseKey] = connectedAt
+	engine.leases.mu.Unlock()
+
+	for attempt := 0; attempt < 20; attempt++ {
+		telemetry, err := engine.GetTelemetry(context.Background(), map[xrayruntimev1.Protocol]string{
+			xrayruntimev1.Protocol_PROTOCOL_HYSTERIA2: "hysteria2",
+			xrayruntimev1.Protocol_PROTOCOL_VLESS:     "vless-reality",
+		})
+		if err != nil || len(telemetry) != 1 {
+			t.Fatalf("collect legacy dual telemetry = %+v, %v", telemetry, err)
+		}
+		item := telemetry[0]
+		if item.Protocol != xrayruntimev1.Protocol_PROTOCOL_VLESS || !item.Online || len(item.SourceIPs) != 1 || item.SourceIPs[0].Address != leaseKey.sourceIP.String() || !item.SourceIPs[0].ConnectedAt.Equal(connectedAt) {
+			t.Fatalf("legacy dual telemetry lost VLESS lease identity: %+v", item)
+		}
 	}
 }
 

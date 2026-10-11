@@ -87,6 +87,24 @@ func TestSubscribeSharesOneTelemetryStreamUntilLastListenerLeaves(t *testing.T) 
 	}
 }
 
+func TestStaleTelemetryStreamCannotChangeReplacementConnectionState(t *testing.T) {
+	manager := &Manager{streamGeneration: 2, streamConnected: true}
+	manager.setStreamConnectedForGeneration(1, false)
+	manager.mu.RLock()
+	stillConnected := manager.streamConnected
+	manager.mu.RUnlock()
+	if !stillConnected {
+		t.Fatal("stale stream cleared the replacement stream's connection state")
+	}
+	manager.setStreamConnectedForGeneration(2, false)
+	manager.mu.RLock()
+	stillConnected = manager.streamConnected
+	manager.mu.RUnlock()
+	if stillConnected {
+		t.Fatal("current stream could not clear its connection state")
+	}
+}
+
 func TestApplyStreamUpdatePersistsTotalsRatesAndRejectsReplay(t *testing.T) {
 	db, _ := openStatsTestStore(t)
 	createStatsClient(t, db, "phone", "phone@example.test")

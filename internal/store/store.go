@@ -871,6 +871,19 @@ func (s *Store) SetupStatus(ctx context.Context) (SetupStatus, error) {
 
 // Initialize initializes the requested resource.
 func (s *Store) Initialize(ctx context.Context, username, passwordHash, publicHost string, publicPort int) (Admin, error) {
+	return s.InitializeWithSettings(ctx, username, passwordHash, domain.Settings{
+		PublicHost:          publicHost,
+		PublicPort:          publicPort,
+		XrayAPIListen:       "127.0.0.1:10085",
+		InternalInboundPort: 8443,
+		ClientFingerprint:   "chrome",
+		LogLevel:            "warning",
+	})
+}
+
+// InitializeWithSettings atomically creates the first administrator and its
+// complete node settings. A failed settings write leaves setup uninitialized.
+func (s *Store) InitializeWithSettings(ctx context.Context, username, passwordHash string, settings domain.Settings) (Admin, error) {
 	username = strings.ToLower(strings.TrimSpace(username))
 	if username == "" || passwordHash == "" {
 		return Admin{}, errors.New("username and password hash are required")
@@ -895,7 +908,7 @@ func (s *Store) Initialize(ctx context.Context, username, passwordHash, publicHo
 	if _, err := tx.ExecContext(ctx, `INSERT INTO admin_users(id, username, password_hash, created_at, updated_at) VALUES(?,?,?,?,?)`, id, username, passwordHash, now, now); err != nil {
 		return Admin{}, fmt.Errorf("create admin: %w", err)
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO settings(id, public_host, public_port, xray_api_listen, internal_inbound_port, created_at, updated_at) VALUES(1,?,?,?,?,?,?)`, publicHost, publicPort, "127.0.0.1:10085", 8443, now, now); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO settings(id, public_host, public_port, xray_api_listen, internal_inbound_port, reality_target, reality_sni, reality_private_key_enc, reality_public_key, client_fingerprint, log_level, created_at, updated_at) VALUES(1,?,?,?,?,?,?,?,?,?,?,?,?)`, settings.PublicHost, settings.PublicPort, settings.XrayAPIListen, settings.InternalInboundPort, settings.RealityTarget, settings.RealitySNI, settings.RealityPrivateKeyEnc, settings.RealityPublicKey, settings.ClientFingerprint, settings.LogLevel, now, now); err != nil {
 		return Admin{}, fmt.Errorf("create settings: %w", err)
 	}
 	if err := tx.Commit(); err != nil {

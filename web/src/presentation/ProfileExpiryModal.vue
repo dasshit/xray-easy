@@ -25,17 +25,19 @@ function submit(): void {
 <template>
   <div class="modal-backdrop" role="presentation" @click.self="emit('close')">
     <div v-modal-focus class="modal modal-small" role="dialog" aria-modal="true" aria-labelledby="expiry-modal-title" tabindex="-1">
-      <div class="modal-header">
-        <div><p class="eyebrow">{{ client.name }}</p><h2 id="expiry-modal-title">{{ text.expiryDialogTitle }}</h2></div>
-        <button class="icon-button" type="button" :aria-label="text.close" @click="emit('close')">×</button>
-      </div>
-      <form @submit.prevent="submit">
-        <ExpirySelector v-model="expiresAt" :language="language" @valid-change="expiryIsValid = $event" />
-        <div class="modal-actions">
-          <button class="secondary" type="button" :disabled="busy" @click="emit('close')">{{ text.cancel }}</button>
-          <button type="submit" :disabled="busy || !expiryIsValid">{{ text.saveExpiry }}</button>
+      <div class="modal-scroll-content">
+        <div class="modal-header">
+          <div><p class="eyebrow">{{ client.name }}</p><h2 id="expiry-modal-title">{{ text.expiryDialogTitle }}</h2></div>
+          <button class="icon-button" type="button" :aria-label="text.close" @click="emit('close')"><svg class="close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg></button>
         </div>
-      </form>
+        <form @submit.prevent="submit">
+          <ExpirySelector v-model="expiresAt" :language="language" @valid-change="expiryIsValid = $event" />
+          <div class="modal-actions">
+            <button class="secondary" type="button" :disabled="busy" @click="emit('close')">{{ text.cancel }}</button>
+            <button type="submit" :disabled="busy || !expiryIsValid">{{ text.saveExpiry }}</button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 </template>

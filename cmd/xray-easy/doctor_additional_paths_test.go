@@ -167,7 +167,7 @@ func TestDoctorLeasePolicyFailureAndConnectedUnreadyTelemetry(t *testing.T) {
 	}{
 		{name: "invalid duration", maxActive: "2", grace: "soon", wantDetail: "environment values are invalid"},
 		{name: "unsupported maximum", maxActive: "3", grace: "30s", wantDetail: "outside supported limits"},
-		{name: "connected but telemetry is not ready", maxActive: "2", grace: "30s", health: leaseHealthStatus{ControllerStreamConnected: true}, wantDetail: "telemetry is not ready"},
+		{name: "lease telemetry is not ready", maxActive: "2", grace: "30s", health: leaseHealthStatus{}, wantDetail: "telemetry is not ready"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dataDir, configDir, key := prepareDoctorState(t, true)

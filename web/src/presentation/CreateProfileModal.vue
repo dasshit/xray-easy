@@ -46,76 +46,78 @@ function submit(): void {
 <template>
   <div class="modal-backdrop" role="presentation" @click.self="emit('cancel')">
     <div v-modal-focus class="modal" role="dialog" aria-modal="true" aria-labelledby="create-profile-title" tabindex="-1">
-      <div class="modal-header">
-        <div><p class="eyebrow">{{ text.profiles }}</p><h2 id="create-profile-title">{{ text.createProfile }}</h2></div>
-        <button class="icon-button" type="button" :aria-label="text.close" @click="emit('cancel')">×</button>
-      </div>
-      <form @submit.prevent="submit">
-        <label>
-          {{ text.newDevice }}
-          <input data-modal-autofocus v-model="form.name" class="device-name-input" :placeholder="text.newDevice" required maxlength="64" pattern="[A-Za-z0-9-]{1,64}" autocomplete="off" />
-        </label>
-        <label>
-          {{ text.profileProtocol }}
-          <select v-model="form.protocol" data-testid="profile-protocol">
-            <option value="vless">VLESS + REALITY</option>
-            <option value="vmess" :disabled="!vmessAvailable">VMess + TLS</option>
-            <option value="hysteria2" :disabled="!hysteriaAvailable">Hysteria 2</option>
-            <option value="shadowsocks" :disabled="!shadowsocksAvailable">Shadowsocks</option>
-            <option value="trojan" :disabled="!trojanAvailable">Trojan</option>
-            <option value="amneziawg" :disabled="!awgAvailable">AmneziaWG</option>
-          </select>
-        </label>
-        <ExpirySelector v-model="form.expiresAt" :language="language" @valid-change="expiryIsValid = $event" />
-        <p v-if="!hysteriaAvailable && form.protocol !== 'vmess' && form.protocol !== 'shadowsocks' && form.protocol !== 'trojan' && form.protocol !== 'amneziawg'" class="hint" role="status">
-          {{ text.hysteriaUnavailable }}
-          <button class="text-button" type="button" @click="emit('openSettings')">{{ text.hysteriaSettingsLink }}</button>
-        </p>
-        <p v-if="form.protocol === 'vmess' && !vmessAvailable" class="hint" role="status">
-          {{ text.vmessUnavailable }}
-          <button class="text-button" type="button" @click="emit('openSettings')">{{ text.hysteriaSettingsLink }}</button>
-        </p>
-        <template v-if="form.protocol === 'vless'">
+      <div class="modal-scroll-content">
+        <div class="modal-header">
+          <div><p class="eyebrow">{{ text.profiles }}</p><h2 id="create-profile-title">{{ text.createProfile }}</h2></div>
+          <button class="icon-button" type="button" :aria-label="text.close" @click="emit('cancel')"><svg class="close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg></button>
+        </div>
+        <form @submit.prevent="submit">
           <label>
-            {{ text.fingerprint }}
-            <select v-model="form.fingerprint">
-              <option value="">chrome ({{ text.defaultValue }})</option>
-              <option value="safari">safari</option>
-              <option value="ios">ios</option>
-              <option value="firefox">firefox</option>
-              <option value="edge">edge</option>
+            {{ text.newDevice }}
+            <input data-modal-autofocus v-model="form.name" class="device-name-input" :placeholder="text.newDevice" required maxlength="64" pattern="[A-Za-z0-9-]{1,64}" autocomplete="off" />
+          </label>
+          <label>
+            {{ text.profileProtocol }}
+            <select v-model="form.protocol" data-testid="profile-protocol">
+              <option value="vless">VLESS + REALITY</option>
+              <option value="vmess" :disabled="!vmessAvailable">VMess + TLS</option>
+              <option value="hysteria2" :disabled="!hysteriaAvailable">Hysteria 2</option>
+              <option value="shadowsocks" :disabled="!shadowsocksAvailable">Shadowsocks</option>
+              <option value="trojan" :disabled="!trojanAvailable">Trojan</option>
+              <option value="amneziawg" :disabled="!awgAvailable">AmneziaWG</option>
             </select>
           </label>
-          <p class="hint">{{ text.profileCreateSummaryVless }}</p>
-        </template>
-        <template v-else-if="form.protocol === 'hysteria2'">
-          <p class="hint">{{ text.profileCreateSummaryHysteria }}</p>
-          <details class="profile-advanced">
-            <summary>{{ text.hysteriaAdvanced }}</summary>
+          <ExpirySelector v-model="form.expiresAt" :language="language" @valid-change="expiryIsValid = $event" />
+          <p v-if="!hysteriaAvailable && form.protocol !== 'vmess' && form.protocol !== 'shadowsocks' && form.protocol !== 'trojan' && form.protocol !== 'amneziawg'" class="hint" role="status">
+            {{ text.hysteriaUnavailable }}
+            <button class="text-button" type="button" @click="emit('openSettings')">{{ text.hysteriaSettingsLink }}</button>
+          </p>
+          <p v-if="form.protocol === 'vmess' && !vmessAvailable" class="hint" role="status">
+            {{ text.vmessUnavailable }}
+            <button class="text-button" type="button" @click="emit('openSettings')">{{ text.hysteriaSettingsLink }}</button>
+          </p>
+          <template v-if="form.protocol === 'vless'">
             <label>
-              {{ text.profileAuth }}
-              <input v-model="form.auth" type="password" autocomplete="new-password" maxlength="256" />
-              <small class="hint">{{ text.profileAuthHelp }}</small>
+              {{ text.fingerprint }}
+              <select v-model="form.fingerprint">
+                <option value="">chrome ({{ text.defaultValue }})</option>
+                <option value="safari">safari</option>
+                <option value="ios">ios</option>
+                <option value="firefox">firefox</option>
+                <option value="edge">edge</option>
+              </select>
             </label>
-          </details>
-        </template>
-        <template v-else-if="form.protocol === 'vmess'">
-          <p class="hint">{{ text.profileCreateSummaryVMess }}</p>
-        </template>
-        <template v-else-if="form.protocol === 'shadowsocks'">
-          <p class="hint">{{ text.profileCreateSummaryShadowsocks }}</p>
-          <p v-if="!shadowsocksAvailable" class="hint" role="status">{{ text.shadowsocksUnavailable }} <button class="text-button" type="button" @click="emit('openSettings')">{{ text.shadowsocksSettingsLink }}</button></p>
-        </template>
-        <template v-else-if="form.protocol === 'trojan'"><p class="hint">{{ text.profileCreateSummaryTrojan }}</p><p v-if="!trojanAvailable" class="hint" role="status">{{ text.trojanUnavailable }} <button class="text-button" type="button" @click="emit('openSettings')">{{ text.trojanSettingsLink }}</button></p></template>
-        <template v-else>
-          <p class="hint">{{ text.profileCreateSummaryAmneziaWG }}</p>
-          <p v-if="!awgAvailable" class="hint" role="status">{{ text.awgUnavailable }}</p>
-        </template>
-        <div class="modal-actions">
-          <button class="secondary" type="button" :disabled="busy" @click="emit('cancel')">{{ text.cancel }}</button>
-          <button type="submit" :disabled="busy || !expiryIsValid || !form.name.trim() || (form.protocol === 'hysteria2' && !hysteriaAvailable) || (form.protocol === 'vmess' && !vmessAvailable) || (form.protocol === 'shadowsocks' && !shadowsocksAvailable) || (form.protocol === 'trojan' && !trojanAvailable) || (form.protocol === 'amneziawg' && !awgAvailable)">{{ text.createDevice }}</button>
-        </div>
-      </form>
+            <p class="hint">{{ text.profileCreateSummaryVless }}</p>
+          </template>
+          <template v-else-if="form.protocol === 'hysteria2'">
+            <p class="hint">{{ text.profileCreateSummaryHysteria }}</p>
+            <details class="profile-advanced">
+              <summary>{{ text.hysteriaAdvanced }}</summary>
+              <label>
+                {{ text.profileAuth }}
+                <input v-model="form.auth" type="password" autocomplete="new-password" maxlength="256" />
+                <small class="hint">{{ text.profileAuthHelp }}</small>
+              </label>
+            </details>
+          </template>
+          <template v-else-if="form.protocol === 'vmess'">
+            <p class="hint">{{ text.profileCreateSummaryVMess }}</p>
+          </template>
+          <template v-else-if="form.protocol === 'shadowsocks'">
+            <p class="hint">{{ text.profileCreateSummaryShadowsocks }}</p>
+            <p v-if="!shadowsocksAvailable" class="hint" role="status">{{ text.shadowsocksUnavailable }} <button class="text-button" type="button" @click="emit('openSettings')">{{ text.shadowsocksSettingsLink }}</button></p>
+          </template>
+          <template v-else-if="form.protocol === 'trojan'"><p class="hint">{{ text.profileCreateSummaryTrojan }}</p><p v-if="!trojanAvailable" class="hint" role="status">{{ text.trojanUnavailable }} <button class="text-button" type="button" @click="emit('openSettings')">{{ text.trojanSettingsLink }}</button></p></template>
+          <template v-else>
+            <p class="hint">{{ text.profileCreateSummaryAmneziaWG }}</p>
+            <p v-if="!awgAvailable" class="hint" role="status">{{ text.awgUnavailable }}</p>
+          </template>
+          <div class="modal-actions">
+            <button class="secondary" type="button" :disabled="busy" @click="emit('cancel')">{{ text.cancel }}</button>
+            <button type="submit" :disabled="busy || !expiryIsValid || !form.name.trim() || (form.protocol === 'hysteria2' && !hysteriaAvailable) || (form.protocol === 'vmess' && !vmessAvailable) || (form.protocol === 'shadowsocks' && !shadowsocksAvailable) || (form.protocol === 'trojan' && !trojanAvailable) || (form.protocol === 'amneziawg' && !awgAvailable)">{{ text.createDevice }}</button>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
 </template>

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"xray-easy/internal/auth"
 	"xray-easy/internal/secret"
 	"xray-easy/internal/totp"
 )
@@ -103,12 +104,16 @@ func TestSetupInitializeReportsSecretAndStorageFailures(t *testing.T) {
 		}
 	})
 
-	t.Run("Xray settings update fails", func(t *testing.T) {
+	t.Run("initial settings insert fails atomically", func(t *testing.T) {
 		app := newTestApp(t, false)
-		execSQLiteTestMutation(t, app, "reject initial settings update", `CREATE TRIGGER reject_initial_settings_update BEFORE UPDATE ON settings BEGIN SELECT RAISE(ABORT, 'settings update blocked'); END`)
+		execSQLiteTestMutation(t, app, "reject initial settings insert", `CREATE TRIGGER reject_initial_settings_insert BEFORE INSERT ON settings BEGIN SELECT RAISE(ABORT, 'settings insert blocked'); END`)
 		response := requestJSON(t, app, http.MethodPost, "/api/setup/initialize", request, false)
-		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "could not save Xray API settings") {
-			t.Fatalf("initial settings update failure = %d %s", response.Code, response.Body.String())
+		if response.Code != http.StatusInternalServerError || !strings.Contains(response.Body.String(), "settings insert blocked") {
+			t.Fatalf("initial settings insert failure = %d %s", response.Code, response.Body.String())
+		}
+		status := decodeResponse[map[string]any](t, requestJSON(t, app, http.MethodGet, "/api/setup/status", nil, false))
+		if status["initialized"] != false {
+			t.Fatalf("failed settings insert partially initialized setup: %+v", status)
 		}
 	})
 }
@@ -127,6 +132,33 @@ func TestSetupInitializeCanonicalizesIPv6PublicHost(t *testing.T) {
 	settings, err := app.server.store.GetSettings(t.Context())
 	if err != nil || settings.PublicHost != "2001:db8::1" {
 		t.Fatalf("persisted IPv6 public host = %q, %v", settings.PublicHost, err)
+	}
+}
+
+func TestLoginRoutesThrottleRepeatedAttemptsFromOneSource(t *testing.T) {
+	app := newTestApp(t, false)
+	app.server.loginThrottle = auth.NewLoginLimiter(1, time.Minute, 1, 10)
+	request := loginRequest{Username: "unknown", Password: "not-the-password"}
+
+	poolApp := newTestApp(t, false)
+	poolLimiter := auth.NewLoginLimiter(10, time.Minute, 1, 10)
+	poolApp.server.loginThrottle = poolLimiter
+	if !poolLimiter.AcquireVerification() {
+		t.Fatal("could not occupy test password verification slot")
+	}
+	busy := requestJSON(t, poolApp, http.MethodPost, "/api/auth/login", request, false)
+	poolLimiter.ReleaseVerification()
+	if busy.Code != http.StatusTooManyRequests || !strings.Contains(busy.Body.String(), "capacity is busy") {
+		t.Fatalf("busy password verifier status = %d; body=%s", busy.Code, busy.Body.String())
+	}
+
+	first := requestJSON(t, app, http.MethodPost, "/api/auth/login", request, false)
+	if first.Code != http.StatusUnauthorized {
+		t.Fatalf("first failed login status = %d; body=%s", first.Code, first.Body.String())
+	}
+	second := requestJSON(t, app, http.MethodPost, "/api/auth/login/totp", request, false)
+	if second.Code != http.StatusTooManyRequests || second.Header().Get("Retry-After") == "" {
+		t.Fatalf("repeated authentication status = %d; Retry-After=%q body=%s", second.Code, second.Header().Get("Retry-After"), second.Body.String())
 	}
 }
 

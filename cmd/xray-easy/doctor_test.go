@@ -10,13 +10,16 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
-	"net/http"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"xray-easy/internal/domain"
 	"xray-easy/internal/interaction"
 	"xray-easy/internal/secret"
@@ -126,25 +129,29 @@ func TestDoctorLeaseServiceChecksAreConditionalAndReportHealth(t *testing.T) {
 	var address string
 	leaseHealthProbe = func(_ context.Context, got string) (leaseHealthStatus, error) {
 		address = got
-		return leaseHealthStatus{Ready: true, ControllerStreamConnected: true}, nil
+		return leaseHealthStatus{Ready: true}, nil
 	}
 	checks = collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
 	if !hasDoctorCheck(checks, "Xray lease service", doctorPass) || address != "172.31.242.4:8091" {
 		t.Fatalf("healthy lease service check/address = %+v, %q", findDoctorCheck(checks, "Xray lease service"), address)
 	}
 	leaseHealthProbe = func(context.Context, string) (leaseHealthStatus, error) {
-		return leaseHealthStatus{ControllerStreamConnected: true}, nil
+		return leaseHealthStatus{}, nil
 	}
 	checks = collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "no-config"}}, &doctorHandlerStub{}, &doctorStatsStub{})
 	if !hasDoctorCheck(checks, "Xray lease service", doctorWarn) {
 		t.Fatalf("lease service awaiting first-run setup was not a warning: %+v", findDoctorCheck(checks, "Xray lease service"))
 	}
 	leaseHealthProbe = func(context.Context, string) (leaseHealthStatus, error) {
-		return leaseHealthStatus{Ready: true}, nil
+		return leaseHealthStatus{}, nil
 	}
-	checks = collectDoctorChecks(context.Background(), t.TempDir(), t.TempDir(), &doctorXrayRuntimeStub{}, &doctorHandlerStub{}, &doctorStatsStub{})
-	if !hasDoctorCheck(checks, "Xray lease service", doctorFail) || !doctorCheckContains(checks, "Xray lease service", "snapshot stream is disconnected") {
-		t.Fatalf("disconnected telemetry stream was not a failure: %+v", findDoctorCheck(checks, "Xray lease service"))
+	dataDir, configDir, _ := prepareDoctorState(t, true)
+	checks = collectDoctorChecks(context.Background(), dataDir, configDir, &doctorXrayRuntimeStub{status: domain.XrayRuntimeStatus{State: "running"}}, &doctorHandlerStub{}, &doctorStatsStub{})
+	if !hasDoctorCheck(checks, "Xray lease service", doctorFail) || !doctorCheckContains(checks, "Xray lease service", "telemetry is not ready") {
+		notReady := findDoctorCheck(checks, "Xray lease service")
+		if notReady == nil || !strings.Contains(notReady.detail, "not ready") {
+			t.Fatalf("unready lease telemetry was not a failure: %+v", notReady)
+		}
 	}
 	leaseHealthProbe = func(context.Context, string) (leaseHealthStatus, error) {
 		return leaseHealthStatus{}, errors.New("connection refused")
@@ -173,64 +180,37 @@ func TestLeaseServiceEnabledFromEnvironmentRecognizesComposeProfile(t *testing.T
 	}
 }
 
-type doctorRoundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f doctorRoundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
-}
-
-func TestProbeLeaseServiceValidatesEndpointAndHealthPayload(t *testing.T) {
-	if _, err := probeLeaseService(context.Background(), "invalid host"); err == nil {
-		t.Fatal("invalid health endpoint address was accepted")
+func TestProbeLeaseServiceUsesGRPCReadiness(t *testing.T) {
+	if _, err := probeLeaseService(context.Background(), "invalid"); err == nil || !strings.Contains(err.Error(), "address is invalid") {
+		t.Fatalf("invalid health gRPC address error = %v", err)
 	}
-	if _, err := probeLeaseServiceWithClient(context.Background(), "%", http.DefaultClient); err == nil || !strings.Contains(err.Error(), "address is invalid") {
-		t.Fatalf("malformed URL error = %v", err)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, test := range []struct {
-		name       string
-		status     int
-		body       string
-		transport  error
-		wantStatus bool
-	}{
-		{name: "healthy", status: http.StatusOK, body: `{"ready":true,"controllerStreamConnected":true}`},
-		{name: "non-success status", status: http.StatusServiceUnavailable, body: `{}`, wantStatus: true},
-		{name: "invalid payload", status: http.StatusOK, body: `not-json`},
-		{name: "transport failure", transport: errors.New("connection refused")},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			client := &http.Client{Transport: doctorRoundTripFunc(func(request *http.Request) (*http.Response, error) {
-				if request.URL.Path != "/healthz" {
-					t.Errorf("health endpoint path=%q", request.URL.Path)
-				}
-				if test.transport != nil {
-					return nil, test.transport
-				}
-				return &http.Response{StatusCode: test.status, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
-			})}
-			health, err := probeLeaseServiceWithClient(context.Background(), "127.0.0.1:8091", client)
-			if test.name == "healthy" {
-				if err != nil || !health.Ready || !health.ControllerStreamConnected {
-					t.Fatalf("lease health=%+v error=%v", health, err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatal("invalid lease health response was accepted")
-			}
-			if test.wantStatus && !strings.Contains(err.Error(), "HTTP 503") {
-				t.Fatalf("health error=%v", err)
-			}
-		})
-	}
-	previousTransport := http.DefaultTransport
-	http.DefaultTransport = doctorRoundTripFunc(func(_ *http.Request) (*http.Response, error) {
-		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"ready":true,"controllerStreamConnected":false}`)), Header: make(http.Header)}, nil
+	server := grpc.NewServer()
+	defer server.Stop()
+	provider := health.NewServer()
+	healthpb.RegisterHealthServer(server, provider)
+	serveErr := make(chan error, 1)
+	go func() { serveErr <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		_ = listener.Close()
+		select {
+		case <-serveErr:
+		case <-time.After(time.Second):
+			t.Error("health gRPC server did not stop")
+		}
 	})
-	t.Cleanup(func() { http.DefaultTransport = previousTransport })
-	health, err := probeLeaseServiceWithClient(context.Background(), "127.0.0.1:18080", nil)
-	if err != nil || !health.Ready || health.ControllerStreamConnected {
-		t.Fatalf("default lease HTTP client health=%+v error=%v", health, err)
+	provider.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	status, err := probeLeaseService(context.Background(), listener.Addr().String())
+	if err != nil || !status.Ready {
+		t.Fatalf("serving lease health=%+v error=%v", status, err)
+	}
+	provider.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+	status, err = probeLeaseService(context.Background(), listener.Addr().String())
+	if err != nil || status.Ready {
+		t.Fatalf("not-serving lease health=%+v error=%v", status, err)
 	}
 }
 

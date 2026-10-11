@@ -491,6 +491,30 @@ func TestStartPollsImmediatelyAndOnIntervalUntilCanceled(t *testing.T) {
 	}
 }
 
+func TestPeriodicPollingFallsBackOnlyWhenTelemetryStreamIsInactive(t *testing.T) {
+	db, _ := openStatsTestStore(t)
+	api := &fakeStatsAPI{}
+	manager := NewManager(db, api)
+	manager.stream = &fakeTelemetryStreamOpener{ctxs: make(chan context.Context, 1)}
+
+	manager.pollIfStreamInactive(context.Background())
+	if got := api.callCount(); got != 1 {
+		t.Fatalf("poll-only fallback calls = %d, want 1", got)
+	}
+
+	manager.setStreamConnected(true)
+	manager.pollIfStreamInactive(context.Background())
+	if got := api.callCount(); got != 1 {
+		t.Fatalf("active stream triggered a duplicate unary poll; calls = %d", got)
+	}
+
+	manager.setStreamConnected(false)
+	manager.pollIfStreamInactive(context.Background())
+	if got := api.callCount(); got != 2 {
+		t.Fatalf("poll fallback did not resume after stream disconnect; calls = %d", got)
+	}
+}
+
 func TestCounterDeltaAndOnlineWindowBoundaries(t *testing.T) {
 	for _, test := range []struct{ current, previous, want int64 }{
 		{-1, 10, 0}, {0, 0, 0}, {10, 4, 6}, {4, 10, 4},

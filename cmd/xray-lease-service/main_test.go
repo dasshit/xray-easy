@@ -3,39 +3,32 @@ package main
 import (
 	"context"
 	"errors"
-	"io"
 	"log/slog"
-	"net/http"
-	"net/http/httptest"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/test/bufconn"
 	"xray-easy/internal/lease"
 )
 
-type roundTripFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
-	return f(request)
-}
-
 type fakeHealthProvider struct {
-	ready     bool
-	connected bool
+	ready bool
 }
 
-func (f fakeHealthProvider) Ready() bool           { return f.ready }
-func (f fakeHealthProvider) StreamConnected() bool { return f.connected }
+func (f fakeHealthProvider) Ready() bool { return f.ready }
 
 type fakeLeaseWorker struct {
 	run func(context.Context) error
 }
 
-func (fakeLeaseWorker) Ready() bool           { return false }
-func (fakeLeaseWorker) StreamConnected() bool { return true }
+func (fakeLeaseWorker) Ready() bool { return false }
 func (f fakeLeaseWorker) Run(ctx context.Context) error {
 	return f.run(ctx)
 }
@@ -88,58 +81,22 @@ func TestReadConfigRejectsInvalidValues(t *testing.T) {
 	}
 }
 
-func TestHealthHandlerReportsStreamReadinessAndRejectsOtherRequests(t *testing.T) {
-	tests := []struct {
-		name       string
-		provider   healthProvider
-		method     string
-		path       string
-		statusCode int
-		body       string
-	}{
-		{"ready", fakeHealthProvider{ready: true, connected: true}, http.MethodGet, "/healthz", http.StatusOK, `"ready":true`},
-		{"connected while awaiting first Xray config", fakeHealthProvider{connected: true}, http.MethodGet, "/healthz", http.StatusOK, `"controllerStreamConnected":true`},
-		{"controller disconnected", fakeHealthProvider{}, http.MethodGet, "/healthz", http.StatusServiceUnavailable, `"controllerStreamConnected":false`},
-		{"wrong path", fakeHealthProvider{connected: true}, http.MethodGet, "/other", http.StatusNotFound, ""},
-		{"wrong method", fakeHealthProvider{connected: true}, http.MethodPost, "/healthz", http.StatusNotFound, ""},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			request := httptest.NewRequest(test.method, test.path, nil)
-			response := httptest.NewRecorder()
-			newHealthHandler(test.provider).ServeHTTP(response, request)
-			if response.Code != test.statusCode || !strings.Contains(response.Body.String(), test.body) {
-				t.Fatalf("health response = %d %q", response.Code, response.Body.String())
-			}
-		})
-	}
-}
-
-func TestCheckHealthWithClient(t *testing.T) {
+func TestUpdateLeaseReadinessOnlyServesUsableSnapshots(t *testing.T) {
+	server := health.NewServer()
 	for _, test := range []struct {
-		name         string
-		statusCode   int
-		body         string
-		transportErr error
-		want         string
+		name  string
+		owner healthProvider
+		want  healthpb.HealthCheckResponse_ServingStatus
 	}{
-		{name: "healthy", statusCode: http.StatusOK},
-		{name: "unhealthy", statusCode: http.StatusServiceUnavailable, body: "controller down", want: "controller down"},
-		{name: "transport failure", transportErr: errors.New("offline"), want: "health request failed"},
+		{name: "nil worker", want: healthpb.HealthCheckResponse_NOT_SERVING},
+		{name: "connected without a usable snapshot", owner: fakeHealthProvider{}, want: healthpb.HealthCheckResponse_NOT_SERVING},
+		{name: "ready", owner: fakeHealthProvider{ready: true}, want: healthpb.HealthCheckResponse_SERVING},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			client := &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
-				if test.transportErr != nil {
-					return nil, test.transportErr
-				}
-				return &http.Response{StatusCode: test.statusCode, Body: io.NopCloser(strings.NewReader(test.body)), Header: make(http.Header)}, nil
-			})}
-			err := checkHealthWithClient("127.0.0.1:8091", client)
-			if test.want == "" && err != nil {
-				t.Fatalf("health check error = %v", err)
-			}
-			if test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
-				t.Fatalf("health check error = %v, want %q", err, test.want)
+			updateLeaseReadiness(test.owner, server)
+			response, err := server.Check(context.Background(), &healthpb.HealthCheckRequest{})
+			if err != nil || response.GetStatus() != test.want {
+				t.Fatalf("gRPC health = %v, %v; want %v", response.GetStatus(), err, test.want)
 			}
 		})
 	}
@@ -214,23 +171,53 @@ func TestRunHealthcheckAndMainDispatch(t *testing.T) {
 	}
 }
 
-func TestRunReturnsHealthServerFailureAndCheckHealthUsesHTTP(t *testing.T) {
+func TestRunReturnsHealthListenerFailureAndCheckHealthUsesGRPC(t *testing.T) {
 	tokenPath := filepath.Join(t.TempDir(), "controller.token")
 	if err := os.WriteFile(tokenPath, []byte("lease-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///127.0.0.1:10088")
 	t.Setenv("XRAY_LEASE_TOKEN_FILE", tokenPath)
-	t.Setenv("XRAY_LEASE_HEALTH_ADDR", "invalid address")
+	t.Setenv("XRAY_LEASE_GRPC_LISTEN", "invalid address")
 	for _, name := range []string{"XRAY_LEASE_MAX_ACTIVE", "XRAY_LEASE_GRACE", "XRAY_LEASE_RETRY_DELAY"} {
 		t.Setenv(name, "")
 	}
 	err := run(nil)
-	if err == nil || !strings.Contains(err.Error(), "lease service health server") {
-		t.Fatalf("health server failure = %v", err)
+	if err == nil || !strings.Contains(err.Error(), "listen for lease health gRPC") {
+		t.Fatalf("health listener failure = %v", err)
 	}
-	if err := checkHealth("127.0.0.1:0"); err == nil || !strings.Contains(err.Error(), "health request failed") {
-		t.Fatalf("unreachable health endpoint error = %v", err)
+	if err := checkHealth("invalid"); err == nil || !strings.Contains(err.Error(), "address is invalid") {
+		t.Fatalf("invalid health gRPC address error = %v", err)
+	}
+}
+
+func TestCheckHealthFollowsStandardGRPCReadiness(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := grpc.NewServer()
+	healthServer := health.NewServer()
+	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_NOT_SERVING)
+	healthpb.RegisterHealthServer(server, healthServer)
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+		select {
+		case <-serveDone:
+		case <-time.After(time.Second):
+			t.Error("health gRPC server did not stop")
+		}
+	})
+	address := listener.Addr().String()
+	if err := checkHealth(address); err == nil || !strings.Contains(err.Error(), "NOT_SERVING") {
+		t.Fatalf("not-serving health check = %v", err)
+	}
+	healthServer.SetServingStatus("", healthpb.HealthCheckResponse_SERVING)
+	if err := checkHealth(address); err != nil {
+		t.Fatalf("serving health check = %v", err)
 	}
 }
 
@@ -242,17 +229,17 @@ func configureLeaseRun(t *testing.T) {
 	}
 	t.Setenv("XRAY_CONTROLLER_ADDR", "passthrough:///127.0.0.1:10088")
 	t.Setenv("XRAY_LEASE_TOKEN_FILE", tokenPath)
-	t.Setenv("XRAY_LEASE_HEALTH_ADDR", "127.0.0.1:0")
+	t.Setenv("XRAY_LEASE_GRPC_LISTEN", "127.0.0.1:0")
 	for _, name := range []string{"XRAY_LEASE_MAX_ACTIVE", "XRAY_LEASE_GRACE", "XRAY_LEASE_RETRY_DELAY"} {
 		t.Setenv(name, "")
 	}
 }
 
 func TestRunCoversWorkerFactoryAndWorkerExitResults(t *testing.T) {
-	previousFactory, previousServer := newLeaseWorker, runLeaseHealthServer
+	previousFactory, previousServer, previousListener := newLeaseWorker, runLeaseHealthServer, listenLeaseHealth
 	previousSignal := leaseSignalContext
 	t.Cleanup(func() {
-		newLeaseWorker, runLeaseHealthServer, leaseSignalContext = previousFactory, previousServer, previousSignal
+		newLeaseWorker, runLeaseHealthServer, listenLeaseHealth, leaseSignalContext = previousFactory, previousServer, previousListener, previousSignal
 	})
 	configureLeaseRun(t)
 
@@ -266,9 +253,9 @@ func TestRunCoversWorkerFactoryAndWorkerExitResults(t *testing.T) {
 	newLeaseWorker = func(lease.Controller, lease.Config, *slog.Logger) (leaseServiceWorker, error) {
 		return fakeLeaseWorker{run: func(context.Context) error { return errors.New("worker crashed") }}, nil
 	}
-	runLeaseHealthServer = func(*http.Server) error {
-		time.Sleep(20 * time.Millisecond)
-		return http.ErrServerClosed
+	listenLeaseHealth = func(string, string) (net.Listener, error) { return bufconn.Listen(1024), nil }
+	runLeaseHealthServer = func(*grpc.Server, net.Listener) error {
+		return errors.New("injected serve failure")
 	}
 	if err := run(nil); err == nil || !strings.Contains(err.Error(), "worker crashed") {
 		t.Fatalf("worker failure = %v", err)
@@ -280,22 +267,40 @@ func TestRunCoversWorkerFactoryAndWorkerExitResults(t *testing.T) {
 	if err := run(nil); err != nil {
 		t.Fatalf("worker cancellation = %v", err)
 	}
+
+	for _, test := range []struct {
+		name string
+		in   error
+		want string
+	}{
+		{name: "unexpected nil", want: "stopped unexpectedly"},
+		{name: "canceled", in: context.Canceled},
+		{name: "failure", in: errors.New("failed"), want: "lease policy worker stopped"},
+	} {
+		t.Run("worker exit "+test.name, func(t *testing.T) {
+			err := leaseWorkerExitError(test.in)
+			if test.want == "" && err != nil || test.want != "" && (err == nil || !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("leaseWorkerExitError(%v) = %v, want %q", test.in, err, test.want)
+			}
+		})
+	}
 }
 
 func TestRunCoversHealthServerClosedAndSignalShutdown(t *testing.T) {
-	previousFactory, previousServer := newLeaseWorker, runLeaseHealthServer
+	previousFactory, previousServer, previousListener := newLeaseWorker, runLeaseHealthServer, listenLeaseHealth
 	previousSignal := leaseSignalContext
 	t.Cleanup(func() {
-		newLeaseWorker, runLeaseHealthServer, leaseSignalContext = previousFactory, previousServer, previousSignal
+		newLeaseWorker, runLeaseHealthServer, listenLeaseHealth, leaseSignalContext = previousFactory, previousServer, previousListener, previousSignal
 	})
 	configureLeaseRun(t)
+	listenLeaseHealth = func(string, string) (net.Listener, error) { return bufconn.Listen(1024), nil }
 	newLeaseWorker = func(lease.Controller, lease.Config, *slog.Logger) (leaseServiceWorker, error) {
 		return fakeLeaseWorker{run: func(ctx context.Context) error {
 			<-ctx.Done()
 			return ctx.Err()
 		}}, nil
 	}
-	runLeaseHealthServer = func(*http.Server) error { return http.ErrServerClosed }
+	runLeaseHealthServer = func(*grpc.Server, net.Listener) error { return grpc.ErrServerStopped }
 	if err := run(nil); err != nil {
 		t.Fatalf("closed health server = %v", err)
 	}
@@ -305,10 +310,7 @@ func TestRunCoversHealthServerClosedAndSignalShutdown(t *testing.T) {
 		cancel()
 		return ctx, cancel
 	}
-	runLeaseHealthServer = func(*http.Server) error {
-		time.Sleep(20 * time.Millisecond)
-		return http.ErrServerClosed
-	}
+	runLeaseHealthServer = func(*grpc.Server, net.Listener) error { return grpc.ErrServerStopped }
 	if err := run(nil); err != nil {
 		t.Fatalf("signal shutdown = %v", err)
 	}
@@ -325,7 +327,14 @@ func TestDefaultLeaseAdapters(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("signal context did not cancel")
 	}
-	if err := defaultRunLeaseHealthServer(&http.Server{Addr: "invalid address"}); err == nil {
-		t.Fatal("default health server accepted an invalid address")
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := defaultRunLeaseHealthServer(grpc.NewServer(), listener); err == nil {
+		t.Fatal("default gRPC health server accepted a closed listener")
 	}
 }

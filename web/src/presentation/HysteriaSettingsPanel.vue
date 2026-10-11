@@ -229,13 +229,15 @@ onMounted(() => { void loadSettings() })
 
   <div v-if="pending" class="modal-backdrop" role="presentation" @click.self="pending = null">
     <div v-modal-focus class="modal" role="dialog" aria-modal="true" aria-labelledby="hysteria-confirmation-title" tabindex="-1">
-      <div class="modal-header"><div><p class="eyebrow">{{ text.hysteriaTitle }}</p><h2 id="hysteria-confirmation-title">{{ text.confirmation }}</h2></div><button class="icon-button" :aria-label="text.close" @click="pending = null">×</button></div>
-      <h3>{{ text.settingsDiff }}</h3>
-      <ul class="review-list"><li v-for="item in pending.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul>
-      <h3>{{ text.consequences }}</h3>
-      <ul class="review-list"><li v-for="item in pending.consequences" :key="item">{{ item }}</li></ul>
-      <label>{{ text.confirmation }} ({{ text.expected }} {{ pending.expectedConfirmation }})<input v-model="pending.confirmation" autocomplete="off" /></label>
-      <div class="modal-actions"><button class="secondary" :disabled="busy" @click="pending = null">{{ text.cancel }}</button><button :disabled="busy || pending.confirmation !== pending.expectedConfirmation" @click="applySettings">{{ text.applySettings }}</button></div>
+      <div class="modal-scroll-content">
+        <div class="modal-header"><div><p class="eyebrow">{{ text.hysteriaTitle }}</p><h2 id="hysteria-confirmation-title">{{ text.confirmation }}</h2></div><button class="icon-button" :aria-label="text.close" @click="pending = null"><svg class="close-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5 19 19M19 5 5 19" /></svg></button></div>
+        <h3>{{ text.settingsDiff }}</h3>
+        <ul class="review-list"><li v-for="item in pending.diff" :key="item.field"><strong>{{ item.field }}</strong>: {{ item.from }} → {{ item.to }}</li></ul>
+        <h3>{{ text.consequences }}</h3>
+        <ul class="review-list"><li v-for="item in pending.consequences" :key="item">{{ item }}</li></ul>
+        <label>{{ text.confirmation }} ({{ text.expected }} {{ pending.expectedConfirmation }})<input v-model="pending.confirmation" autocomplete="off" /></label>
+        <div class="modal-actions"><button class="secondary" :disabled="busy" @click="pending = null">{{ text.cancel }}</button><button :disabled="busy || pending.confirmation !== pending.expectedConfirmation" @click="applySettings">{{ text.applySettings }}</button></div>
+      </div>
     </div>
   </div>
 </template>

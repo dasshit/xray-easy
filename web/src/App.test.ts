@@ -125,6 +125,67 @@ describe('App profile delivery actions', () => {
     wrapper.unmount()
   })
 
+  it('tracks the pointer highlight on glass surfaces and clears it when needed', async () => {
+    const gateway = createGateway()
+    const attachPoint = document.createElement('div')
+    document.body.append(attachPoint)
+    const wrapper = mount(App, {
+      attachTo: attachPoint,
+      global: { provide: { [xrayEasyGatewayKey as symbol]: gateway }, stubs: { HysteriaSettingsPanel: { template: '<div />' } } },
+    })
+    await flushPromises()
+
+    const button = wrapper.get('.theme-toggle')
+    const buttonElement = button.element as HTMLButtonElement
+    vi.spyOn(button.element, 'getBoundingClientRect').mockReturnValue(new DOMRect(10, 20, 100, 40))
+    const dispatchPointerMove = (target: EventTarget, pointerType = 'mouse', clientX = 60, clientY = 40) => {
+      const event = new MouseEvent('pointermove', { bubbles: true, clientX, clientY })
+      Object.defineProperty(event, 'pointerType', { value: pointerType })
+      target.dispatchEvent(event)
+    }
+
+    window.dispatchEvent(new Event('pointermove'))
+    dispatchPointerMove(buttonElement)
+    expect(buttonElement.style.getPropertyValue('--glass-pointer-x')).toBe('50%')
+    expect(buttonElement.style.getPropertyValue('--glass-pointer-y')).toBe('50%')
+
+    window.dispatchEvent(new Event('pointermove'))
+    expect(buttonElement.style.getPropertyValue('--glass-pointer-x')).toBe('')
+    expect(buttonElement.style.getPropertyValue('--glass-pointer-y')).toBe('')
+
+    dispatchPointerMove(buttonElement, 'touch')
+    expect(buttonElement.style.getPropertyValue('--glass-pointer-x')).toBe('')
+    dispatchPointerMove(buttonElement)
+    dispatchPointerMove(wrapper.get('.brand-copy').element)
+    expect(buttonElement.style.getPropertyValue('--glass-pointer-x')).toBe('')
+
+    dispatchPointerMove(buttonElement)
+    buttonElement.disabled = true
+    dispatchPointerMove(buttonElement)
+    expect(buttonElement.style.getPropertyValue('--glass-pointer-y')).toBe('')
+    buttonElement.disabled = false
+
+    await wrapper.get('.section-heading button').trigger('click')
+    await flushPromises()
+    const modal = wrapper.get('.modal')
+    const modalElement = modal.element as HTMLElement
+    vi.spyOn(modalElement, 'getBoundingClientRect').mockReturnValue(new DOMRect(30, 40, 200, 100))
+    dispatchPointerMove(wrapper.get('.modal h2').element, 'mouse', 80, 90)
+    expect(modalElement.style.getPropertyValue('--glass-pointer-x')).toBe('25%')
+    expect(modalElement.style.getPropertyValue('--glass-pointer-y')).toBe('50%')
+
+    wrapper.unmount()
+    attachPoint.remove()
+    expect(modalElement.style.getPropertyValue('--glass-pointer-x')).toBe('')
+    expect(modalElement.style.getPropertyValue('--glass-pointer-y')).toBe('')
+
+    const idleWrapper = mount(App, {
+      global: { provide: { [xrayEasyGatewayKey as symbol]: createGateway() }, stubs: { HysteriaSettingsPanel: { template: '<div />' } } },
+    })
+    await flushPromises()
+    idleWrapper.unmount()
+  })
+
   it('reports clipboard failures for each share URI and resets copied notices on time', async () => {
     const gateway = createGateway()
     const clipboard = vi.fn().mockRejectedValue(new Error('Clipboard denied'))

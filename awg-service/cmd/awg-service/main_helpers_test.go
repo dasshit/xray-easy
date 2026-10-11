@@ -15,6 +15,10 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/test/bufconn"
 	"xray-easy/awg-service/internal/control"
 )
 
@@ -208,6 +212,41 @@ func TestServeControlServerStopsGracefullyAndReportsServeFailure(t *testing.T) {
 			t.Fatalf("closed listener error = %v", err)
 		}
 	})
+}
+
+func TestStopControlServerBoundsLiveStreamShutdown(t *testing.T) {
+	listener := bufconn.Listen(1 << 20)
+	server := grpc.NewServer()
+	healthpb.RegisterHealthServer(server, health.NewServer())
+	serveDone := make(chan error, 1)
+	go func() { serveDone <- server.Serve(listener) }()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	connection, err := grpc.NewClient("passthrough:///bufnet", grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+		return listener.Dial()
+	}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	stream, err := healthpb.NewHealthClient(connection).Watch(ctx, &healthpb.HealthCheckRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("health stream did not start: %v", err)
+	}
+	start := time.Now()
+	stopControlServer(server, 20*time.Millisecond)
+	if elapsed := time.Since(start); elapsed > time.Second {
+		t.Fatalf("bounded gRPC shutdown took %v", elapsed)
+	}
+	select {
+	case <-serveDone:
+	case <-time.After(time.Second):
+		t.Fatal("gRPC Serve remained blocked after forced shutdown")
+	}
+	_ = listener.Close()
 }
 
 func TestServeControlServiceRegistersAPIAndStopsGracefully(t *testing.T) {
