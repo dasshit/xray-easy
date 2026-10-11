@@ -261,6 +261,7 @@ func TestRunCoversWorkerFactoryAndWorkerExitResults(t *testing.T) {
 		t.Fatalf("worker failure = %v", err)
 	}
 
+	runLeaseHealthServer = func(*grpc.Server, net.Listener) error { return grpc.ErrServerStopped }
 	newLeaseWorker = func(lease.Controller, lease.Config, *slog.Logger) (leaseServiceWorker, error) {
 		return fakeLeaseWorker{run: func(context.Context) error { return context.Canceled }}, nil
 	}
