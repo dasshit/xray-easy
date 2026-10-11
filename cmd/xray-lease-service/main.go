@@ -31,10 +31,13 @@ const (
 	// defaultHealthAddress is the private gRPC readiness listener.
 	defaultHealthAddress = ":8091"
 	// defaultHealthCheck is the loopback gRPC target used by the container probe.
-	defaultHealthCheck      = "127.0.0.1:8091"
+	defaultHealthCheck = "127.0.0.1:8091"
+	// leaseHealthPollInterval controls how often worker readiness is refreshed.
 	leaseHealthPollInterval = 250 * time.Millisecond
-	leaseHealthStopTimeout  = 2 * time.Second
-	leaseWorkerStopTimeout  = 3 * time.Second
+	// leaseHealthStopTimeout bounds graceful shutdown of the readiness server.
+	leaseHealthStopTimeout = 2 * time.Second
+	// leaseWorkerStopTimeout bounds the wait for the lease worker to exit.
+	leaseWorkerStopTimeout = 3 * time.Second
 )
 
 // leaseHealthCheck performs the health probe selected by the CLI healthcheck command.
@@ -162,6 +165,7 @@ func run(args []string) error {
 	}
 }
 
+// monitorLeaseReadiness periodically publishes the worker's readiness to the gRPC health server.
 func monitorLeaseReadiness(ctx context.Context, worker healthProvider, server *health.Server, interval time.Duration) {
 	if interval <= 0 {
 		interval = leaseHealthPollInterval
@@ -179,6 +183,7 @@ func monitorLeaseReadiness(ctx context.Context, worker healthProvider, server *h
 	}
 }
 
+// updateLeaseReadiness sets the gRPC health status from the worker's current readiness.
 func updateLeaseReadiness(worker healthProvider, server *health.Server) {
 	state := healthpb.HealthCheckResponse_NOT_SERVING
 	if worker != nil && worker.Ready() {
@@ -187,6 +192,7 @@ func updateLeaseReadiness(worker healthProvider, server *health.Server) {
 	server.SetServingStatus("", state)
 }
 
+// waitLeaseWorker waits for worker shutdown and reports errors or a shutdown timeout.
 func waitLeaseWorker(workerErr <-chan error) error {
 	timer := time.NewTimer(leaseWorkerStopTimeout)
 	defer timer.Stop()
@@ -201,6 +207,7 @@ func waitLeaseWorker(workerErr <-chan error) error {
 	}
 }
 
+// leaseWorkerExitError converts an unexpected worker exit into a service error.
 func leaseWorkerExitError(err error) error {
 	if err == nil {
 		return errors.New("lease policy worker stopped unexpectedly")

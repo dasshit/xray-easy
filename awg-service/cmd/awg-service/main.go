@@ -41,7 +41,8 @@ const (
 	// defaultIPv6Pool is an internal package constant.
 	defaultIPv6Pool = "fd88:88:88::/64"
 	// defaultInterface is an internal package constant.
-	defaultInterface       = "awg0"
+	defaultInterface = "awg0"
+	// controlShutdownTimeout bounds graceful shutdown of the control server.
 	controlShutdownTimeout = 3 * time.Second
 )
 
@@ -177,6 +178,7 @@ func serveControlServer(server *grpc.Server, listener net.Listener, shutdown <-c
 	}
 }
 
+// stopControlServer gracefully stops the control server before forcing it down.
 func stopControlServer(server *grpc.Server, timeout time.Duration) {
 	if server == nil {
 		return

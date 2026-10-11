@@ -8,6 +8,7 @@ import (
 	"google.golang.org/grpc"
 )
 
+// defaultTimeout is used when Stop receives a non-positive timeout.
 const defaultTimeout = 3 * time.Second
 
 // Stop gives active RPCs a bounded grace period, then forces the server down.

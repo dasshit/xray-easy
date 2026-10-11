@@ -15,6 +15,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 )
 
+// checkTimeout bounds each gRPC health check.
 const checkTimeout = 2 * time.Second
 
 // Check reports whether the standard gRPC health service is SERVING.

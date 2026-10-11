@@ -126,6 +126,7 @@ func (m *Manager) Start(ctx context.Context) <-chan struct{} {
 	return done
 }
 
+// pollIfStreamInactive falls back to polling while the telemetry stream is disconnected.
 func (m *Manager) pollIfStreamInactive(ctx context.Context) {
 	m.mu.RLock()
 	streamConnected := m.stream != nil && m.streamConnected
@@ -135,10 +136,12 @@ func (m *Manager) pollIfStreamInactive(ctx context.Context) {
 	}
 }
 
+// setStreamConnected updates the telemetry stream connection state.
 func (m *Manager) setStreamConnected(connected bool) {
 	m.setStreamConnectedForGeneration(0, connected)
 }
 
+// setStreamConnectedForGeneration ignores stale stream generations when updating connection state.
 func (m *Manager) setStreamConnectedForGeneration(generation uint64, connected bool) {
 	m.mu.Lock()
 	if generation == 0 || generation == m.streamGeneration {
@@ -624,6 +627,7 @@ func (m *Manager) consumeTelemetryStream(ctx context.Context) {
 	m.consumeTelemetryStreamGeneration(ctx, 0)
 }
 
+// consumeTelemetryStreamGeneration applies stream updates and reconnects with backoff for its generation.
 func (m *Manager) consumeTelemetryStreamGeneration(ctx context.Context, generation uint64) {
 	defer m.setStreamConnectedForGeneration(generation, false)
 	backoff := time.Second

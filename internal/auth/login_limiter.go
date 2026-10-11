@@ -6,6 +6,7 @@ import (
 	"time"
 )
 
+// loginAttemptWindow tracks the start time and count for one source's attempts.
 type loginAttemptWindow struct {
 	started time.Time
 	count   int

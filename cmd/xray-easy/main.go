@@ -488,14 +488,19 @@ var (
 	}
 )
 
+// controlPlaneShutdownTimeout bounds graceful shutdown of the HTTP server.
 const controlPlaneShutdownTimeout = 5 * time.Second
 
 const (
+	// loginAttemptsPerSource caps password attempts from one client address per window.
 	loginAttemptsPerSource = 10
-	loginAttemptWindow     = time.Minute
-	loginHashConcurrency   = 2
+	// loginAttemptWindow is the duration used to count attempts from each source.
+	loginAttemptWindow = time.Minute
+	// loginHashConcurrency caps concurrent password hash verifications.
+	loginHashConcurrency = 2
 )
 
+// serveControlPlaneHTTP listens on the configured address and serves the control plane.
 func serveControlPlaneHTTP(ctx context.Context, serverHTTP *http.Server) error {
 	listener, err := net.Listen("tcp", serverHTTP.Addr)
 	if err != nil {
@@ -504,6 +509,7 @@ func serveControlPlaneHTTP(ctx context.Context, serverHTTP *http.Server) error {
 	return serveControlPlaneListener(ctx, serverHTTP, listener, controlPlaneShutdownTimeout)
 }
 
+// serveControlPlaneListener serves the control plane on an existing listener and shuts it down with ctx.
 func serveControlPlaneListener(ctx context.Context, serverHTTP *http.Server, listener net.Listener, timeout time.Duration) error {
 	serveDone := make(chan error, 1)
 	go func() { serveDone <- serverHTTP.Serve(listener) }()
@@ -531,6 +537,7 @@ func serveControlPlaneListener(ctx context.Context, serverHTTP *http.Server, lis
 	}
 }
 
+// passwordLoginLimiter returns the server's lazily initialized login limiter.
 func (s *server) passwordLoginLimiter() *auth.LoginLimiter {
 	s.loginThrottleMu.Lock()
 	defer s.loginThrottleMu.Unlock()
@@ -540,6 +547,7 @@ func (s *server) passwordLoginLimiter() *auth.LoginLimiter {
 	return s.loginThrottle
 }
 
+// loginClientSource normalizes the remote address used to track login attempts.
 func loginClientSource(r *http.Request) string {
 	remote := strings.TrimSpace(r.RemoteAddr)
 	host, _, err := net.SplitHostPort(remote)
@@ -555,6 +563,7 @@ func loginClientSource(r *http.Request) string {
 	return remote
 }
 
+// passwordAdminForRequest rate-limits password verification; proceed reports whether verification ran.
 func (s *server) passwordAdminForRequest(w http.ResponseWriter, r *http.Request, username, password string) (store.Admin, error, bool) {
 	limiter := s.passwordLoginLimiter()
 	allowed, retryAfter := limiter.Allow(loginClientSource(r))
