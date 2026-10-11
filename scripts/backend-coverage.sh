@@ -3,7 +3,7 @@ set -euo pipefail
 
 profile="${1:-coverage.out}"
 overall_min="${BACKEND_COVERAGE_MIN:-90}"
-package_min="${BACKEND_PACKAGE_COVERAGE_MIN:-80}"
+package_min="${BACKEND_PACKAGE_COVERAGE_MIN:-90}"
 test_json="${GO_TEST_JSON:-}"
 
 validate_threshold() {

@@ -75,7 +75,7 @@ jobs:
           bash scripts/backend-coverage.sh "$GITHUB_WORKSPACE/reports/backend/coverage.out"
         env:
           BACKEND_COVERAGE_MIN: "90"
-          BACKEND_PACKAGE_COVERAGE_MIN: "80"
+          BACKEND_PACKAGE_COVERAGE_MIN: "90"
           GO_TEST_RACE: "1"
           GO_TEST_JSON: ${{ github.workspace }}/reports/backend/test.jsonl
 

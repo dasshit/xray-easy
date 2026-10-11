@@ -75,7 +75,7 @@ production-код ради зелёного отчёта.
 
 | Область | Команда/проверка | Результат |
 | --- | --- | --- |
-| Корневые Go сервисы и библиотеки | `go test -covermode=atomic -coverprofile=backend-final.out ./cmd/... ./internal/...` | PASS; handwritten overall **97,96%** (10 368/10 584 statements); минимальный handwritten package — `internal/backup`, **91,76%**; все пакеты выше сохранённого порога 80%. |
+| Корневые Go сервисы и библиотеки | `go test -covermode=atomic -coverprofile=backend-final.out ./cmd/... ./internal/...` | PASS; handwritten overall **97,96%** (10 368/10 584 statements); минимальный handwritten package — `internal/backup`, **91,76%**; все пакеты выше порога 90%. |
 | AWG отдельный Go module | `go test -covermode=atomic -coverprofile=awg.out ./...` из `awg-service/` | PASS; handwritten overall **96,46%** (1 851/1 919); `cmd/awg-service` 96,6%, `internal/control` 96,4%. |
 | Embedded Xray runtime | `go test -covermode=atomic -coverprofile=runtime.out ./...` из `xray-runtime/` | PASS; `cmd/xray-runtime` 97,8%, `internal/runtime` 95,0%; каждый выбранный production source file выше 90%, минимум — `engine.go` 92,2%. |
 | Web panel | `npm run test:coverage` | PASS; 22 test files, 199 tests; 100% statements, branches, functions и lines. |

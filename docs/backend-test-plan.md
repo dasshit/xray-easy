@@ -6,7 +6,7 @@
 
 ## Как считать покрытие
 
-Из корня репозитория выполнить `bash scripts/backend-coverage.sh`. Скрипт запускает все Go-тесты заново, сохраняет `coverage.out`, печатает покрытие операторов по пакетам и в целом, а затем проверяет пороги: не менее 90% рукописного кода и 80% в каждом пакете. Пороги можно переопределить через `BACKEND_COVERAGE_MIN` и `BACKEND_PACKAGE_COVERAGE_MIN`. Для просмотра функций или подсвеченного исходного кода:
+Из корня репозитория выполнить `bash scripts/backend-coverage.sh`. Скрипт запускает все Go-тесты заново, сохраняет `coverage.out`, печатает покрытие операторов по пакетам и в целом, а затем проверяет пороги: не менее 90% рукописного кода и 90% в каждом пакете. Пороги можно переопределить через `BACKEND_COVERAGE_MIN` и `BACKEND_PACKAGE_COVERAGE_MIN`. Для просмотра функций или подсвеченного исходного кода:
 
 ```sh
 go tool cover -func=coverage.out
@@ -121,7 +121,7 @@ AWG-состояния в общих backup и rollback SQLite/профилей 
 
 Покрытие пересчитано без кэша тестовых результатов после удаления legacy
 supervisor. Root Go-модуль достигает **7031 / 7802 (90,1%)** по handwritten-коду;
-скрипт также требует не менее 80% в каждом пакете. Отдельный вложенный модуль
+скрипт также требует не менее 90% в каждом пакете. Отдельный вложенный модуль
 `awg-service` достигает **1357 / 1507 (90,05%)**. Web достигает **93,34%
 statements**, 97,42% lines, 90,94% functions и 87,3% branches. Embedded runtime
 каждый handwritten-файл покрывает не ниже 90%. Для каждого модуля действует
@@ -135,11 +135,11 @@ bash scripts/awg-coverage.sh
 (cd web && npm run test:coverage)
 ```
 
-Root Go gate проверяет 90% общего handwritten Go-кода и 80% на пакет;
+Root Go gate проверяет 90% общего handwritten Go-кода и 90% на пакет;
 AWG gate отдельно проверяет 90% модуля. Runtime gate отдельно проверяет 90%
 каждого handwritten-файла встроенного runtime. Web-пороги заданы в
-`web/vite.config.ts`: statements/lines/functions >= 90%, branches >= 85%,
-каждый web-файл lines >= 90%. Все gates запускаются GitHub Actions.
+`web/vite.config.ts`: statements/lines/branches/functions >= 90% как в целом,
+так и в каждом файле. Все gates запускаются GitHub Actions.
 
 ## Порядок работы
 
