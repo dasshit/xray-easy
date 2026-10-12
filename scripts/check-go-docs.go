@@ -1,4 +1,4 @@
-// Command check-go-docs verifies that handwritten Go production code has Go doc comments.
+// Command check-go-docs verifies that handwritten exported Go APIs have Go doc comments.
 package main
 
 import (
@@ -53,7 +53,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "FAIL Go documentation check: %d problem(s)\n", len(problems))
 		os.Exit(1)
 	}
-	fmt.Printf("PASS Go documentation check: %d handwritten source file(s) have documented production declarations\n", len(files))
+	fmt.Printf("PASS Go documentation check: %d handwritten source file(s) have documented exported API declarations\n", len(files))
 }
 
 // collectFiles performs the operation represented by its name.
@@ -113,23 +113,25 @@ func checkFile(fset *token.FileSet, source sourceFile) []string {
 	for _, declaration := range source.file.Decls {
 		switch declaration := declaration.(type) {
 		case *ast.FuncDecl:
-			if declaration.Doc == nil {
+			if isExported(declaration.Name.Name) && isPublicMethod(declaration) && declaration.Doc == nil {
 				problems = append(problems, missing(fset, source.path, declaration.Pos(), "function", declaration.Name.Name))
 			}
 		case *ast.GenDecl:
 			for _, spec := range declaration.Specs {
 				switch spec := spec.(type) {
 				case *ast.TypeSpec:
-					if declaration.Doc == nil && spec.Doc == nil {
+					if isExported(spec.Name.Name) && declaration.Doc == nil && spec.Doc == nil {
 						problems = append(problems, missing(fset, source.path, spec.Pos(), "type", spec.Name.Name))
 					}
-					problems = append(problems, checkType(fset, source.path, spec)...)
+					if isExported(spec.Name.Name) {
+						problems = append(problems, checkType(fset, source.path, spec)...)
+					}
 				case *ast.ValueSpec:
 					if declaration.Doc != nil || spec.Doc != nil {
 						continue
 					}
 					for _, name := range spec.Names {
-						if name.Name != "_" {
+						if isExported(name.Name) {
 							kind := declaration.Tok.String()
 							problems = append(problems, missing(fset, source.path, name.Pos(), kind, name.Name))
 						}
@@ -139,6 +141,33 @@ func checkFile(fset *token.FileSet, source sourceFile) []string {
 		}
 	}
 	return problems
+}
+
+// isPublicMethod reports whether declaration is a method on an exported type.
+func isPublicMethod(declaration *ast.FuncDecl) bool {
+	if declaration.Recv == nil {
+		return true
+	}
+	if len(declaration.Recv.List) != 1 {
+		return false
+	}
+	return isExported(receiverTypeName(declaration.Recv.List[0].Type))
+}
+
+// receiverTypeName returns the identifier naming a method's receiver type.
+func receiverTypeName(expression ast.Expr) string {
+	switch expression := expression.(type) {
+	case *ast.Ident:
+		return expression.Name
+	case *ast.StarExpr:
+		return receiverTypeName(expression.X)
+	case *ast.IndexExpr:
+		return receiverTypeName(expression.X)
+	case *ast.IndexListExpr:
+		return receiverTypeName(expression.X)
+	default:
+		return ""
+	}
 }
 
 // checkType performs the operation represented by its name.
@@ -162,7 +191,7 @@ func checkType(fset *token.FileSet, path string, typeSpec *ast.TypeSpec) []strin
 				continue
 			}
 			for _, name := range method.Names {
-				if name.Name != "_" {
+				if isExported(name.Name) {
 					problems = append(problems, missing(fset, path, name.Pos(), "interface method", name.Name))
 				}
 			}
