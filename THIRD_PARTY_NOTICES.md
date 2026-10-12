@@ -2,11 +2,12 @@
 
 This file records third-party software used by the project, including software
 linked into distributed binaries, the web application, build tools, and runtime
-container packages. Each component remains under its own upstream license; this
-file does not relicense third-party code. Exact Go versions are recorded in the
-Go manifests and module checksums in the `go.sum` files listed below. The npm lock
-file records the resolved versions and license metadata for the web dependency
-tree.
+container packages. Project-authored code is licensed under GPL-3.0-or-later;
+the GPLv3 text is in [`LICENSE`](LICENSE). Each third-party component remains
+under its own upstream license; this file does not relicense third-party code.
+Exact Go versions are recorded in the Go manifests and module checksums in the
+`go.sum` files listed below. The npm lock file records the resolved versions
+and license metadata for the web dependency tree.
 
 ## Components embedded in Go binaries
 
@@ -28,10 +29,12 @@ tree.
 Xray's Shadowsocks-2022 package is imported by `xray-runtime` and in turn uses
 `sing` and `sing-shadowsocks`. These modules are included in the statically
 linked runtime, not just present as unused module metadata. Their upstream
-licenses state GPL-3.0-or-later. This is a material input to the project's
-distribution and top-level license decision; review compatibility and source
-distribution obligations before publishing binaries. This notice is an
-inventory, not a legal opinion.
+licenses state GPL-3.0-or-later. The project has selected GPL-3.0-or-later for
+project-authored code and binaries. Xray-core's MPL-2.0 terms and all other
+third-party license terms continue to apply to their respective components.
+The matching source tag and the pinned module versions and checksums provide
+the inputs needed to retrieve the runtime's corresponding source. This notice
+is an inventory, not a legal opinion.
 
 The Go manifests below list the direct and indirect modules selected for each
 binary. The `go.sum` files hold module checksums and can also retain entries for

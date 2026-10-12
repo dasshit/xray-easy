@@ -13,4 +13,8 @@ FROM alpine:3.22
 RUN apk add --no-cache openssl
 COPY --from=mkcert-build /out/mkcert /usr/local/bin/mkcert
 COPY --chmod=755 scripts/init-hysteria-tls.sh /usr/local/bin/init-hysteria-tls
+COPY LICENSE /usr/share/licenses/xray-easy/LICENSE
+COPY THIRD_PARTY_NOTICES.md /usr/share/licenses/xray-easy/THIRD_PARTY_NOTICES.md
+COPY third_party/licenses/ /usr/share/licenses/xray-easy/third_party/licenses/
+COPY third_party/go-qrcode/LICENSE /usr/share/licenses/xray-easy/third_party/go-qrcode/LICENSE
 ENTRYPOINT ["/usr/local/bin/init-hysteria-tls"]

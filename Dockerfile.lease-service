@@ -21,6 +21,10 @@ FROM alpine:3.22
 RUN addgroup -S -g 10001 xray && adduser -S -D -H -u 10001 -G xray xray \
     && apk add --no-cache ca-certificates
 COPY --from=build /out/xray-lease-service /usr/local/bin/xray-lease-service
+COPY LICENSE /usr/share/licenses/xray-easy/LICENSE
+COPY THIRD_PARTY_NOTICES.md /usr/share/licenses/xray-easy/THIRD_PARTY_NOTICES.md
+COPY third_party/licenses/ /usr/share/licenses/xray-easy/third_party/licenses/
+COPY third_party/go-qrcode/LICENSE /usr/share/licenses/xray-easy/third_party/go-qrcode/LICENSE
 USER 10001:10001
 EXPOSE 8091
 ENTRYPOINT ["/usr/local/bin/xray-lease-service"]

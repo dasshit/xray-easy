@@ -44,6 +44,10 @@ RUN addgroup -S -g 10001 xray && adduser -S -D -H -u 10001 -G xray xray \
 COPY --from=build /out/xray-easy /usr/local/bin/xray-easy
 COPY --from=mkcert-build /out/mkcert /usr/local/bin/mkcert
 COPY --from=web-build /web/dist /usr/share/xray-easy/ui
+COPY LICENSE /usr/share/licenses/xray-easy/LICENSE
+COPY THIRD_PARTY_NOTICES.md /usr/share/licenses/xray-easy/THIRD_PARTY_NOTICES.md
+COPY third_party/licenses/ /usr/share/licenses/xray-easy/third_party/licenses/
+COPY third_party/go-qrcode/LICENSE /usr/share/licenses/xray-easy/third_party/go-qrcode/LICENSE
 RUN mkdir -p /data /etc/xray \
     && chown -R xray:xray /data /etc/xray /usr/local/bin/xray-easy
 USER 10001:10001

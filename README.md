@@ -680,3 +680,12 @@ Regenerate checked-in typed protobuf bindings from the repository root with
 **scripts/generate-protobuf.sh**. See
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party components
 and licenses.
+
+## License
+
+Project-authored code is licensed under [GPL-3.0-or-later](LICENSE). The full
+GPLv3 text is in that file, and the project permits use under later GPL
+versions. Release images are built from matching Git release tags; their OCI
+metadata identifies the source repository, revision, and license. Third-party
+components retain their own licenses; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

@@ -28,3 +28,7 @@ FROM alpine:3.22
 ARG TARGETARCH
 COPY --from=build /out/linux/${TARGETARCH}/xray-easy-install /usr/share/xray-easy-installer/linux/${TARGETARCH}/xray-easy-install
 COPY --from=build /out/darwin/${TARGETARCH}/xray-easy-install /usr/share/xray-easy-installer/darwin/${TARGETARCH}/xray-easy-install
+COPY LICENSE /usr/share/licenses/xray-easy/LICENSE
+COPY THIRD_PARTY_NOTICES.md /usr/share/licenses/xray-easy/THIRD_PARTY_NOTICES.md
+COPY third_party/licenses/ /usr/share/licenses/xray-easy/third_party/licenses/
+COPY third_party/go-qrcode/LICENSE /usr/share/licenses/xray-easy/third_party/go-qrcode/LICENSE
