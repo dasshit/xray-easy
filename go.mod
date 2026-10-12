@@ -11,13 +11,18 @@ require (
 	google.golang.org/grpc v1.76.0
 	google.golang.org/protobuf v1.36.6
 	modernc.org/sqlite v1.34.5
+	gorm.io/driver/sqlite v1.6.0
+	gorm.io/gorm v1.31.2
 	xray-easy/awg-contract v0.0.0
 )
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/mattn/go-sqlite3 v1.14.22 // indirect
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/net v0.42.0 // indirect
