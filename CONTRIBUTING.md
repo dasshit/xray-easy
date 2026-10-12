@@ -11,8 +11,7 @@ documentation improvements, and carefully scoped features are welcome.
   and any behavior or configuration changes users should know about.
 - Do not include passwords, tokens, private keys, server addresses, or other
   sensitive data in issues, logs, screenshots, or test fixtures. For a suspected
-  security vulnerability, use GitHub's private vulnerability reporting if it is
-  enabled for this repository; do not publish exploit details in a public issue.
+  security vulnerability, follow the project's [security policy](SECURITY.md).
 
 ## Development setup
 
