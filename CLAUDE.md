@@ -29,6 +29,12 @@ and `docs/domain-architecture.md` explains the backend and frontend boundaries.
   keyboard access and update translations for supported locales.
 - Add or update focused tests when behavior changes. Run the relevant checks
   listed in `AGENTS.md`, and state clearly which checks were run or skipped.
+- Format commit subjects as `<type>: <short imperative summary>` with no final
+  period. Prefer `docs` for documentation, `feat` for new behavior, `fix` for
+  bug fixes, and `tests` for test-only changes. For implementation plus tests,
+  use `feat` or `fix`; use another clear conventional prefix, such as
+  `refactor` or `chore`, when the preferred types do not fit. See `AGENTS.md`
+  for examples and details.
 - Treat `.env`, `secrets/`, databases, backups, tokens, private keys, and client
   profiles as sensitive. Do not expose their contents in output, logs, tests,
   or commits.

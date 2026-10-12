@@ -134,6 +134,26 @@ core behavior:
 - Keep pull requests focused. Summarize behavior changes, verification, and any
   compatibility, security, migration, or deployment impact.
 
+### Commit messages
+
+Use the format `<type>: <short summary>`, with a lowercase type, a colon and
+one space, and an imperative summary without a final period. Prefer these
+project prefixes:
+
+- `docs`: documentation-only changes, for example `docs: add deployment guide`.
+- `feat`: a new capability or user-visible behavior, for example
+  `feat: add profile expiry controls`.
+- `fix`: a bug or incorrect behavior, for example
+  `fix: preserve settings during restore`.
+- `tests`: test-only changes, for example `tests: cover backup rollback`.
+
+For a commit that changes implementation and tests together, choose `feat` or
+`fix` to describe the implementation; reserve `tests` for commits that only
+change tests. Keep commits focused and use a clear conventional prefix such as
+`refactor` or `chore` when none of the preferred types accurately describes
+the change. Add a commit body when context or compatibility impact needs more
+explanation.
+
 ## Development commands
 
 The module toolchain is Go 1.27.1. CI uses Node.js 24. Run commands from the

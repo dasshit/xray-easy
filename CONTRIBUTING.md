@@ -84,9 +84,9 @@ go test -tags=composeintegration -count=1 -v -timeout=40m ./integration/compose
 4. Keep the pull request up to date with review feedback and make sure required
    GitHub Actions checks pass.
 
-There is no required commit-message format. Use the pull request template to
-describe the change, verification, and any compatibility, security, or
-deployment impact.
+Use the commit-message format and preferred prefixes in [`AGENTS.md`](AGENTS.md).
+Use the pull request template to describe the change, verification, and any
+compatibility, security, or deployment impact.
 
 ## License
 
